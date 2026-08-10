@@ -22,8 +22,7 @@ place agents/AGENTS.md        "$HOME/AGENTS.md"
 for s in summary questionyourself whatsmissing; do
   place "skills/$s" "$HOME/.agents/skills/$s"
 done
-for p in "$REPO"/prompts/PROMPT-*.md; do
-  place "prompts/$(basename "$p")" "$HOME/$(basename "$p")"
-done
+# prompts/ is archive-only by ruling 2026-08-10: work routes through Linear,
+# never through ~/PROMPT-*.md files — nothing from prompts/ gets linked.
 [ -f "$HOME/.config/linear.env" ] || echo "WARNING: ~/.config/linear.env missing — the system needs LINEAR_API_KEY there."
 echo done

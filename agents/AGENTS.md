@@ -15,6 +15,11 @@ Design record: `~/.omc/specs/deep-interview-linear-big-blocks.md`.
    one-line update; triage new captures into their surface; propose closes —
    the owner's verdict closes projects, agents never do; archive issues
    closed more than 1 day (free-plan 250-issue care).
+4. **HANDOFF (routing law, owner-ratified 2026-08-10)**: session handoffs go
+   through Linear — the NOW pointer plus comments on the issues themselves.
+   Never write `~/PROMPT-*.md`, handoff files, or any local file that tracks
+   work state. Retired charters live in the session-system repo under
+   `prompts/archive/`; nothing new joins them.
 
 Structure law (owner-ratified 2026-08-10, rev 2 — layer inversion after
 by-seeing): initiatives = WORLDS (Media Discovery, Kavedarr, Home Lab,

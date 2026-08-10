@@ -19,3 +19,15 @@ When in plan mode or asked to plan:
 Always: stray findings worth keeping become issues (capture, don't chase);
 propose closes, never close — owner verdict closes. Keep Linear reads bounded;
 never dump the backlog into context.
+
+## Routing law (owner-ratified 2026-08-10) — no prompt files, no file trackers
+
+Work routes through Linear, period. Open loops live as issues; session
+handoffs go through the NOW pointer and issue comments; per-item context
+lives ON the issue it belongs to. NEVER write a `~/PROMPT-*.md`, handoff
+file, or any local file that tracks work state — that includes "on stop,
+rewrite this charter file" patterns from retired charters (archived in the
+session-system repo, `prompts/archive/`). A fresh session orients with the
+start digest, then `/now` — not by reading a file. Exception by standing
+law: media-discovery's TASKS.md is that product's engineering roadmap
+(separate world, separate ruling) — do not extend the exception.

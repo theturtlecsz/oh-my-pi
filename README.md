@@ -15,7 +15,7 @@ created by `install.sh`.
 | `skills/summary` | `~/.agents/skills/summary` | /summary close ritual (cross-harness: pi + Claude Code) |
 | `skills/questionyourself` | `~/.agents/skills/questionyourself` | Confidence audit, invoked by summary |
 | `skills/whatsmissing` | `~/.agents/skills/whatsmissing` | Blind-spot audit, invoked by summary |
-| `prompts/PROMPT-*.md` | `~/PROMPT-*.md` | Session charters (walkthrough, hardening loop, verdict drain, historical) |
+| `prompts/archive/` | (nothing — archive only) | Retired session charters. Ruling 2026-08-10: work routes through Linear (issues, NOW, comments), never prompt files |
 
 `~/.claude/skills/summary` reaches the skill via `~/.agents/skills/summary`.
 
