@@ -1,0 +1,4 @@
+*.env
+linear.env
+.omc/
+node_modules/
