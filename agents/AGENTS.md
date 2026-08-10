@@ -10,7 +10,9 @@ Design record: `~/.omc/specs/deep-interview-linear-big-blocks.md`.
    `~/.config/linear.env`) if session state is needed.
 2. **MID-SESSION**: capture, don't chase — stray ideas become Linear issues
    in their surface immediately (GraphQL, key at `~/.config/linear.env`);
-   sloppy titles fine. No other mid-session Linear writes.
+   sloppy titles fine. No other mid-session Linear writes, except
+   owner-gated closes/archives per §3 when Chris gives his on-screen yes
+   in the moment (the 2026-08-10 close-now ruling).
 3. **CLOSE**: for every project touched this session write health + a
    one-line update; triage new captures into their surface; closes only with
    the owner's on-screen yes — close_issue is his verdict path, propose_close
