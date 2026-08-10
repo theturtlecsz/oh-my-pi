@@ -12,8 +12,9 @@ Design record: `~/.omc/specs/deep-interview-linear-big-blocks.md`.
    in their surface immediately (GraphQL, key at `~/.config/linear.env`);
    sloppy titles fine. No other mid-session Linear writes.
 3. **CLOSE**: for every project touched this session write health + a
-   one-line update; triage new captures into their surface; propose closes —
-   the owner's verdict closes projects, agents never do; archive issues
+   one-line update; triage new captures into their surface; closes only with
+   the owner's on-screen yes — close_issue is his verdict path, propose_close
+   the async path, agents never close without it; archive issues
    closed more than 1 day (free-plan 250-issue care).
 4. **HANDOFF (routing law, owner-ratified 2026-08-10)**: session handoffs go
    through Linear — the NOW pointer plus comments on the issues themselves.

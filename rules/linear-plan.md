@@ -17,7 +17,8 @@ When in plan mode or asked to plan:
    (`set_now`).
 
 Always: stray findings worth keeping become issues (capture, don't chase);
-propose closes, never close — owner verdict closes. Keep Linear reads bounded;
+closes need the owner's on-screen yes (close_issue verdict path); otherwise
+propose. Keep Linear reads bounded;
 never dump the backlog into context.
 
 ## Routing law (owner-ratified 2026-08-10) — no prompt files, no file trackers

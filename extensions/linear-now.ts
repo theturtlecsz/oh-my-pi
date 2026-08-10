@@ -31,6 +31,26 @@ interface NowState {
 	lastDone?: { identifier: string; title: string; at: number };
 	teamId?: string;
 	nowLabelId?: string;
+	doneStateId?: string;
+	canceledStateId?: string;
+}
+
+interface MapIssue {
+	id: string;
+	identifier: string;
+	title: string;
+	stateName: string;
+	updatedAt: string;
+	waiting: boolean;
+	isNow: boolean;
+}
+
+interface MapSurface {
+	name: string;
+	health?: string;
+	state: string;
+	issues: MapIssue[];
+	waiting: number;
 }
 
 function apiKey(): string | null {
@@ -65,6 +85,21 @@ function fmtElapsed(ms: number): string {
 	if (m < 60) return `${m}m`;
 	return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`;
 }
+
+const HEALTH_GLYPH: Record<string, string> = { onTrack: "🟢", atRisk: "🟡", offTrack: "🔴" };
+const STATE_BAND: Record<string, number> = { started: 0, planned: 1 };
+const DONE_SUFFIX: Record<string, string> = { completed: " (done)", canceled: " (done)" };
+
+const BRIEF_INSTRUCTION = [
+	"── Linear brief requested from the /now map ──",
+	"Distill the raw data below into a ≤5-line plain-language brief for Chris (non-engineer, first read):",
+	'1. PROBLEM — what this issue is and why the household cares',
+	'2. DECIDED — verdicts/proofs/retractions already on record in the comments ("nothing decided yet" if none)',
+	'3. BLOCKED BY — open blockers ("none recorded" if none)',
+	"4. STATE — where it stands right now",
+	"5. NEXT — the single next step",
+	"No jargon, no filler, no headers beyond the five lines.",
+].join("\n");
 
 /**
  * Owner approval for writes. Human slash commands (//done, //capture) → on-screen
@@ -166,6 +201,115 @@ export default function linearNow(pi: ExtensionAPI) {
 		return id;
 	}
 
+	async function stateIdFor(kind: "completed" | "canceled"): Promise<string> {
+		const cached = kind === "canceled" ? state.canceledStateId : state.doneStateId;
+		if (cached) return cached;
+		const d = await gql<{ teams: { nodes: { states: { nodes: { id: string; name: string; type: string }[] } }[] } }>(
+			`query($key:String!){ teams(filter:{key:{eq:$key}}){nodes{states(first:20){nodes{id name type}}}} }`,
+			{ key: TEAM_KEY },
+		);
+		const s = d.teams.nodes[0]?.states.nodes.find(n => n.type === kind);
+		if (!s) throw new Error(`no ${kind} workflow state on team ${TEAM_KEY}`);
+		if (kind === "canceled") state.canceledStateId = s.id;
+		else state.doneStateId = s.id;
+		await saveCache();
+		return s.id;
+	}
+
+	/** ONE bounded request for the /now MAP — never query per-issue (free-plan rate). */
+	async function mapData(): Promise<{ surfaces: MapSurface[]; capped: boolean }> {
+		const d = await gql<{
+			projects: { nodes: { name: string; state: string; health?: string }[] };
+			issues: {
+				nodes: {
+					id: string;
+					identifier: string;
+					title: string;
+					updatedAt: string;
+					state: { name: string };
+					project?: { name: string };
+					labels: { nodes: { name: string }[] };
+				}[];
+			};
+		}>(
+			`query($team:String!){ projects(first:50){nodes{name state health}} issues(first:100,filter:{team:{key:{eq:$team}},state:{type:{nin:["completed","canceled"]}}},orderBy:updatedAt){nodes{id identifier title updatedAt state{name} project{name} labels(first:10){nodes{name}}}} }`,
+			{ team: TEAM_KEY },
+		);
+		const NO_SURFACE = "(no surface)";
+		const byProject = new Map<string, MapIssue[]>();
+		for (const n of d.issues.nodes) {
+			const key = n.project?.name ?? NO_SURFACE;
+			const list = byProject.get(key) ?? [];
+			list.push({
+				id: n.id,
+				identifier: n.identifier,
+				title: n.title,
+				stateName: n.state.name,
+				updatedAt: n.updatedAt,
+				waiting: n.labels.nodes.some(l => l.name === QUEUE_LABEL),
+				isNow: n.identifier === state.identifier,
+			});
+			byProject.set(key, list);
+		}
+		const known = new Map(d.projects.nodes.map(p => [p.name, p]));
+		const names = new Set<string>([...d.projects.nodes.filter(p => p.state === "started").map(p => p.name), ...byProject.keys()]);
+		names.delete(NO_SURFACE);
+		const surfaces: MapSurface[] = [...names]
+			.map(name => {
+				const p = known.get(name);
+				const issues = byProject.get(name) ?? [];
+				return { name, health: p?.health, state: p?.state ?? "?", issues, waiting: issues.filter(i => i.waiting).length };
+			})
+			.sort((a, b) => (STATE_BAND[a.state] ?? 2) - (STATE_BAND[b.state] ?? 2) || a.name.localeCompare(b.name));
+		const orphans = byProject.get(NO_SURFACE);
+		if (orphans) surfaces.push({ name: NO_SURFACE, state: "?", issues: orphans, waiting: orphans.filter(i => i.waiting).length });
+		return { surfaces, capped: d.issues.nodes.length === 100 };
+	}
+
+	/** ONE bounded request for the issue BRIEF; the agent distills the packet. */
+	async function briefPacket(ref: string): Promise<{ packet: string; identifier: string; isNow: boolean }> {
+		const d = await gql<{
+			issue: {
+				identifier: string;
+				title: string;
+				description?: string;
+				updatedAt: string;
+				state: { name: string };
+				project?: { name: string; health?: string };
+				labels: { nodes: { name: string }[] };
+				comments: { nodes: { body: string; createdAt: string; user?: { name: string } }[] };
+				relations: { nodes: { type: string; relatedIssue: { identifier: string; title: string; state: { type: string } } }[] };
+				inverseRelations: { nodes: { type: string; issue: { identifier: string; title: string; state: { type: string } } }[] };
+			};
+		}>(
+			`query($id:String!){ issue(id:$id){ identifier title description updatedAt state{name} project{name health} labels(first:10){nodes{name}} comments(first:50){nodes{body createdAt user{name}}} relations(first:20){nodes{type relatedIssue{identifier title state{type}}}} inverseRelations(first:20){nodes{type issue{identifier title state{type}}}} } }`,
+			{ id: ref },
+		);
+		const i = d.issue;
+		const comments = [...i.comments.nodes]
+			.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+			.slice(-20)
+			.map(c => `[${c.createdAt.slice(0, 10)} ${c.user?.name ?? "?"}] ${c.body.slice(0, 400)}`);
+		const blockedBy = i.inverseRelations.nodes.filter(r => r.type === "blocks").map(r => `${r.issue.identifier} ${r.issue.title}${DONE_SUFFIX[r.issue.state.type] ?? ""}`);
+		const blocks = i.relations.nodes.filter(r => r.type === "blocks").map(r => `${r.relatedIssue.identifier} ${r.relatedIssue.title}${DONE_SUFFIX[r.relatedIssue.state.type] ?? ""}`);
+		const related = [
+			...i.relations.nodes.filter(r => r.type !== "blocks").map(r => `${r.type}: ${r.relatedIssue.identifier} ${r.relatedIssue.title}`),
+			...i.inverseRelations.nodes.filter(r => r.type !== "blocks").map(r => `${r.type}: ${r.issue.identifier} ${r.issue.title}`),
+		];
+		const packet = [
+			`${i.identifier} ${i.title}`,
+			`surface: ${i.project?.name ?? "none"}${i.project?.health ? ` [${i.project.health}]` : ""} · state: ${i.state.name} · labels: ${i.labels.nodes.map(l => l.name).join(",") || "none"} · updated: ${i.updatedAt.slice(0, 10)}`,
+			"DESCRIPTION:",
+			(i.description ?? "(none)").slice(0, 3000),
+			"COMMENTS (oldest→newest, last 20):",
+			comments.join("\n") || "(no comments)",
+			`BLOCKED BY:\n${blockedBy.join("\n") || "(none recorded)"}`,
+			`BLOCKS:\n${blocks.join("\n") || "(none recorded)"}`,
+			...(related.length ? [`RELATED:\n${related.join("\n")}`] : []),
+		].join("\n");
+		return { packet, identifier: i.identifier, isNow: i.identifier === state.identifier };
+	}
+
 	async function labelHolder(): Promise<{ id: string; identifier: string; title: string; project?: string } | null> {
 		const d = await gql<{ issues: { nodes: { id: string; identifier: string; title: string; project?: { name: string } }[] } }>(
 			`query($label:String!){ issues(first:2,filter:{labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{id identifier title project{name}}} }`,
@@ -247,6 +391,28 @@ export default function linearNow(pi: ExtensionAPI) {
 		await saveCache();
 		persistSession();
 		footer(ctx);
+	}
+
+	/** Owner-verdict close: state change first (the act), then the verdict comment (the record). */
+	async function closeWithVerdict(issueId: string, identifier: string, outcome: "done" | "canceled", reason: string | undefined, ctx: ExtensionContext): Promise<string> {
+		const stateId = await stateIdFor(outcome === "canceled" ? "canceled" : "completed");
+		await gql(`mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }`, { id: issueId, input: { stateId } });
+		try {
+			await gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){success} }`, {
+				input: {
+					issueId,
+					body: `**Owner verdict in session: close${outcome === "canceled" ? " (canceled — not doing it)" : ""}** — ${reason ?? "done"} (omp session ${new Date().toISOString().slice(0, 10)})`,
+				},
+			});
+		} catch (e) {
+			try {
+				ctx.ui.notify(`verdict comment failed (${String(e)}) — close stands`, "warning");
+			} catch {
+				/* headless */
+			}
+		}
+		if (issueId === state.issueId) await clearNow(ctx, true);
+		return `${identifier} → ${outcome === "canceled" ? "Canceled" : "Done"} (owner verdict)`;
 	}
 
 	async function buildDigest(): Promise<string> {
@@ -339,20 +505,51 @@ export default function linearNow(pi: ExtensionAPI) {
 					await setNow({ id: issue.id, identifier: issue.identifier, title: issue.title, project: issue.project?.name }, ctx);
 					return;
 				}
-				const d = await gql<{ issues: { nodes: { id: string; identifier: string; title: string; project?: { name: string } }[] } }>(
-					`query($team:String!){ issues(first:25,filter:{team:{key:{eq:$team}},state:{type:{nin:["completed","canceled"]}}},orderBy:updatedAt){nodes{id identifier title project{name}}} }`,
-					{ team: TEAM_KEY },
-				);
-				const nodes = d.issues.nodes;
-				if (!nodes.length) {
+				const map = await mapData();
+				if (map.capped) ctx.ui.notify("100-issue cap hit — map may be partial", "warning");
+				if (!map.surfaces.length) {
 					ctx.ui.notify("No open issues found", "warning");
 					return;
 				}
-				const labels = nodes.map(n => `${n.identifier} · ${n.project?.name ?? "no project"} · ${n.title}`);
-				const picked = await ctx.ui.select("Set NOW — which issue?", labels);
-				if (!picked) return;
-				const issue = nodes[labels.indexOf(picked)];
-				await setNow({ id: issue.id, identifier: issue.identifier, title: issue.title, project: issue.project?.name }, ctx);
+				let picked: MapIssue | undefined;
+				while (!picked) {
+					const nowIdx = map.surfaces.findIndex(s => s.issues.some(i => i.isNow));
+					const surfaceItems = map.surfaces.map(s => ({
+						label: `${HEALTH_GLYPH[s.health ?? ""] ?? "◇"} ${s.name} · ${s.issues.length} open${s.waiting ? ` · ⏳${s.waiting} on Chris` : ""}`,
+						description: s.issues.slice(0, 4).map(i => i.identifier).join(", ") + (s.issues.length > 4 ? ", …" : ""),
+					}));
+					const surfacePick = await ctx.ui.select("NOW map — which surface?", surfaceItems, {
+						helpText: "enter = open surface · esc = cancel",
+						initialIndex: nowIdx >= 0 ? nowIdx : 0,
+					});
+					if (surfacePick === undefined) return;
+					const surface = map.surfaces[surfaceItems.findIndex(o => o.label === surfacePick)];
+					if (!surface || !surface.issues.length) {
+						ctx.ui.notify("no open issues here", "info");
+						continue;
+					}
+					const issueItems: { label: string; description?: string }[] = [
+						{ label: "← back to map" },
+						...surface.issues.map(i => ({
+							label: `${i.isNow ? "◆ " : ""}${i.identifier} · ${i.title}${i.waiting ? " ⏳" : ""}`,
+							description: `${i.stateName} · updated ${fmtElapsed(Date.now() - Date.parse(i.updatedAt))} ago`,
+						})),
+					];
+					const issuePick = await ctx.ui.select(`${surface.name} — which issue?`, issueItems, { helpText: "enter = brief · esc = cancel" });
+					if (issuePick === undefined) return;
+					const idx = issueItems.findIndex(o => o.label === issuePick);
+					if (idx <= 0) continue;
+					picked = surface.issues[idx - 1];
+				}
+				const brief = await briefPacket(picked.identifier);
+				const tail = brief.isNow
+					? "This issue is already NOW — say so at the end; do not call set_now."
+					: `Then call the linear tool with action set_now and issue ${brief.identifier} (NO confirm flag) so the confirm card lands under the brief; if Chris says yes, repeat with confirm:true.`;
+				pi.sendMessage(
+					{ customType: "linear-brief", content: `${BRIEF_INSTRUCTION}\n${tail}\n── raw data ──\n${brief.packet}` },
+					{ triggerTurn: true, deliverAs: "nextTurn" },
+				);
+				ctx.ui.notify(`Brief for ${brief.identifier} → distilling`, "info");
 			} catch (e) {
 				ctx.ui.notify(`/now failed: ${String(e)}`, "error");
 			}
@@ -368,25 +565,44 @@ export default function linearNow(pi: ExtensionAPI) {
 			}
 			const { issueId, identifier, title } = { issueId: state.issueId, identifier: state.identifier, title: state.title };
 			try {
-				const propose = await ctx.ui.confirm(
+				const CLOSE = "Close now — my verdict, moves to Done";
+				const PROPOSE = "Propose close — comment + queue label";
+				const CLEAR = "Just clear NOW — no close, no comment";
+				const choice = await ctx.ui.select(
 					`Done with ${identifier}?`,
-					`"${title}"\n\nThis will:\n1. Clear the NOW pointer\n2. Comment "Close proposed from omp session" on ${identifier}\n3. Add the ${QUEUE_LABEL} label so it lands in your decision queue\n\nThe issue is NOT closed — your verdict closes it.`,
+					[
+						{ label: CLOSE, description: `posts "Owner verdict in session: close" on ${identifier}` },
+						{ label: PROPOSE, description: "you click the final close in the app (today's behavior)" },
+						{ label: CLEAR },
+					],
+					{ helpText: "esc = keep NOW as is" },
 				);
-				await clearNow(ctx, true);
-				if (propose) {
-					await gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){success} }`, {
-						input: { issueId, body: `**Close proposed** from omp session ${new Date().toISOString().slice(0, 10)} — owner verdict closes.` },
-					});
-					const d = await gql<{ issueLabels: { nodes: { id: string }[] } }>(
-						`query($name:String!){ issueLabels(filter:{name:{eq:$name}}){nodes{id}} }`,
-						{ name: QUEUE_LABEL },
+				if (choice === undefined) return;
+				if (choice === CLOSE) {
+					const yes = await ctx.ui.confirm(
+						`This is your verdict — close ${identifier}?`,
+						`"${title}"\n\nMoves to Done + posts the verdict comment. Not reversible from here.`,
 					);
-					const qId = d.issueLabels.nodes[0]?.id;
-					if (qId) await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: issueId, labelId: qId });
-					ctx.ui.notify(`${identifier} → close proposed, in your queue`, "info");
-				} else {
-					ctx.ui.notify(`${identifier} cleared from NOW (no proposal)`, "info");
+					if (!yes) return;
+					ctx.ui.notify(await closeWithVerdict(issueId, identifier, "done", undefined, ctx), "info");
+					return;
 				}
+				if (choice === CLEAR) {
+					await clearNow(ctx, true);
+					ctx.ui.notify(`${identifier} cleared from NOW (no close, no comment)`, "info");
+					return;
+				}
+				await clearNow(ctx, true);
+				await gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){success} }`, {
+					input: { issueId, body: `**Close proposed** from omp session ${new Date().toISOString().slice(0, 10)} — owner verdict closes.` },
+				});
+				const d = await gql<{ issueLabels: { nodes: { id: string }[] } }>(
+					`query($name:String!){ issueLabels(filter:{name:{eq:$name}}){nodes{id}} }`,
+					{ name: QUEUE_LABEL },
+				);
+				const qId = d.issueLabels.nodes[0]?.id;
+				if (qId) await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: issueId, labelId: qId });
+				ctx.ui.notify(`${identifier} → close proposed, in your queue`, "info");
 			} catch (e) {
 				ctx.ui.notify(`/done failed: ${String(e)}`, "error");
 			}
@@ -442,7 +658,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				return;
 			}
 			if (sub === "help") {
-				ctx.ui.notify("/now [issue|clear] · /done · /capture <text> · /linear status|digest", "info");
+				ctx.ui.notify("/now (map→brief) · /now <issue>|clear · /done (close-now|propose|clear) · /capture <text> · /linear status|digest", "info");
 				return;
 			}
 			const lines: string[] = [];
@@ -477,23 +693,24 @@ export default function linearNow(pi: ExtensionAPI) {
 		description: [
 			"Bounded access to the owner's Linear workspace (team HOME; worlds→surfaces→promises→issues).",
 			"Reads are free: get_issue, tree, waiting, my_now. comment posts evidence immediately (the bounded",
-			"replacement for raw GraphQL). Other writes (create_issue, propose_close, update_health, set_now) are",
+			"replacement for raw GraphQL). Other writes (create_issue, propose_close, update_health, set_now, close_issue, archive_issue) are",
 			"owner-confirmed, ALWAYS two-phase: the first call writes nothing and returns a payload preview",
 			"to show the owner verbatim; repeat with confirm:true only after his yes.",
 			"create_issue queue:true adds the waiting-on-chris label at creation; queue_issue adds it to an",
 			"existing issue — use them for ANYTHING parked on the owner (the decision queue is that label).",
 			"Never assume a write landed without success:true. Never dump large result sets into prose; summarize.",
-			"Issues close only by owner verdict — propose, never close.",
+			"Closes are the owner's verdict: close_issue/archive_issue require his on-screen yes (two-phase); propose_close remains the async path.",
 		].join(" "),
 		parameters: z.object({
-			action: z.enum(["get_issue", "tree", "waiting", "my_now", "comment", "create_issue", "queue_issue", "propose_close", "update_health", "set_now"]),
-			issue: z.string().optional().describe("Issue identifier like HOME-31 (get_issue, comment, queue_issue, propose_close, set_now)"),
+			action: z.enum(["get_issue", "tree", "waiting", "my_now", "comment", "create_issue", "queue_issue", "propose_close", "update_health", "set_now", "close_issue", "archive_issue"]),
+			issue: z.string().optional().describe("Issue identifier like HOME-31 (get_issue, comment, queue_issue, propose_close, set_now, close_issue, archive_issue)"),
 			title: z.string().optional().describe("Issue title (create_issue)"),
 			description: z.string().optional().describe("Issue description markdown (create_issue)"),
 			project: z.string().optional().describe("Project name (create_issue target, update_health)"),
 			health: z.enum(["onTrack", "atRisk", "offTrack"]).optional().describe("Project health (update_health)"),
 			body: z.string().optional().describe("Comment body, one-line update, or close reason (comment, update_health, propose_close)"),
 			queue: z.boolean().optional().describe("create_issue: also add the waiting-on-chris label so the issue lands in the owner decision queue"),
+			outcome: z.enum(["done", "canceled"]).optional().describe("close_issue: done (default) or canceled for never-doing-it"),
 			confirm: z.boolean().optional().describe("Two-phase write approval: pass true ONLY after the owner saw the previewed payload and said yes"),
 		}),
 		// Signature contract is (toolCallId, params, signal, onUpdate, ctx) — the
@@ -615,6 +832,34 @@ export default function linearNow(pi: ExtensionAPI) {
 						const qId = dl.issueLabels.nodes[0]?.id;
 						if (qId) await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: issue.id, labelId: qId });
 						return okText(`close proposed on ${issue.identifier} — owner verdict closes`);
+					}
+					case "close_issue": {
+						if (!params.issue) return deny("issue identifier required");
+						const issue = await findIssue(params.issue);
+						const outcome = params.outcome ?? "done";
+						const gate = await ownerGate(
+							ctx,
+							"Model wants to CLOSE an issue — this is your verdict",
+							`${issue.identifier} ${issue.title}\n→ moves to ${outcome === "canceled" ? "Canceled (never doing it)" : "Done"}\nReason: ${params.body ?? "(none given)"}\n\nThis is not a proposal — confirming closes it and posts "Owner verdict in session: close".`,
+							params.confirm,
+							true,
+						);
+						if (!gate.approved) return deny(gate.preview ?? "owner declined — issue NOT closed");
+						return okText(await closeWithVerdict(issue.id, issue.identifier, outcome, params.body, ctx));
+					}
+					case "archive_issue": {
+						if (!params.issue) return deny("issue identifier required");
+						const issue = await findIssue(params.issue);
+						const gate = await ownerGate(
+							ctx,
+							"Model wants to ARCHIVE an issue",
+							`${issue.identifier} ${issue.title}\n\nLinear archive: hides it from views. Does NOT mark it completed. Reversible in-app.`,
+							params.confirm,
+							true,
+						);
+						if (!gate.approved) return deny(gate.preview ?? "owner declined — issue NOT archived");
+						await gql(`mutation($id:String!){ issueArchive(id:$id){success} }`, { id: issue.id });
+						return okText(`${issue.identifier} archived`);
 					}
 					case "update_health": {
 						if (!params.project || !params.health || !params.body) return deny("project, health, body all required");
