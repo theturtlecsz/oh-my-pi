@@ -396,14 +396,19 @@ export default function linearNow(pi: ExtensionAPI) {
 	/** Owner-verdict close: state change first (the act), then the verdict comment (the record). */
 	async function closeWithVerdict(issueId: string, identifier: string, outcome: "done" | "canceled", reason: string | undefined, ctx: ExtensionContext): Promise<string> {
 		const stateId = await stateIdFor(outcome === "canceled" ? "canceled" : "completed");
-		await gql(`mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }`, { id: issueId, input: { stateId } });
+		const upd = await gql<{ issueUpdate: { success: boolean } }>(
+			`mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }`,
+			{ id: issueId, input: { stateId } },
+		);
+		if (!upd.issueUpdate.success) throw new Error(`Linear refused the close (issueUpdate success:false) for ${identifier} — no verdict recorded`);
 		try {
-			await gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){success} }`, {
+			const cmt = await gql<{ commentCreate: { success: boolean } }>(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){success} }`, {
 				input: {
 					issueId,
 					body: `**Owner verdict in session: close${outcome === "canceled" ? " (canceled — not doing it)" : ""}** — ${reason ?? "done"} (omp session ${new Date().toISOString().slice(0, 10)})`,
 				},
 			});
+			if (!cmt.commentCreate.success) throw new Error("commentCreate returned success:false");
 		} catch (e) {
 			try {
 				ctx.ui.notify(`verdict comment failed (${String(e)}) — close stands`, "warning");
@@ -858,7 +863,8 @@ export default function linearNow(pi: ExtensionAPI) {
 							true,
 						);
 						if (!gate.approved) return deny(gate.preview ?? "owner declined — issue NOT archived");
-						await gql(`mutation($id:String!){ issueArchive(id:$id){success} }`, { id: issue.id });
+						const arch = await gql<{ issueArchive: { success: boolean } }>(`mutation($id:String!){ issueArchive(id:$id){success} }`, { id: issue.id });
+						if (!arch.issueArchive.success) return deny(`Linear refused the archive (success:false) for ${issue.identifier} — nothing hidden`);
 						return okText(`${issue.identifier} archived`);
 					}
 					case "update_health": {
