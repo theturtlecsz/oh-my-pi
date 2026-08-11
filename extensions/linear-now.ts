@@ -101,6 +101,30 @@ function fmtElapsed(ms: number): string {
 	return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`;
 }
 
+/**
+ * Word-wrap plain text into at most maxLines lines of the given width.
+ * Retained per the v3 plan's keep-machinery list. Currently uncalled: the pane
+ * wraps content via pi-tui wrapTextWithAnsi instead, because this helper never
+ * splits a word longer than `width` (a long URL yields an overlong line that
+ * cell truncation would clip silently).
+ */
+function wrap(text: string, width: number, maxLines: number): string[] {
+	const out: string[] = [];
+	let line = "";
+	for (const word of text.split(/\s+/)) {
+		if (!word) continue;
+		if (line && line.length + 1 + word.length > width) {
+			out.push(line);
+			if (out.length === maxLines) return out;
+			line = word;
+		} else {
+			line = line ? `${line} ${word}` : word;
+		}
+	}
+	if (line && out.length < maxLines) out.push(line);
+	return out;
+}
+
 const HEALTH_GLYPH: Record<string, string> = { onTrack: "🟢", atRisk: "🟡", offTrack: "🔴" };
 const STATE_BAND: Record<string, number> = { started: 0, planned: 1 };
 const DONE_SUFFIX: Record<string, string> = { completed: " (done)", canceled: " (done)" };
