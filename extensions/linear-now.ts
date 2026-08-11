@@ -427,6 +427,7 @@ export default function linearNow(pi: ExtensionAPI) {
 			function arm() {
 				clearTimeout(dwell);
 				inflight?.abort();
+				gen++; // ALWAYS invalidate: a still-running load() from the previous highlight must never paint this one
 				const issue = current();
 				detail = detailCache.get(issue.id);
 				detailErr = digestErr = undefined;
@@ -435,7 +436,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				digest = dig && dig.updatedAt === issue.updatedAt ? dig.lines : undefined;
 				digestPending = !digest;
 				if (detail && digest) return;
-				const g = ++gen;
+				const g = gen;
 				dwell = setTimeout(() => void load(g), 350);
 			}
 
@@ -499,7 +500,9 @@ export default function linearNow(pi: ExtensionAPI) {
 					c.push(`${pad}blocked by: ${detail.blockedBy.join(", ") || "none recorded"}`);
 					if (detail.blocks.length) c.push(`${pad}unblocks: ${detail.blocks.join(", ")}`);
 				}
-				if (digestErr) c.push(`${pad}✦ digest unavailable (${digestErr})`);
+				if (detailErr) {
+					/* no digest line — the history-unavailable error above covers the whole fetch chain */
+				} else if (digestErr) c.push(`${pad}✦ digest unavailable (${digestErr})`);
 				else if (digestPending || !digest) c.push(`${pad}✦ digesting…`);
 				else for (const l of digest) for (const wl of wrap(l, w - pad.length - 2, 2)) c.push(`${pad}${wl}`);
 				return c.slice(0, 24);
