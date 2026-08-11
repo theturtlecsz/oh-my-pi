@@ -15,7 +15,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { discoverAuthStorage, getAgentDir, type ExtensionAPI, type ExtensionContext, type ExtensionModelQuery, type Theme } from "@oh-my-pi/pi-coding-agent";
-import { matchesKey, type TUI } from "@oh-my-pi/pi-tui";
+import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 
 const TEAM_KEY = "HOME";
 const NOW_LABEL = "now";
@@ -135,6 +135,8 @@ const DIGEST_INSTRUCTION = [
 	"NEXT: the single next step (1 line)",
 	"SUGGEST: your recommended action on this issue — one direct line",
 ].join("\n");
+
+const DIGEST_LABELS = new Set(["PROBLEM", "MAKEUP", "DECISIONS", "BLOCKERS", "ON-YOU", "EVIDENCE", "STATE", "NEXT", "SUGGEST"]);
 
 /**
  * Owner approval for writes. Human slash commands (//done, //capture) → on-screen
@@ -389,26 +391,41 @@ export default function linearNow(pi: ExtensionAPI) {
 			.map(c => c.text)
 			.join("\n");
 		const all = text.split("\n").map(l => l.trim()).filter(Boolean);
-		const first = all.findIndex(l => /^[A-Z][A-Z-]*:/.test(l));
+		const labelOf = (l: string) => {
+			const m = /^([A-Z][A-Z-]*):/.exec(l);
+			return m && DIGEST_LABELS.has(m[1]) ? m[1] : undefined;
+		};
+		const first = all.findIndex(l => labelOf(l) !== undefined);
 		// Per-section line caps (label line + continuations). Overflow trims WITHIN a
 		// section only — a later section is never dropped (owner contract: every
 		// labeled section survives; DECISIONS max 5 / EVIDENCE max 3 per instruction).
+		// Only KNOWN contract labels start a section — model prose like "URL:" is a
+		// continuation line of the current section, never a section reset.
 		const lines: string[] = [];
+		const seen = new Set<string>();
 		let section = "";
 		let sectionLines = 0;
 		for (const line of first >= 0 ? all.slice(first) : all) {
-			const m = /^([A-Z][A-Z-]*):/.exec(line);
-			if (m) {
-				section = m[1];
+			const l = labelOf(line);
+			if (l) {
+				section = l;
+				seen.add(l);
 				sectionLines = 0;
 			}
-			const cap = section === "DECISIONS" ? 5 : section === "EVIDENCE" ? 3 : 3;
+			const cap = section === "DECISIONS" ? 5 : 3;
 			if (sectionLines < cap) {
 				lines.push(line);
 				sectionLines++;
 			}
 		}
 		if (!lines.length) throw new Error("digest came back empty");
+		// Contract validation BEFORE caching — a bad reply is never cached; the pane
+		// shows the explicit "✦ digest unavailable (…)" line instead (law 12).
+		const required = ["PROBLEM", "MAKEUP", "DECISIONS", "BLOCKERS", "STATE", "NEXT", "SUGGEST"];
+		if (issue.waiting) required.push("ON-YOU");
+		const missing = required.filter(s => !seen.has(s));
+		if (missing.length) throw new Error(`digest missing required section(s): ${missing.join(", ")}`);
+		if (!issue.waiting && seen.has("ON-YOU")) throw new Error("digest included ON-YOU for an issue not parked on Chris");
 		digestCache.set(issue.id, { updatedAt: issue.updatedAt, lines });
 		return lines;
 	}
@@ -437,8 +454,8 @@ export default function linearNow(pi: ExtensionAPI) {
 			let dwell: NodeJS.Timeout | undefined;
 			let inflight: AbortController | undefined;
 			let gen = 0;
-			let scrollTop = 0;
-			let cardScroll = 0; // pgup/pgdn offset INTO an oversized card; reset on every highlight
+			let listTop = 0; // first visible left-column row; cursor kept in view
+			let paneScroll = 0; // →/← page offset INTO oversized pane content; reset on every highlight
 
 			const current = () => issueRows[cursor].issue;
 
@@ -446,7 +463,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				clearTimeout(dwell);
 				inflight?.abort();
 				gen++; // ALWAYS invalidate: a still-running load() from the previous highlight must never paint this one
-				cardScroll = 0;
+				paneScroll = 0;
 				const issue = current();
 				detail = detailCache.get(issue.id);
 				detailErr = digestErr = undefined;
@@ -499,77 +516,99 @@ export default function linearNow(pi: ExtensionAPI) {
 				gen++;
 			}
 
-			function cardLines(i: MapIssue, w: number): string[] {
-				const c: string[] = [];
-				const pad = "    ";
-				c.push(`${pad}${i.stateName} · updated ${fmtElapsed(Date.now() - Date.parse(i.updatedAt))} ago · ${i.labels.join(",") || "no labels"}`);
-				if (detailErr) {
-					c.push(`${pad}⚠ history unavailable (${detailErr})`);
-				} else if (detailPending || !detail) {
-					c.push(`${pad}…loading history`);
-				} else {
-					const lastC = detail.comments[detail.comments.length - 1];
-					c.push(
-						`${pad}${detail.commentsTotal >= 20 ? "20+" : detail.commentsTotal} comments · ${detail.commentsLast7d} this week · ` +
-							(lastC ? `last: [${lastC.at.slice(5, 10)} ${lastC.author}] ${lastC.head.slice(0, 60)}` : "(no comments)"),
-					);
-				}
-				for (const l of wrap((i.description ?? "").slice(0, 280) || "(no description)", w - pad.length - 2, 3)) c.push(`${pad}${l}`);
-				if (detail) {
-					c.push(`${pad}blocked by: ${detail.blockedBy.join(", ") || "none recorded"}`);
-					if (detail.blocks.length) c.push(`${pad}unblocks: ${detail.blocks.join(", ")}`);
-				}
-				if (detailErr) {
-					/* no digest line — the history-unavailable error above covers the whole fetch chain */
-				} else if (digestErr) c.push(`${pad}✦ digest unavailable (${digestErr})`);
-				else if (digestPending || !digest) c.push(`${pad}✦ digesting…`);
-				else for (const l of digest) for (const wl of wrap(l, w - pad.length - 2, 2)) c.push(`${pad}${wl}`);
-				return c;
-			}
-
 			arm();
 
 			return {
 				render(width: number): string[] {
-					const w = Math.max(40, width);
-					const out: string[] = [];
-					let cursorStart = 0;
-					let cardEnd = 0;
-					for (let r = 0; r < rows.length; r++) {
-						const row = rows[r];
+					// R1-v3 split layout (owner ruling 2026-08-11): static one-line list rows
+					// LEFT, framed detail pane RIGHT consuming all remaining width, following
+					// the highlight. List geometry never changes on arrow press.
+					const w = Math.max(60, width);
+					const listW = Math.min(48, Math.max(24, Math.floor(w * 0.38)));
+					const paneW = w - listW - 1;
+					const innerW = paneW - 4;
+					const vh = Math.max(12, (process.stdout.rows ?? 40) - 6);
+					const i = current();
+
+					// Left column: plain cell → exact-width pad → style the whole cell (ANSI
+					// is zero-width; emoji handled by truncateToWidth's width tables).
+					const cells = rows.map((row, r) => {
 						if (row.kind === "header") {
 							const s = row.s;
-							out.push(`${HEALTH_GLYPH[s.health ?? ""] ?? "◇"} ${s.name} · ${s.issues.length} open${s.waiting ? ` · ⏳${s.waiting} on Chris` : ""}`.slice(0, w));
-						} else {
-							const i = row.i;
-							const isCur = issueRows[cursor].rowIdx === r;
-							const line = `  ${isCur ? "❯ " : "  "}${i.isNow ? "◆ " : ""}${i.identifier} · ${i.title}${i.waiting ? " ⏳" : ""}`.slice(0, w);
-							out.push(isCur ? line : theme.fg("dim", line));
-							if (isCur) {
-								cursorStart = out.length - 1;
-								for (const cl of cardLines(i, w)) out.push(theme.fg("dim", cl.slice(0, w)));
-								cardEnd = out.length - 1;
-							}
+							return truncateToWidth(`${HEALTH_GLYPH[s.health ?? ""] ?? "◇"} ${s.name} · ${s.issues.length} open${s.waiting ? ` · ⏳${s.waiting} on Chris` : ""}`, listW, Ellipsis.Unicode, true);
+						}
+						const it = row.i;
+						const isCur = issueRows[cursor].rowIdx === r;
+						const cell = truncateToWidth(`  ${isCur ? "❯ " : "  "}${it.isNow ? "◆ " : ""}${it.identifier} · ${it.title}${it.waiting ? " ⏳" : ""}`, listW, Ellipsis.Unicode, true);
+						return isCur ? cell : theme.fg("dim", cell);
+					});
+					const curRow = issueRows[cursor].rowIdx;
+					if (curRow < listTop) listTop = Math.max(0, curRow - 1);
+					if (curRow >= listTop + vh) listTop = curRow - vh + 1;
+					listTop = Math.max(0, Math.min(listTop, Math.max(0, rows.length - vh)));
+					const blankCell = " ".repeat(listW);
+					const left: string[] = [];
+					for (let r = listTop; r < listTop + vh; r++) left.push(cells[r] ?? blankCell);
+
+					// Right pane content, each line pre-wrapped to the frame interior.
+					const content: string[] = [];
+					const push = (line: string) => {
+						for (const wl of wrapTextWithAnsi(line, innerW)) content.push(wl);
+					};
+					push(theme.fg("muted", `${i.stateName} · updated ${fmtElapsed(Date.now() - Date.parse(i.updatedAt))} ago · ${i.labels.join(",") || "no labels"}`));
+					if (detailErr) {
+						push(theme.fg("error", `⚠ history unavailable (${detailErr})`));
+					} else if (detailPending || !detail) {
+						push(theme.fg("dim", "…loading history"));
+					} else {
+						const lastC = detail.comments[detail.comments.length - 1];
+						push(
+							`${detail.commentsTotal >= 20 ? "20+" : detail.commentsTotal} comments · ${detail.commentsLast7d} this week · ` +
+								(lastC ? `last: [${lastC.at.slice(5, 10)} ${lastC.author}] ${lastC.head.slice(0, 60)}` : "(no comments)"),
+						);
+					}
+					content.push("");
+					const desc = (i.description ?? "").slice(0, 480);
+					if (desc) for (const l of wrap(desc, innerW, 6)) content.push(l);
+					else content.push(theme.fg("dim", "(no description)"));
+					if (detail) {
+						push(`blocked by: ${detail.blockedBy.join(", ") || "none recorded"}`);
+						if (detail.blocks.length) push(`unblocks: ${detail.blocks.join(", ")}`);
+					}
+					content.push("");
+					if (detailErr) {
+						/* no digest line — the history-unavailable error above covers the whole fetch chain */
+					} else if (digestErr) push(theme.fg("warning", `✦ digest unavailable (${digestErr})`));
+					else if (digestPending || !digest) push(theme.fg("dim", "✦ digesting…"));
+					else {
+						for (const l of digest) {
+							const m = /^([A-Z][A-Z-]*):/.exec(l);
+							if (m && DIGEST_LABELS.has(m[1])) push(theme.bold(theme.fg("accent", `${m[1]}:`)) + l.slice(m[0].length));
+							else push(l);
 						}
 					}
-					const vh = Math.max(12, (process.stdout.rows ?? 40) - 6);
-					const cardOverflow = Math.max(0, cardEnd - cursorStart + 1 - vh);
-					cardScroll = Math.min(cardScroll, cardOverflow);
-					if (cardOverflow > 0) {
-						// card taller than the viewport: anchor at the cursor row, pgdn walks deeper
-						scrollTop = cursorStart + cardScroll;
-					} else {
-						if (cursorStart < scrollTop) scrollTop = Math.max(0, cursorStart - 1);
-						if (cardEnd >= scrollTop + vh) scrollTop = Math.min(cursorStart, cardEnd - vh + 1);
-					}
-					const view = out.slice(scrollTop, scrollTop + vh);
-					view.push(
+
+					// Frame the pane: exactly vh lines, frame chars border-colored, body text
+					// as styled above (hierarchy: only frame + hints are dim/border).
+					const bd = (s: string) => theme.fg("border", s);
+					const bodyH = vh - 2;
+					const paneOverflow = Math.max(0, content.length - bodyH);
+					paneScroll = Math.min(paneScroll, paneOverflow);
+					const head = truncateToWidth(`┌─ ${i.identifier} · ${i.title} `, paneW - 1, Ellipsis.Unicode);
+					const pane: string[] = [bd(head + "─".repeat(Math.max(0, paneW - 1 - visibleWidth(head))) + "┐")];
+					for (const line of content.slice(paneScroll, paneScroll + bodyH)) pane.push(bd("│ ") + truncateToWidth(line, innerW, Ellipsis.Omit, true) + bd(" │"));
+					while (pane.length < vh - 1) pane.push(bd("│ ") + " ".repeat(innerW) + bd(" │"));
+					pane.push(bd(`└${"─".repeat(Math.max(0, paneW - 2))}┘`));
+
+					const out: string[] = [];
+					for (let r = 0; r < vh; r++) out.push(`${left[r]} ${pane[r]}`);
+					out.push(
 						theme.fg(
 							"dim",
-							`enter = make it NOW · esc = close${cardOverflow > 0 ? ` · →/← = card (+${cardOverflow - cardScroll} below)` : ""}${map.capped ? " · ⚠ 100-issue cap" : ""}`,
+							`enter = make it NOW · esc = close${paneOverflow > 0 ? ` · →/← page details (+${paneOverflow - paneScroll} below)` : ""}${map.capped ? " · ⚠ 100-issue cap" : ""}`,
 						),
 					);
-					return view;
+					return out;
 				},
 				handleInput(data: string) {
 					if (matchesKey(data, "up")) {
@@ -589,12 +628,12 @@ export default function linearNow(pi: ExtensionAPI) {
 						return;
 					}
 					if (matchesKey(data, "pageDown") || matchesKey(data, "right")) {
-						cardScroll += 5;
+						paneScroll += 5;
 						tui.requestRender();
 						return;
 					}
 					if (matchesKey(data, "pageUp") || matchesKey(data, "left")) {
-						cardScroll = Math.max(0, cardScroll - 5);
+						paneScroll = Math.max(0, paneScroll - 5);
 						tui.requestRender();
 						return;
 					}
@@ -797,7 +836,7 @@ export default function linearNow(pi: ExtensionAPI) {
 	// ---- commands ----
 
 	pi.registerCommand("now", {
-		description: "The NOW window (bare = map+cards, or /now HOME-31, /now clear)",
+		description: "The NOW window (bare = map + detail pane, or /now HOME-31, /now clear)",
 		getArgumentCompletions: prefix => {
 			const p = prefix.trim().toUpperCase();
 			if (!p) return null;
