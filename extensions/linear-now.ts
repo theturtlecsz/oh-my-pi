@@ -13,7 +13,9 @@ import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { completeSimple } from "@oh-my-pi/pi-ai";
+import { discoverAuthStorage, getAgentDir, type ExtensionAPI, type ExtensionContext, type ExtensionModelQuery, type Theme } from "@oh-my-pi/pi-coding-agent";
+import { matchesKey, type TUI } from "@oh-my-pi/pi-tui";
 
 const TEAM_KEY = "HOME";
 const NOW_LABEL = "now";
@@ -43,6 +45,9 @@ interface MapIssue {
 	updatedAt: string;
 	waiting: boolean;
 	isNow: boolean;
+	description?: string;
+	labels: string[];
+	project?: string;
 }
 
 interface MapSurface {
@@ -51,6 +56,16 @@ interface MapSurface {
 	state: string;
 	issues: MapIssue[];
 	waiting: number;
+}
+
+interface IssueDetail {
+	blockedBy: string[];
+	blocks: string[];
+	related: string[];
+	comments: { at: string; author: string; head: string }[];
+	commentsTotal: number;
+	commentsLast7d: number;
+	digestPacket: string;
 }
 
 function apiKey(): string | null {
@@ -86,19 +101,39 @@ function fmtElapsed(ms: number): string {
 	return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`;
 }
 
+/** Word-wrap plain text into at most maxLines lines of the given width. */
+function wrap(text: string, width: number, maxLines: number): string[] {
+	const out: string[] = [];
+	let line = "";
+	for (const word of text.split(/\s+/)) {
+		if (!word) continue;
+		if (line && line.length + 1 + word.length > width) {
+			out.push(line);
+			if (out.length === maxLines) return out;
+			line = word;
+		} else {
+			line = line ? `${line} ${word}` : word;
+		}
+	}
+	if (line && out.length < maxLines) out.push(line);
+	return out;
+}
+
 const HEALTH_GLYPH: Record<string, string> = { onTrack: "🟢", atRisk: "🟡", offTrack: "🔴" };
 const STATE_BAND: Record<string, number> = { started: 0, planned: 1 };
 const DONE_SUFFIX: Record<string, string> = { completed: " (done)", canceled: " (done)" };
 
-const BRIEF_INSTRUCTION = [
-	"── Linear brief requested from the /now map ──",
-	"Distill the raw data below into a ≤5-line plain-language brief for Chris (non-engineer, first read):",
-	'1. PROBLEM — what this issue is and why the household cares',
-	'2. DECIDED — verdicts/proofs/retractions already on record in the comments ("nothing decided yet" if none)',
-	'3. BLOCKED BY — open blockers ("none recorded" if none)',
-	"4. STATE — where it stands right now",
-	"5. NEXT — the single next step",
-	"No jargon, no filler, no headers beyond the five lines.",
+const DIGEST_INSTRUCTION = [
+	"Analyze this Linear issue for Chris (non-engineer, first read). Output ONLY labeled lines in this order, plain language, no markdown, no preamble:",
+	"PROBLEM: the problem statement — what is wrong or wanted and why the household cares (1-2 lines)",
+	"MAKEUP: what the work is made of — the moving parts, scope, what done involves (1-3 lines)",
+	'DECISIONS: every verdict/proof/retraction on record, dated, one line each, oldest first (max 5; exactly "DECISIONS: none recorded" if empty)',
+	'BLOCKERS: what actually blocks this — linked blockers AND blockers described in prose ("BLOCKERS: none recorded" if none)',
+	"ON-YOU: the exact question parked on Chris and since when — ONLY when the issue is marked waiting on him, else omit this line entirely",
+	"EVIDENCE: commits, proofs, live-test results cited in the record, dated (max 3 lines; omit if none cited)",
+	"STATE: where it stands right now (1 line)",
+	"NEXT: the single next step (1 line)",
+	"SUGGEST: your recommended action on this issue — one direct line",
 ].join("\n");
 
 /**
@@ -144,6 +179,7 @@ export default function linearNow(pi: ExtensionAPI) {
 	let state: NowState = {};
 	let digestPending = false;
 	let digestInjectedThisSession = false;
+	let models: ExtensionModelQuery | undefined;
 
 	async function loadCache() {
 		try {
@@ -225,6 +261,7 @@ export default function linearNow(pi: ExtensionAPI) {
 					id: string;
 					identifier: string;
 					title: string;
+					description?: string;
 					updatedAt: string;
 					state: { name: string };
 					project?: { name: string };
@@ -232,7 +269,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				}[];
 			};
 		}>(
-			`query($team:String!){ projects(first:50){nodes{name state health}} issues(first:100,filter:{team:{key:{eq:$team}},state:{type:{nin:["completed","canceled"]}}},orderBy:updatedAt){nodes{id identifier title updatedAt state{name} project{name} labels(first:10){nodes{name}}}} }`,
+			`query($team:String!){ projects(first:50){nodes{name state health}} issues(first:100,filter:{team:{key:{eq:$team}},state:{type:{nin:["completed","canceled"]}}},orderBy:updatedAt){nodes{id identifier title description updatedAt state{name} project{name} labels(first:10){nodes{name}}}} }`,
 			{ team: TEAM_KEY },
 		);
 		const NO_SURFACE = "(no surface)";
@@ -248,6 +285,9 @@ export default function linearNow(pi: ExtensionAPI) {
 				updatedAt: n.updatedAt,
 				waiting: n.labels.nodes.some(l => l.name === QUEUE_LABEL),
 				isNow: n.identifier === state.identifier,
+				description: n.description,
+				labels: n.labels.nodes.map(l => l.name),
+				project: n.project?.name,
 			});
 			byProject.set(key, list);
 		}
@@ -266,8 +306,8 @@ export default function linearNow(pi: ExtensionAPI) {
 		return { surfaces, capped: d.issues.nodes.length === 100 };
 	}
 
-	/** ONE bounded request for the issue BRIEF; the agent distills the packet. */
-	async function briefPacket(ref: string): Promise<{ packet: string; identifier: string; isNow: boolean }> {
+	/** ONE bounded request for an issue's history — card raw fields + the digest packet. */
+	async function fetchIssueDetail(ref: string): Promise<IssueDetail> {
 		const d = await gql<{
 			issue: {
 				identifier: string;
@@ -286,28 +326,250 @@ export default function linearNow(pi: ExtensionAPI) {
 			{ id: ref },
 		);
 		const i = d.issue;
-		const comments = [...i.comments.nodes]
-			.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-			.slice(-20)
-			.map(c => `[${c.createdAt.slice(0, 10)} ${c.user?.name ?? "?"}] ${c.body.slice(0, 400)}`);
+		const sorted = [...i.comments.nodes].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+		const last20 = sorted.slice(-20).map(c => ({ at: c.createdAt, author: c.user?.name ?? "?", head: c.body.slice(0, 400) }));
+		const weekAgo = Date.now() - 7 * 24 * 3600_000;
 		const blockedBy = i.inverseRelations.nodes.filter(r => r.type === "blocks").map(r => `${r.issue.identifier} ${r.issue.title}${DONE_SUFFIX[r.issue.state.type] ?? ""}`);
 		const blocks = i.relations.nodes.filter(r => r.type === "blocks").map(r => `${r.relatedIssue.identifier} ${r.relatedIssue.title}${DONE_SUFFIX[r.relatedIssue.state.type] ?? ""}`);
 		const related = [
 			...i.relations.nodes.filter(r => r.type !== "blocks").map(r => `${r.type}: ${r.relatedIssue.identifier} ${r.relatedIssue.title}`),
 			...i.inverseRelations.nodes.filter(r => r.type !== "blocks").map(r => `${r.type}: ${r.issue.identifier} ${r.issue.title}`),
 		];
-		const packet = [
+		const digestPacket = [
 			`${i.identifier} ${i.title}`,
 			`surface: ${i.project?.name ?? "none"}${i.project?.health ? ` [${i.project.health}]` : ""} · state: ${i.state.name} · labels: ${i.labels.nodes.map(l => l.name).join(",") || "none"} · updated: ${i.updatedAt.slice(0, 10)}`,
 			"DESCRIPTION:",
 			(i.description ?? "(none)").slice(0, 3000),
 			"COMMENTS (oldest→newest, last 20):",
-			comments.join("\n") || "(no comments)",
+			last20.map(c => `[${c.at.slice(0, 10)} ${c.author}] ${c.head}`).join("\n") || "(no comments)",
 			`BLOCKED BY:\n${blockedBy.join("\n") || "(none recorded)"}`,
 			`BLOCKS:\n${blocks.join("\n") || "(none recorded)"}`,
 			...(related.length ? [`RELATED:\n${related.join("\n")}`] : []),
 		].join("\n");
-		return { packet, identifier: i.identifier, isNow: i.identifier === state.identifier };
+		return {
+			blockedBy,
+			blocks,
+			related,
+			comments: last20,
+			commentsTotal: sorted.length,
+			commentsLast7d: sorted.filter(c => Date.parse(c.createdAt) > weekAgo).length,
+			digestPacket,
+		};
+	}
+
+	// ---- in-card digest engine (owner ruling R4: auto per highlighted issue) ----
+
+	const detailCache = new Map<string, IssueDetail>();
+	const digestCache = new Map<string, { updatedAt: string; lines: string[] }>();
+	const digestKeyByProvider = new Map<string, Promise<string | undefined>>();
+
+	function digestApiKey(provider: string): Promise<string | undefined> {
+		let p = digestKeyByProvider.get(provider);
+		if (!p) {
+			p = (async () => (await discoverAuthStorage(getAgentDir())).getApiKey(provider))();
+			digestKeyByProvider.set(provider, p);
+		}
+		return p;
+	}
+
+	async function digestFor(issue: MapIssue, detail: IssueDetail, signal: AbortSignal): Promise<string[]> {
+		const cached = digestCache.get(issue.id);
+		if (cached && cached.updatedAt === issue.updatedAt) return cached.lines;
+		const model = models?.resolve("@smol");
+		if (!model) throw new Error("no smol model configured (@smol role) — digests never fall through to the session model");
+		const key = await digestApiKey(model.provider);
+		if (!key) throw new Error(`no credentials for ${model.provider}`);
+		const res = await completeSimple(
+			model,
+			{ messages: [{ role: "user", content: `${DIGEST_INSTRUCTION}\nwaiting-on-chris label: ${issue.waiting ? "yes" : "no"}\n── issue ──\n${detail.digestPacket}`, timestamp: Date.now() }] },
+			{ apiKey: key, disableReasoning: true, signal },
+		);
+		const text = res.content
+			.filter(c => c.type === "text")
+			.map(c => c.text)
+			.join("\n");
+		const all = text.split("\n").map(l => l.trim()).filter(Boolean);
+		const first = all.findIndex(l => /^[A-Z][A-Z-]*:/.test(l));
+		const lines = (first >= 0 ? all.slice(first) : all).slice(0, 16);
+		if (!lines.length) throw new Error("digest came back empty");
+		digestCache.set(issue.id, { updatedAt: issue.updatedAt, lines });
+		return lines;
+	}
+
+	// ---- the NOW window (owner rulings R1-R5: one screen, card on highlight, enter→confirm→NOW) ----
+
+	function nowWindowFactory(map: { surfaces: MapSurface[]; capped: boolean }) {
+		return (tui: TUI, theme: Theme, _kb: unknown, done: (r: MapIssue | undefined) => void) => {
+			type Row = { kind: "header"; s: MapSurface } | { kind: "issue"; i: MapIssue };
+			const rows: Row[] = [];
+			for (const s of map.surfaces) {
+				rows.push({ kind: "header", s });
+				for (const i of s.issues) rows.push({ kind: "issue", i });
+			}
+			const issueRows: { rowIdx: number; issue: MapIssue }[] = [];
+			rows.forEach((r, idx) => {
+				if (r.kind === "issue") issueRows.push({ rowIdx: idx, issue: r.i });
+			});
+			let cursor = Math.max(0, issueRows.findIndex(e => e.issue.isNow));
+			let detail: IssueDetail | undefined;
+			let detailErr: string | undefined;
+			let detailPending = true;
+			let digest: string[] | undefined;
+			let digestErr: string | undefined;
+			let digestPending = true;
+			let dwell: NodeJS.Timeout | undefined;
+			let inflight: AbortController | undefined;
+			let gen = 0;
+			let scrollTop = 0;
+
+			const current = () => issueRows[cursor].issue;
+
+			function arm() {
+				clearTimeout(dwell);
+				inflight?.abort();
+				const issue = current();
+				detail = detailCache.get(issue.id);
+				detailErr = digestErr = undefined;
+				detailPending = !detail;
+				const dig = digestCache.get(issue.id);
+				digest = dig && dig.updatedAt === issue.updatedAt ? dig.lines : undefined;
+				digestPending = !digest;
+				if (detail && digest) return;
+				const g = ++gen;
+				dwell = setTimeout(() => void load(g), 350);
+			}
+
+			async function load(g: number) {
+				const issue = current();
+				inflight = new AbortController();
+				try {
+					let det = detailCache.get(issue.id);
+					if (!det) {
+						det = await fetchIssueDetail(issue.identifier);
+						detailCache.set(issue.id, det);
+					}
+					if (g !== gen) return;
+					detail = det;
+					detailPending = false;
+					tui.requestRender();
+					if (!digest) {
+						const lines = await digestFor(issue, det, inflight.signal);
+						if (g !== gen) return;
+						digest = lines;
+						digestPending = false;
+					}
+					tui.requestRender();
+				} catch (e) {
+					if (g !== gen) return;
+					if (!detail) {
+						detailErr = String(e);
+						detailPending = false;
+						digestPending = false;
+					} else {
+						digestErr = String(e);
+						digestPending = false;
+					}
+					tui.requestRender();
+				}
+			}
+
+			function cleanup() {
+				if (dwell) clearTimeout(dwell);
+				inflight?.abort();
+				gen++;
+			}
+
+			function cardLines(i: MapIssue, w: number): string[] {
+				const c: string[] = [];
+				const pad = "    ";
+				c.push(`${pad}${i.stateName} · updated ${fmtElapsed(Date.now() - Date.parse(i.updatedAt))} ago · ${i.labels.join(",") || "no labels"}`);
+				if (detailErr) {
+					c.push(`${pad}⚠ history unavailable (${detailErr})`);
+				} else if (detailPending || !detail) {
+					c.push(`${pad}…loading history`);
+				} else {
+					const lastC = detail.comments[detail.comments.length - 1];
+					c.push(
+						`${pad}${detail.commentsTotal >= 20 ? "20+" : detail.commentsTotal} comments · ${detail.commentsLast7d} this week · ` +
+							(lastC ? `last: [${lastC.at.slice(5, 10)} ${lastC.author}] ${lastC.head.slice(0, 60)}` : "(no comments)"),
+					);
+				}
+				for (const l of wrap((i.description ?? "").slice(0, 280) || "(no description)", w - pad.length - 2, 3)) c.push(`${pad}${l}`);
+				if (detail) {
+					c.push(`${pad}blocked by: ${detail.blockedBy.join(", ") || "none recorded"}`);
+					if (detail.blocks.length) c.push(`${pad}unblocks: ${detail.blocks.join(", ")}`);
+				}
+				if (digestErr) c.push(`${pad}✦ digest unavailable (${digestErr})`);
+				else if (digestPending || !digest) c.push(`${pad}✦ digesting…`);
+				else for (const l of digest) for (const wl of wrap(l, w - pad.length - 2, 2)) c.push(`${pad}${wl}`);
+				return c.slice(0, 24);
+			}
+
+			arm();
+
+			return {
+				render(width: number): string[] {
+					const w = Math.max(40, width);
+					const out: string[] = [];
+					let cursorStart = 0;
+					let cardEnd = 0;
+					for (let r = 0; r < rows.length; r++) {
+						const row = rows[r];
+						if (row.kind === "header") {
+							const s = row.s;
+							out.push(`${HEALTH_GLYPH[s.health ?? ""] ?? "◇"} ${s.name} · ${s.issues.length} open${s.waiting ? ` · ⏳${s.waiting} on Chris` : ""}`.slice(0, w));
+						} else {
+							const i = row.i;
+							const isCur = issueRows[cursor].rowIdx === r;
+							const line = `  ${isCur ? "❯ " : "  "}${i.isNow ? "◆ " : ""}${i.identifier} · ${i.title}${i.waiting ? " ⏳" : ""}`.slice(0, w);
+							out.push(isCur ? line : theme.fg("dim", line));
+							if (isCur) {
+								cursorStart = out.length - 1;
+								for (const cl of cardLines(i, w)) out.push(theme.fg("dim", cl.slice(0, w)));
+								cardEnd = out.length - 1;
+							}
+						}
+					}
+					const vh = Math.max(12, (process.stdout.rows ?? 40) - 6);
+					if (cursorStart < scrollTop) scrollTop = Math.max(0, cursorStart - 1);
+					if (cardEnd >= scrollTop + vh) scrollTop = Math.min(cursorStart, cardEnd - vh + 1);
+					const view = out.slice(scrollTop, scrollTop + vh);
+					view.push(theme.fg("dim", `enter = make it NOW · esc = close${map.capped ? " · ⚠ 100-issue cap" : ""}`));
+					return view;
+				},
+				handleInput(data: string) {
+					if (matchesKey(data, "up")) {
+						if (cursor > 0) {
+							cursor--;
+							arm();
+							tui.requestRender();
+						}
+						return;
+					}
+					if (matchesKey(data, "down")) {
+						if (cursor < issueRows.length - 1) {
+							cursor++;
+							arm();
+							tui.requestRender();
+						}
+						return;
+					}
+					if (matchesKey(data, "enter") || matchesKey(data, "return")) {
+						const picked = current();
+						cleanup();
+						done(picked);
+						return;
+					}
+					if (matchesKey(data, "escape")) {
+						cleanup();
+						done(undefined);
+					}
+				},
+				dispose() {
+					cleanup();
+				},
+			};
+		};
 	}
 
 	async function labelHolder(): Promise<{ id: string; identifier: string; title: string; project?: string } | null> {
@@ -447,6 +709,7 @@ export default function linearNow(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_e, ctx) => {
 		await loadCache();
+		models = ctx.models;
 		// session entry wins over cache for NOW restore (survives cache loss)
 		try {
 			for (const entry of ctx.sessionManager.getBranch()) {
@@ -490,7 +753,7 @@ export default function linearNow(pi: ExtensionAPI) {
 	// ---- commands ----
 
 	pi.registerCommand("now", {
-		description: "Set/show the NOW issue (bare = picker, or /now HOME-31, /now clear)",
+		description: "The NOW window (bare = map+cards, or /now HOME-31, /now clear)",
 		getArgumentCompletions: prefix => {
 			const p = prefix.trim().toUpperCase();
 			if (!p) return null;
@@ -511,50 +774,15 @@ export default function linearNow(pi: ExtensionAPI) {
 					return;
 				}
 				const map = await mapData();
-				if (map.capped) ctx.ui.notify("100-issue cap hit — map may be partial", "warning");
-				if (!map.surfaces.length) {
+				if (!map.surfaces.length || !map.surfaces.some(s => s.issues.length)) {
 					ctx.ui.notify("No open issues found", "warning");
 					return;
 				}
-				let picked: MapIssue | undefined;
-				while (!picked) {
-					const nowIdx = map.surfaces.findIndex(s => s.issues.some(i => i.isNow));
-					const surfaceItems = map.surfaces.map(s => ({
-						label: `${HEALTH_GLYPH[s.health ?? ""] ?? "◇"} ${s.name} · ${s.issues.length} open${s.waiting ? ` · ⏳${s.waiting} on Chris` : ""}`,
-						description: s.issues.slice(0, 4).map(i => i.identifier).join(", ") + (s.issues.length > 4 ? ", …" : ""),
-					}));
-					const surfacePick = await ctx.ui.select("NOW map — which surface?", surfaceItems, {
-						helpText: "enter = open surface · esc = cancel",
-						initialIndex: nowIdx >= 0 ? nowIdx : 0,
-					});
-					if (surfacePick === undefined) return;
-					const surface = map.surfaces[surfaceItems.findIndex(o => o.label === surfacePick)];
-					if (!surface || !surface.issues.length) {
-						ctx.ui.notify("no open issues here", "info");
-						continue;
-					}
-					const issueItems: { label: string; description?: string }[] = [
-						{ label: "← back to map" },
-						...surface.issues.map(i => ({
-							label: `${i.isNow ? "◆ " : ""}${i.identifier} · ${i.title}${i.waiting ? " ⏳" : ""}`,
-							description: `${i.stateName} · updated ${fmtElapsed(Date.now() - Date.parse(i.updatedAt))} ago`,
-						})),
-					];
-					const issuePick = await ctx.ui.select(`${surface.name} — which issue?`, issueItems, { helpText: "enter = brief · esc = cancel" });
-					if (issuePick === undefined) return;
-					const idx = issueItems.findIndex(o => o.label === issuePick);
-					if (idx <= 0) continue;
-					picked = surface.issues[idx - 1];
-				}
-				const brief = await briefPacket(picked.identifier);
-				const tail = brief.isNow
-					? "This issue is already NOW — say so at the end; do not call set_now."
-					: `Then call the linear tool with action set_now and issue ${brief.identifier} (NO confirm flag) so the confirm card lands under the brief; if Chris says yes, repeat with confirm:true.`;
-				pi.sendMessage(
-					{ customType: "linear-brief", content: `${BRIEF_INSTRUCTION}\n${tail}\n── raw data ──\n${brief.packet}` },
-					{ triggerTurn: true, deliverAs: "nextTurn" },
-				);
-				ctx.ui.notify(`Brief for ${brief.identifier} → distilling`, "info");
+				const pick = await ctx.ui.custom<MapIssue | undefined>(nowWindowFactory(map), { overlay: true });
+				if (!pick) return;
+				const yes = await ctx.ui.confirm(`Make ${pick.identifier} your NOW?`, `"${pick.title}"\n${pick.project ?? ""}`);
+				if (!yes) return;
+				await setNow({ id: pick.id, identifier: pick.identifier, title: pick.title, project: pick.project }, ctx);
 			} catch (e) {
 				ctx.ui.notify(`/now failed: ${String(e)}`, "error");
 			}
@@ -663,7 +891,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				return;
 			}
 			if (sub === "help") {
-				ctx.ui.notify("/now (map→brief) · /now <issue>|clear · /done (close-now|propose|clear) · /capture <text> · /linear status|digest", "info");
+				ctx.ui.notify("/now (window) · /now <issue>|clear · /done (close-now|propose|clear) · /capture <text> · /linear status|digest", "info");
 				return;
 			}
 			const lines: string[] = [];
