@@ -390,7 +390,24 @@ export default function linearNow(pi: ExtensionAPI) {
 			.join("\n");
 		const all = text.split("\n").map(l => l.trim()).filter(Boolean);
 		const first = all.findIndex(l => /^[A-Z][A-Z-]*:/.test(l));
-		const lines = (first >= 0 ? all.slice(first) : all).slice(0, 16);
+		// Per-section line caps (label line + continuations). Overflow trims WITHIN a
+		// section only — a later section is never dropped (owner contract: every
+		// labeled section survives; DECISIONS max 5 / EVIDENCE max 3 per instruction).
+		const lines: string[] = [];
+		let section = "";
+		let sectionLines = 0;
+		for (const line of first >= 0 ? all.slice(first) : all) {
+			const m = /^([A-Z][A-Z-]*):/.exec(line);
+			if (m) {
+				section = m[1];
+				sectionLines = 0;
+			}
+			const cap = section === "DECISIONS" ? 5 : section === "EVIDENCE" ? 3 : 3;
+			if (sectionLines < cap) {
+				lines.push(line);
+				sectionLines++;
+			}
+		}
 		if (!lines.length) throw new Error("digest came back empty");
 		digestCache.set(issue.id, { updatedAt: issue.updatedAt, lines });
 		return lines;
@@ -421,6 +438,7 @@ export default function linearNow(pi: ExtensionAPI) {
 			let inflight: AbortController | undefined;
 			let gen = 0;
 			let scrollTop = 0;
+			let cardScroll = 0; // pgup/pgdn offset INTO an oversized card; reset on every highlight
 
 			const current = () => issueRows[cursor].issue;
 
@@ -428,6 +446,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				clearTimeout(dwell);
 				inflight?.abort();
 				gen++; // ALWAYS invalidate: a still-running load() from the previous highlight must never paint this one
+				cardScroll = 0;
 				const issue = current();
 				detail = detailCache.get(issue.id);
 				detailErr = digestErr = undefined;
@@ -505,7 +524,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				} else if (digestErr) c.push(`${pad}✦ digest unavailable (${digestErr})`);
 				else if (digestPending || !digest) c.push(`${pad}✦ digesting…`);
 				else for (const l of digest) for (const wl of wrap(l, w - pad.length - 2, 2)) c.push(`${pad}${wl}`);
-				return c.slice(0, 24);
+				return c;
 			}
 
 			arm();
@@ -534,10 +553,22 @@ export default function linearNow(pi: ExtensionAPI) {
 						}
 					}
 					const vh = Math.max(12, (process.stdout.rows ?? 40) - 6);
-					if (cursorStart < scrollTop) scrollTop = Math.max(0, cursorStart - 1);
-					if (cardEnd >= scrollTop + vh) scrollTop = Math.min(cursorStart, cardEnd - vh + 1);
+					const cardOverflow = Math.max(0, cardEnd - cursorStart + 1 - vh);
+					cardScroll = Math.min(cardScroll, cardOverflow);
+					if (cardOverflow > 0) {
+						// card taller than the viewport: anchor at the cursor row, pgdn walks deeper
+						scrollTop = cursorStart + cardScroll;
+					} else {
+						if (cursorStart < scrollTop) scrollTop = Math.max(0, cursorStart - 1);
+						if (cardEnd >= scrollTop + vh) scrollTop = Math.min(cursorStart, cardEnd - vh + 1);
+					}
 					const view = out.slice(scrollTop, scrollTop + vh);
-					view.push(theme.fg("dim", `enter = make it NOW · esc = close${map.capped ? " · ⚠ 100-issue cap" : ""}`));
+					view.push(
+						theme.fg(
+							"dim",
+							`enter = make it NOW · esc = close${cardOverflow > 0 ? ` · →/← = card (+${cardOverflow - cardScroll} below)` : ""}${map.capped ? " · ⚠ 100-issue cap" : ""}`,
+						),
+					);
 					return view;
 				},
 				handleInput(data: string) {
@@ -555,6 +586,16 @@ export default function linearNow(pi: ExtensionAPI) {
 							arm();
 							tui.requestRender();
 						}
+						return;
+					}
+					if (matchesKey(data, "pageDown") || matchesKey(data, "right")) {
+						cardScroll += 5;
+						tui.requestRender();
+						return;
+					}
+					if (matchesKey(data, "pageUp") || matchesKey(data, "left")) {
+						cardScroll = Math.max(0, cardScroll - 5);
+						tui.requestRender();
 						return;
 					}
 					if (matchesKey(data, "enter") || matchesKey(data, "return")) {
