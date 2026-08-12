@@ -10,16 +10,18 @@
  * Everything fails open: Linear down = one honest line, never a blocked session.
  */
 import { readFileSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { completeSimple } from "@oh-my-pi/pi-ai";
+import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
 import { discoverAuthStorage, getAgentDir, type ExtensionAPI, type ExtensionContext, type ExtensionModelQuery, type Theme } from "@oh-my-pi/pi-coding-agent";
 import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 
 const TEAM_KEY = "HOME";
 const NOW_LABEL = "now";
 const QUEUE_LABEL = "waiting-on-chris";
+const DRAIN_MAX_QUEUE = 8;
+const DRAIN_MAX_AGE_DAYS = 14;
 const KEY_FILE = join(homedir(), ".config", "linear.env");
 const CACHE_FILE = join(homedir(), ".omp", "agent", "linear-now.json");
 const API = "https://api.linear.app/graphql";
@@ -35,6 +37,12 @@ interface NowState {
 	nowLabelId?: string;
 	doneStateId?: string;
 	canceledStateId?: string;
+	// HOME-45 obligation machine — session-scoped fields reset on session_start;
+	// owedFromLastSession is the only cross-session carrier (set on SIGINT/SIGTERM).
+	executingIssue?: { id: string; identifier: string };
+	obligationDigest?: { armed: boolean; blockedOnce: boolean };
+	obligationHandoff?: { armed: boolean; blockedOnce: boolean };
+	owedFromLastSession?: { identifier: string; kind: "digest" | "handoff" };
 }
 
 interface MapIssue {
@@ -213,6 +221,41 @@ export default function linearNow(pi: ExtensionAPI) {
 		});
 	}
 
+	// ---- HOME-45 obligation machine (approved design; fails open everywhere) ----
+
+	/** Mark the issue this session is executing against; arms the handoff obligation. */
+	function armExecuting(id: string, identifier: string) {
+		if (state.executingIssue?.id === id) return;
+		state.executingIssue = { id, identifier };
+		state.obligationHandoff = { armed: true, blockedOnce: false };
+		void saveCache();
+	}
+
+	/** A *-plan.md landed in the session local/ dir → a digest comment is owed. */
+	function armDigestObligation() {
+		if (state.obligationDigest?.armed) return;
+		state.obligationDigest = { armed: true, blockedOnce: false };
+		void saveCache();
+	}
+
+	/** ANY successful comment on the executing issue clears both obligations (no content classification). */
+	function dischargeObligations(issue: { id: string; identifier: string }, ctx?: ExtensionContext) {
+		let changed = false;
+		if (state.executingIssue?.id === issue.id && (state.obligationDigest || state.obligationHandoff)) {
+			state.obligationDigest = undefined;
+			state.obligationHandoff = undefined;
+			changed = true;
+		}
+		if (state.owedFromLastSession?.identifier === issue.identifier) {
+			state.owedFromLastSession = undefined;
+			changed = true;
+		}
+		if (changed) {
+			void saveCache();
+			if (ctx) footer(ctx);
+		}
+	}
+
 	async function teamId(): Promise<string> {
 		if (state.teamId) return state.teamId;
 		const d = await gql<{ teams: { nodes: { id: string; key: string }[] } }>(
@@ -369,15 +412,21 @@ export default function linearNow(pi: ExtensionAPI) {
 
 	const detailCache = new Map<string, IssueDetail>();
 	const digestCache = new Map<string, { updatedAt: string; lines: string[] }>();
-	const digestKeyByProvider = new Map<string, Promise<string | undefined>>();
+	let digestAuthStorage: Promise<AuthStorage> | undefined;
 
 	function digestApiKey(provider: string): Promise<string | undefined> {
-		let p = digestKeyByProvider.get(provider);
-		if (!p) {
-			p = (async () => (await discoverAuthStorage(getAgentDir())).getApiKey(provider))();
-			digestKeyByProvider.set(provider, p);
+		// Cache the storage DISCOVERY, never the key: getApiKey() refreshes expired
+		// OAuth bearers on each call, and antigravity/etc. tokens rotate hourly — a
+		// session-lifetime key cache serves a dead bearer to every digest after ~1h.
+		// A failed discovery evicts itself so one hiccup can't poison the session.
+		if (!digestAuthStorage) {
+			const p = discoverAuthStorage(getAgentDir());
+			digestAuthStorage = p;
+			p.catch(() => {
+				if (digestAuthStorage === p) digestAuthStorage = undefined;
+			});
 		}
-		return p;
+		return digestAuthStorage.then(storage => storage.getApiKey(provider));
 	}
 
 	async function digestFor(issue: MapIssue, detail: IssueDetail, signal: AbortSignal): Promise<string[]> {
@@ -392,6 +441,13 @@ export default function linearNow(pi: ExtensionAPI) {
 			{ messages: [{ role: "user", content: `${DIGEST_INSTRUCTION}\nwaiting-on-chris label: ${issue.waiting ? "yes" : "no"}\n── issue ──\n${detail.digestPacket}`, timestamp: Date.now() }] },
 			{ apiKey: key, disableReasoning: true, signal },
 		);
+		// pi-ai surfaces provider failures IN-BAND (stopReason "error"/"aborted" +
+		// errorMessage, content empty) — completeSimple does not throw. Without this
+		// guard every provider error (429 quota, auth refresh race, thinking-loop
+		// retry marker) collapses into a lying "digest came back empty".
+		if (res.stopReason === "error" || res.stopReason === "aborted") {
+			throw new Error(res.errorMessage || `${model.provider}/${model.id} call ${res.stopReason} with no detail`);
+		}
 		const text = res.content
 			.filter(c => c.type === "text")
 			.map(c => c.text)
@@ -684,17 +740,19 @@ export default function linearNow(pi: ExtensionAPI) {
 	function footer(ctx: ExtensionContext) {
 		try {
 			const theme = ctx.ui.theme;
+			const owedKinds = [...(state.obligationDigest?.armed ? ["digest"] : []), ...(state.obligationHandoff?.armed ? ["handoff"] : [])];
+			const warn = state.executingIssue && owedKinds.length ? ` ⚠ ${owedKinds.join("/")} owed on ${state.executingIssue.identifier}` : "";
 			if (state.identifier) {
 				const elapsed = state.setAt ? ` · ${fmtElapsed(Date.now() - state.setAt)}` : "";
 				const proj = state.project ? `${state.project} · ` : "";
-				ctx.ui.setStatus("linear-now", theme.fg("accent", `◆ NOW · ${proj}${state.identifier} ${state.title ?? ""}${theme.fg("dim", elapsed)}`));
+				ctx.ui.setStatus("linear-now", theme.fg("accent", `◆ NOW · ${proj}${state.identifier} ${state.title ?? ""}${theme.fg("dim", elapsed)}${warn}`));
 			} else if (state.lastDone) {
 				ctx.ui.setStatus(
 					"linear-now",
-					theme.fg("dim", `✓ last: ${state.lastDone.identifier} ${state.lastDone.title} · ${fmtElapsed(Date.now() - state.lastDone.at)} ago — /now to refocus`),
+					theme.fg("dim", `✓ last: ${state.lastDone.identifier} ${state.lastDone.title} · ${fmtElapsed(Date.now() - state.lastDone.at)} ago — /now to refocus${warn}`),
 				);
 			} else {
-				ctx.ui.setStatus("linear-now", theme.fg("dim", "◇ no NOW — /now to pick"));
+				ctx.ui.setStatus("linear-now", theme.fg("dim", `◇ no NOW — /now to pick${warn}`));
 			}
 		} catch {
 			/* headless: no footer */
@@ -719,6 +777,7 @@ export default function linearNow(pi: ExtensionAPI) {
 		state.title = issue.title;
 		state.project = issue.project;
 		state.setAt = Date.now();
+		armExecuting(issue.id, issue.identifier);
 		await saveCache();
 		persistSession();
 		footer(ctx);
@@ -771,28 +830,47 @@ export default function linearNow(pi: ExtensionAPI) {
 			}
 		}
 		if (issueId === state.issueId) await clearNow(ctx, true);
+		// HOME-56: a verdict close settles the executing obligations — no handoff owed on a closed issue.
+		if (state.executingIssue?.id === issueId) {
+			state.executingIssue = undefined;
+			state.obligationDigest = undefined;
+			state.obligationHandoff = undefined;
+			void saveCache();
+		}
 		return `${identifier} → ${outcome === "canceled" ? "Canceled" : "Done"} (owner verdict)`;
 	}
 
 	async function buildDigest(): Promise<string> {
 		const d = await gql<{
 			projects: { nodes: { name: string; state: string; health?: string }[] };
-			issues: { nodes: { identifier: string; title: string }[] };
+			issues: { nodes: { identifier: string; title: string; createdAt: string }[] };
 		}>(
-			`query($label:String!){ projects(first:50){nodes{name state health}} issues(first:10,filter:{labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title}} }`,
+			`query($label:String!){ projects(first:50){nodes{name state health}} issues(first:50,orderBy:createdAt,filter:{labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title createdAt}} }`,
 			{ label: QUEUE_LABEL },
 		);
 		const inflight = d.projects.nodes
 			.filter(p => p.state === "started")
 			.map(p => `${p.name} [${p.health ?? "?"}]`)
 			.join(" · ");
-		const queue = d.issues.nodes.map(i => `${i.identifier} ${i.title}`).join(" | ");
+	// ponytail: first:50 cap — beyond 50 queued the count and oldest under-report again; paginate if that ever happens
+		const n = d.issues.nodes.length;
+		const shown = d.issues.nodes.slice(0, 10);
+		const queue =
+			shown.map(i => `${i.identifier} ${i.title}`).join(" | ") + (n > shown.length ? ` | …+${n - shown.length} more` : "");
 		const now = state.identifier ? `NOW: ${state.project ? `${state.project} · ` : ""}${state.identifier} ${state.title}` : "NOW: unset — /now to pick";
+		const oldestDays = Math.max(0, ...d.issues.nodes.map(i => Math.floor((Date.now() - Date.parse(i.createdAt)) / 86_400_000)));
 		return [
 			"── Linear bookend (linear.app/spec-kit) ──",
 			now,
+			...(state.owedFromLastSession
+				? [`UNMET FROM LAST SESSION: ${state.owedFromLastSession.kind} comment owed on ${state.owedFromLastSession.identifier} — run /summary before new work.`]
+				: []),
 			`IN FLIGHT: ${inflight || "none"}`,
-			`NEEDS CHRIS (${d.issues.nodes.length}): ${queue || "empty"}`,
+			`NEEDS CHRIS (${n}${n ? `, oldest ${oldestDays}d` : ""}): ${queue || "empty"}`,
+			...(n > DRAIN_MAX_QUEUE || oldestDays > DRAIN_MAX_AGE_DAYS
+				? [`DRAIN RULE TRIPPED: queue ${n} deep / oldest ${oldestDays}d — surface the 3 oldest to Chris for rulings this session.`]
+				: []),
+			"CHECKPOINT CONTRACT: executing against an issue → the issue is the durable cross-session log; local plans/todos/chat do not survive the session. Plan approved → post a digest comment (decisions, acceptance list, artifact paths + hash). Every stop — restart, blocked, session end — → post a handoff comment (done / remaining / exact resume steps). Session closing → run /summary (questionyourself + whatsmissing + Linear close ritual) BEFORE /done.",
 			"CLOSE CONTRACT: update touched projects (health + one line) · triage captures · propose closes (owner verdict closes) · archive >1-day-closed",
 		].join("\n");
 	}
@@ -813,6 +891,12 @@ export default function linearNow(pi: ExtensionAPI) {
 		} catch {
 			/* fresh session */
 		}
+		// HOME-45: obligations are session-scoped — never inherited from the cache
+		// of a previous session. owedFromLastSession is the deliberate exception.
+		state.executingIssue = undefined;
+		state.obligationDigest = undefined;
+		state.obligationHandoff = undefined;
+		void saveCache();
 		digestPending = true;
 		digestInjectedThisSession = false;
 		footer(ctx);
@@ -826,13 +910,19 @@ export default function linearNow(pi: ExtensionAPI) {
 		footer(ctx);
 	});
 
+	// HOME-56: owner slash-command actions (/now, /done) were invisible to the agent —
+	// it argued from the session-start digest. Queue one-line notices, flush next turn.
+	const pendingNotices: string[] = [];
 	pi.on("before_agent_start", async () => {
-		if (!digestPending || digestInjectedThisSession) return;
+		const notices = pendingNotices.splice(0).join("\n");
+		if (!digestPending || digestInjectedThisSession) {
+			return notices ? { message: { customType: "linear-notice", content: notices } } : undefined;
+		}
 		digestPending = false;
 		try {
 			const digest = await buildDigest();
 			digestInjectedThisSession = true;
-			return { message: { customType: "linear-digest", content: digest } };
+			return { message: { customType: "linear-digest", content: notices ? `${digest}\n${notices}` : digest } };
 		} catch (e) {
 			pi.logger.warn("linear-now: digest failed", { error: String(e) });
 			return { message: { customType: "linear-digest", content: `[linear] digest unavailable (${String(e)}) — session unblocked` } };
@@ -841,6 +931,78 @@ export default function linearNow(pi: ExtensionAPI) {
 
 	pi.on("turn_start", async (_e, ctx) => footer(ctx));
 	pi.on("turn_end", async (_e, ctx) => footer(ctx));
+
+	// ---- HOME-45: plan-file watcher + stop refusal + shutdown debt ----
+
+	const pendingWritePaths = new Map<string, string>();
+	pi.on("tool_execution_start", async event => {
+		if (event.toolName !== "write") return;
+		const p = (event.args as { path?: unknown } | undefined)?.path;
+		if (typeof p === "string") pendingWritePaths.set(event.toolCallId, p);
+	});
+	pi.on("tool_execution_end", async (event, ctx) => {
+		if (event.toolName !== "write") return;
+		const p = pendingWritePaths.get(event.toolCallId);
+		pendingWritePaths.delete(event.toolCallId);
+		if (!p || event.isError) return;
+		const norm = p.replace(/\\/g, "/");
+		if (!norm.endsWith("-plan.md")) return;
+		if (!norm.startsWith("local://") && !norm.includes("/local/")) return;
+		armDigestObligation();
+		footer(ctx);
+	});
+
+	pi.on("session_stop", async event => {
+		try {
+			if (event.stop_hook_active) return; // loop guard: never block our own continuation
+			if (!state.executingIssue) return; // fail open: no executing issue → zero enforcement
+			// Backstop: a *-plan.md in the session local/ dir arms the digest obligation
+			// even if the write event was missed (plan-mode writes, subagents, …).
+			if (!state.obligationDigest?.armed && event.session_file) {
+				try {
+					const files = await readdir(join(event.session_file.replace(/\.jsonl$/, ""), "local"));
+					if (files.some(f => f.endsWith("-plan.md"))) armDigestObligation();
+				} catch {
+					/* no local dir — nothing owed */
+				}
+			}
+			const owed: string[] = [];
+			if (state.obligationDigest?.armed && !state.obligationDigest.blockedOnce) owed.push("digest");
+			if (state.obligationHandoff?.armed && !state.obligationHandoff.blockedOnce) owed.push("handoff");
+			if (!owed.length) return; // already blocked once per arming → only the footer ⚠ persists
+			if (state.obligationDigest?.armed) state.obligationDigest.blockedOnce = true;
+			if (state.obligationHandoff?.armed) state.obligationHandoff.blockedOnce = true;
+			void saveCache();
+			const id = state.executingIssue.identifier;
+			return {
+				continue: true,
+				additionalContext: [
+					`Checkpoint contract: a ${owed.join(" and ")} comment is owed on ${id} before this session settles.`,
+					"Digest comment = decisions, acceptance list, artifact paths + hash.",
+					"Handoff comment = done / remaining / exact resume steps.",
+					`Post it now with the linear tool (action:"comment", issue:"${id}").`,
+					"If this stop is the session ending, run /summary first (questionyourself + whatsmissing + Linear close ritual), then post the handoff.",
+					"This reminder fires once per obligation; afterwards only the footer ⚠ remains.",
+				].join(" "),
+			};
+		} catch (e) {
+			pi.logger.warn("linear-now: stop obligation check failed (fail-open)", { error: String(e) });
+			return;
+		}
+	});
+
+	pi.on("session_shutdown", async () => {
+		// SIGINT/SIGTERM: no model turn, no network — persist the debt for the next bookend.
+		try {
+			if (!state.executingIssue) return;
+			const kind = state.obligationDigest?.armed ? "digest" : state.obligationHandoff?.armed ? "handoff" : undefined;
+			if (!kind) return;
+			state.owedFromLastSession = { identifier: state.executingIssue.identifier, kind };
+			await saveCache();
+		} catch {
+			/* fail open */
+		}
+	});
 
 	// ---- commands ----
 
@@ -858,11 +1020,13 @@ export default function linearNow(pi: ExtensionAPI) {
 				if (arg === "clear") {
 					await clearNow(ctx, false);
 					ctx.ui.notify("NOW cleared (no close proposed)", "info");
+					pendingNotices.push("[linear] Owner cleared NOW via /now clear — no close proposed.");
 					return;
 				}
 				if (arg) {
 					const issue = await findIssue(arg);
 					await setNow({ id: issue.id, identifier: issue.identifier, title: issue.title, project: issue.project?.name }, ctx);
+					pendingNotices.push(`[linear] Owner set NOW to ${issue.identifier} via /now.`);
 					return;
 				}
 				const map = await mapData();
@@ -875,6 +1039,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				const yes = await ctx.ui.confirm(`Make ${pick.identifier} your NOW?`, `"${pick.title}"\n${pick.project ?? ""}`);
 				if (!yes) return;
 				await setNow({ id: pick.id, identifier: pick.identifier, title: pick.title, project: pick.project }, ctx);
+				pendingNotices.push(`[linear] Owner set NOW to ${pick.identifier} via /now.`);
 			} catch (e) {
 				ctx.ui.notify(`/now failed: ${String(e)}`, "error");
 			}
@@ -910,11 +1075,13 @@ export default function linearNow(pi: ExtensionAPI) {
 					);
 					if (!yes) return;
 					ctx.ui.notify(await closeWithVerdict(issueId, identifier, "done", undefined, ctx), "info");
+					pendingNotices.push(`[linear] Owner verdict via /done: ${identifier} closed (Done); NOW cleared.`);
 					return;
 				}
 				if (choice === CLEAR) {
 					await clearNow(ctx, true);
 					ctx.ui.notify(`${identifier} cleared from NOW (no close, no comment)`, "info");
+					pendingNotices.push(`[linear] Owner cleared NOW (${identifier}) via /done — no close.`);
 					return;
 				}
 				await clearNow(ctx, true);
@@ -928,6 +1095,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				const qId = d.issueLabels.nodes[0]?.id;
 				if (qId) await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: issueId, labelId: qId });
 				ctx.ui.notify(`${identifier} → close proposed, in your queue`, "info");
+				pendingNotices.push(`[linear] Owner proposed close of ${identifier} via /done; NOW cleared, queued for owner verdict.`);
 			} catch (e) {
 				ctx.ui.notify(`/done failed: ${String(e)}`, "error");
 			}
@@ -1023,8 +1191,10 @@ export default function linearNow(pi: ExtensionAPI) {
 			"to show the owner verbatim; repeat with confirm:true only after his yes.",
 			"create_issue queue:true adds the waiting-on-chris label at creation; queue_issue adds it to an",
 			"existing issue — use them for ANYTHING parked on the owner (the decision queue is that label).",
+			"create_issue with batch publishes a parent + N children with NATIVE parent/blocks relations behind ONE preview; on mid-batch failure the exact landed/not-landed inventory is reported — no rollback exists and none is claimed.",
 			"Never assume a write landed without success:true. Never dump large result sets into prose; summarize.",
 			"Closes are the owner's verdict: close_issue/archive_issue require his on-screen yes (two-phase); propose_close remains the async path.",
+			"Executing against an issue: checkpoint via comment — plan approved → digest comment (decisions, acceptance, artifact paths+hash); every stop (restart/blocked/session end) → handoff comment (done/remaining/resume steps). The issue is the durable cross-session log; local session artifacts do not survive handoff.",
 		].join(" "),
 		parameters: z.object({
 			action: z.enum(["get_issue", "tree", "waiting", "my_now", "comment", "create_issue", "queue_issue", "propose_close", "update_health", "set_now", "close_issue", "archive_issue"]),
@@ -1035,6 +1205,19 @@ export default function linearNow(pi: ExtensionAPI) {
 			health: z.enum(["onTrack", "atRisk", "offTrack"]).optional().describe("Project health (update_health)"),
 			body: z.string().optional().describe("Comment body, one-line update, or close reason (comment, update_health, propose_close)"),
 			queue: z.boolean().optional().describe("create_issue: also add the waiting-on-chris label so the issue lands in the owner decision queue"),
+			batch: z
+				.array(
+					z.object({
+						title: z.string(),
+						description: z.string().optional(),
+						blocks: z.array(z.number().int().nonnegative()).optional()
+							.describe("zero-based indexes of sibling batch entries THIS entry blocks"),
+					}),
+				)
+				.optional()
+				.describe(
+					"create_issue: publish these child issues under the parent (title/description) with native parent links and blocks relations, behind ONE preview — one confirm writes the whole set",
+				),
 			outcome: z.enum(["done", "canceled"]).optional().describe("close_issue: done (default) or canceled for never-doing-it"),
 			confirm: z.boolean().optional().describe("Two-phase write approval: pass true ONLY after the owner saw the previewed payload and said yes"),
 		}),
@@ -1053,7 +1236,7 @@ export default function linearNow(pi: ExtensionAPI) {
 						return okText(state.identifier ? `NOW: ${state.project ? `${state.project} · ` : ""}${state.identifier} ${state.title}` : "NOW unset");
 					case "waiting": {
 						const d = await gql<{ issues: { nodes: { identifier: string; title: string }[] } }>(
-							`query($label:String!){ issues(first:15,filter:{labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title}} }`,
+							`query($label:String!){ issues(first:50,orderBy:createdAt,filter:{labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title}} }`,
 							{ label: QUEUE_LABEL },
 						);
 						return okText(d.issues.nodes.map(i => `${i.identifier} ${i.title}`).join("\n") || "queue empty");
@@ -1074,11 +1257,12 @@ export default function linearNow(pi: ExtensionAPI) {
 					}
 					case "get_issue": {
 						if (!params.issue) return deny("issue identifier required");
-						const d = await gql<{ issue: { identifier: string; title: string; description?: string; state: { name: string }; project?: { name: string }; labels: { nodes: { name: string }[] } } }>(
-							`query($id:String!){ issue(id:$id){identifier title description state{name} project{name} labels{nodes{name}}} }`,
+						const d = await gql<{ issue: { id: string; identifier: string; title: string; description?: string; state: { name: string }; project?: { name: string }; labels: { nodes: { name: string }[] } } }>(
+							`query($id:String!){ issue(id:$id){id identifier title description state{name} project{name} labels{nodes{name}}} }`,
 							{ id: params.issue },
 						);
 						const i = d.issue;
+						if (!state.executingIssue) armExecuting(i.id, i.identifier);
 						return okText(
 							[
 								`${i.identifier} ${i.title}`,
@@ -1090,13 +1274,126 @@ export default function linearNow(pi: ExtensionAPI) {
 					case "comment": {
 						if (!params.issue || !params.body) return deny("issue identifier and body required");
 						const issue = await findIssue(params.issue);
-						await gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){success} }`, {
-							input: { issueId: issue.id, body: params.body },
-						});
+						const res = await gql<{ commentCreate: { success: boolean } }>(
+							`mutation($input:CommentCreateInput!){ commentCreate(input:$input){success} }`,
+							{ input: { issueId: issue.id, body: params.body } },
+						);
+						if (!res.commentCreate.success) return deny(`Linear refused the comment (success:false) on ${issue.identifier} — nothing discharged`);
+						if (!state.executingIssue) armExecuting(issue.id, issue.identifier);
+						dischargeObligations({ id: issue.id, identifier: issue.identifier }, ctx);
 						return okText(`comment posted on ${issue.identifier}`);
 					}
 					case "create_issue": {
 						if (!params.title) return deny("title required");
+					if (params.batch !== undefined && params.batch.length > 0) {
+						const entries = params.batch;
+						const n = entries.length;
+						// 2a. validate BEFORE any gate call (invariant 6: reject at preview time)
+						for (let k = 0; k < n; k++) {
+							for (const j of entries[k].blocks ?? []) {
+								if (!Number.isInteger(j) || j < 0 || j >= n || j === k) {
+									return deny(`batch entry [${k}] "${entries[k].title}" has invalid blocks index ${j} (valid: 0–${n - 1}, not itself)`);
+								}
+							}
+						}
+						// acyclicity — Kahn's algorithm over edges k→j
+						const indeg = new Array<number>(n).fill(0);
+						for (let k = 0; k < n; k++) for (const j of entries[k].blocks ?? []) indeg[j]++;
+						const ready: number[] = [];
+						for (let k = 0; k < n; k++) if (indeg[k] === 0) ready.push(k);
+						let seen = 0;
+						while (ready.length > 0) {
+							const k = ready.shift()!;
+							seen++;
+							for (const j of entries[k].blocks ?? []) if (--indeg[j] === 0) ready.push(j);
+						}
+						if (seen < n) {
+							const leftover: string[] = [];
+							for (let k = 0; k < n; k++) if (indeg[k] > 0) leftover.push(`[${k}] "${entries[k].title}"`);
+							return deny(`blocks edges form a cycle: ${leftover.join(" ↔ ")} — publish refused`);
+						}
+						// 2b. resolve project — strict: a mis-landed tree is n+1 wrong issues
+						const target = params.project ?? state.project;
+						let projectId: string | undefined;
+						if (target) {
+							const dp = await gql<{ projects: { nodes: { id: string }[] } }>(`query($name:String!){ projects(filter:{name:{eq:$name}}){nodes{id}} }`, { name: target });
+							projectId = dp.projects.nodes[0]?.id;
+							if (!projectId) return deny(`project "${target}" not found — refusing to publish a batch without its project`);
+						}
+						// 2c. ONE preview covering the entire batch (invariant 2)
+						const edgeLines: string[] = [];
+						for (let k = 0; k < n; k++) for (const j of entries[k].blocks ?? []) edgeLines.push(`[${k}] blocks [${j}]`);
+						const detail = [
+							`PARENT "${params.title}" → ${target ? `project ${target}` : "team HOME"}${params.queue ? `\n→ + ${QUEUE_LABEL} label on parent` : ""}${params.description ? `\n${params.description.slice(0, 400)}` : ""}`,
+							...entries.map((e, k) => `[${k}] "${e.title}"${e.description ? `\n${e.description.slice(0, 200)}` : ""}`),
+							edgeLines.length > 0 ? `edges:\n${edgeLines.join("\n")}` : "edges: none",
+						].join("\n\n");
+						const gate = await ownerGate(ctx, `Model wants to publish a BATCH — 1 parent + ${n} children`, detail, params.confirm, true);
+						if (!gate.approved) return deny(gate.preview ?? "owner declined — batch NOT published");
+						// 2d. execute with partial-failure inventory (invariant 4) — own try/catch so the
+						// outer catch can't flatten the inventory into a generic error.
+						const landed: string[] = [];
+						const edgesLanded: string[] = [];
+						const childIds: string[] = [];
+						const childIdentifiers: string[] = [];
+						try {
+							const tid = await teamId();
+							const created = await gql<{ issueCreate: { issue: { id: string; identifier: string } } }>(
+								`mutation($input:IssueCreateInput!){ issueCreate(input:$input){issue{id identifier}} }`,
+								{ input: { teamId: tid, title: params.title, description: params.description, ...(projectId ? { projectId } : {}) } },
+							);
+							const parentId = created.issueCreate.issue.id;
+							const parentIdentifier = created.issueCreate.issue.identifier;
+							landed.push(parentIdentifier);
+							if (params.queue) {
+								const dl = await gql<{ issueLabels: { nodes: { id: string }[] } }>(`query($name:String!){ issueLabels(filter:{name:{eq:$name}}){nodes{id}} }`, { name: QUEUE_LABEL });
+								const qId = dl.issueLabels.nodes[0]?.id;
+								if (qId) await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: parentId, labelId: qId });
+							}
+							for (let k = 0; k < n; k++) {
+								const child = await gql<{ issueCreate: { issue: { id: string; identifier: string } } }>(
+									`mutation($input:IssueCreateInput!){ issueCreate(input:$input){issue{id identifier}} }`,
+									{ input: { teamId: tid, title: entries[k].title, description: entries[k].description, parentId, ...(projectId ? { projectId } : {}) } },
+								);
+								childIds[k] = child.issueCreate.issue.id;
+								childIdentifiers[k] = child.issueCreate.issue.identifier;
+								landed.push(child.issueCreate.issue.identifier);
+							}
+							for (let k = 0; k < n; k++) {
+								for (const j of entries[k].blocks ?? []) {
+									const rel = await gql<{ issueRelationCreate: { success: boolean } }>(
+										`mutation($input:IssueRelationCreateInput!){ issueRelationCreate(input:$input){success} }`,
+										{ input: { issueId: childIds[k], relatedIssueId: childIds[j], type: "blocks" } },
+									);
+									if (!rel.issueRelationCreate.success) throw new Error(`relation [${k}]→[${j}] refused (success:false)`);
+									edgesLanded.push(`${childIdentifiers[k]} blocks ${childIdentifiers[j]}`);
+								}
+							}
+							return okText(
+								`batch published: parent ${parentIdentifier} + children ${childIdentifiers.join(", ")}; ${edgesLanded.length} blocks edge(s)${params.queue ? ` + ${QUEUE_LABEL} on parent` : ""}`,
+								{ identifier: parentIdentifier, children: childIdentifiers },
+							);
+						} catch (e) {
+							const notCreated: string[] = [];
+							if (landed.length === 0) notCreated.push(`parent "${params.title}"`);
+							for (let k = 0; k < n; k++) if (!childIds[k]) notCreated.push(`[${k}] "${entries[k].title}"`);
+							// edges execute in the same k-outer/j-inner order as edgeLines
+							const notLandedEdges = edgeLines.slice(edgesLanded.length);
+							return {
+								content: [{
+									type: "text" as const,
+									text: [
+										`BATCH PARTIAL FAILURE at ${String(e)}`,
+										`landed issues: ${landed.join(", ") || "none"}`,
+										`landed edges: ${edgesLanded.join(", ") || "none"}`,
+										`NOT created: ${[...notCreated, ...notLandedEdges].join(", ") || "none"}`,
+										"No rollback exists — surviving issues need an owner verdict to remove.",
+									].join("\n"),
+								}],
+								details: { success: false, landed, edgesLanded },
+							};
+						}
+					}
 						const target = params.project ?? state.project;
 						const gate = await ownerGate(
 							ctx,

@@ -200,10 +200,14 @@ say why the loop form doesn't fit when you use one.
 
 **Prompt hygiene, all forms:**
 
-- **Write the file yourself.** Save to
-  `.omc/handoffs/PROMPT-<topic>-<date>.md` (or the current repo's handoff
-  home) AND show it in chat. Never end by telling the owner to save it —
-  a drafted-but-unsaved prompt was lost exactly that way (obs #88).
+- **Deliver the charter to the repo's handoff home yourself.** In
+  Linear-weave estates (routing law, owner-ratified 2026-08-10) that home is
+  a handoff comment on the NOW/executing issue — PROMPT-*.md/handoff files
+  are BANNED there; sessions self-orient from the bookend, never from
+  prompt files (obs #106). Elsewhere, save to
+  `.omc/handoffs/PROMPT-<topic>-<date>.md` AND show it in chat. Either way,
+  never end by telling the owner to save it — a drafted-but-unsaved prompt
+  was lost exactly that way (obs #88).
 - If the prompt promises to quote or analyze a stored data field, grep the
   source artifact for that field NOW and either confirm it exists or
   downgrade the objective (obs #87).
@@ -216,8 +220,9 @@ say why the loop form doesn't fit when you use one.
   prompt for their pick before the session ends.
 
 **Pre-delivery check (run, don't skim):** (1) Phases 1 and 2 actually
-invoked their skills via the Skill tool this session; (2) the prompt file
-exists on disk — `ls` it; (3) the prompt is a loop charter tied to a named
+invoked their skills via the Skill tool this session; (2) the charter
+artifact exists — comment landed (success:true) in Linear-weave estates,
+else the file on disk (`ls` it); (3) the prompt is a loop charter tied to a named
 standing goal, or carries a one-line justification for the single-task
 exception; (4) every command embedded in the prompt was executed or probed
 this session, not composed from memory; (5) every touched project got its

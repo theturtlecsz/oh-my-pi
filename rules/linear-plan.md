@@ -32,3 +32,26 @@ session-system repo, `prompts/archive/`). A fresh session orients with the
 start digest, then `/now` — not by reading a file. Exception by standing
 law: media-discovery's TASKS.md is that product's engineering roadmap
 (separate world, separate ruling) — do not extend the exception.
+
+## Checkpoint contract (2026-08-11, HOME-44 session — extends the routing law)
+
+The issue is the durable cross-session log; `local://` plans, todos, and chat
+do not survive the session. A plan file may be authoritative for the current
+execution, but anything that must outlive the session goes on the issue.
+Two mandatory comment moments when executing against an issue:
+- **Plan approved** → post a digest comment on the issue: decisions that refine
+  the blueprint, acceptance list, artifact paths + file hash. Not the full plan
+  — the resume kit.
+- **Every stop** — restart needed, blocked on the owner, session ending — →
+  post a handoff comment: done / remaining / exact resume steps. (This is the
+  routing law's existing handoff clause, restated at the point of failure: the
+  2026-08-11 HOME-44 run posted its handoff only after the owner asked.)
+- **Session closing** (owner ruling 2026-08-11) → run the `/summary` close
+  ritual BEFORE `/done`: it invokes the questionyourself and whatsmissing
+  skills over the whole session, then executes the Linear close ritual. The
+  handoff comment does not substitute for it — handoff preserves state,
+  /summary audits it.
+
+Enforcement: the linear-now session-start bookend carries a CHECKPOINT CONTRACT
+line, and the `linear` device doc carries the same rule — both reach every
+session regardless of whether this rule file is injected.
