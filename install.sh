@@ -19,6 +19,7 @@ place() { # place <repo-relative> <live-path>
 place extensions/linear-now.ts "$HOME/.omp/agent/extensions/linear-now.ts"
 place rules/linear-plan.md    "$HOME/.omp/agent/rules/linear-plan.md"
 place agents/AGENTS.md        "$HOME/AGENTS.md"
+place agents/omp-AGENTS.md    "$HOME/.omp/agent/AGENTS.md"
 for s in summary questionyourself whatsmissing; do
   place "skills/$s" "$HOME/.agents/skills/$s"
 done
