@@ -68,6 +68,105 @@ function resolveMarker(marker: string): string | null {
 	return null;
 }
 
+/** Run git in cwd; timeoutMs guards network ops (push). */
+function runGit(cwd: string, args: string[], timeoutMs = 10_000): { ok: boolean; out: string; err: string } {
+	const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: timeoutMs });
+	return { ok: r.status === 0, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim() };
+}
+
+/** Parse `git status --porcelain -z` output → workdir-relative dirty paths.
+ *  NUL-separated; entries with X status R or C carry the ORIGINAL path as the
+ *  next NUL token — skip it, keep the new path. Untracked (`??`) included. */
+export function parsePorcelain(z: string): string[] {
+	const tokens = z.split("\0").filter(t => t.length > 0);
+	const paths: string[] = [];
+	for (let i = 0; i < tokens.length; i++) {
+		const entry = tokens[i];
+		paths.push(entry.slice(3));
+		if (entry[0] === "R" || entry[0] === "C") i++; // next token = original path; not stageable
+	}
+	return paths;
+}
+
+const SECRET_PATTERNS: [string, RegExp][] = [
+	["linear-key", /lin_api_[A-Za-z0-9]/],
+	["secret-key", /\bsk-[A-Za-z0-9_-]{16,}/],
+	["aws-key", /\bAKIA[0-9A-Z]{16}\b/],
+	["github-token", /\bgh[pousr]_[A-Za-z0-9]{20,}/],
+	["slack-token", /\bxox[baprs]-/],
+	["private-key", /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+];
+
+/** Scan ADDED lines of a cached diff for credential shapes → matched pattern names ([] = clean). */
+export function findSecrets(diff: string): string[] {
+	const hits = new Set<string>();
+	for (const line of diff.split("\n")) {
+		if (!line.startsWith("+") || line.startsWith("+++")) continue;
+		for (const [name, re] of SECRET_PATTERNS) if (re.test(line)) hits.add(name);
+	}
+	return [...hits];
+}
+
+/** /done commit step (HOME-118): owner-confirmed exact-path staging, credential scan,
+ *  commit `session close: <identifier>`, guarded push. Returns a one-line notice for
+ *  pendingNotices, or null when nothing happened. NEVER throws. */
+export async function commitSessionWork(
+	ui: { confirm(title: string, body: string): Promise<boolean>; notify(msg: string, level?: "info" | "warning" | "error"): void },
+	cwd: string,
+	identifier: string,
+): Promise<string | null> {
+	try {
+		const top = runGit(cwd, ["rev-parse", "--show-toplevel"]);
+		if (!top.ok) {
+			ui.notify("no git repo here — nothing to commit", "info");
+			return null;
+		}
+		const root = top.out;
+		const status = runGit(root, ["status", "--porcelain", "-z"]);
+		const all = status.ok ? parsePorcelain(status.out) : [];
+		const excluded = all.filter(p => p.startsWith("packages/")); // Chris's own lane — never staged (HOME-117/118)
+		const commitable = all.filter(p => !p.startsWith("packages/"));
+		const leftAlone = excluded.length ? `left alone: ${excluded.length} file(s) under packages/ (yours)` : "";
+		if (commitable.length === 0) {
+			ui.notify(`nothing to commit${leftAlone ? ` — ${leftAlone}` : ""}`, "info");
+			return null;
+		}
+		const listed = commitable.slice(0, 20).join("\n") + (commitable.length > 20 ? `\n+${commitable.length - 20} more` : "");
+		const body = leftAlone ? `${listed}\n\n${leftAlone}` : listed;
+		const yes = await ui.confirm(`Commit session work? (${commitable.length} files → session close: ${identifier})`, body);
+		if (!yes) return null;
+		const add = runGit(root, ["add", "--", ...commitable]); // exact paths only — never `git add .`
+		if (!add.ok) {
+			ui.notify(`commit failed at staging: ${add.err.split("\n")[0]}`, "error");
+			return null;
+		}
+		const secrets = findSecrets(runGit(root, ["diff", "--cached"]).out);
+		if (secrets.length) {
+			runGit(root, ["reset", "-q", "--", ...commitable]);
+			ui.notify(`commit refused — possible secret in staged diff: ${secrets.join(", ")}. Commit manually if false alarm.`, "error");
+			return null;
+		}
+		const commit = runGit(root, ["commit", "-m", `session close: ${identifier}`]);
+		if (!commit.ok) {
+			runGit(root, ["reset", "-q", "--", ...commitable]);
+			ui.notify(`commit failed: ${commit.err.split("\n")[0] || commit.out.split("\n")[0]}`, "error");
+			return null;
+		}
+		const n = commitable.length;
+		if (root === join(homedir(), ".claude")) return `[linear] /done committed ${n} file(s) on ${identifier} (not pushed — ~/.claude)`;
+		if (!runGit(root, ["remote", "get-url", "origin"]).ok) return `[linear] /done committed ${n} file(s) on ${identifier} (not pushed — no remote)`;
+		const push = runGit(root, ["push"], 30_000);
+		if (!push.ok) {
+			ui.notify(`committed; push failed: ${push.err.split("\n")[0]}`, "warning");
+			return `[linear] /done committed ${n} file(s) on ${identifier} (not pushed — push failed)`;
+		}
+		return `[linear] /done committed and pushed ${n} file(s) for ${identifier}`;
+	} catch (e) {
+		ui.notify(`/done commit step failed: ${String(e)}`, "error");
+		return null;
+	}
+}
+
 interface NowState {
 	team?: string; // owning team key; restore skips entries from another team (absent = legacy HOME)
 	issueId?: string;
@@ -1361,6 +1460,8 @@ export default function linearNow(pi: ExtensionAPI) {
 					if (!yes) return;
 					ctx.ui.notify(await closeWithVerdict(issueId, identifier, "done", undefined, ctx), "info");
 					pendingNotices.push(`[linear] Owner verdict via /done: ${identifier} closed (Done); NOW cleared.`);
+					const closeCommit = await commitSessionWork(ctx.ui, process.cwd(), identifier);
+					if (closeCommit) pendingNotices.push(closeCommit);
 					return;
 				}
 				if (choice === CLEAR) {
@@ -1377,6 +1478,8 @@ export default function linearNow(pi: ExtensionAPI) {
 				if (qId) await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: issueId, labelId: qId });
 				ctx.ui.notify(`${identifier} → close proposed, in your queue`, "info");
 				pendingNotices.push(`[linear] Owner proposed close of ${identifier} via /done; NOW cleared, queued for owner verdict.`);
+				const proposeCommit = await commitSessionWork(ctx.ui, process.cwd(), identifier);
+				if (proposeCommit) pendingNotices.push(proposeCommit);
 			} catch (e) {
 				ctx.ui.notify(`/done failed: ${String(e)}`, "error");
 			}
