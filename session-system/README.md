@@ -52,6 +52,30 @@ addon (`refresh-natives.sh`), then the fork tests (`session-system/tests/`,
 the drift alarm proving the extension still loads against the new omp
 source), then pushes origin. Restart omp afterward.
 
+## New project (day 1)
+
+Everything native loads from this repo no matter the directory — extension,
+AGENTS files, and skills. To scope a brand-new project into the Linear
+workflow:
+
+1. Create the project in the Linear UI first (the `linear` tool deliberately
+   cannot create projects; `create_issue` refuses to file into a project
+   that doesn't exist rather than silently dropping it into the team).
+2. `git init` if it isn't a repo yet — markers resolve from the git root.
+3. `echo "Exact Linear Project Name" > .linear-project` at the repo root.
+   From then on `/now` filters to that project and capture/create file into
+   it. (`.linear-team` only if the team isn't HOME.) The extension validates
+   the exact marker on session start and bare `/now`; a stale or misspelled
+   marker is an on-screen error, not an "empty project."
+4. Work as usual — digest, NOW footer, `/now`, `/done`, `/capture`, intake.
+
+Without a marker in a git repo, `/now` still works (unfiltered map) but
+`/capture` and `create_issue` are refused until the repo is scoped or a
+project is passed explicitly — the session-start notification and the digest
+SCOPE line both say so. Non-git scratch dirs keep the old behavior (filing
+lands on team HOME, or NOW's project). Enforcement is native to the
+extension, never an LLM rule.
+
 ## History
 
 Built 2026-08-10 (HOME-27) after the end-to-end review: system previously

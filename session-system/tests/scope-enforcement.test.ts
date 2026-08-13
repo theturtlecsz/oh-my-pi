@@ -1,0 +1,50 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, describe, expect, test } from "bun:test";
+
+interface HarnessOutput {
+	statuses: string[];
+	refusalText: string;
+	explicitText: string;
+}
+
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-scope-"));
+const home = path.join(tempRoot, "home");
+const probe = path.join(tempRoot, "repo");
+const harness = path.join(import.meta.dir, "fixtures/scope-enforcement-harness.ts");
+fs.mkdirSync(path.join(home, ".omp", "agent"), { recursive: true });
+fs.mkdirSync(path.join(home, ".config"), { recursive: true });
+fs.mkdirSync(probe, { recursive: true });
+fs.writeFileSync(path.join(home, ".config", "linear.env"), "LINEAR_API_KEY=fake\n");
+fs.writeFileSync(
+	path.join(home, ".omp", "agent", "linear-now.json"),
+	JSON.stringify({
+		team: "HOME",
+		issueId: "old-now-id",
+		identifier: "HOME-1",
+		title: "Old global NOW",
+		project: "Old Global Project",
+		setAt: Date.now(),
+	}),
+);
+Bun.spawnSync(["git", "init", "-q"], { cwd: probe });
+
+afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+
+describe("unscoped repo write enforcement", () => {
+	test("refuses restored global NOW project but accepts an explicit project", () => {
+		const child = Bun.spawnSync([process.execPath, harness, probe], {
+			cwd: probe,
+			env: { ...process.env, HOME: home },
+		});
+		expect(child.exitCode, child.stderr.toString()).toBe(0);
+		const output = JSON.parse(child.stdout.toString()) as HarnessOutput;
+		expect(output.statuses.join("\n")).toContain("Old Global Project"); // state.project really restored
+		expect(output.refusalText).toContain("refused: unscoped git repo");
+		expect(output.refusalText).not.toContain("Old Global Project");
+		expect(output.explicitText).toContain("CONFIRM REQUIRED");
+		expect(output.explicitText).toContain("project Chosen Project");
+		expect(output.explicitText).not.toContain("refused: unscoped git repo");
+	});
+});

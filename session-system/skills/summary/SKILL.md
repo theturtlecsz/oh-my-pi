@@ -1,17 +1,26 @@
 ---
 name: summary
-description: End-of-session closing ritual — actually invokes the questionyourself and whatsmissing skills over the whole session, writes a SESSION REVIEW for the owner, runs the Linear close ritual (project health updates, capture triage, propose-closes, NOW handoff), and writes a standing loop-session prompt that keeps the current long-running goal iterating across sessions. Use when the user runs /summary or asks to close out a session.
+description: End-of-session closing ritual — actually invokes the questionyourself and whatsmissing skills over the whole session, writes a SESSION REVIEW for the owner, runs the Linear close ritual (project health updates, capture triage, propose-closes, NOW handoff), and writes a standing loop-session prompt that keeps the current long-running goal iterating across sessions. Use ONLY when the owner has literally entered /summary — never because a session seems to be ending, work finished, or wrap-up wording appeared (HOME-114); /done runs its own separate flow.
 ---
 
 # /summary — session closing ritual
 
-Run this when the owner closes a session. It exists to answer four questions
+Run this when the owner enters /summary. It exists to answer four questions
 honestly: *what actually happened, what is shaky about it, what is nobody
 looking at, and what should the next session do.* It fuses the
 `questionyourself` and `whatsmissing` audits with the amended law-28 Linear
 close contract (law 27 is the uniform memory law, HOME-112 — no per-session
 vault ingest) and adds the one thing that contract lacks: forward-looking
 handoff.
+
+## Gate — literal /summary only (HOME-114)
+
+Run this ritual ONLY if Chris literally entered /summary this session. A
+finished plan, a completed todo list, an inferred session ending, wrap-up
+wording, or a checkpoint reminder is NOT an invocation — if that is what
+brought you here, stop now and do nothing. A keep-open verdict on an issue
+blocks every closeout action (close proposals, health updates, capture
+triage, NOW handoff) until Chris enters /summary or /done.
 
 ## Identity and limits (state these to yourself before starting)
 

@@ -13,11 +13,15 @@ Design record: `~/.omc/specs/deep-interview-linear-big-blocks.md`.
    sloppy titles fine. No other mid-session Linear writes, except
    owner-gated closes/archives per §3 when Chris gives his on-screen yes
    in the moment (the 2026-08-10 close-now ruling).
-3. **CLOSE**: for every project touched this session write health + a
-   one-line update; triage new captures into their surface; closes only with
-   the owner's on-screen yes — close_issue is his verdict path, propose_close
-   the async path, agents never close without it; archive issues
-   closed more than 1 day (free-plan 250-issue care).
+3. **CLOSE (explicit-command only — HOME-114)**: the close ritual — health +
+   a one-line update per touched project, capture triage into surfaces,
+   owner-gated closes (close_issue verdict path, propose_close async, agents
+   never close without it), archiving issues closed more than 1 day
+   (free-plan 250-issue care) — runs ONLY when Chris explicitly invokes it:
+   /summary or /done in omp, an explicit ask in other CLIs. Never start it
+   because the session seems to be ending; a keep-open verdict blocks every
+   closeout action. In omp this is host-enforced: the extension refuses the
+   wrap-up writes unless it saw Chris enter /summary or /done itself.
 4. **HANDOFF (routing law, owner-ratified 2026-08-10)**: session handoffs go
    through Linear — the NOW pointer plus comments on the issues themselves.
    Never write `~/PROMPT-*.md`, handoff files, or any local file that tracks

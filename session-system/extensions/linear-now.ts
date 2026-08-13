@@ -27,6 +27,19 @@ const KEY_FILE = join(homedir(), ".config", "linear.env");
 const CACHE_FILE = join(homedir(), ".omp", "agent", TEAM_KEY === "HOME" ? "linear-now.json" : `linear-now-${TEAM_KEY.toLowerCase()}.json`);
 const API = "https://api.linear.app/graphql";
 
+/** HOME-114: closeout is explicit-command only. Injected verbatim into every digest + stop reminder. */
+export const CLOSEOUT_BOUNDARY =
+	"Closeout is explicit-command only: /summary (questionyourself + whatsmissing + Linear close ritual) and /done run ONLY when Chris literally enters them — never start a summary, close proposal, health update, capture triage, or NOW handoff because work, a todo list, or the session looks finished; a keep-open verdict blocks every closeout action until he enters one.";
+export const CHECKPOINT_CONTRACT =
+	"CHECKPOINT CONTRACT: executing against an issue → the issue is the durable cross-session log; local plans/todos/chat do not survive the session. Plan approved → post a digest comment (decisions, acceptance list, artifact paths + hash). Every stop — restart, blocked, session end — → post a handoff comment (done / remaining / exact resume steps). " +
+	CLOSEOUT_BOUNDARY;
+export const CLOSE_CONTRACT =
+	"CLOSE CONTRACT (runs ONLY inside an owner-entered /summary; host-enforced — wrap-up writes are refused without it): update touched projects (health + one line) · triage captures · propose closes (owner verdict closes) · archive >1-day-closed";
+export const STOP_REMINDER_BOUNDARY =
+	"Post the owed comment only — do not run /summary or any closeout on your own; closeout starts only when Chris literally enters /summary or /done.";
+export const CLOSEOUT_LOCK_REFUSAL =
+	"REFUSED — closeout lock (HOME-114): no owner-entered /summary or /done this session. update_health, propose_close, and archive_issue are wrap-up writes; they unlock only when Chris literally enters /summary or /done. If he wants this write, he must enter one of those commands himself — do not retry on your own.";
+
 /** Resolve a committed single-line marker file (e.g. .linear-project, .linear-team)
  *  from the git toplevel of cwd, falling back to the primary checkout root via
  *  --git-common-dir (covers worktrees whose branch predates the marker).
@@ -243,9 +256,44 @@ async function ownerGate(
 
 export default function linearNow(pi: ExtensionAPI) {
 	const projectFilter = resolveMarker(".linear-project"); // exact Linear project name, one line
+
+	// Day-1 scoping, enforced natively (owner law: enforcement/piping is omp-native,
+	// never LLM-only rules): the digest states scope every session, session start
+	// notifies when unscoped, and writes from an unscoped git repo (no marker, no
+	// explicit project, NOW carries none) are REFUSED with the scoping instructions.
+	// NOW stays global (single-holder label); .linear-project scopes /now + filing only.
+	const gitRooted = spawnSync("git", ["-C", process.cwd(), "rev-parse", "--show-toplevel"], { encoding: "utf8" }).status === 0;
+	const SCOPE_FIX = 'create the project in Linear first, then echo "<Exact Project Name>" > .linear-project at the repo root';
+	const scopeLine = !gitRooted
+		? "SCOPE: not a git repo — /now unfiltered, filing lands on team HOME; git init + .linear-project to scope this directory"
+		: projectFilter
+			? `SCOPE: "${projectFilter}" (.linear-project) — /now + filing scoped to this project; NOW itself stays global`
+			: `SCOPE: no .linear-project marker — /now unfiltered; unscoped writes refused. Day 1: ${SCOPE_FIX}`;
+	/** Native write gate: null = scoped, string = refusal reason. */
+	function unscopedRefusal(target: string | undefined): string | null {
+		if (target || !gitRooted) return null;
+		return `refused: unscoped git repo (no .linear-project marker, no explicit project) — ${SCOPE_FIX}`;
+	}
+	/** Filing target: explicit param wins, then the repo marker. The global NOW's project
+	 *  (state.project) is NOT an implicit target inside a git repo — it would silently
+	 *  route this repo's work into whatever project NOW happens to live in. Outside git
+	 *  repos (scratch dirs, no marker possible) the NOW fallback still applies. */
+	function fileTarget(explicit: string | undefined): string | undefined {
+		return explicit ?? projectFilter ?? (gitRooted ? undefined : state.project);
+	}
 	let state: NowState = {};
 	let digestPending = false;
 	let digestInjectedThisSession = false;
+	/** Validate the exact marker name against Linear; an empty issue list cannot
+	 *  distinguish an empty project from a stale/nonexistent marker. */
+	async function projectScopeExists(): Promise<boolean> {
+		if (!projectFilter) return true;
+		const data = await gql<{ projects: { nodes: { name: string }[] } }>(
+			`query($name:String!){ projects(first:10,filter:{name:{eq:$name}}){nodes{name}} }`,
+			{ name: projectFilter },
+		);
+		return data.projects.nodes.some(project => project.name === projectFilter);
+	}
 	let models: ExtensionModelQuery | undefined;
 
 	async function loadCache() {
@@ -985,12 +1033,9 @@ export default function linearNow(pi: ExtensionAPI) {
 			.catch(e => [`TREE: unavailable (${String(e)}) — session unblocked`]);
 		const now = state.identifier ? `NOW: ${state.project ? `${state.project} · ` : ""}${state.identifier} ${state.title}` : "NOW: unset — /now to pick";
 		const owed = state.owedFromLastSession
-			? [`UNMET FROM LAST SESSION: ${state.owedFromLastSession.kind} comment owed on ${state.owedFromLastSession.identifier} — run /summary before new work.`]
+			? [`UNMET FROM LAST SESSION: ${state.owedFromLastSession.kind} comment owed on ${state.owedFromLastSession.identifier} — post it before new work.`]
 			: [];
-		const contracts = [
-			"CHECKPOINT CONTRACT: executing against an issue → the issue is the durable cross-session log; local plans/todos/chat do not survive the session. Plan approved → post a digest comment (decisions, acceptance list, artifact paths + hash). Every stop — restart, blocked, session end — → post a handoff comment (done / remaining / exact resume steps). Session closing → run /summary (questionyourself + whatsmissing + Linear close ritual) BEFORE /done.",
-			"CLOSE CONTRACT: update touched projects (health + one line) · triage captures · propose closes (owner verdict closes) · archive >1-day-closed",
-		];
+		const contracts = [CHECKPOINT_CONTRACT, CLOSE_CONTRACT];
 		let d: { projects: { nodes: { name: string; state: string; health?: string }[] }; issues: { nodes: { identifier: string; title: string; createdAt: string }[] } };
 		try {
 			d = await gql(
@@ -1000,7 +1045,7 @@ export default function linearNow(pi: ExtensionAPI) {
 		} catch (e) {
 			// Fail open with what we have: cached NOW + the tree's own honest line
 			// (missing key / API down degrades the bookend, never blocks the session).
-			return ["── Linear bookend (linear.app/spec-kit) ──", now, ...(await treeLines), ...owed, `[linear] queue/in-flight unavailable (${String(e)}) — session unblocked`, ...contracts].join("\n");
+			return ["── Linear bookend (linear.app/spec-kit) ──", now, scopeLine, ...(await treeLines), ...owed, `[linear] queue/in-flight unavailable (${String(e)}) — session unblocked`, ...contracts].join("\n");
 		}
 		const inflight = d.projects.nodes
 			.filter(p => p.state === "started")
@@ -1015,6 +1060,7 @@ export default function linearNow(pi: ExtensionAPI) {
 		return [
 			"── Linear bookend (linear.app/spec-kit) ──",
 			now,
+			scopeLine,
 			...(await treeLines),
 			...owed,
 			`IN FLIGHT: ${inflight || "none"}`,
@@ -1028,7 +1074,17 @@ export default function linearNow(pi: ExtensionAPI) {
 
 	// ---- lifecycle: digest injection (new + resume), footer, state restore ----
 
+	// HOME-114 mechanical lock: flips ONLY on host-observed owner entry of /summary or /done —
+	// TUI raw text (input event), the structured user-attributed skill-prompt message the host
+	// composes for a user-invoked summary skill (message_start; models cannot author custom
+	// messages, so prompt bytes never unlock), or the /done command handler.
+	// FAIL CLOSED on unknown depth: subagent sessions (taskDepth > 0) and hosts predating
+	// ctx.taskDepth never unlock — on an old omp build every wrap-up write stays refused until
+	// the rebuilt host is live. Authorization is per-transcript: reset on session start/switch.
+	let closeoutAuthorized = false;
+	const ownerSession = (ctx: { taskDepth?: number } | undefined): boolean => ctx?.taskDepth === 0;
 	pi.on("session_start", async (_e, ctx) => {
+		closeoutAuthorized = false;
 		await loadCache();
 		models = ctx.models;
 		// session entry wins over cache for NOW restore (survives cache loss)
@@ -1050,10 +1106,30 @@ export default function linearNow(pi: ExtensionAPI) {
 		void saveCache();
 		digestPending = true;
 		digestInjectedThisSession = false;
+		if (gitRooted && !projectFilter) {
+			try {
+				ctx.ui.notify(`Unscoped git repo: no .linear-project — /now unfiltered, unscoped writes refused. ${SCOPE_FIX}`, "warning");
+			} catch {
+				/* headless */
+			}
+		} else if (projectFilter) {
+			try {
+				if (!(await projectScopeExists())) {
+					ctx.ui.notify(`Project "${projectFilter}" from .linear-project does not exist in Linear — create it or fix the marker`, "error");
+				}
+			} catch (error) {
+				try {
+					ctx.ui.notify(`Could not verify .linear-project "${projectFilter}" (${String(error)}) — session unblocked`, "warning");
+				} catch {
+					/* headless */
+				}
+			}
+		}
 		footer(ctx);
 	});
 
 	pi.on("session_switch", async (event, ctx) => {
+		closeoutAuthorized = false; // authorization never crosses transcripts (advisor F1)
 		if (event.reason === "resume" || event.reason === "new") {
 			digestPending = true;
 			digestInjectedThisSession = false;
@@ -1064,6 +1140,17 @@ export default function linearNow(pi: ExtensionAPI) {
 	// HOME-56: owner slash-command actions (/now, /done) were invisible to the agent —
 	// it argued from the session-start digest. Queue one-line notices, flush next turn.
 	const pendingNotices: string[] = [];
+	pi.on("input", async (event, ctx) => {
+		if (ownerSession(ctx) && event.source !== "extension" && /^\s*\/(summary|done)\b/.test(event.text)) closeoutAuthorized = true;
+		return undefined;
+	});
+	pi.on("message_start", async (event, ctx) => {
+		if (!ownerSession(ctx)) return;
+		const m = event.message as { role?: string; customType?: string; attribution?: string; details?: { name?: string } };
+		if (m.role === "custom" && m.customType === "skill-prompt" && m.attribution === "user" && m.details?.name === "summary") {
+			closeoutAuthorized = true;
+		}
+	});
 	pi.on("before_agent_start", async () => {
 		const notices = pendingNotices.splice(0).join("\n");
 		if (!digestPending || digestInjectedThisSession) {
@@ -1132,7 +1219,7 @@ export default function linearNow(pi: ExtensionAPI) {
 					"Digest comment = decisions, acceptance list, artifact paths + hash.",
 					"Handoff comment = done / remaining / exact resume steps.",
 					`Post it now with the linear tool (action:"comment", issue:"${id}").`,
-					"If this stop is the session ending, run /summary first (questionyourself + whatsmissing + Linear close ritual), then post the handoff.",
+					STOP_REMINDER_BOUNDARY,
 					"This reminder fires once per obligation; afterwards only the footer ⚠ remains.",
 				].join(" "),
 			};
@@ -1178,6 +1265,10 @@ export default function linearNow(pi: ExtensionAPI) {
 					const issue = await findIssue(arg);
 					await setNow({ id: issue.id, identifier: issue.identifier, title: issue.title, project: issue.project?.name }, ctx);
 					pendingNotices.push(`[linear] Owner set NOW to ${issue.identifier} via /now.`);
+					return;
+				}
+				if (projectFilter && !(await projectScopeExists())) {
+					ctx.ui.notify(`Project "${projectFilter}" from .linear-project does not exist in Linear — create it or fix the marker`, "error");
 					return;
 				}
 				const map = await mapData();
@@ -1236,6 +1327,13 @@ export default function linearNow(pi: ExtensionAPI) {
 	pi.registerCommand("done", {
 		description: "Clear NOW + propose the close (owner verdict closes)",
 		handler: async (_args, ctx) => {
+			// Owner-only, before ANY NOW/UI/Linear logic: a non-owner context (subagent,
+			// legacy host without taskDepth) gets a refusal and nothing else (HOME-114).
+			if (!ownerSession(ctx)) {
+				ctx.ui.notify("/done is owner-only — refused outside the owner's main session (HOME-114)", "warning");
+				return;
+			}
+			closeoutAuthorized = true; // owner-entered /done on every entry path
 			if (!state.issueId || !state.identifier) {
 				ctx.ui.notify("No NOW set", "warning");
 				return;
@@ -1294,7 +1392,12 @@ export default function linearNow(pi: ExtensionAPI) {
 				return;
 			}
 			try {
-				const captureProject = projectFilter ?? state.project;
+				const captureProject = fileTarget(undefined);
+				const refusal = unscopedRefusal(captureProject);
+				if (refusal) {
+					ctx.ui.notify(`/capture ${refusal}`, "error");
+					return;
+				}
 				const target = captureProject ? `project "${captureProject}"` : "team HOME (no project)";
 				const ok = await ctx.ui.confirm("File this capture?", `"${text}"\n→ ${target}`);
 				if (!ok) return;
@@ -1377,9 +1480,12 @@ export default function linearNow(pi: ExtensionAPI) {
 			"to show the owner verbatim; repeat with confirm:true only after his yes.",
 			"create_issue queue:true adds the waiting-on-chris label at creation; queue_issue adds it to an",
 			"existing issue — use them for ANYTHING parked on the owner (the decision queue is that label).",
+			"Writes from an unscoped git repo (no .linear-project marker at its root) are REFUSED unless",
+			"project is passed explicitly — the marker is the day-1 scoping mechanism, not optional friction.",
 			"create_issue with batch publishes a parent + N children with NATIVE parent/blocks relations behind ONE preview; on mid-batch failure the exact landed/not-landed inventory is reported — no rollback exists and none is claimed.",
 			"Never assume a write landed without success:true. Never dump large result sets into prose; summarize.",
 			"Closes are the owner's verdict: close_issue/archive_issue require his on-screen yes (two-phase); propose_close remains the async path.",
+			"Closeout lock (HOME-114, host-enforced): update_health/propose_close/archive_issue are REFUSED unless Chris literally entered /summary or /done this session — the extension tracks his entry itself; asking or arguing does not unlock it. close_issue stays his on-screen verdict path. A keep-open verdict blocks every closeout action.",
 			"Executing against an issue: checkpoint via comment — plan approved → digest comment (decisions, acceptance, artifact paths+hash); every stop (restart/blocked/session end) → handoff comment (done/remaining/resume steps). The issue is the durable cross-session log; local session artifacts do not survive handoff.",
 		].join(" "),
 		parameters: z.object({
@@ -1417,6 +1523,11 @@ export default function linearNow(pi: ExtensionAPI) {
 				details: { success: true, ...details },
 			});
 			try {
+				// HOME-114: wrap-up writes are host-locked; close_issue stays the owner's
+				// on-screen verdict path (two-phase confirm is his yes — 2026-08-10 ruling).
+				if ((params.action === "update_health" || params.action === "propose_close" || params.action === "archive_issue") && !closeoutAuthorized) {
+					return deny(CLOSEOUT_LOCK_REFUSAL);
+				}
 				switch (params.action) {
 					case "my_now": {
 						// HOME-109: status-on-demand = completion tree + explanation line.
@@ -1508,7 +1619,9 @@ export default function linearNow(pi: ExtensionAPI) {
 							return deny(`blocks edges form a cycle: ${leftover.join(" ↔ ")} — publish refused`);
 						}
 						// 2b. resolve project — strict: a mis-landed tree is n+1 wrong issues
-						const target = params.project ?? projectFilter ?? state.project;
+						const target = fileTarget(params.project);
+						const batchRefusal = unscopedRefusal(target);
+						if (batchRefusal) return deny(batchRefusal);
 						let projectId: string | undefined;
 						if (target) {
 							const dp = await gql<{ projects: { nodes: { id: string }[] } }>(`query($name:String!){ projects(filter:{name:{eq:$name}}){nodes{id}} }`, { name: target });
@@ -1588,7 +1701,9 @@ export default function linearNow(pi: ExtensionAPI) {
 							};
 						}
 					}
-						const target = params.project ?? projectFilter ?? state.project;
+						const target = fileTarget(params.project);
+						const singleRefusal = unscopedRefusal(target);
+						if (singleRefusal) return deny(singleRefusal);
 						const gate = await ownerGate(
 							ctx,
 							"Model wants to file an issue",

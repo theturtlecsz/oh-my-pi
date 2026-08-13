@@ -25,8 +25,9 @@ When in plan mode or asked to plan:
    (`set_now`).
 
 Always: stray findings worth keeping become issues (capture, don't chase);
-closes need the owner's on-screen yes (close_issue verdict path); otherwise
-propose. Keep Linear reads bounded;
+closes are explicit-command only — propose or execute a close ONLY inside an
+owner-entered /summary or /done, or on Chris's explicit ask (close_issue is
+his on-screen verdict path). Keep Linear reads bounded;
 never dump the backlog into context.
 
 ## Routing law (owner-ratified 2026-08-10) — no prompt files, no file trackers
@@ -54,12 +55,18 @@ Two mandatory comment moments when executing against an issue:
   post a handoff comment: done / remaining / exact resume steps. (This is the
   routing law's existing handoff clause, restated at the point of failure: the
   2026-08-11 HOME-44 run posted its handoff only after the owner asked.)
-- **Session closing** (owner ruling 2026-08-11) → run the `/summary` close
-  ritual BEFORE `/done`: it invokes the questionyourself and whatsmissing
-  skills over the whole session, then executes the Linear close ritual. The
-  handoff comment does not substitute for it — handoff preserves state,
-  /summary audits it.
+- **Session closing** (owner ruling 2026-08-11; explicit-command boundary
+  2026-08-13, HOME-114) → closeout is explicit-command only: the `/summary`
+  close ritual (questionyourself + whatsmissing + Linear close ritual) runs
+  ONLY when Chris literally enters `/summary`, and `/done` only when he
+  enters `/done`. Never start either — or any close proposal, health
+  update, or NOW handoff — because work or the session looks finished; a
+  keep-open verdict blocks every closeout action. The handoff comment is
+  still owed at every stop — handoff preserves state, /summary audits it.
 
 Enforcement: the linear-now session-start bookend carries a CHECKPOINT CONTRACT
 line, and the `linear` device doc carries the same rule — both reach every
-session regardless of whether this rule file is injected.
+session regardless of whether this rule file is injected. The closeout boundary
+is also host code, not just text: the extension refuses update_health,
+propose_close, and archive_issue unless it observed Chris literally entering
+/summary or /done this session (close_issue stays his on-screen verdict path).
