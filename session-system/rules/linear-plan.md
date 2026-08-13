@@ -5,6 +5,14 @@ SURFACE nouns with health, milestones = PROMISE sentences (owner verdict
 closes), issues = work. A `linear` tool is available: reads are free, writes
 always render an on-screen confirmation.
 
+## Uniform memory law (owner-ratified 2026-08-13, HOME-112)
+
+state lives in Linear; knowledge lives in files; files change when reality
+changes — never on a session clock. The Linear close ritual is the only
+mandatory per-session write set; no other store may carry a mandatory
+per-session write. Knowledge files (wikis, runbooks, references) update in
+the same pass as the work that changes them.
+
 When in plan mode or asked to plan:
 
 1. Ground the plan in the live tree first — call `linear` with `tree` (and

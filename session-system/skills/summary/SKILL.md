@@ -8,8 +8,10 @@ description: End-of-session closing ritual — actually invokes the questionyour
 Run this when the owner closes a session. It exists to answer four questions
 honestly: *what actually happened, what is shaky about it, what is nobody
 looking at, and what should the next session do.* It fuses the
-`questionyourself` and `whatsmissing` audits with the law-27/28 session-close
-contract and adds the one thing that contract lacks: forward-looking handoff.
+`questionyourself` and `whatsmissing` audits with the amended law-28 Linear
+close contract (law 27 is the uniform memory law, HOME-112 — no per-session
+vault ingest) and adds the one thing that contract lacks: forward-looking
+handoff.
 
 ## Identity and limits (state these to yourself before starting)
 
@@ -266,7 +268,8 @@ show them before writing via API. Four steps, in order:
    `propose_close` + clear). Continuing next session → leave it. Superseded →
    propose the next NOW and set it on the owner's yes (`set_now`).
 
-Also draft, on owner confirmation, the **SESSION REVIEW** (Section 1) and —
-where the current repo keeps a knowledge vault — the **wiki vault ingest**
-for durable knowledge produced. Legacy Product-State pages are a pointer to
-Linear now; do not maintain parallel decision queues there.
+Also draft, on owner confirmation, the **SESSION REVIEW** (Section 1).
+Knowledge files are change-coupled (uniform memory law, HOME-112): they were
+updated by the work that changed them, never as a close step — do not run a
+close-time vault ingest. Legacy Product-State pages are a pointer to Linear;
+do not maintain parallel decision queues there.
