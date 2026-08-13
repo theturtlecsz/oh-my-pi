@@ -27,6 +27,15 @@ function ccaChunk(text: string): Record<string, unknown> {
 	return { response: genaiChunk(text) };
 }
 
+function ccaThinkingChunk(thinking: string): Record<string, unknown> {
+	return {
+		response: {
+			candidates: [{ content: { parts: [{ text: thinking, thought: true }] }, finishReason: "STOP" }],
+			usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
+		},
+	};
+}
+
 async function drain(stream: AsyncIterable<AssistantMessageEvent>) {
 	const events: AssistantMessageEvent[] = [];
 	for await (const event of stream) events.push(event);
@@ -288,6 +297,29 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 		const result = await stream.result();
 
 		expect(calls).toBe(1);
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+	});
+
+	it("accepts a thinking-only advisor STOP without switching endpoints", async () => {
+		const requestedEndpoints: string[] = [];
+		const fetchMock: FetchImpl = async input => {
+			const endpoint = endpointFromInput(input);
+			requestedEndpoints.push(endpoint);
+			return withResponseUrl(sse(ccaThinkingChunk("No advice is needed.")), endpoint);
+		};
+
+		const stream = streamGoogleGeminiCli(antigravityModel, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			antigravityEndpointMode: "auto",
+			acceptEmptyResponse: true,
+			fetch: fetchMock,
+		});
+		const { starts } = await drain(stream);
+		const result = await stream.result();
+
+		expect(requestedEndpoints).toEqual([ANTIGRAVITY_DAILY_ENDPOINT]);
+		expect(starts).toBe(1);
 		expect(result.stopReason).toBe("stop");
 		expect(result.errorMessage).toBeUndefined();
 	});

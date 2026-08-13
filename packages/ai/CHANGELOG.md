@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed thinking-only Gemini Cloud Code Assist responses being treated as failures when silence is valid, preventing passive advisors from unnecessarily switching providers.
+
 ## [17.3.0] - 2026-08-13
 
 ### Breaking Changes
