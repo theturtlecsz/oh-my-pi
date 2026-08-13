@@ -1185,7 +1185,43 @@ export default function linearNow(pi: ExtensionAPI) {
 					ctx.ui.notify(projectFilter ? `No open issues in project "${projectFilter}" (.linear-project filter)` : "No open issues found", "warning");
 					return;
 				}
-				const pick = await ctx.ui.custom<MapIssue | undefined>(nowWindowFactory(map), { overlay: true });
+				// Prefer ctx.ui.custom (TUI overlay with framed detail pane) when the
+				// host supports it; otherwise fall back to a plain select() so
+				// non-TUI surfaces (omp-webui browser client, Slack bridge, headless
+				// scripting) can still drive /now with the same MapIssue list.
+				let pick: MapIssue | undefined;
+				const supportsCustom = typeof (ctx.ui as { custom?: unknown }).custom === "function";
+				if (supportsCustom) {
+					try {
+						pick = await ctx.ui.custom<MapIssue | undefined>(nowWindowFactory(map), { overlay: true });
+					} catch {
+						pick = undefined;
+					}
+				}
+				if (!supportsCustom || pick === undefined) {
+					const flat: { label: string; issue: MapIssue }[] = [];
+					for (const s of map.surfaces) {
+						for (const i of s.issues) {
+							const proj = i.project ? `${i.project} · ` : "";
+							const age = fmtElapsed(Date.now() - Date.parse(i.updatedAt));
+							const mark = i.isNow ? "● " : "  ";
+							flat.push({ label: `${mark}[${s.name}] ${proj}${i.identifier} ${i.title} · ${age}`.slice(0, 200), issue: i });
+						}
+					}
+					if (!flat.length) {
+						ctx.ui.notify("No open issues found", "warning");
+						return;
+					}
+					// Move any issue Linear labels as `now` to the top so the list mirrors
+					// the TUI overlay's ordering intent even without live isNow state.
+					flat.sort((a, b) => Number(b.issue.isNow) - Number(a.issue.isNow));
+					const choice = await ctx.ui.select(
+						`Pick your NOW${map.capped ? " (list capped)" : ""}`,
+						flat.map(f => f.label),
+					);
+					if (typeof choice !== "string" || !choice) return;
+					pick = flat.find(f => f.label === choice)?.issue;
+				}
 				if (!pick) return;
 				const yes = await ctx.ui.confirm(`Make ${pick.identifier} your NOW?`, `"${pick.title}"\n${pick.project ?? ""}`);
 				if (!yes) return;
