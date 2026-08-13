@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 git fetch upstream
 git merge upstream/main
 bun install
+bash session-system/refresh-natives.sh
 bun test session-system/tests
 git push origin main
 echo "fork now at $(git rev-parse --short HEAD) — restart omp to load the new source."

@@ -19,7 +19,8 @@ locations are symlinks created by `install.sh`.
 | `skills/whatsmissing` | `~/.agents/skills/whatsmissing` | Blind-spot audit, invoked by summary |
 | `prompts/archive/` | (nothing — archive only) | Retired session charters. Ruling 2026-08-10: work routes through Linear (issues, NOW, comments), never prompt files |
 | `tests/` | (nothing — fork-persistence tests) | Extension loads against current omp source; installer integrity + idempotency |
-| `update.sh` | (nothing — run by hand) | The update loop: fetch upstream → merge → `bun install` → fork tests → push origin |
+| `update.sh` | (nothing — run by hand) | The update loop: fetch upstream → merge → `bun install` → native refresh → fork tests → push origin |
+| `refresh-natives.sh` | (nothing — run by update.sh) | Keeps the drop-in native addon matched to the current omp version |
 
 `~/.claude/skills/summary` reaches the skill via `~/.agents/skills/summary`.
 
@@ -38,10 +39,12 @@ via symlink, `install.sh --copy` falls back to copying files into place —
 then keep edits in the repo and re-run it.
 
 `omp` on PATH runs from this fork checkout (`bun run setup` in
-`/home/thetu/oh-my-pi` source-links it; re-run only if the link breaks or
-natives change — if `build:native` fails for missing bazelisk, drop the
-matching `@oh-my-pi/pi-natives-linux-x64` npm binaries into
-`packages/natives/native/` instead).
+`/home/thetu/oh-my-pi` source-links it; re-run only if the link breaks).
+Natives: `build:native` needs bazelisk (absent here), so the exact-version
+npm binaries sit in `packages/natives/native/` — `refresh-natives.sh` keeps
+them matched to `packages/natives/package.json` (the workspace loader skips
+the version sentinel, so without this gate a stale binary fails nothing).
+Re-run `bun run setup` only if natives change and bazelisk is available.
 
 Update loop: `bash session-system/update.sh` from the fork root — fetches
 upstream, merges `upstream/main`, runs `bun install` and the fork tests
