@@ -47,9 +47,10 @@ the version sentinel, so without this gate a stale binary fails nothing).
 Re-run `bun run setup` only if natives change and bazelisk is available.
 
 Update loop: `bash session-system/update.sh` from the fork root — fetches
-upstream, merges `upstream/main`, runs `bun install` and the fork tests
-(`session-system/tests/`, the drift alarm proving the extension still loads
-against the new omp source), then pushes origin. Restart omp afterward.
+upstream, merges `upstream/main`, runs `bun install`, refreshes the native
+addon (`refresh-natives.sh`), then the fork tests (`session-system/tests/`,
+the drift alarm proving the extension still loads against the new omp
+source), then pushes origin. Restart omp afterward.
 
 ## History
 
