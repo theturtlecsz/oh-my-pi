@@ -28,14 +28,17 @@ plugin ambiguity skills (deep-interview, deep-dive, ralplan, /plan-as-intake)
 are bypassed for this lane. Intake ends at a published Linear issue —
 execution lanes pull from Linear.
 
-## Plain language (owner directive, 2026-08-11)
+## Plain language (owner directive, 2026-08-11; redefined by HOME-109, 2026-08-13)
 
-When explaining anything to Chris — issue status, bugs, plans, tradeoffs —
-use plain everyday language. No jargon, no function names, no file paths,
-no protocol terms unless he asks for the technical detail. Lead with what
-it means for him; keep the technical version available on request.
-Code, commits, and Linear comments keep full technical precision — this
-rule governs how things are explained to Chris, not how work is recorded.
+Owner-facing output, ALL the time (HOME-109): routine progress replies are
+completion-tree updates or plain sentences — what moved, what's next, what's
+stuck and why, in household terms. No commit hashes, file paths, protocol
+terms, or tool narration unless Chris asks. Technical detail is tucked away,
+reachable: it lives in issue comments and comes out the moment he asks for it
+— it never leads. Status questions ("where does X stand") are answered with
+the completion tree (linear tool, action my_now) plus one plain explanation
+line. Code, commits, and Linear comments keep full technical precision — this
+governs what Chris SEES, not what is recorded.
 
 ## Task Observer (installed 2026-07-18, owner-approved activation)
 

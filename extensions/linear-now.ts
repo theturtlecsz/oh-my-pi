@@ -73,6 +73,7 @@ interface NowState {
 	obligationDigest?: { armed: boolean; blockedOnce: boolean };
 	obligationHandoff?: { armed: boolean; blockedOnce: boolean };
 	owedFromLastSession?: { identifier: string; kind: "digest" | "handoff" };
+	treeCounts?: { done: number; total: number; stuck: number; onyou: number; at: number }; // HOME-109 footer cache — refreshed by every goalTree()
 }
 
 interface MapIssue {
@@ -104,6 +105,22 @@ interface IssueDetail {
 	commentsTotal: number;
 	commentsLast7d: number;
 	digestPacket: string;
+}
+
+interface TreeItem {
+	identifier: string;
+	title: string;
+	bucket: "done" | "working" | "stuck" | "onyou" | "next";
+	blocker?: string;
+	isNow: boolean;
+}
+
+interface GoalTree {
+	goal: string;
+	health?: string;
+	promise?: string;
+	items: TreeItem[];
+	counts: { done: number; total: number; stuck: number; onyou: number };
 }
 
 function apiKey(): string | null {
@@ -166,6 +183,9 @@ function wrap(text: string, width: number, maxLines: number): string[] {
 const HEALTH_GLYPH: Record<string, string> = { onTrack: "🟢", atRisk: "🟡", offTrack: "🔴" };
 const STATE_BAND: Record<string, number> = { started: 0, planned: 1 };
 const DONE_SUFFIX: Record<string, string> = { completed: " (done)", canceled: " (done)" };
+// HOME-109 completion tree — glyph vocabulary is a v1 prototype pending owner by-seeing; revise here only.
+const TREE_GLYPH: Record<TreeItem["bucket"], string> = { done: "✔", working: "▶", stuck: "✖", onyou: "✋", next: "○" };
+const HEALTH_WORDS: Record<string, string> = { onTrack: "on track", atRisk: "at risk", offTrack: "off track" };
 
 const DIGEST_INSTRUCTION = [
 	"Analyze this Linear issue for Chris (non-engineer, first read). Output ONLY labeled lines in this order, plain language, no markdown, no preamble:",
@@ -396,6 +416,76 @@ export default function linearNow(pi: ExtensionAPI) {
 		if (orphans) surfaces.push({ name: NO_SURFACE, state: "?", issues: orphans, waiting: orphans.filter(i => i.waiting).length });
 		if (projectFilter) return { surfaces: surfaces.filter(s => s.name === projectFilter), capped: d.issues.nodes.length === 100 };
 		return { surfaces, capped: d.issues.nodes.length === 100 };
+	}
+
+	/** HOME-109 completion tree — ONE bounded request (mapData's law, never per-issue):
+	 *  the current goal (NOW's project) at root, every project issue as a branch in
+	 *  exactly one plain-words bucket. */
+	async function goalTree(): Promise<GoalTree | null> {
+		if (!state.project || !state.identifier) return null;
+		const d = await gql<{
+			issues: {
+				nodes: {
+					identifier: string;
+					title: string;
+					state: { name: string; type: string };
+					labels: { nodes: { name: string }[] };
+					inverseRelations: { nodes: { type: string; issue: { identifier: string; title: string; state: { type: string } } }[] };
+				}[];
+			};
+			projects: { nodes: { name: string; health?: string; projectMilestones: { nodes: { name: string }[] } }[] };
+		}>(
+			`query($team:String!,$project:String!){ issues(first:100,orderBy:updatedAt,filter:{team:{key:{eq:$team}},project:{name:{eq:$project}}}){nodes{identifier title state{name type} labels(first:10){nodes{name}} inverseRelations(first:10){nodes{type issue{identifier title state{type}}}}}} projects(first:10,filter:{name:{eq:$project}}){nodes{name health projectMilestones(first:5){nodes{name}}}} }`,
+			{ team: TEAM_KEY, project: state.project },
+		);
+		const proj = d.projects.nodes[0];
+		const items: TreeItem[] = d.issues.nodes.map(n => {
+			const isNow = n.identifier === state.identifier;
+			const blocked = n.inverseRelations.nodes.find(r => r.type === "blocks" && !DONE_SUFFIX[r.issue.state.type]);
+			// First match wins — exactly one bucket per item (approved rule set:
+			// done → onyou → stuck → working(started) → next). isNow drives only
+			// the "← working now" arrow in the render, never the bucket.
+			const bucket: TreeItem["bucket"] = DONE_SUFFIX[n.state.type]
+				? "done"
+				: n.labels.nodes.some(l => l.name === QUEUE_LABEL)
+					? "onyou"
+					: blocked
+						? "stuck"
+						: n.state.type === "started"
+							? "working"
+							: "next";
+			return { identifier: n.identifier, title: n.title, bucket, blocker: bucket === "stuck" ? blocked?.issue.title : undefined, isNow };
+		});
+		const counts = {
+			done: items.filter(i => i.bucket === "done").length,
+			total: items.length,
+			stuck: items.filter(i => i.bucket === "stuck").length,
+			onyou: items.filter(i => i.bucket === "onyou").length,
+		};
+		state.treeCounts = { ...counts, at: Date.now() };
+		void saveCache();
+		return { goal: state.project, health: proj?.health, promise: proj?.projectMilestones.nodes[0]?.name, items, counts };
+	}
+
+	/** Deterministic plain-words render — zero LLM, zero paths/hashes. Identifiers
+	 *  stay: they are the owner's own handles, visible on his Linear. */
+	function renderGoalTree(t: GoalTree): string[] {
+		const lines = [`GOAL: ${t.goal}${t.promise ? ` — ${t.promise}` : ""}${t.health ? ` [${HEALTH_WORDS[t.health] ?? t.health}]` : ""}`];
+		const by = (b: TreeItem["bucket"]) => t.items.filter(i => i.bucket === b);
+		for (const i of by("working")) lines.push(`  ${TREE_GLYPH.working} ${i.identifier} ${i.title}${i.isNow ? " ← working now" : ""}`);
+		for (const i of by("stuck")) lines.push(`  ${TREE_GLYPH.stuck} ${i.identifier} ${i.title} — stuck: ${i.blocker}`);
+		for (const i of by("onyou")) lines.push(`  ${TREE_GLYPH.onyou} ${i.identifier} ${i.title} — waiting on you`);
+		for (const i of by("next")) lines.push(`  ${TREE_GLYPH.next} ${i.identifier} ${i.title} (next)`);
+		const done = by("done"); // query is orderBy:updatedAt — first 5 are the newest
+		for (const i of done.slice(0, 5)) lines.push(`  ${TREE_GLYPH.done} ${i.identifier} ${i.title}`);
+		if (done.length > 5) lines.push(`  ${TREE_GLYPH.done} +${done.length - 5} more done`);
+		const nowTitle = t.items.find(i => i.isNow)?.title ?? state.title ?? "";
+		const parts = [`${t.counts.done} of ${t.counts.total} pieces done.`];
+		if (nowTitle) parts.push(`Working on: ${nowTitle}.`);
+		if (t.counts.stuck) parts.push(`${t.counts.stuck} stuck.`);
+		if (t.counts.onyou) parts.push(`${t.counts.onyou} waiting on you.`);
+		lines.push(parts.join(" "));
+		return lines;
 	}
 
 	/** ONE bounded request for an issue's history — card raw fields + the digest packet. */
@@ -783,7 +873,14 @@ export default function linearNow(pi: ExtensionAPI) {
 			const theme = ctx.ui.theme;
 			const owedKinds = [...(state.obligationDigest?.armed ? ["digest"] : []), ...(state.obligationHandoff?.armed ? ["handoff"] : [])];
 			const warn = state.executingIssue && owedKinds.length ? ` ⚠ ${owedKinds.join("/")} owed on ${state.executingIssue.identifier}` : "";
-			if (state.identifier) {
+			if (state.identifier && state.treeCounts) {
+				// HOME-109 plain-words footer — never calls the network (runs every turn).
+				// ponytail: counts staleness ceiling = last goalTree() call (session start +
+				// every my_now); wire a refresh timer only if the owner notices.
+				const c = state.treeCounts;
+				const bits = [state.project ?? "", `${c.done}/${c.total} done`, `▶ ${truncateToWidth(state.title ?? "", 40, Ellipsis.Unicode, true)}`, `${c.stuck} stuck`, `${c.onyou} on you`];
+				ctx.ui.setStatus("linear-now", theme.fg("accent", `◆ ${bits.filter(Boolean).join(" · ")}${warn}`));
+			} else if (state.identifier) {
 				const elapsed = state.setAt ? ` · ${fmtElapsed(Date.now() - state.setAt)}` : "";
 				const proj = state.project ? `${state.project} · ` : "";
 				ctx.ui.setStatus("linear-now", theme.fg("accent", `◆ NOW · ${proj}${state.identifier} ${state.title ?? ""}${theme.fg("dim", elapsed)}${warn}`));
@@ -818,6 +915,7 @@ export default function linearNow(pi: ExtensionAPI) {
 		state.title = issue.title;
 		state.project = issue.project;
 		state.setAt = Date.now();
+		state.treeCounts = undefined; // previous goal's counts — next goalTree() refreshes
 		armExecuting(issue.id, issue.identifier);
 		await saveCache();
 		persistSession();
@@ -882,13 +980,28 @@ export default function linearNow(pi: ExtensionAPI) {
 	}
 
 	async function buildDigest(): Promise<string> {
-		const d = await gql<{
-			projects: { nodes: { name: string; state: string; health?: string }[] };
-			issues: { nodes: { identifier: string; title: string; createdAt: string }[] };
-		}>(
-			`query($label:String!,$team:String!){ projects(first:50){nodes{name state health}} issues(first:50,orderBy:createdAt,filter:{team:{key:{eq:$team}},labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title createdAt}} }`,
-			{ label: QUEUE_LABEL, team: TEAM_KEY },
-		);
+		const treeLines = goalTree()
+			.then(t => (t ? renderGoalTree(t) : ["TREE: no goal picked — /now to pick"]))
+			.catch(e => [`TREE: unavailable (${String(e)}) — session unblocked`]);
+		const now = state.identifier ? `NOW: ${state.project ? `${state.project} · ` : ""}${state.identifier} ${state.title}` : "NOW: unset — /now to pick";
+		const owed = state.owedFromLastSession
+			? [`UNMET FROM LAST SESSION: ${state.owedFromLastSession.kind} comment owed on ${state.owedFromLastSession.identifier} — run /summary before new work.`]
+			: [];
+		const contracts = [
+			"CHECKPOINT CONTRACT: executing against an issue → the issue is the durable cross-session log; local plans/todos/chat do not survive the session. Plan approved → post a digest comment (decisions, acceptance list, artifact paths + hash). Every stop — restart, blocked, session end — → post a handoff comment (done / remaining / exact resume steps). Session closing → run /summary (questionyourself + whatsmissing + Linear close ritual) BEFORE /done.",
+			"CLOSE CONTRACT: update touched projects (health + one line) · triage captures · propose closes (owner verdict closes) · archive >1-day-closed",
+		];
+		let d: { projects: { nodes: { name: string; state: string; health?: string }[] }; issues: { nodes: { identifier: string; title: string; createdAt: string }[] } };
+		try {
+			d = await gql(
+				`query($label:String!,$team:String!){ projects(first:50){nodes{name state health}} issues(first:50,orderBy:createdAt,filter:{team:{key:{eq:$team}},labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title createdAt}} }`,
+				{ label: QUEUE_LABEL, team: TEAM_KEY },
+			);
+		} catch (e) {
+			// Fail open with what we have: cached NOW + the tree's own honest line
+			// (missing key / API down degrades the bookend, never blocks the session).
+			return ["── Linear bookend (linear.app/spec-kit) ──", now, ...(await treeLines), ...owed, `[linear] queue/in-flight unavailable (${String(e)}) — session unblocked`, ...contracts].join("\n");
+		}
 		const inflight = d.projects.nodes
 			.filter(p => p.state === "started")
 			.map(p => `${p.name} [${p.health ?? "?"}]`)
@@ -898,21 +1011,18 @@ export default function linearNow(pi: ExtensionAPI) {
 		const shown = d.issues.nodes.slice(0, 10);
 		const queue =
 			shown.map(i => `${i.identifier} ${i.title}`).join(" | ") + (n > shown.length ? ` | …+${n - shown.length} more` : "");
-		const now = state.identifier ? `NOW: ${state.project ? `${state.project} · ` : ""}${state.identifier} ${state.title}` : "NOW: unset — /now to pick";
 		const oldestDays = Math.max(0, ...d.issues.nodes.map(i => Math.floor((Date.now() - Date.parse(i.createdAt)) / 86_400_000)));
 		return [
 			"── Linear bookend (linear.app/spec-kit) ──",
 			now,
-			...(state.owedFromLastSession
-				? [`UNMET FROM LAST SESSION: ${state.owedFromLastSession.kind} comment owed on ${state.owedFromLastSession.identifier} — run /summary before new work.`]
-				: []),
+			...(await treeLines),
+			...owed,
 			`IN FLIGHT: ${inflight || "none"}`,
 			`NEEDS CHRIS (${n}${n ? `, oldest ${oldestDays}d` : ""}): ${queue || "empty"}`,
 			...(n > DRAIN_MAX_QUEUE || oldestDays > DRAIN_MAX_AGE_DAYS
 				? [`DRAIN RULE TRIPPED: queue ${n} deep / oldest ${oldestDays}d — surface the 3 oldest to Chris for rulings this session.`]
 				: []),
-			"CHECKPOINT CONTRACT: executing against an issue → the issue is the durable cross-session log; local plans/todos/chat do not survive the session. Plan approved → post a digest comment (decisions, acceptance list, artifact paths + hash). Every stop — restart, blocked, session end — → post a handoff comment (done / remaining / exact resume steps). Session closing → run /summary (questionyourself + whatsmissing + Linear close ritual) BEFORE /done.",
-			"CLOSE CONTRACT: update touched projects (health + one line) · triage captures · propose closes (owner verdict closes) · archive >1-day-closed",
+			...contracts,
 		].join("\n");
 	}
 
@@ -1225,7 +1335,7 @@ export default function linearNow(pi: ExtensionAPI) {
 		label: "Linear",
 		description: [
 			"Bounded access to the owner's Linear workspace (team HOME; worlds→surfaces→promises→issues).",
-			"Reads are free: get_issue, tree, waiting, my_now. comment posts evidence immediately (the bounded",
+			"Reads are free: get_issue, tree, waiting, my_now (returns the completion tree + explanation for the current goal). comment posts evidence immediately (the bounded",
 			"replacement for raw GraphQL). Other writes (create_issue, propose_close, update_health, set_now, close_issue, archive_issue) are",
 			"owner-confirmed, ALWAYS two-phase: the first call writes nothing and returns a payload preview",
 			"to show the owner verbatim; repeat with confirm:true only after his yes.",
@@ -1272,8 +1382,16 @@ export default function linearNow(pi: ExtensionAPI) {
 			});
 			try {
 				switch (params.action) {
-					case "my_now":
+					case "my_now": {
+						// HOME-109: status-on-demand = completion tree + explanation line.
+						try {
+							const t = await goalTree();
+							if (t) return okText(renderGoalTree(t).join("\n"));
+						} catch (e) {
+							return okText(`tree unavailable (${String(e)})`);
+						}
 						return okText(state.identifier ? `NOW: ${state.project ? `${state.project} · ` : ""}${state.identifier} ${state.title}` : "NOW unset");
+					}
 					case "waiting": {
 						const d = await gql<{ issues: { nodes: { identifier: string; title: string }[] } }>(
 							`query($label:String!,$team:String!){ issues(first:50,orderBy:createdAt,filter:{team:{key:{eq:$team}},labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title}} }`,

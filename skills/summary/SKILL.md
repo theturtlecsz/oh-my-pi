@@ -107,12 +107,24 @@ Audits BEFORE summary — never write the summary first and let the audits
 anchor on it. Fold Phase 1–2 findings in; the summary must absorb them, not
 contradict them.
 
+The review OPENS with the completion tree (HOME-109): call the `linear` tool
+with `action:"my_now"` and paste its output verbatim, then explain in plain
+words what this session changed in that tree. Only then the sections below.
+
 Format (the law-28 fixed format, extended):
+
+All seven law-28 sections (DECIDED … PRODUCT MOVED) remain, but chat carries
+ONLY plain words: commit hashes, file paths, sha256 seals, and test counts
+move to the issue handoff/board comment, cited from chat as "evidence saved
+on the issue." (HOME-109 box 4: review renders as the tree + explanation;
+technical evidence goes to the board comment only. Law 28(a)'s fixed
+sections survive in plain words — the two reconcile, neither is repealed.)
 
 - **DECIDED** — rulings made, with where each is now recorded (or flagged as
   recorded nowhere).
 - **BUILT+PROVEN** — each item with its dated evidence: commit hashes, test
-  counts, live proofs re-queried in Phase 0.
+  counts, live proofs re-queried in Phase 0. Evidence citations live on the
+  issue; chat states what the household can rely on.
 - **SHAKY** — the Phase 1 ranking, compressed.
 - **BLIND SPOTS** — the Phase 2 ranking, compressed.
 - **UNVERIFIED** — claims that could not be re-grounded, explicitly labeled.
