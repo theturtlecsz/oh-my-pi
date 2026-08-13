@@ -1,9 +1,11 @@
 # session-system
 
 Chris's ADHD session-management system: Linear (team HOME) is the owner page,
-omp is the only CLI surface (ruling 2026-08-10). This repo is the canonical
-home and dev workspace for every piece; the live locations are symlinks
-created by `install.sh`.
+omp is the only CLI surface (ruling 2026-08-10). The canonical home is
+`session-system/` inside the oh-my-pi fork (`theturtlecsz/oh-my-pi`,
+checkout `/home/thetu/oh-my-pi`), merged with full history 2026-08-13;
+`zimmermanc/session-system` is the frozen pre-merge archive. The live
+locations are symlinks created by `install.sh`.
 
 ## Layout → live location
 
@@ -16,6 +18,8 @@ created by `install.sh`.
 | `skills/questionyourself` | `~/.agents/skills/questionyourself` | Confidence audit, invoked by summary |
 | `skills/whatsmissing` | `~/.agents/skills/whatsmissing` | Blind-spot audit, invoked by summary |
 | `prompts/archive/` | (nothing — archive only) | Retired session charters. Ruling 2026-08-10: work routes through Linear (issues, NOW, comments), never prompt files |
+| `tests/` | (nothing — fork-persistence tests) | Extension loads against current omp source; installer integrity + idempotency |
+| `update.sh` | (nothing — run by hand) | The update loop: fetch upstream → merge → `bun install` → fork tests → push origin |
 
 `~/.claude/skills/summary` reaches the skill via `~/.agents/skills/summary`.
 
@@ -32,6 +36,17 @@ Edit here → omp loads extensions at startup only → restart omp → prove liv
 extension edits per restart. If a restart ever fails to load the extension
 via symlink, `install.sh --copy` falls back to copying files into place —
 then keep edits in the repo and re-run it.
+
+`omp` on PATH runs from this fork checkout (`bun run setup` in
+`/home/thetu/oh-my-pi` source-links it; re-run only if the link breaks or
+natives change — if `build:native` fails for missing bazelisk, drop the
+matching `@oh-my-pi/pi-natives-linux-x64` npm binaries into
+`packages/natives/native/` instead).
+
+Update loop: `bash session-system/update.sh` from the fork root — fetches
+upstream, merges `upstream/main`, runs `bun install` and the fork tests
+(`session-system/tests/`, the drift alarm proving the extension still loads
+against the new omp source), then pushes origin. Restart omp afterward.
 
 ## History
 
