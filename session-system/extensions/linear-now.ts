@@ -68,10 +68,12 @@ function resolveMarker(marker: string): string | null {
 	return null;
 }
 
-/** Run git in cwd; timeoutMs guards network ops (push). */
-function runGit(cwd: string, args: string[], timeoutMs = 10_000): { ok: boolean; out: string; err: string } {
+/** Run git in cwd; timeoutMs guards network ops (push). `raw` is untrimmed stdout —
+ *  porcelain -z parsing needs the leading space of the first `XY path` entry. */
+function runGit(cwd: string, args: string[], timeoutMs = 10_000): { ok: boolean; out: string; raw: string; err: string } {
 	const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: timeoutMs });
-	return { ok: r.status === 0, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim() };
+	const raw = r.stdout ?? "";
+	return { ok: r.status === 0, out: raw.trim(), raw, err: (r.stderr ?? "").trim() };
 }
 
 /** Parse `git status --porcelain -z` output → workdir-relative dirty paths.
@@ -123,7 +125,7 @@ export async function commitSessionWork(
 		}
 		const root = top.out;
 		const status = runGit(root, ["status", "--porcelain", "-z"]);
-		const all = status.ok ? parsePorcelain(status.out) : [];
+		const all = status.ok ? parsePorcelain(status.raw) : [];
 		const excluded = all.filter(p => p.startsWith("packages/")); // Chris's own lane — never staged (HOME-117/118)
 		const commitable = all.filter(p => !p.startsWith("packages/"));
 		const leftAlone = excluded.length ? `left alone: ${excluded.length} file(s) under packages/ (yours)` : "";

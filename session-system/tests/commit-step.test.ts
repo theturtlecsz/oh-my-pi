@@ -85,6 +85,26 @@ describe("HOME-118 /done commit step", () => {
 		expect(ui.confirms[0].body).toContain("left alone: 1 file(s) under packages/ (yours)");
 	});
 
+	test("modified tracked file: leading-space porcelain entry survives stdout trim (HOME-118 field failure)", async () => {
+		const repo = makeRepo();
+		// A TRACKED file under packages/ that sorts first: its ` M packages/...` entry
+		// lost its leading space to runGit's stdout trim pre-fix, so slice(3) mangled
+		// the path to `ackages/...` — bypassing the packages/ exclusion AND failing
+		// `git add` with "pathspec 'ackages/CHANGELOG.md' did not match any files".
+		fs.mkdirSync(path.join(repo, "packages"));
+		fs.writeFileSync(path.join(repo, "packages", "CHANGELOG.md"), "v1\n");
+		Bun.spawnSync(["git", "add", "--", "packages/CHANGELOG.md"], { cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "track"], { cwd: repo });
+		fs.appendFileSync(path.join(repo, "packages", "CHANGELOG.md"), "v2\n");
+		fs.appendFileSync(path.join(repo, "seed.txt"), "more\n");
+		const ui = makeUi(true);
+		const notice = await commitSessionWork(ui, repo, "HOME-118");
+		expect(notice).toBe("[linear] /done committed 1 file(s) on HOME-118 (not pushed — no remote)");
+		expect(git(repo, "show", "--name-only", "--format=", "HEAD")).toBe("seed.txt");
+		expect(git(repo, "status", "--porcelain")).toBe("M packages/CHANGELOG.md"); // Chris's lane untouched (test `git` helper trims stdout)
+		expect(ui.confirms[0].body).toContain("left alone: 1 file(s) under packages/ (yours)");
+	});
+
 	test("secret in staged diff aborts commit and restores the tree", async () => {
 		const repo = makeRepo();
 		fs.writeFileSync(path.join(repo, "config.ts"), "const key = 'lin_api_FAKE123';\n");
