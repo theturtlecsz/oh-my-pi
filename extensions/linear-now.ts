@@ -1153,6 +1153,7 @@ export default function linearNow(pi: ExtensionAPI) {
 						{ name: captureProject },
 					);
 					projectId = d.projects.nodes[0]?.id;
+					if (!projectId) throw new Error(`project "${captureProject}" not found in Linear — refusing to file without its project`);
 				}
 				const created = await gql<{ issueCreate: { issue: { identifier: string } } }>(
 					`mutation($input:IssueCreateInput!){ issueCreate(input:$input){issue{identifier}} }`,
@@ -1440,6 +1441,7 @@ export default function linearNow(pi: ExtensionAPI) {
 						if (target) {
 							const dp = await gql<{ projects: { nodes: { id: string }[] } }>(`query($name:String!){ projects(filter:{name:{eq:$name}}){nodes{id}} }`, { name: target });
 							projectId = dp.projects.nodes[0]?.id;
+							if (!projectId) return deny(`project "${target}" not found — refusing to file an issue without its project`);
 						}
 						const created = await gql<{ issueCreate: { issue: { id: string; identifier: string } } }>(
 							`mutation($input:IssueCreateInput!){ issueCreate(input:$input){issue{id identifier}} }`,
