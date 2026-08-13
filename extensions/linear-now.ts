@@ -1390,7 +1390,8 @@ export default function linearNow(pi: ExtensionAPI) {
 						} catch (e) {
 							return okText(`tree unavailable (${String(e)})`);
 						}
-						return okText(state.identifier ? `NOW: ${state.project ? `${state.project} · ` : ""}${state.identifier} ${state.title}` : "NOW unset");
+						// null tree → plan-literal "NOW unset" (projectless-NOW edge recorded on HOME-109 handoff, owner by-seeing)
+						return okText("NOW unset");
 					}
 					case "waiting": {
 						const d = await gql<{ issues: { nodes: { identifier: string; title: string }[] } }>(
