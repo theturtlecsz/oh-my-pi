@@ -445,6 +445,8 @@ export interface ExtensionContext {
 	compact(instructionsOrOptions?: string | CompactOptions): Promise<void>;
 	/** Whether UI is available (false in print/RPC mode) */
 	hasUI: boolean;
+	/** Task recursion depth of the owning session (0 = main/top-level, >0 = subagent). */
+	taskDepth: number;
 	/** Current working directory */
 	cwd: string;
 	/** Session manager (read-only) */

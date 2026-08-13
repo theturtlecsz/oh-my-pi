@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `taskDepth` to `ExtensionContext`, letting extensions distinguish the owner-facing main session (0) from model-spawned subagent sessions (>0) — e.g. to restrict owner-only authorization flows to the main session.
+
 ## [17.3.0] - 2026-08-13
 
 ### Breaking Changes

@@ -528,6 +528,8 @@ export class AgentSession {
 	 *  generation path. Refresh via {@link AgentSession.setTitleSystemPrompt} when
 	 *  the session cwd changes. */
 	#titleSystemPrompt: string | undefined;
+	/** Task recursion depth (0 = main/top-level, >0 = subagent). Mirrors ToolSession.taskDepth. */
+	#taskDepth = 0;
 	#titleGenerationAbortController = new AbortController();
 	#toolChoiceQueue = new ToolChoiceQueue();
 
@@ -1151,6 +1153,7 @@ export class AgentSession {
 			memoryTaskDepth: config.memoryTaskDepth,
 			createMemoryTools: config.createMemoryTools,
 		});
+		this.#taskDepth = config.memoryTaskDepth ?? 0;
 		// Resolve the wire service-tier per request so the Fireworks Priority
 		// toggle scopes priority to Fireworks alone, without mutating the shared
 		// session `serviceTier` that drives `/fast` and OpenAI/Anthropic priority.
@@ -5648,6 +5651,7 @@ export class AgentSession {
 		return {
 			ui: noOpUIContext,
 			hasUI: false,
+			taskDepth: this.#taskDepth,
 			cwd: this.sessionManager.getCwd(),
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
