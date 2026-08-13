@@ -763,8 +763,8 @@ export default function linearNow(pi: ExtensionAPI) {
 
 	async function labelHolder(): Promise<{ id: string; identifier: string; title: string; project?: string } | null> {
 		const d = await gql<{ issues: { nodes: { id: string; identifier: string; title: string; project?: { name: string } }[] } }>(
-			`query($label:String!){ issues(first:2,filter:{labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{id identifier title project{name}}} }`,
-			{ label: NOW_LABEL },
+			`query($label:String!,$team:String!){ issues(first:2,filter:{team:{key:{eq:$team}},labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{id identifier title project{name}}} }`,
+			{ label: NOW_LABEL, team: TEAM_KEY },
 		);
 		const n = d.issues.nodes[0];
 		return n ? { id: n.id, identifier: n.identifier, title: n.title, project: n.project?.name } : null;
@@ -886,8 +886,8 @@ export default function linearNow(pi: ExtensionAPI) {
 			projects: { nodes: { name: string; state: string; health?: string }[] };
 			issues: { nodes: { identifier: string; title: string; createdAt: string }[] };
 		}>(
-			`query($label:String!){ projects(first:50){nodes{name state health}} issues(first:50,orderBy:createdAt,filter:{labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title createdAt}} }`,
-			{ label: QUEUE_LABEL },
+			`query($label:String!,$team:String!){ projects(first:50){nodes{name state health}} issues(first:50,orderBy:createdAt,filter:{team:{key:{eq:$team}},labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title createdAt}} }`,
+			{ label: QUEUE_LABEL, team: TEAM_KEY },
 		);
 		const inflight = d.projects.nodes
 			.filter(p => p.state === "started")
@@ -1276,8 +1276,8 @@ export default function linearNow(pi: ExtensionAPI) {
 						return okText(state.identifier ? `NOW: ${state.project ? `${state.project} · ` : ""}${state.identifier} ${state.title}` : "NOW unset");
 					case "waiting": {
 						const d = await gql<{ issues: { nodes: { identifier: string; title: string }[] } }>(
-							`query($label:String!){ issues(first:50,orderBy:createdAt,filter:{labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title}} }`,
-							{ label: QUEUE_LABEL },
+							`query($label:String!,$team:String!){ issues(first:50,orderBy:createdAt,filter:{team:{key:{eq:$team}},labels:{some:{name:{eq:$label}}},state:{type:{nin:["completed","canceled"]}}}){nodes{identifier title}} }`,
+							{ label: QUEUE_LABEL, team: TEAM_KEY },
 						);
 						return okText(d.issues.nodes.map(i => `${i.identifier} ${i.title}`).join("\n") || "queue empty");
 					}
