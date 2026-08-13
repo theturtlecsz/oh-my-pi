@@ -40,6 +40,18 @@ the completion tree (linear tool, action my_now) plus one plain explanation
 line. Code, commits, and Linear comments keep full technical precision — this
 governs what Chris SEES, not what is recorded.
 
+## Issue tracking law (owner ruling, 2026-08-13 — non-negotiable, global)
+
+Every item is tracked as a Linear issue: findings, fixes (including ones
+found and fixed in the same session), watch-items, parked ideas, follow-ups,
+decisions needed, and new standing rules. Chat, handoff comments, local
+files, and todo lists are NOT tracking — they evaporate or go unread. If
+work is done or discovered and no issue exists, create one (owner-confirmed
+two-phase write) before the session ends. A finding that lives only in a
+comment is unfiled, and unfiled = lost. This law is global: it applies in
+every repo and every session, whatever the project.
+
+
 ## Task Observer (installed 2026-07-18, owner-approved activation)
 
 At the start of any task-oriented session — any interaction where you will
