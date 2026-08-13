@@ -9,10 +9,11 @@
  * keeps the footer instant and a session entry restores it across resume.
  * Everything fails open: Linear down = one honest line, never a blocked session.
  */
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
 import { discoverAuthStorage, getAgentDir, type ExtensionAPI, type ExtensionContext, type ExtensionModelQuery, type Theme } from "@oh-my-pi/pi-coding-agent";
 import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
@@ -25,6 +26,34 @@ const DRAIN_MAX_AGE_DAYS = 14;
 const KEY_FILE = join(homedir(), ".config", "linear.env");
 const CACHE_FILE = join(homedir(), ".omp", "agent", "linear-now.json");
 const API = "https://api.linear.app/graphql";
+
+/** The Linear project this directory maps to, from a committed .linear-project
+ *  marker (exact project name, one line). Two roots: the git toplevel of cwd,
+ *  and the primary checkout root via --git-common-dir (covers worktrees whose
+ *  branch predates the marker). No marker / non-git cwd → null (no filter). */
+function resolveProject(): string | null {
+	const git = (...args: string[]): string | null => {
+		const r = spawnSync("git", ["-C", process.cwd(), ...args], { encoding: "utf8" });
+		return r.status === 0 ? r.stdout.trim() : null;
+	};
+	const roots: string[] = [];
+	const top = git("rev-parse", "--show-toplevel");
+	if (top) roots.push(top);
+	const common = git("rev-parse", "--path-format=absolute", "--git-common-dir");
+	if (common && basename(common) === ".git") {
+		const primary = dirname(common);
+		if (!roots.includes(primary)) roots.push(primary);
+	}
+	for (const root of roots) {
+		try {
+			const raw = readFileSync(join(root, ".linear-project"), "utf8").trim();
+			if (raw) return raw;
+		} catch {
+			/* next root */
+		}
+	}
+	return null;
+}
 
 interface NowState {
 	issueId?: string;
@@ -192,6 +221,7 @@ async function ownerGate(
 }
 
 export default function linearNow(pi: ExtensionAPI) {
+	const projectFilter = resolveProject();
 	let state: NowState = {};
 	let digestPending = false;
 	let digestInjectedThisSession = false;
@@ -354,6 +384,7 @@ export default function linearNow(pi: ExtensionAPI) {
 			.sort((a, b) => (STATE_BAND[a.state] ?? 2) - (STATE_BAND[b.state] ?? 2) || a.name.localeCompare(b.name));
 		const orphans = byProject.get(NO_SURFACE);
 		if (orphans) surfaces.push({ name: NO_SURFACE, state: "?", issues: orphans, waiting: orphans.filter(i => i.waiting).length });
+		if (projectFilter) return { surfaces: surfaces.filter(s => s.name === projectFilter), capped: d.issues.nodes.length === 100 };
 		return { surfaces, capped: d.issues.nodes.length === 100 };
 	}
 
@@ -1031,7 +1062,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				}
 				const map = await mapData();
 				if (!map.surfaces.length || !map.surfaces.some(s => s.issues.length)) {
-					ctx.ui.notify("No open issues found", "warning");
+					ctx.ui.notify(projectFilter ? `No open issues in project "${projectFilter}" (.linear-project filter)` : "No open issues found", "warning");
 					return;
 				}
 				const pick = await ctx.ui.custom<MapIssue | undefined>(nowWindowFactory(map), { overlay: true });
@@ -1111,14 +1142,15 @@ export default function linearNow(pi: ExtensionAPI) {
 				return;
 			}
 			try {
-				const target = state.project ? `project "${state.project}"` : "team HOME (no project)";
+				const captureProject = projectFilter ?? state.project;
+				const target = captureProject ? `project "${captureProject}"` : "team HOME (no project)";
 				const ok = await ctx.ui.confirm("File this capture?", `"${text}"\n→ ${target}`);
 				if (!ok) return;
 				let projectId: string | undefined;
-				if (state.project) {
+				if (captureProject) {
 					const d = await gql<{ projects: { nodes: { id: string; name: string }[] } }>(
 						`query($name:String!){ projects(filter:{name:{eq:$name}}){nodes{id name}} }`,
-						{ name: state.project },
+						{ name: captureProject },
 					);
 					projectId = d.projects.nodes[0]?.id;
 				}
@@ -1155,6 +1187,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				return;
 			}
 			const lines: string[] = [];
+			lines.push(`project filter: ${projectFilter ?? "none"}`);
 			lines.push(`key file: ${apiKey() ? "found" : `MISSING (${KEY_FILE})`}`);
 			try {
 				const t0 = Date.now();
@@ -1313,7 +1346,7 @@ export default function linearNow(pi: ExtensionAPI) {
 							return deny(`blocks edges form a cycle: ${leftover.join(" ↔ ")} — publish refused`);
 						}
 						// 2b. resolve project — strict: a mis-landed tree is n+1 wrong issues
-						const target = params.project ?? state.project;
+						const target = params.project ?? projectFilter ?? state.project;
 						let projectId: string | undefined;
 						if (target) {
 							const dp = await gql<{ projects: { nodes: { id: string }[] } }>(`query($name:String!){ projects(filter:{name:{eq:$name}}){nodes{id}} }`, { name: target });
@@ -1394,7 +1427,7 @@ export default function linearNow(pi: ExtensionAPI) {
 							};
 						}
 					}
-						const target = params.project ?? state.project;
+						const target = params.project ?? projectFilter ?? state.project;
 						const gate = await ownerGate(
 							ctx,
 							"Model wants to file an issue",
