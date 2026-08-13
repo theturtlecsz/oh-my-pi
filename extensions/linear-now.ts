@@ -18,20 +18,20 @@ import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
 import { discoverAuthStorage, getAgentDir, type ExtensionAPI, type ExtensionContext, type ExtensionModelQuery, type Theme } from "@oh-my-pi/pi-coding-agent";
 import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 
-const TEAM_KEY = "HOME";
+const TEAM_KEY = resolveMarker(".linear-team") ?? "HOME";
 const NOW_LABEL = "now";
 const QUEUE_LABEL = "waiting-on-chris";
 const DRAIN_MAX_QUEUE = 8;
 const DRAIN_MAX_AGE_DAYS = 14;
 const KEY_FILE = join(homedir(), ".config", "linear.env");
-const CACHE_FILE = join(homedir(), ".omp", "agent", "linear-now.json");
+const CACHE_FILE = join(homedir(), ".omp", "agent", TEAM_KEY === "HOME" ? "linear-now.json" : `linear-now-${TEAM_KEY.toLowerCase()}.json`);
 const API = "https://api.linear.app/graphql";
 
-/** The Linear project this directory maps to, from a committed .linear-project
- *  marker (exact project name, one line). Two roots: the git toplevel of cwd,
- *  and the primary checkout root via --git-common-dir (covers worktrees whose
- *  branch predates the marker). No marker / non-git cwd → null (no filter). */
-function resolveProject(): string | null {
+/** Resolve a committed single-line marker file (e.g. .linear-project, .linear-team)
+ *  from the git toplevel of cwd, falling back to the primary checkout root via
+ *  --git-common-dir (covers worktrees whose branch predates the marker).
+ *  No marker / non-git cwd → null. */
+function resolveMarker(marker: string): string | null {
 	const git = (...args: string[]): string | null => {
 		const r = spawnSync("git", ["-C", process.cwd(), ...args], { encoding: "utf8" });
 		return r.status === 0 ? r.stdout.trim() : null;
@@ -46,7 +46,7 @@ function resolveProject(): string | null {
 	}
 	for (const root of roots) {
 		try {
-			const raw = readFileSync(join(root, ".linear-project"), "utf8").trim();
+			const raw = readFileSync(join(root, marker), "utf8").trim();
 			if (raw) return raw;
 		} catch {
 			/* next root */
@@ -56,6 +56,7 @@ function resolveProject(): string | null {
 }
 
 interface NowState {
+	team?: string; // owning team key; restore skips entries from another team (absent = legacy HOME)
 	issueId?: string;
 	identifier?: string;
 	title?: string;
@@ -221,7 +222,7 @@ async function ownerGate(
 }
 
 export default function linearNow(pi: ExtensionAPI) {
-	const projectFilter = resolveProject();
+	const projectFilter = resolveMarker(".linear-project"); // exact Linear project name, one line
 	let state: NowState = {};
 	let digestPending = false;
 	let digestInjectedThisSession = false;
@@ -243,6 +244,7 @@ export default function linearNow(pi: ExtensionAPI) {
 	}
 	function persistSession() {
 		pi.appendEntry("linear-now", {
+			team: TEAM_KEY,
 			issueId: state.issueId,
 			identifier: state.identifier,
 			title: state.title,
@@ -302,8 +304,8 @@ export default function linearNow(pi: ExtensionAPI) {
 	async function nowLabelId(): Promise<string> {
 		if (state.nowLabelId) return state.nowLabelId;
 		const d = await gql<{ issueLabels: { nodes: { id: string; name: string }[] } }>(
-			`query($name:String!){ issueLabels(filter:{name:{eq:$name}}){nodes{id name}} }`,
-			{ name: NOW_LABEL },
+			`query($name:String!,$team:String!){ issueLabels(filter:{name:{eq:$name},team:{key:{eq:$team}}}){nodes{id name}} }`,
+			{ name: NOW_LABEL, team: TEAM_KEY },
 		);
 		let id = d.issueLabels.nodes[0]?.id;
 		if (!id) {
@@ -316,6 +318,14 @@ export default function linearNow(pi: ExtensionAPI) {
 		state.nowLabelId = id;
 		await saveCache();
 		return id;
+	}
+
+	async function queueLabelId(): Promise<string | undefined> {
+		const d = await gql<{ issueLabels: { nodes: { id: string }[] } }>(
+			`query($name:String!,$team:String!){ issueLabels(filter:{name:{eq:$name},team:{key:{eq:$team}}}){nodes{id}} }`,
+			{ name: QUEUE_LABEL, team: TEAM_KEY },
+		);
+		return d.issueLabels.nodes[0]?.id;
 	}
 
 	async function stateIdFor(kind: "completed" | "canceled"): Promise<string> {
@@ -914,10 +924,10 @@ export default function linearNow(pi: ExtensionAPI) {
 		// session entry wins over cache for NOW restore (survives cache loss)
 		try {
 			for (const entry of ctx.sessionManager.getBranch()) {
-				if (entry.type === "custom" && (entry as { customType?: string }).customType === "linear-now") {
-					const data = (entry as { data?: NowState }).data;
-					if (data) Object.assign(state, data);
-				}
+				if (entry.type !== "custom" || !("customType" in entry) || entry.customType !== "linear-now") continue;
+				if (!("data" in entry) || !entry.data || typeof entry.data !== "object") continue;
+				const data = entry.data as NowState; // own persisted shape — written by persistSession above
+				if ((data.team ?? "HOME") === TEAM_KEY) Object.assign(state, data);
 			}
 		} catch {
 			/* fresh session */
@@ -1119,11 +1129,7 @@ export default function linearNow(pi: ExtensionAPI) {
 				await gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){success} }`, {
 					input: { issueId, body: `**Close proposed** from omp session ${new Date().toISOString().slice(0, 10)} — owner verdict closes.` },
 				});
-				const d = await gql<{ issueLabels: { nodes: { id: string }[] } }>(
-					`query($name:String!){ issueLabels(filter:{name:{eq:$name}}){nodes{id}} }`,
-					{ name: QUEUE_LABEL },
-				);
-				const qId = d.issueLabels.nodes[0]?.id;
+				const qId = await queueLabelId();
 				if (qId) await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: issueId, labelId: qId });
 				ctx.ui.notify(`${identifier} → close proposed, in your queue`, "info");
 				pendingNotices.push(`[linear] Owner proposed close of ${identifier} via /done; NOW cleared, queued for owner verdict.`);
@@ -1380,8 +1386,7 @@ export default function linearNow(pi: ExtensionAPI) {
 							const parentIdentifier = created.issueCreate.issue.identifier;
 							landed.push(parentIdentifier);
 							if (params.queue) {
-								const dl = await gql<{ issueLabels: { nodes: { id: string }[] } }>(`query($name:String!){ issueLabels(filter:{name:{eq:$name}}){nodes{id}} }`, { name: QUEUE_LABEL });
-								const qId = dl.issueLabels.nodes[0]?.id;
+								const qId = await queueLabelId();
 								if (qId) await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: parentId, labelId: qId });
 							}
 							for (let k = 0; k < n; k++) {
@@ -1448,8 +1453,7 @@ export default function linearNow(pi: ExtensionAPI) {
 							{ input: { teamId: await teamId(), title: params.title, description: params.description, ...(projectId ? { projectId } : {}) } },
 						);
 						if (params.queue) {
-							const dl = await gql<{ issueLabels: { nodes: { id: string }[] } }>(`query($name:String!){ issueLabels(filter:{name:{eq:$name}}){nodes{id}} }`, { name: QUEUE_LABEL });
-							const qId = dl.issueLabels.nodes[0]?.id;
+							const qId = await queueLabelId();
 							if (qId) await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: created.issueCreate.issue.id, labelId: qId });
 						}
 						return okText(`created ${created.issueCreate.issue.identifier}${params.queue ? ` + ${QUEUE_LABEL}` : ""}`, { identifier: created.issueCreate.issue.identifier });
@@ -1465,8 +1469,7 @@ export default function linearNow(pi: ExtensionAPI) {
 							true,
 						);
 						if (!gate.approved) return deny(gate.preview ?? "owner declined — label NOT added");
-						const dl = await gql<{ issueLabels: { nodes: { id: string }[] } }>(`query($name:String!){ issueLabels(filter:{name:{eq:$name}}){nodes{id}} }`, { name: QUEUE_LABEL });
-						const qId = dl.issueLabels.nodes[0]?.id;
+						const qId = await queueLabelId();
 						if (!qId) return deny(`${QUEUE_LABEL} label not found in Linear`);
 						await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: issue.id, labelId: qId });
 						return okText(`${issue.identifier} → ${QUEUE_LABEL}`);
@@ -1485,8 +1488,7 @@ export default function linearNow(pi: ExtensionAPI) {
 						await gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){success} }`, {
 							input: { issueId: issue.id, body: `**Close proposed** — ${params.body ?? "work complete"} (omp session ${new Date().toISOString().slice(0, 10)})` },
 						});
-						const dl = await gql<{ issueLabels: { nodes: { id: string }[] } }>(`query($name:String!){ issueLabels(filter:{name:{eq:$name}}){nodes{id}} }`, { name: QUEUE_LABEL });
-						const qId = dl.issueLabels.nodes[0]?.id;
+						const qId = await queueLabelId();
 						if (qId) await gql(`mutation($id:String!,$labelId:String!){ issueAddLabel(id:$id,labelId:$labelId){success} }`, { id: issue.id, labelId: qId });
 						return okText(`close proposed on ${issue.identifier} — owner verdict closes`);
 					}
