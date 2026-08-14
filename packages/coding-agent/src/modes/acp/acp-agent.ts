@@ -1725,6 +1725,27 @@ export class AcpAgent implements Agent {
 				details,
 			};
 		}
+		const approvalResult = await session.extensionRunner?.emit({
+			type: "plan_approved",
+			planFilePath,
+			planContent,
+			title: resolvedTitle,
+		});
+		if (approvalResult?.cancel) {
+			if (state.planFilePath !== planFilePath) {
+				session.setPlanModeState({ ...state, planFilePath });
+			}
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: approvalResult.reason ?? "Plan approval was cancelled.",
+					},
+				],
+				details,
+			};
+		}
+
 		// Approved. Set the plan reference so the next turn injects the plan
 		// content as context (the file keeps its agent-chosen name — no rename),
 		// then exit plan mode so the agent regains full tools.

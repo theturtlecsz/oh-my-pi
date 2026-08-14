@@ -5,6 +5,8 @@
 ### Added
 
 - Added `taskDepth` to `ExtensionContext`, letting extensions distinguish the owner-facing main session (0) from model-spawned subagent sessions (>0) — e.g. to restrict owner-only authorization flows to the main session.
+- Added a cancellable `plan_approved` extension event that both interactive and ACP hosts await before an approved plan can leave plan mode and execute.
+
 ## [17.3.2] - 2026-08-13
 
 ### Fixed

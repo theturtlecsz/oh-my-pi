@@ -718,6 +718,14 @@ export interface BeforeAgentStartEvent {
 	systemPrompt: string[];
 }
 
+/** Fired after the owner approves the final plan bytes, before execution starts. */
+export interface PlanApprovedEvent {
+	type: "plan_approved";
+	planFilePath: string;
+	planContent: string;
+	title: string;
+}
+
 export type {
 	AgentEndEvent,
 	AgentStartEvent,
@@ -1030,6 +1038,7 @@ export type ExtensionEvent =
 	| BeforeProviderRequestEvent
 	| AfterProviderResponseEvent
 	| BeforeAgentStartEvent
+	| PlanApprovedEvent
 	| AgentStartEvent
 	| AgentEndEvent
 	| SessionStopEvent
@@ -1095,6 +1104,11 @@ export interface UserPythonEventResult {
 }
 
 export type { ToolResultEventResult } from "../shared-events";
+
+export interface PlanApprovedEventResult {
+	cancel?: boolean;
+	reason?: string;
+}
 
 export interface BeforeAgentStartEventResult {
 	message?: CustomMessagePayload;
@@ -1219,6 +1233,7 @@ export interface ExtensionAPI {
 	): void;
 	on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
+	on(event: "plan_approved", handler: ExtensionHandler<PlanApprovedEvent, PlanApprovedEventResult>): void;
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
 	on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
 	on(event: "session_stop", handler: ExtensionHandler<SessionStopEvent, SessionStopEventResult>): void;

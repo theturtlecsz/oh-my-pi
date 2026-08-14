@@ -51,6 +51,7 @@ import type {
 	InputEventResult,
 	McpNotificationEvent,
 	MessageRenderer,
+	PlanApprovedEventResult,
 	RegisteredCommand,
 	RegisteredTool,
 	ResourcesDiscoverEvent,
@@ -275,9 +276,11 @@ type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends { type: "
 				? SessionBeforeTreeResult | undefined
 				: TEvent extends { type: "session.compacting" }
 					? SessionCompactingResult | undefined
-					: TEvent extends { type: "session_stop" }
-						? SessionStopEventResult | undefined
-						: undefined;
+					: TEvent extends { type: "plan_approved" }
+						? PlanApprovedEventResult | undefined
+						: TEvent extends { type: "session_stop" }
+							? SessionStopEventResult | undefined
+							: undefined;
 
 // Session-lifecycle handler types live once in session-handler-types (imported
 // above for local use); re-exported here to keep this module's public API stable.
@@ -1119,7 +1122,12 @@ export class ExtensionRunner {
 		// message_update / tool_execution_* per delta with usually no extension
 		// subscribed; building `ctx` for a zero-handler event is pure waste.
 		let ctx: ExtensionContext | undefined;
-		let result: SessionBeforeEventResult | SessionCompactingResult | SessionStopEventResult | undefined;
+		let result:
+			| SessionBeforeEventResult
+			| SessionCompactingResult
+			| SessionStopEventResult
+			| PlanApprovedEventResult
+			| undefined;
 
 		if (this.#isSessionShutdownEvent(event)) {
 			const timeoutMs = handlerTimeoutForEvent(event.type);
@@ -1151,9 +1159,18 @@ export class ExtensionRunner {
 				);
 
 				if (this.#isSessionBeforeEvent(event) && handlerResult) {
-					result = handlerResult as SessionBeforeEventResult;
-					if (result.cancel) {
-						return result as RunnerEmitResult<TEvent>;
+					const beforeResult = handlerResult as SessionBeforeEventResult;
+					result = beforeResult;
+					if (beforeResult.cancel) {
+						return beforeResult as RunnerEmitResult<TEvent>;
+					}
+				}
+
+				if (event.type === "plan_approved" && handlerResult) {
+					const approvalResult = handlerResult as PlanApprovedEventResult;
+					result = approvalResult;
+					if (approvalResult.cancel) {
+						return approvalResult as RunnerEmitResult<TEvent>;
 					}
 				}
 
@@ -1162,12 +1179,13 @@ export class ExtensionRunner {
 				}
 
 				if (event.type === "session_stop" && handlerResult) {
-					result = handlerResult as SessionStopEventResult;
+					const stopResult = handlerResult as SessionStopEventResult;
+					result = stopResult;
 					const hasContinuationContext =
-						(typeof result.additionalContext === "string" && result.additionalContext.length > 0) ||
-						(typeof result.reason === "string" && result.reason.length > 0);
-					if ((result.continue === true || result.decision === "block") && hasContinuationContext) {
-						return result as RunnerEmitResult<TEvent>;
+						(typeof stopResult.additionalContext === "string" && stopResult.additionalContext.length > 0) ||
+						(typeof stopResult.reason === "string" && stopResult.reason.length > 0);
+					if ((stopResult.continue === true || stopResult.decision === "block") && hasContinuationContext) {
+						return stopResult as RunnerEmitResult<TEvent>;
 					}
 				}
 			}

@@ -606,6 +606,11 @@ describe("InteractiveMode plan review rendering", () => {
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
 		const edited = "# Plan\n\nedited body\n";
+		const eventSpy = vi.fn(async () => undefined);
+		Object.defineProperty(session, "extensionRunner", {
+			configurable: true,
+			value: { emit: eventSpy },
+		});
 		vi.spyOn(mode, "showPlanReview").mockImplementation(async (_plan, _title, _options, dialogOptions) => {
 			dialogOptions?.onPlanEdited?.(edited);
 			return "Approve and execute";
@@ -634,6 +639,53 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(call?.[0] as string).not.toContain("original body");
 		// onPlanEdited mirrored the edit to the plan file.
 		expect(await Bun.file(resolvedPlanPath).text()).toContain("edited body");
+		expect(eventSpy).toHaveBeenCalledTimes(1);
+		expect(eventSpy).toHaveBeenCalledWith({
+			type: "plan_approved",
+			planFilePath,
+			planContent: edited,
+			title: "PLAN",
+		});
+	});
+
+	it("keeps plan mode active when an approval handler cancels execution", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		const planContent = "# Plan\n\nDo not execute yet.\n";
+		await Bun.write(resolvedPlanPath, planContent);
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and execute");
+		const eventSpy = vi.fn(async () => ({ cancel: true, reason: "Add a Verification section." }));
+		Object.defineProperty(session, "extensionRunner", {
+			configurable: true,
+			value: { emit: eventSpy },
+		});
+		const clearSpy = vi.spyOn(mode, "handleClearCommand");
+		const promptSpy = vi.spyOn(session, "prompt");
+		const errorSpy = vi.spyOn(mode, "showError");
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+		});
+
+		expect(eventSpy).toHaveBeenCalledTimes(1);
+		expect(eventSpy).toHaveBeenCalledWith({
+			type: "plan_approved",
+			planFilePath,
+			planContent,
+			title: "PLAN",
+		});
+		expect(clearSpy).not.toHaveBeenCalled();
+		expect(promptSpy).not.toHaveBeenCalled();
+		expect(mode.planModeEnabled).toBe(true);
+		expect(errorSpy).toHaveBeenCalledWith("Add a Verification section.");
 	});
 
 	it("carries pre-approval local artifacts into the fresh approve-and-execute session", async () => {

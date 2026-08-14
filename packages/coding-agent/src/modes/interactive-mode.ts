@@ -3190,6 +3190,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			executionModel?: ResolvedRoleModel;
 		},
 	): Promise<boolean> {
+		const approvalResult = await this.session.extensionRunner?.emit({
+			type: "plan_approved",
+			planFilePath: options.planFilePath,
+			planContent,
+			title: options.title,
+		});
+		if (approvalResult?.cancel) {
+			this.showError(approvalResult.reason ?? "Plan approval was cancelled.");
+			return false;
+		}
+
 		const previousTools = this.#planModePreviousTools ?? this.session.getEnabledToolNames();
 
 		// Mark the pending abort caused by the plan-mode → compaction transition as

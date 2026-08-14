@@ -678,6 +678,8 @@ describe("ACP agent", () => {
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
 		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
+		const approvalEvent = vi.fn(async () => undefined);
+		Object.defineProperty(session, "extensionRunner", { value: { emit: approvalEvent }, configurable: true });
 
 		const localOptions = {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
@@ -701,6 +703,12 @@ describe("ACP agent", () => {
 		expect(result.details.planFilePath).toBe("local://words-counter-plan.md");
 		expect(result.details.planExists).toBe(true);
 		expect(result.content[0]?.text).toMatch(/Plan approved/);
+		expect(approvalEvent).toHaveBeenCalledWith({
+			type: "plan_approved",
+			planFilePath: "local://words-counter-plan.md",
+			planContent: "# Words Counter\n\nFile contents.",
+			title: "words-counter",
+		});
 		// Plan file keeps its agent-chosen name — no rename.
 		expect(await Bun.file(planPath).exists()).toBe(true);
 		// Mode + handler are cleared; the agent regains write tools next turn.
@@ -730,6 +738,35 @@ describe("ACP agent", () => {
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
+	});
+
+	it("plan-proposal handler keeps plan mode active when an approval extension cancels", async () => {
+		const harness = await createHarness();
+		Settings.instance.set("plan.enabled", true);
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
+		const approvalEvent = vi.fn(async () => ({ cancel: true, reason: "Linear unavailable" }));
+		Object.defineProperty(session, "extensionRunner", { value: { emit: approvalEvent }, configurable: true });
+		const localOptions = {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		};
+		cleanupRoots.push(resolveLocalUrlToPath("local://", localOptions));
+		const planPath = resolveLocalUrlToPath("local://PLAN.md", localOptions);
+		await Bun.write(planPath, "# Words Counter\n\nFile contents.");
+
+		const result = (await session.planProposalHandler!("words-counter")) as {
+			content: Array<{ type: string; text: string }>;
+		};
+
+		expect(approvalEvent).toHaveBeenCalledTimes(1);
+		expect(result.content[0]?.text).toContain("Linear unavailable");
+		expect(session.planModeState?.enabled).toBe(true);
+		expect(typeof session.planProposalHandler).toBe("function");
+		expect(session.planReferencePath).toBeUndefined();
+
+		harness.abortController.abort();
 	});
 
 	it("plan-proposal handler treats dismissed elicitation as refine, never approves", async () => {
