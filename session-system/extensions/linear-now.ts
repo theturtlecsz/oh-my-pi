@@ -591,16 +591,17 @@ export default function linearNow(pi: ExtensionAPI) {
 		const items: TreeItem[] = d.issues.nodes.map(n => {
 			const isNow = n.identifier === state.identifier;
 			const blocked = n.inverseRelations.nodes.find(r => r.type === "blocks" && !DONE_SUFFIX[r.issue.state.type]);
-			// First match wins — exactly one bucket per item (approved rule set:
-			// done → onyou → stuck → working(started) → next). isNow drives only
-			// the "← working now" arrow in the render, never the bucket.
+			// First match wins — exactly one bucket per item (by-seeing verdict 2,
+			// 2026-08-14: NOW forces working even from Backlog; stuck/onyou still
+			// outrank it — they are the "what's blocking" signal). isNow also
+			// drives the "← working now" arrow in the render.
 			const bucket: TreeItem["bucket"] = DONE_SUFFIX[n.state.type]
 				? "done"
 				: n.labels.nodes.some(l => l.name === QUEUE_LABEL)
 					? "onyou"
 					: blocked
 						? "stuck"
-						: n.state.type === "started"
+						: isNow || n.state.type === "started"
 							? "working"
 							: "next";
 			return { identifier: n.identifier, title: n.title, bucket, blocker: bucket === "stuck" ? blocked?.issue.title : undefined, isNow };
@@ -624,15 +625,13 @@ export default function linearNow(pi: ExtensionAPI) {
 		for (const i of by("working")) lines.push(`  ${TREE_GLYPH.working} ${i.identifier} ${i.title}${i.isNow ? " ← working now" : ""}`);
 		for (const i of by("stuck")) lines.push(`  ${TREE_GLYPH.stuck} ${i.identifier} ${i.title} — stuck: ${i.blocker}`);
 		for (const i of by("onyou")) lines.push(`  ${TREE_GLYPH.onyou} ${i.identifier} ${i.title} — waiting on you`);
-		for (const i of by("next")) lines.push(`  ${TREE_GLYPH.next} ${i.identifier} ${i.title} (next)`);
-		const done = by("done"); // query is orderBy:updatedAt — first 5 are the newest
-		for (const i of done.slice(0, 5)) lines.push(`  ${TREE_GLYPH.done} ${i.identifier} ${i.title}`);
-		if (done.length > 5) lines.push(`  ${TREE_GLYPH.done} +${done.length - 5} more done`);
 		const nowTitle = t.items.find(i => i.isNow)?.title ?? state.title ?? "";
 		const parts = [`${t.counts.done} of ${t.counts.total} pieces done.`];
 		if (nowTitle) parts.push(`Working on: ${nowTitle}.`);
 		if (t.counts.stuck) parts.push(`${t.counts.stuck} stuck.`);
 		if (t.counts.onyou) parts.push(`${t.counts.onyou} waiting on you.`);
+		const queued = by("next").length;
+		if (queued) parts.push(`${queued} queued next.`);
 		lines.push(parts.join(" "));
 		return lines;
 	}
@@ -1642,7 +1641,8 @@ export default function linearNow(pi: ExtensionAPI) {
 						} catch (e) {
 							return okText(`tree unavailable (${String(e)})`);
 						}
-						// null tree → plan-literal "NOW unset" (projectless-NOW edge recorded on HOME-109 handoff, owner by-seeing)
+						// Projectless NOW says it truthfully (by-seeing verdict 3, landed 2026-08-14 — see HOME-109 review comment)
+						if (state.identifier) return okText(`NOW: ${state.identifier} ${state.title ?? ""} — no goal attached, so no tree`.trim());
 						return okText("NOW unset");
 					}
 					case "waiting": {
