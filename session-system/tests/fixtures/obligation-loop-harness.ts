@@ -89,9 +89,11 @@ const out: Record<string, string> = {};
 out.armed = await stop(a.file); // plan A discovered → digest owed
 await comment(); // digest posted → plan A settled
 out.settled = await stop(a.file); // same plan, unchanged → must stay quiet
-const future = new Date(Date.now() + 5000);
-fs.utimesSync(a.plan, future, future); // plan rewritten after its digest
+Bun.sleepSync(10); // ensure the rewrite mtime lands strictly after the first discharge
+const now = new Date();
+fs.utimesSync(a.plan, now, now); // plan rewritten after its digest (realistic past mtime)
 out.rewritten = await stop(a.file);
-await comment();
+await comment(); // digest for the rewrite
+out.resettled = await stop(a.file); // rewrite digested → quiet again
 out.otherSession = await stop(b.file); // same name, different session dir → owed
 process.stdout.write(JSON.stringify(out));

@@ -36,5 +36,6 @@ test("digest obligation: settled plan never re-arms; rewrite and foreign session
 	expect(out.armed, "plan file must arm the digest obligation").toContain("digest comment is owed");
 	expect(out.settled, "posted digest must settle the plan — this re-arm WAS the loop").toBe("none");
 	expect(out.rewritten, "plan rewritten after discharge owes a fresh digest").toContain("digest comment is owed");
+	expect(out.resettled, "digested rewrite must settle again — foreign-session probe starts from a quiet state").toBe("none");
 	expect(out.otherSession, "same-named plan in another session must not be masked").toContain("digest comment is owed");
 });
