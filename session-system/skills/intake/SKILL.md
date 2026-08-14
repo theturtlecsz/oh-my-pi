@@ -364,5 +364,5 @@ questions, the cap never tripped; (c) owner-codified independent
 multi-complaint publication (Blueprint section); (d) added the BINDING visible
 scan (HOME-108; owner revised the numeric-floor design at execution); (e)
 folded obs #103 (already present), #108, #109 into the lint gate. Next review
-after ~5 more real intake sessions (count: 4 as of 2026-08-14 — HOME-111; HOME-112; HOME-123; HOME-130). Increment the
+after ~5 more real intake sessions (count: 5 as of 2026-08-14 — HOME-111; HOME-112; HOME-123; HOME-130; HOME-131). Increment the
 count line here at the end of every real intake session.

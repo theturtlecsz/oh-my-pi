@@ -12,6 +12,9 @@ locations are symlinks created by `install.sh`.
 | Repo path | Symlinked from | What it is |
 |---|---|---|
 | `extensions/linear-now.ts` | `~/.omp/agent/extensions/linear-now.ts` | The omp extension: start digest, NOW footer, /now //done //capture, bounded `linear` tool (two-phase owner-gated writes) |
+| `extensions/model-bookends.ts` | `~/.omp/agent/extensions/model-bookends.ts` | HOME-131 bookends: /intake auto-routes to the intake role (Fable-high) and forwards to the skill; /summary arms a fail-closed audit gate (one fresh auditor, five required input sections, verbatim report into the typed review) |
+| `extensions/model-bookends-audit.md` | `~/.omp/agent/extensions/model-bookends-audit.md` | Static audit contract the extension injects when /summary arms |
+| `agents/auditor.md` | `~/.omp/agent/agents/auditor.md` | The `auditor` task agent: blocking, fresh-context final acceptance audit on `@audit`, verdict-structured report |
 | `rules/linear-plan.md` | `~/.omp/agent/rules/linear-plan.md` | omp plan-mode rule: ground plans in the Linear tree |
 | `agents/AGENTS.md` | `~/AGENTS.md` | Home-directory session protocol (bookends contract) |
 | `skills/summary` | `~/.agents/skills/summary` | /summary close ritual (cross-harness: pi + Claude Code) |

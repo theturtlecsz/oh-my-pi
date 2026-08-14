@@ -17,6 +17,11 @@ place() { # place <repo-relative> <live-path>
 }
 
 place extensions/linear-now.ts "$HOME/.omp/agent/extensions/linear-now.ts"
+place extensions/model-bookends.ts "$HOME/.omp/agent/extensions/model-bookends.ts"
+place extensions/model-bookends-audit.md "$HOME/.omp/agent/extensions/model-bookends-audit.md"
+place extensions/model-bookends-stop-no-audit.md "$HOME/.omp/agent/extensions/model-bookends-stop-no-audit.md"
+place extensions/model-bookends-stop-not-forwarded.md "$HOME/.omp/agent/extensions/model-bookends-stop-not-forwarded.md"
+place agents/auditor.md           "$HOME/.omp/agent/agents/auditor.md"
 place rules/linear-plan.md    "$HOME/.omp/agent/rules/linear-plan.md"
 place agents/AGENTS.md        "$HOME/AGENTS.md"
 place agents/omp-AGENTS.md    "$HOME/.omp/agent/AGENTS.md"

@@ -64,6 +64,25 @@ When loading any skill, check the observation log
 observations tagged to that skill and apply their insights to the current
 work, even if the skill file hasn't been updated yet.
 
+## Model escalation (HOME-131, 2026-08-14)
+
+Everyday work runs on the default worker (Terra-medium). Escalation is
+explicit routing — no automatic machinery:
+
+* **Escalate to Sol-xhigh (`@slow`)** when the work touches any of:
+  security/auth changes; concurrency or distributed-state behavior; data
+  migrations or destructive operations; public API or compatibility changes;
+  more than 3 subsystems affected; two failed repair/test loops; or a
+  material deviation from the approved plan.
+* **Escalate to K3-high (`@deep`)** for exceptionally large-repo or
+  long-horizon work, or as the third-family adjudicator when the worker and
+  the auditor disagree.
+
+Any K3 reference carries an explicit `:high` or `:low` suffix — never bare
+(K3 always thinks and defaults to max effort). The bookend roles (`intake`,
+`audit`, `deep`) stay out of the execution cycle; /intake and the /summary
+auditor own them.
+
 # MCP — gotchas only
 
 Server catalogs, tool schemas, and per-server usage instructions are injected

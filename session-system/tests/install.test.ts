@@ -10,6 +10,11 @@ afterAll(() => fs.rmSync(home, { recursive: true, force: true }));
 
 const LINKS: Array<[string, string]> = [
 	[".omp/agent/extensions/linear-now.ts", "extensions/linear-now.ts"],
+	[".omp/agent/extensions/model-bookends.ts", "extensions/model-bookends.ts"],
+	[".omp/agent/extensions/model-bookends-audit.md", "extensions/model-bookends-audit.md"],
+	[".omp/agent/extensions/model-bookends-stop-no-audit.md", "extensions/model-bookends-stop-no-audit.md"],
+	[".omp/agent/extensions/model-bookends-stop-not-forwarded.md", "extensions/model-bookends-stop-not-forwarded.md"],
+	[".omp/agent/agents/auditor.md", "agents/auditor.md"],
 	[".omp/agent/rules/linear-plan.md", "rules/linear-plan.md"],
 	["AGENTS.md", "agents/AGENTS.md"],
 	[".omp/agent/AGENTS.md", "agents/omp-AGENTS.md"],
