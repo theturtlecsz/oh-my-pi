@@ -11,7 +11,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
@@ -184,9 +184,13 @@ interface NowState {
 	// HOME-45 obligation machine — session-scoped fields reset on session_start;
 	// owedFromLastSession is the only cross-session carrier (set on SIGINT/SIGTERM).
 	executingIssue?: { id: string; identifier: string };
-	obligationDigest?: { armed: boolean; blockedOnce: boolean };
+	obligationDigest?: { armed: boolean; blockedOnce: boolean; plan?: string; dir?: string };
 	obligationHandoff?: { armed: boolean; blockedOnce: boolean };
 	owedFromLastSession?: { identifier: string; kind: "digest" | "handoff" };
+	// Which plan's digest was last posted (canonical local dir + filename + discharge time).
+	// The session_stop backstop re-arms ONLY for a different plan or one rewritten after `at`
+	// — without this, an already-settled plan re-armed on every turn end (loop, 2026-08-14).
+	dischargedPlan?: { dir?: string; name: string; at: number };
 	treeCounts?: { done: number; total: number; stuck: number; onyou: number; at: number }; // HOME-109 footer cache — refreshed by every goalTree()
 }
 
@@ -433,9 +437,9 @@ export default function linearNow(pi: ExtensionAPI) {
 	}
 
 	/** A *-plan.md landed in the session local/ dir → a digest comment is owed. */
-	function armDigestObligation() {
+	function armDigestObligation(plan?: string, dir?: string) {
 		if (state.obligationDigest?.armed) return;
-		state.obligationDigest = { armed: true, blockedOnce: false };
+		state.obligationDigest = { armed: true, blockedOnce: false, plan, dir };
 		void saveCache();
 	}
 
@@ -443,6 +447,9 @@ export default function linearNow(pi: ExtensionAPI) {
 	function dischargeObligations(issue: { id: string; identifier: string }, ctx?: ExtensionContext) {
 		let changed = false;
 		if (state.executingIssue?.id === issue.id && (state.obligationDigest || state.obligationHandoff)) {
+			if (state.obligationDigest?.plan) {
+				state.dischargedPlan = { dir: state.obligationDigest.dir, name: state.obligationDigest.plan, at: Date.now() };
+			}
 			state.obligationDigest = undefined;
 			state.obligationHandoff = undefined;
 			changed = true;
@@ -1286,7 +1293,7 @@ export default function linearNow(pi: ExtensionAPI) {
 		const norm = p.replace(/\\/g, "/");
 		if (!norm.endsWith("-plan.md")) return;
 		if (!norm.startsWith("local://") && !norm.includes("/local/")) return;
-		armDigestObligation();
+		armDigestObligation(basename(norm)); // dir unknowable from local:// here — stamped at next session_stop
 		footer(ctx);
 	});
 
@@ -1296,12 +1303,31 @@ export default function linearNow(pi: ExtensionAPI) {
 			if (!state.executingIssue) return; // fail open: no executing issue → zero enforcement
 			// Backstop: a *-plan.md in the session local/ dir arms the digest obligation
 			// even if the write event was missed (plan-mode writes, subagents, …).
-			if (!state.obligationDigest?.armed && event.session_file) {
-				try {
-					const files = await readdir(join(event.session_file.replace(/\.jsonl$/, ""), "local"));
-					if (files.some(f => f.endsWith("-plan.md"))) armDigestObligation();
-				} catch {
-					/* no local dir — nothing owed */
+			// A plan whose digest was already posted (same dir+name, not rewritten since)
+			// stays settled instead of re-arming every turn end.
+			if (event.session_file) {
+				const dir = join(event.session_file.replace(/\.jsonl$/, ""), "local");
+				if (state.obligationDigest?.armed && state.obligationDigest.plan && !state.obligationDigest.dir) {
+					state.obligationDigest.dir = dir; // canonicalize write-event arms
+					void saveCache();
+				}
+				if (!state.obligationDigest?.armed) {
+					try {
+						const d = state.dischargedPlan;
+						for (const f of await readdir(dir)) {
+							if (!f.endsWith("-plan.md")) continue;
+							// Exact dir match required — undefined dir (discharged before any
+							// session_stop stamped it) counts as NOT settled: fails toward one
+							// extra reminder, never toward masking another session's owed plan.
+							const settled = d && d.name === f && d.dir === dir && (await stat(join(dir, f))).mtimeMs <= d.at;
+							if (!settled) {
+								armDigestObligation(f, dir);
+								break;
+							}
+						}
+					} catch {
+						/* no local dir — nothing owed */
+					}
 				}
 			}
 			const owed: string[] = [];
