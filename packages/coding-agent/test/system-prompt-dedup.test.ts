@@ -169,7 +169,8 @@ describe("SYSTEM.md prompt assembly", () => {
 
 	it("renders active child repo context in the main system prompt", async () => {
 		const parentDir = path.join(tempDir, "parent-cwd");
-		fs.mkdirSync(path.join(parentDir, "active-project", ".git"), { recursive: true });
+		const activeDir = path.join(parentDir, "active-project");
+		fs.mkdirSync(activeDir, { recursive: true });
 
 		const { systemPrompt } = await buildSystemPrompt({
 			cwd: parentDir,
@@ -177,6 +178,12 @@ describe("SYSTEM.md prompt assembly", () => {
 			skills: [],
 			rules: [],
 			toolNames: [],
+			activeRepoContext: {
+				cwd: parentDir,
+				repoRoot: activeDir,
+				relativeRepoRoot: "active-project",
+				source: "single-direct-child-repo",
+			},
 			workspaceTree: {
 				rootPath: parentDir,
 				rendered: "",
