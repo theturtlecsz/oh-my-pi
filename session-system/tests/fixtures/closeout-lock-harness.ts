@@ -14,6 +14,14 @@ const probe = process.argv[2];
 const mode = process.argv[3];
 const MODES = ["input", "skill", "done", "forged-subagent", "legacy-host"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
+
+globalThis.fetch = (async () =>
+	new Response(
+		JSON.stringify({
+			data: { issue: { id: "id-1", identifier: "HOME-1", title: "t", comments: { nodes: [] } } },
+		}),
+		{ status: 200 },
+	)) as typeof fetch;
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 const extPath = path.join(repoRoot, "session-system/extensions/linear-now.ts");
 const result = await loadExtensions([extPath], probe);
@@ -114,10 +122,9 @@ if (mode === "legacy-host") {
 	const ctx = runner.createContext();
 	await attempt("before", ctx);
 	if (mode === "input") {
-		// Full locked-action coverage on the pristine instance, plus the deliberate exemption.
+		// Full locked-action coverage on the pristine instance.
 		await attemptAction("before_propose_close", { action: "propose_close", issue: "HOME-1", body: "b" }, ctx);
 		await attemptAction("before_archive_issue", { action: "archive_issue", issue: "HOME-1" }, ctx);
-		await attemptAction("before_close_issue", { action: "close_issue", issue: "HOME-1" }, ctx);
 		await runner.emitInput("/summary", undefined, "interactive");
 		await attempt("afterUnlock", ctx);
 		await runner.emit({ type: "session_switch", reason: "new" } as never);

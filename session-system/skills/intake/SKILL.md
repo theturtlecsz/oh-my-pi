@@ -9,9 +9,9 @@ Internal skill (owner-specific doctrine and estate wiring; not for distribution)
 
 One lane, one skill: taxonomy scan → budgeted Socratic interview with entity-graph
 tracking → blueprint artifact → pre-publish lint → two-phase Linear publication.
-Execution is OUT of scope: intake ends at a published Linear issue. No execution,
-mutation, or skill handoff happens inside an intake session; the only side effects
-are the blueprint file and the owner-confirmed Linear writes after lint passes.
+Execution is OUT of scope: intake ends after owner-confirmed Linear publication.
+The extension selects the first published issue (or batch parent) as NOW inside
+that confirmed operation; no second prompt or manual state change follows.
 
 Provenance: blueprint HOME-43 (deep-grill session 2026-08-11). This skill replaced
 `grilling`, `deep-grill`, and the OMC `deep-interview` engine. The self-graded
@@ -320,7 +320,8 @@ publish a failing blueprint.
 
 - **Single issue** (default): `create_issue` with the blueprint as description.
   Two-phase: first call returns the payload preview — show it to the owner
-  verbatim; repeat with `confirm:true` only after his yes.
+  verbatim, including that the issue becomes NOW; repeat with `confirm:true`
+  only after his yes.
 - **Conditional split**: only when ONE complaint's blueprint decomposes into ≥2
   independently verifiable slices that share blocking relations — the split is
   a decomposition of a single deliverable, never a bundling of independent
@@ -334,8 +335,9 @@ publish a failing blueprint.
   deferred on the issue.
 - Never assume a write landed without `success:true`.
 
-Intake ends here. The published issue is the handoff; execution lanes pull from
-Linear. Do not offer to start building.
+Intake ends here. Native publication selects the first issue or batch parent as
+NOW; do not ask Chris to select it again. Do not start building inside intake —
+the next owner action is `/plan`.
 
 ## Optional feasibility stage (owner-defined process, 2026-07-01)
 
@@ -362,5 +364,5 @@ questions, the cap never tripped; (c) owner-codified independent
 multi-complaint publication (Blueprint section); (d) added the BINDING visible
 scan (HOME-108; owner revised the numeric-floor design at execution); (e)
 folded obs #103 (already present), #108, #109 into the lint gate. Next review
-after ~5 more real intake sessions (count: 3 as of 2026-08-14 — HOME-111; HOME-112; HOME-123). Increment the
+after ~5 more real intake sessions (count: 4 as of 2026-08-14 — HOME-111; HOME-112; HOME-123; HOME-130). Increment the
 count line here at the end of every real intake session.

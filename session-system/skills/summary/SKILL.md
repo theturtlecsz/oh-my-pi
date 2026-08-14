@@ -223,14 +223,12 @@ say why the loop form doesn't fit when you use one.
 
 **Prompt hygiene, all forms:**
 
-- **Deliver the charter to the repo's handoff home yourself.** In
-  Linear-weave estates (routing law, owner-ratified 2026-08-10) that home is
-  a handoff comment on the NOW/executing issue — PROMPT-*.md/handoff files
-  are BANNED there; sessions self-orient from the bookend, never from
-  prompt files (obs #106). Elsewhere, save to
-  `.omc/handoffs/PROMPT-<topic>-<date>.md` AND show it in chat. Either way,
-  never end by telling the owner to save it — a drafted-but-unsaved prompt
-  was lost exactly that way (obs #88).
+- **Deliver the charter through the session review.** In Linear-weave estates
+  (routing law, owner-ratified 2026-08-10), include the next-session charter in
+  Phase 5's single typed review comment on the current issue. NEVER post a
+  second handoff comment or write PROMPT-*.md/handoff files. Elsewhere, save to
+  `.omc/handoffs/PROMPT-<topic>-<date>.md` AND show it in chat. Never end by
+  telling the owner to save it.
 - If the prompt promises to quote or analyze a stored data field, grep the
   source artifact for that field NOW and either confirm it exists or
   downgrade the objective (obs #87).
@@ -243,42 +241,35 @@ say why the loop form doesn't fit when you use one.
   prompt for their pick before the session ends.
 
 **Pre-delivery check (run, don't skim):** (1) Phases 1 and 2 actually
-invoked their skills via the Skill tool this session; (2) the charter
-artifact exists — comment landed (success:true) in Linear-weave estates,
-else the file on disk (`ls` it); (3) the prompt is a loop charter tied to a named
-standing goal, or carries a one-line justification for the single-task
-exception; (4) every command embedded in the prompt was executed or probed
-this session, not composed from memory; (5) every touched project got its
-Linear health + one-line update, or is explicitly listed as not updated and
-why; (6) zero session findings remain unfiled — each is an issue, in the
-review as UNVERIFIED, or dropped out loud; (7) the NOW pointer was
-re-verified true, handed off, or cleared.
+invoked their skills via the Skill tool this session; (2) the charter is inside
+the single Phase 5 review body in Linear-weave estates, else its file exists;
+(3) the prompt is a loop charter tied to a named standing goal, or justifies the
+single-task exception; (4) every embedded command was executed or probed this
+session; (5) every touched project got health plus one line, or is listed as not
+updated with a reason; (6) every finding is filed, listed UNVERIFIED, or dropped
+out loud; (7) NOW was re-verified and remains the reviewed issue.
 
-## Phase 5 — The Linear close ritual (the bookend CLOSE contract)
+## Phase 5 — The Linear close ritual
 
-Linear (team HOME) is the owner page; this phase updates it. Where the
-`linear` tool is available (omp), drive it through the tool — every write
-shows on screen for the owner's yes. Elsewhere, draft the exact payloads and
-show them before writing via API. Four steps, in order:
+Linear (team HOME) is the owner page. Where the `linear` tool is available,
+perform these writes in order; otherwise preview equivalent payloads before the
+API writes:
 
-1. **Project updates** — for every project this session touched: health
-   (onTrack / atRisk / offTrack, honestly) + ONE plain-language line of what
-   moved (`update_health`). Cross-surface propagation: if the work moved a
-   promise in ANOTHER project (a trial blocker, a dependency), that project
-   gets its line too.
-2. **Capture triage** — every stray finding, watch-item, or parked idea from
-   the session becomes an issue in its surface (`create_issue`), or is
-   explicitly dropped out loud. The ledger file is not a destination;
-   findings that only live in TASKS.md are unfiled, and unfiled = lost.
-3. **Propose closes** — anything finished gets a close PROPOSAL
-   (`propose_close`: comment + `waiting-on-chris`). Owner verdict closes;
-   never close an issue or milestone yourself.
-4. **NOW handoff** — is the NOW pointer still true? Finished → `/done` (or
-   `propose_close` + clear). Continuing next session → leave it. Superseded →
-   propose the next NOW and set it on the owner's yes (`set_now`).
+1. **Project updates** — every touched project gets honest health plus one
+   plain-language line via `update_health`. Include another project when this
+   session moved its dependency or promise.
+2. **Capture triage** — every stray finding, watch-item, or parked idea becomes
+   an issue via `create_issue`, or is explicitly dropped. Chat and local ledgers
+   are not destinations.
+3. **Propose closes** — finished issues get `propose_close`; the owner verdict
+   still closes them.
+4. **Session review + handoff** — call the `linear` tool exactly once on the
+   current NOW/executing issue with `action:"comment"`, `kind:"review"`, and the
+   review `body`.
+   The body carries all technical evidence from Section 1 plus the complete
+   next-session state and loop charter from Section 2. The host adds the
+   `Session review` prefix and current plan hash; require `success:true`.
 
-Also draft, on owner confirmation, the **SESSION REVIEW** (Section 1).
-Knowledge files are change-coupled (uniform memory law, HOME-112): they were
-updated by the work that changed them, never as a close step — do not run a
-close-time vault ingest. Legacy Product-State pages are a pointer to Linear;
-do not maintain parallel decision queues there.
+Leave NOW unchanged. NEVER invoke `/done`, clear NOW, post a second handoff, or
+close an issue from `/summary`; Chris enters `/done` separately when he wants
+the reviewed issue closed.
