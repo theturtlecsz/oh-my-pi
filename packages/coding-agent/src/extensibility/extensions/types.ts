@@ -216,6 +216,18 @@ export interface ExtensionUIDialogOptions {
 /** Raw terminal input listener for extensions. */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
+export type ExtensionStatusPlacement = "footer" | "inline";
+
+export interface ExtensionStatusOptions {
+	/**
+	 * Where the status renders. `footer` (default) is the hook-status line
+	 * below the editor. `inline` is interactive-TUI-only and appears in the
+	 * main status line beside the path segment and its adjacent branch
+	 * segment; other modes ignore the placement.
+	 */
+	placement?: ExtensionStatusPlacement;
+}
+
 export type WidgetPlacement = "aboveEditor" | "belowEditor";
 
 export interface ExtensionWidgetOptions {
@@ -276,8 +288,8 @@ export interface ExtensionUIContext {
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
 	onTerminalInput(handler: TerminalInputHandler): () => void;
 
-	/** Set status text in the footer/status bar. Pass undefined to clear. */
-	setStatus(key: string, text: string | undefined): void;
+	/** Set status text in the footer/status bar. Pass undefined to clear. `options.placement: "inline"` renders beside the path in the main status line (interactive TUI only). */
+	setStatus(key: string, text: string | undefined, options?: ExtensionStatusOptions): void;
 
 	/** Set the working/loading message shown during streaming. Call with no argument to restore default. */
 	setWorkingMessage(message?: string): void;

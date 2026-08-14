@@ -4,6 +4,7 @@ import type { AssistantMessage, UsageLimit, UsageReport } from "@oh-my-pi/pi-ai"
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { settings } from "../../../config/settings";
+import type { ExtensionStatusPlacement } from "../../../extensibility/extensions/types";
 import type { AgentSession } from "../../../session/agent-session";
 import type { OAuthAccountIdentity } from "../../../session/auth-storage";
 import { limitMatchesActiveAccount } from "../../../slash-commands/helpers/active-oauth-account";
@@ -33,6 +34,10 @@ import type {
 
 const JJ_REFRESH_TTL_MS = 5000;
 const WATCHER_FAILURE_POLL_TTL_MS = 5000;
+// Sentinel id marking an inline extension status slot in the left-segment
+// arrays; never a real StatusLineSegmentId, so overflow logic can tell
+// configured segments from extension-injected inline statuses.
+const INLINE_STATUS_SEG = "__inline_status__";
 
 function normalizeCodexIdentityValue(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
@@ -325,6 +330,7 @@ export class StatusLineComponent implements Component {
 	#disposed = false;
 	#autoCompactEnabled: boolean = true;
 	#hookStatuses: Map<string, string> = new Map();
+	#inlineHookStatuses: Map<string, string> = new Map();
 	#subagentCount: number = 0;
 	/**
 	 * Active-processing accounting for the `time_spent` segment, keyed per
@@ -631,12 +637,13 @@ export class StatusLineComponent implements Component {
 		this.#onCodexResetFireworks = handler;
 	}
 
-	setHookStatus(key: string, text: string | undefined): void {
-		if (text === undefined) {
-			this.#hookStatuses.delete(key);
-		} else {
-			this.#hookStatuses.set(key, text);
-		}
+	setHookStatus(key: string, text: string | undefined, placement: ExtensionStatusPlacement = "footer"): void {
+		// One key, one status: a key moving between placements must not leave
+		// a stale copy in the other map.
+		this.#hookStatuses.delete(key);
+		this.#inlineHookStatuses.delete(key);
+		if (text === undefined) return;
+		(placement === "inline" ? this.#inlineHookStatuses : this.#hookStatuses).set(key, text);
 	}
 
 	watchBranch(onBranchChange: () => void): void {
@@ -1717,13 +1724,29 @@ export class StatusLineComponent implements Component {
 
 		// Collect visible segment contents
 		const leftParts: string[] = [];
-		const leftSegIds: StatusLineSegmentId[] = [];
+		const leftSegIds: (StatusLineSegmentId | typeof INLINE_STATUS_SEG)[] = [];
 		for (const segId of effectiveSettings.leftSegments) {
 			if (subagentBadge && segId === "subagents") continue;
 			const rendered = renderSegment(segId, ctx);
 			if (rendered.visible && rendered.content) {
 				leftParts.push(rendered.content);
 				leftSegIds.push(segId);
+			}
+		}
+
+		// Inline extension statuses render beside the path: after an immediately
+		// adjacent branch segment, else directly after the path. A preset without
+		// a rendered path shows no inline statuses.
+		if (this.#settings.showHookStatus ?? true) {
+			const pathIdx = leftSegIds.indexOf("path");
+			if (pathIdx >= 0 && this.#inlineHookStatuses.size > 0) {
+				const insertIdx = pathIdx + (leftSegIds[pathIdx + 1] === "git" ? 2 : 1);
+				const inlineParts = Array.from(this.#inlineHookStatuses.entries())
+					.sort(([a], [b]) => a.localeCompare(b))
+					.map(([, text]) => sanitizeStatusText(text))
+					.filter(text => text.length > 0);
+				leftParts.splice(insertIdx, 0, ...inlineParts);
+				leftSegIds.splice(insertIdx, 0, ...inlineParts.map((): typeof INLINE_STATUS_SEG => INLINE_STATUS_SEG));
 			}
 		}
 
@@ -1769,6 +1792,33 @@ export class StatusLineComponent implements Component {
 			while (totalWidth() > topFillWidth && right.length > 0) {
 				right.pop();
 				rightWidth = groupWidth(right, rightCapWidth, rightSepWidth);
+			}
+			// Inline extension statuses give way before the path shrinks or any
+			// configured segment drops: truncate the last sorted status first,
+			// removing it outright when no useful width remains.
+			while (totalWidth() > topFillWidth) {
+				let inlineIdx = -1;
+				for (let i = leftSegIds.length - 1; i >= 0; i--) {
+					if (leftSegIds[i] === INLINE_STATUS_SEG) {
+						inlineIdx = i;
+						break;
+					}
+				}
+				if (inlineIdx < 0) break;
+				const overflow = totalWidth() - topFillWidth;
+				const currentVW = visibleWidth(left[inlineIdx]);
+				const available = currentVW - overflow;
+				if (available >= 2) {
+					const truncated = truncateToWidth(left[inlineIdx], available);
+					if (visibleWidth(truncated) < currentVW) {
+						left[inlineIdx] = truncated;
+						leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
+						continue;
+					}
+				}
+				left.splice(inlineIdx, 1);
+				leftSegIds.splice(inlineIdx, 1);
+				leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
 			}
 			// Shrink path before dropping left segments — path is the only elastic segment
 			const pathIdx = leftSegIds.indexOf("path");

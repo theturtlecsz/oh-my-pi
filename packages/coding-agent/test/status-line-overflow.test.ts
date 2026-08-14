@@ -476,3 +476,76 @@ describe("overflow: path survives before model", () => {
 		expect(rendered).not.toContain("MODEL_SHOULD_DROP");
 	});
 });
+
+describe("inline extension statuses", () => {
+	function buildPathOnlyComponent() {
+		const session = createStatusLineSession("inline status test");
+		const component = new StatusLineComponent(session);
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["path"],
+			rightSegments: [],
+			separator: "none",
+			sessionAccent: false,
+			transparent: true,
+			segmentOptions: { path: { abbreviate: false, maxLength: 40, stripWorkPrefix: false } },
+		});
+		return component;
+	}
+
+	let root: string;
+	beforeAll(() => {
+		root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-inline-status-"));
+		const cwd = path.join(root, "cwdxyz");
+		fs.mkdirSync(cwd);
+		setProjectDir(cwd);
+	});
+
+	it("renders an inline status in the main line beside the path and not in render()", () => {
+		const component = buildPathOnlyComponent();
+		component.setHookStatus("linear-now-current", "▶ HOME-130 Footer current work", "inline");
+
+		const top = stripAnsi(component.getTopBorder(200).content);
+		const pathIdx = top.indexOf("xyz");
+		const issueIdx = top.indexOf("HOME-130");
+		expect(pathIdx).toBeGreaterThanOrEqual(0);
+		expect(issueIdx).toBeGreaterThan(pathIdx);
+		expect(component.render(200)).toEqual([]);
+	});
+
+	it("keeps a footer-placed status out of the main line and in render()", () => {
+		const component = buildPathOnlyComponent();
+		component.setHookStatus("linear-now", "◆ The Bookends · 47/59 done");
+
+		expect(stripAnsi(component.getTopBorder(200).content)).not.toContain("Bookends");
+		const lines = component.render(200).map(stripAnsi);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("Bookends");
+	});
+
+	it("truncates the inline status before shrinking the path when width is tight", () => {
+		const component = buildPathOnlyComponent();
+		const title = "T".repeat(40);
+		const bare = component.getTopBorder(200);
+		component.setHookStatus("linear-now-current", `▶ HOME-130 ${title}`, "inline");
+		const full = component.getTopBorder(200);
+		expect(stripAnsi(full.content)).toContain(title);
+
+		// Fits the full path plus only part of the issue text.
+		const width = bare.width + 16;
+		const narrow = component.getTopBorder(width);
+		const text = stripAnsi(narrow.content);
+		expect(text).toContain("xyz"); // full path suffix survives untouched
+		expect(text).toContain("HOME-130");
+		expect(text).not.toContain(title); // issue title gave way first
+		expect(visibleWidth(narrow.content)).toBeLessThanOrEqual(width);
+	});
+
+	it("clears an inline status when set to undefined", () => {
+		const component = buildPathOnlyComponent();
+		component.setHookStatus("linear-now-current", "▶ HOME-130 Footer current work", "inline");
+		expect(stripAnsi(component.getTopBorder(200).content)).toContain("HOME-130");
+		component.setHookStatus("linear-now-current", undefined, "inline");
+		expect(stripAnsi(component.getTopBorder(200).content)).not.toContain("HOME-130");
+	});
+});
