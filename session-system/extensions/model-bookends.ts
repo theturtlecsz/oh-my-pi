@@ -69,6 +69,17 @@ export function missingAuditSections(task: string): string[] {
 
 export type AuditVerdict = "PASS" | "NEEDS_FIX" | "BLOCKED";
 
+const STRUCTURED_FINDING = /^\s*-\s+\[[A-Z][A-Z0-9]*\]\s+AC-\S+\s+\S+:\d+\s+—\s+evidence:\s+\S/m;
+
+function hasStructuredFinding(finding: unknown): boolean {
+	if (typeof finding === "string") return STRUCTURED_FINDING.test(finding);
+	if (!finding || typeof finding !== "object" || Array.isArray(finding)) return false;
+	const record = finding as Record<string, unknown>;
+	return [record.severity, record.ac, record.location, record.evidence].every(
+		value => typeof value === "string" && value.trim().length > 0,
+	);
+}
+
 /** Canonical headed-text sections (auditor.md report template). Case-sensitive and
  *  line-anchored so a one-line token echo cannot satisfy the structure check. */
 export const REPORT_SECTIONS: ReadonlyArray<{ label: string; pattern: RegExp }> = [
@@ -93,7 +104,9 @@ function missingJsonReportParts(obj: Record<string, unknown>): string[] {
 	const verdict = typeof obj.verdict === "string" ? parseAuditVerdict(`VERDICT: ${obj.verdict}`) : undefined;
 	if (!verdict) missing.push("verdict (PASS | NEEDS_FIX | BLOCKED)");
 	if (!Array.isArray(obj.findings)) missing.push("findings array");
-	else if (verdict === "NEEDS_FIX" && obj.findings.length === 0) missing.push("at least one finding under NEEDS_FIX");
+	else if (verdict === "NEEDS_FIX" && !obj.findings.some(hasStructuredFinding)) {
+		missing.push("at least one finding under NEEDS_FIX");
+	}
 	if (!Array.isArray(obj.acceptance_coverage) || obj.acceptance_coverage.length === 0) missing.push("acceptance_coverage entries");
 	if (obj.out_of_scope === undefined) missing.push("out_of_scope");
 	if (!Array.isArray(obj.checks_run)) missing.push("checks_run array");
@@ -121,8 +134,11 @@ export function missingReportParts(text: string): string[] {
 		}
 	}
 	const missing = REPORT_SECTIONS.filter(section => !section.pattern.test(text)).map(section => section.label);
-	if (!/^\s*(?:#+\s*)?VERDICT\s*:\s*(?:PASS|NEEDS_FIX|BLOCKED)\b/m.test(text)) {
-		missing.unshift("VERDICT: PASS | NEEDS_FIX | BLOCKED");
+	const verdict = parseAuditVerdict(text);
+	if (!verdict) missing.unshift("VERDICT: PASS | NEEDS_FIX | BLOCKED");
+	const findings = /^\s*(?:#+\s*)?FINDINGS\b[^\n]*\n([\s\S]*?)(?=^\s*(?:#+\s*)?ACCEPTANCE COVERAGE\b)/m.exec(text)?.[1];
+	if (verdict === "NEEDS_FIX" && !hasStructuredFinding(findings ?? "")) {
+		missing.push("at least one finding under NEEDS_FIX");
 	}
 	return missing;
 }
@@ -322,11 +338,13 @@ export default function modelBookends(pi: ExtensionAPI) {
 	});
 
 	// Fail-closed settlement gate: while armed, the session may not settle until the
-	// report exists AND has been copied verbatim into the typed review. Reset only via
-	// session switch (fresh /summary → fresh auditor).
+	// report exists AND has been copied verbatim into the typed review. A stop with a
+	// reserved call but no result means the host interrupted it; release that stale
+	// reservation so the stop guidance can be followed.
 	pi.on("session_stop", async (_event, ctx) => {
 		if (!ownerSession(ctx) || !gate.armed) return undefined;
 		if (!gate.report) {
+			gate.auditorCallId = undefined;
 			return { continue: true, additionalContext: stopNoAudit.trim() };
 		}
 		if (!gate.forwarded) {

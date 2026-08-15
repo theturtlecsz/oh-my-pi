@@ -48,5 +48,6 @@ CHECKS RUN
 REMAINING QUESTIONS
 - open questions a future session must answer (or "none")
 ```
+Severity identifiers MUST match `[A-Z][A-Z0-9]*`; examples: `HIGH`, `P0`–`P3`.
 
 Verdict rules: `PASS` only when every acceptance criterion is met with evidence and no finding is severity-worthy; `NEEDS_FIX` when at least one evidenced finding requires a change; `BLOCKED` when the input contract is incomplete or the work cannot be verified at all.

@@ -202,6 +202,12 @@ describe("helpers", () => {
 		// advisory regression: a one-line section-name echo must NOT pass
 		const echo = "VERDICT: PASS\nfindings acceptance coverage out of scope checks run remaining questions";
 		expect(missingReportParts(echo)).not.toEqual([]);
+		expect(missingReportParts(report("NEEDS_FIX", "(none)"))).toContain("at least one finding under NEEDS_FIX");
+		expect(missingReportParts(report("NEEDS_FIX", "- none"))).toContain("at least one finding under NEEDS_FIX");
+		expect(missingReportParts(report("NEEDS_FIX", "- [P0] AC-1 src/x.ts:3 — evidence: failure"))).toEqual([]);
+		expect(missingReportParts(report("NEEDS_FIX", "- [0] AC-1 src/x.ts:3 — evidence: failure"))).toContain(
+			"at least one finding under NEEDS_FIX",
+		);
 	});
 
 	test("missingReportParts validates the observed JSON report schema", () => {
@@ -216,6 +222,16 @@ describe("helpers", () => {
 		expect(
 			missingReportParts(
 				'{"verdict": "NEEDS_FIX", "findings": [], "acceptance_coverage": [{"id": "AC-1"}], "out_of_scope": "n", "checks_run": [], "remaining_questions": "n"}',
+			),
+		).toContain("at least one finding under NEEDS_FIX");
+		expect(
+			missingReportParts(
+				'{"verdict": "NEEDS_FIX", "findings": ["none"], "acceptance_coverage": [{"id": "AC-1"}], "out_of_scope": "n", "checks_run": [], "remaining_questions": "n"}',
+			),
+		).toContain("at least one finding under NEEDS_FIX");
+		expect(
+			missingReportParts(
+				'{"verdict": "NEEDS_FIX", "findings": [{"severity": "", "ac": "", "location": "", "evidence": ""}], "acceptance_coverage": [{"id": "AC-1"}], "out_of_scope": "n", "checks_run": [], "remaining_questions": "n"}',
 			),
 		).toContain("at least one finding under NEEDS_FIX");
 		// malformed JSON falls back to headed-text validation and fails it
@@ -340,21 +356,28 @@ describe("audit gate", () => {
 		expect(second?.reason).toContain("exactly one auditor");
 	});
 
-	test("failed, verdict-less, or structurally incomplete auditor runs release the slot for a fresh retry", async () => {
+	test("failed, verdict-less, structurally incomplete, or interrupted auditor runs release the slot for a fresh retry", async () => {
 		const h = await makeHarness();
 		await armSummary(h);
 		const first = await h.runner.emitToolCall(auditorCall("aud-1"));
 		expect(first?.block).toBeUndefined();
-		await h.runner.emitToolResult(taskResult("aud-1", "task crashed", true));
+		// The host can stop before it delivers any result; that stale reservation must not block a replacement.
+		const interrupted = await h.runner.emit(sessionStop());
+		expect((interrupted as { continue?: boolean } | undefined)?.continue).toBe(true);
 		const retry = await h.runner.emitToolCall(auditorCall("aud-2"));
 		expect(retry?.block).toBeUndefined();
-		// verdict token alone, without the required report sections, is also unusable
-		await h.runner.emitToolResult(taskResult("aud-2", "VERDICT: PASS\neverything seemed fine"));
+		await h.runner.emitToolResult(taskResult("aud-2", "task crashed", true));
 		const retry2 = await h.runner.emitToolCall(auditorCall("aud-3"));
 		expect(retry2?.block).toBeUndefined();
+		// verdict token alone, without the required report sections, is also unusable
+		await h.runner.emitToolResult(taskResult("aud-3", "VERDICT: PASS\neverything seemed fine"));
+		const retry3 = await h.runner.emitToolCall(auditorCall("aud-4"));
+		expect(retry3?.block).toBeUndefined();
 		// while no usable report exists, the session must not settle
 		const stop = await h.runner.emit(sessionStop());
 		expect((stop as { continue?: boolean } | undefined)?.continue).toBe(true);
+		const retry4 = await h.runner.emitToolCall(auditorCall("aud-5"));
+		expect(retry4?.block).toBeUndefined();
 	});
 
 	test("review comment is blocked before the audit and when the report is paraphrased", async () => {
