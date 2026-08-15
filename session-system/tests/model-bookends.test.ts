@@ -163,8 +163,38 @@ async function runAuditor(h: Harness, id = "aud-1", reportText = PASS_REPORT): P
 }
 
 describe("helpers", () => {
-	test("missingAuditSections names each absent section and passes a complete task", () => {
+	test("missingAuditSections accepts headings but rejects incidental label prose", () => {
 		expect(missingAuditSections(FULL_AUDIT_TASK)).toEqual([]);
+		const standaloneHeadings = [
+			"The approved plan discusses acceptance criteria, starting state, and final diff before the real input sections.",
+			"Approved plan",
+			"Anchor audit headings so incidental prose cannot start a section body.",
+			"Acceptance criteria",
+			"Accept exact unindented labels while rejecting incidental prose references.",
+			"Starting state",
+			"commit abc123; pre-existing dirty files: none; working tree otherwise clean.",
+			"Final diff",
+			"```diff",
+			"--- a/session-system/extensions/model-bookends.ts",
+			"+++ b/session-system/extensions/model-bookends.ts",
+			"@@ -28,5 +28,5 @@",
+			"+Verification results must remain prose inside this unified diff.",
+			"```",
+			"Verification",
+			"bun test session-system/tests/model-bookends.test.ts → 24 pass, 0 fail.",
+		].join("\n");
+		expect(missingAuditSections(standaloneHeadings)).toEqual([]);
+		expect(
+			missingAuditSections(
+				"The approved plan satisfies acceptance criteria from the starting state through the final diff after verification results.",
+			),
+		).toEqual([
+			"Approved plan",
+			"Acceptance criteria",
+			"Starting state (commit + pre-existing dirty files)",
+			"Final diff",
+			"Verification results",
+		]);
 		const missing = missingAuditSections(
 			"Approved plan: rewrite the frobnicator config end to end.\nFinal diff: the full diff follows below verbatim.",
 		);

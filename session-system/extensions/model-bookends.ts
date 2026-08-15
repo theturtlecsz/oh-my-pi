@@ -25,11 +25,11 @@ export const INTAKE_THINKING_LEVEL = "high";
 
 /** The five labeled sections every auditor task must inline (HOME-131 input contract). */
 export const AUDIT_INPUT_SECTIONS: ReadonlyArray<{ label: string; pattern: RegExp }> = [
-	{ label: "Approved plan", pattern: /approved plan/gi },
-	{ label: "Acceptance criteria", pattern: /acceptance criteria/gi },
-	{ label: "Starting state (commit + pre-existing dirty files)", pattern: /starting (?:state|commit)/gi },
-	{ label: "Final diff", pattern: /final diff/gi },
-	{ label: "Verification results", pattern: /verification/gi },
+	{ label: "Approved plan", pattern: /^approved plan(?:$|:)/gim },
+	{ label: "Acceptance criteria", pattern: /^acceptance criteria(?:$|:)/gim },
+	{ label: "Starting state (commit + pre-existing dirty files)", pattern: /^starting (?:state|commit)(?:$|:)/gim },
+	{ label: "Final diff", pattern: /^final diff(?:$|:)/gim },
+	{ label: "Verification results", pattern: /^verification(?: results)?(?:$|:)/gim },
 ];
 
 /** Body of a labeled section: text after the label up to the next section label or end. */
