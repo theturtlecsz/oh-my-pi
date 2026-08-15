@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
 import {
 	AUDIT_CONTRACT,
+	decodeJsonQuoted,
 	extractAuditReport,
 	missingAuditSections,
 	missingReportParts,
@@ -224,17 +225,36 @@ describe("helpers", () => {
 
 	test("missingReportParts enforces real shape, not token presence", () => {
 		expect(missingReportParts(PASS_REPORT)).toEqual([]);
+		expect(missingReportParts(report("PASS", ""))).toEqual([]);
 		const verdictOnly = missingReportParts("VERDICT: PASS\nall good");
 		expect(verdictOnly).toEqual(["FINDINGS", "ACCEPTANCE COVERAGE", "OUT OF SCOPE", "CHECKS RUN", "REMAINING QUESTIONS"]);
 		expect(missingReportParts("FINDINGS\nACCEPTANCE COVERAGE\nOUT OF SCOPE\nCHECKS RUN\nREMAINING QUESTIONS")).toEqual([
-			"VERDICT: PASS | NEEDS_FIX | BLOCKED",
+			"VERDICT: PASS | NEEDS_FIX | BLOCKED (must be first)",
+			"FINDINGS (label present but no content)",
+			"ACCEPTANCE COVERAGE (label present but no content)",
+			"OUT OF SCOPE (label present but no content)",
+			"CHECKS RUN (label present but no content)",
+			"REMAINING QUESTIONS (label present but no content)",
 		]);
 		// advisory regression: a one-line section-name echo must NOT pass
 		const echo = "VERDICT: PASS\nfindings acceptance coverage out of scope checks run remaining questions";
 		expect(missingReportParts(echo)).not.toEqual([]);
+		expect(missingReportParts(PASS_REPORT.replace("FINDINGS", "FINDINGS (ordered by severity)"))).toContain("FINDINGS");
 		expect(missingReportParts(report("NEEDS_FIX", "(none)"))).toContain("at least one finding under NEEDS_FIX");
 		expect(missingReportParts(report("NEEDS_FIX", "- none"))).toContain("at least one finding under NEEDS_FIX");
-		expect(missingReportParts(report("NEEDS_FIX", "- [P0] AC-1 src/x.ts:3 — evidence: failure"))).toEqual([]);
+		expect(missingReportParts(report("NEEDS_FIX", "- [P0] AC-1 src/x.ts:3 — evidence: failure"))).toContain(
+			"at least one finding under NEEDS_FIX",
+		);
+		expect(
+			missingReportParts(
+				report("NEEDS_FIX", "- [P0] AC-1 src/x.ts:3 — evidence: failure\n- impact: broken; minimal fix: guard"),
+			),
+		).toContain("at least one finding under NEEDS_FIX");
+		expect(
+			missingReportParts(
+				report("NEEDS_FIX", "- [P0] AC-1 src/x.ts:3 — evidence: failure; impact: broken; minimal fix: guard"),
+			),
+		).toEqual([]);
 		expect(missingReportParts(report("NEEDS_FIX", "- [0] AC-1 src/x.ts:3 — evidence: failure"))).toContain(
 			"at least one finding under NEEDS_FIX",
 		);
@@ -264,6 +284,11 @@ describe("helpers", () => {
 				'{"verdict": "NEEDS_FIX", "findings": [{"severity": "", "ac": "", "location": "", "evidence": ""}], "acceptance_coverage": [{"id": "AC-1"}], "out_of_scope": "n", "checks_run": [], "remaining_questions": "n"}',
 			),
 		).toContain("at least one finding under NEEDS_FIX");
+		expect(
+			missingReportParts(
+				'{"verdict": "NEEDS_FIX", "findings": [{"severity": "P1", "ac": "AC-1", "location": "src/x.ts:3", "evidence": "failure"}], "acceptance_coverage": [{"id": "AC-1"}], "out_of_scope": "n", "checks_run": [], "remaining_questions": "n"}',
+			),
+		).toContain("at least one finding under NEEDS_FIX");
 		// malformed JSON falls back to headed-text validation and fails it
 		expect(missingReportParts('{"verdict": "PASS", broken')).not.toEqual([]);
 	});
@@ -280,6 +305,17 @@ describe("helpers", () => {
 		expect(extractAuditReport({ results: [{ output: PASS_REPORT }] }, wrapped)).toBe(PASS_REPORT);
 		expect(extractAuditReport(undefined, wrapped)).toBe(PASS_REPORT);
 		expect(extractAuditReport(undefined, PASS_REPORT)).toBe(PASS_REPORT);
+	});
+
+	test("decodeJsonQuoted undoes exactly one transport quoting layer and leaves real text alone", () => {
+		// HOME-137 regression: string-outputSchema runs delivered the whole report as a
+		// JSON string literal on one physical line — captured live 2026-08-15.
+		expect(decodeJsonQuoted(JSON.stringify(PASS_REPORT))).toBe(PASS_REPORT);
+		expect(decodeJsonQuoted(JSON.stringify({ report: PASS_REPORT }))).toBe(PASS_REPORT);
+		expect(decodeJsonQuoted(PASS_REPORT)).toBe(PASS_REPORT);
+		expect(decodeJsonQuoted('"unterminated')).toBe('"unterminated');
+		expect(extractAuditReport({ results: [{ output: JSON.stringify(PASS_REPORT) }] }, "")).toBe(PASS_REPORT);
+		expect(missingReportParts(extractAuditReport({ results: [{ output: JSON.stringify(PASS_REPORT) }] }, ""))).toEqual([]);
 	});
 });
 
@@ -384,6 +420,58 @@ describe("audit gate", () => {
 		const second = await h.runner.emitToolCall(auditorCall("aud-2"));
 		expect(second?.block).toBe(true);
 		expect(second?.reason).toContain("exactly one auditor");
+	});
+
+	test("armed: rejects an auditor spawn carrying outputSchema, naming the canonical format", async () => {
+		const h = await makeHarness();
+		await armSummary(h);
+		const res = await h.runner.emitToolCall(
+			taskCall("t1", { context: "c", tasks: [{ agent: "auditor", task: FULL_AUDIT_TASK, outputSchema: { type: "string" } }] }),
+		);
+		expect(res?.block).toBe(true);
+		expect(res?.reason).toContain("outputSchema");
+		expect(res?.reason).toContain("headed-text");
+		// the rejected spawn must not consume the one-auditor slot
+		expect((await h.runner.emitToolCall(auditorCall("t2")))?.block).toBeUndefined();
+	});
+
+	test("a JSON-quoted transport wrapper is decoded and its report accepted end to end", async () => {
+		// HOME-137 regression: the live task host delivered `"VERDICT: PASS\n…"` as one line.
+		const h = await makeHarness();
+		await armSummary(h);
+		const call = await h.runner.emitToolCall(auditorCall("aud-1"));
+		expect(call?.block).toBeUndefined();
+		await h.runner.emitToolResult(taskResult("aud-1", JSON.stringify(PASS_REPORT)));
+		const verbatim = await h.runner.emitToolCall(linearReview("l1", `Review\n\n${PASS_REPORT}`));
+		expect(verbatim?.block).toBeUndefined();
+	});
+
+	test("a refused report tells the session why, marks refusal state, and frees the slot", async () => {
+		const h = await makeHarness();
+		await armSummary(h);
+		const call = await h.runner.emitToolCall(auditorCall("aud-1"));
+		expect(call?.block).toBeUndefined();
+		const refusal = (await h.runner.emitToolResult(taskResult("aud-1", "VERDICT: PASS\nlooks fine to me"))) as
+			| { content?: Array<{ type: string; text?: string }> }
+			| undefined;
+		const appended = refusal?.content?.map(part => part.text ?? "").join("\n") ?? "";
+		expect(appended).toContain("REFUSED");
+		expect(appended).toContain("FINDINGS");
+		// review block now names the refusal instead of claiming no audit ran
+		const blocked = await h.runner.emitToolCall(linearReview("l1", "body"));
+		expect(blocked?.block).toBe(true);
+		expect(blocked?.reason).toContain("REFUSED");
+		// stop guidance distinguishes refusal from no-audit
+		const stop = (await h.runner.emit(sessionStop())) as { continue?: boolean; additionalContext?: string } | undefined;
+		expect(stop?.continue).toBe(true);
+		expect(stop?.additionalContext).toContain("REFUSED");
+		expect(stop?.additionalContext).not.toContain("the audit has not run yet");
+		// slot is free: a fresh auditor with a usable report completes the attempt
+		await runAuditor(h, "aud-2");
+		const body = `Review\n\n${PASS_REPORT}`;
+		expect((await h.runner.emitToolCall(linearReview("l2", body)))?.block).toBeUndefined();
+		await h.runner.emitToolResult(linearResult("l2", body));
+		expect(await h.runner.emit(sessionStop())).toBeUndefined();
 	});
 
 	test("failed, verdict-less, structurally incomplete, or interrupted auditor runs release the slot for a fresh retry", async () => {

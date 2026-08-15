@@ -1,3 +1,12 @@
 advisors:
   - name: default
     model: openai-codex/gpt-5.6-sol:high
+    tools:
+      - read
+      - security_scan
+      - ast_grep
+      - debug
+      - eval
+      - glob
+      - grep
+      - lsp

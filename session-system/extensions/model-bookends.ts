@@ -14,10 +14,14 @@
  * fresh auditor (state resets on session switch).
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { prompt } from "@oh-my-pi/pi-utils";
 // Static audit instructions (HOME-131) — installed alongside this extension so the
 // relative import resolves in both link and copy modes.
 import auditContract from "./model-bookends-audit.md" with { type: "text" };
+import refusedNotice from "./model-bookends-refused.md" with { type: "text" };
+import schemaRefused from "./model-bookends-schema-refused.md" with { type: "text" };
 import stopNoAudit from "./model-bookends-stop-no-audit.md" with { type: "text" };
+import stopRefused from "./model-bookends-stop-refused.md" with { type: "text" };
 import stopNotForwarded from "./model-bookends-stop-not-forwarded.md" with { type: "text" };
 
 /** Effort pinned by HOME-131: /intake always runs Fable at :high. */
@@ -69,13 +73,14 @@ export function missingAuditSections(task: string): string[] {
 
 export type AuditVerdict = "PASS" | "NEEDS_FIX" | "BLOCKED";
 
-const STRUCTURED_FINDING = /^\s*-\s+\[[A-Z][A-Z0-9]*\]\s+AC-\S+\s+\S+:\d+\s+—\s+evidence:\s+\S/m;
+const STRUCTURED_FINDING =
+	/^\s*-\s+\[[A-Z][A-Z0-9]*\]\s+AC-\S+\s+\S+:\d+\s+—\s+evidence:\s+\S[^\n]*?;\s+impact:\s+\S[^\n]*?;\s+minimal fix:\s+\S[^\n]*$/m;
 
 function hasStructuredFinding(finding: unknown): boolean {
 	if (typeof finding === "string") return STRUCTURED_FINDING.test(finding);
 	if (!finding || typeof finding !== "object" || Array.isArray(finding)) return false;
 	const record = finding as Record<string, unknown>;
-	return [record.severity, record.ac, record.location, record.evidence].every(
+	return [record.severity, record.ac, record.location, record.evidence, record.impact, record.minimal_fix].every(
 		value => typeof value === "string" && value.trim().length > 0,
 	);
 }
@@ -83,11 +88,11 @@ function hasStructuredFinding(finding: unknown): boolean {
 /** Canonical headed-text sections (auditor.md report template). Case-sensitive and
  *  line-anchored so a one-line token echo cannot satisfy the structure check. */
 export const REPORT_SECTIONS: ReadonlyArray<{ label: string; pattern: RegExp }> = [
-	{ label: "FINDINGS", pattern: /^\s*(?:#+\s*)?FINDINGS\b/m },
-	{ label: "ACCEPTANCE COVERAGE", pattern: /^\s*(?:#+\s*)?ACCEPTANCE COVERAGE\b/m },
-	{ label: "OUT OF SCOPE", pattern: /^\s*(?:#+\s*)?OUT OF SCOPE\b/m },
-	{ label: "CHECKS RUN", pattern: /^\s*(?:#+\s*)?CHECKS RUN\b/m },
-	{ label: "REMAINING QUESTIONS", pattern: /^\s*(?:#+\s*)?REMAINING QUESTIONS\b/m },
+	{ label: "FINDINGS", pattern: /^\s*(?:#+\s*)?FINDINGS\s*$/m },
+	{ label: "ACCEPTANCE COVERAGE", pattern: /^\s*(?:#+\s*)?ACCEPTANCE COVERAGE\s*$/m },
+	{ label: "OUT OF SCOPE", pattern: /^\s*(?:#+\s*)?OUT OF SCOPE\s*$/m },
+	{ label: "CHECKS RUN", pattern: /^\s*(?:#+\s*)?CHECKS RUN\s*$/m },
+	{ label: "REMAINING QUESTIONS", pattern: /^\s*(?:#+\s*)?REMAINING QUESTIONS\s*$/m },
 ];
 
 /** First verdict token in a report, or undefined when the report is not verdict-structured. */
@@ -121,6 +126,21 @@ function missingJsonReportParts(obj: Record<string, unknown>): string[] {
  * presence alone never passes — a `VERDICT: PASS` line followed by a section-name
  * echo is rejected.
  */
+function reportSectionBody(text: string, section: { label: string; pattern: RegExp }): string | undefined {
+	const match = section.pattern.exec(text);
+	if (!match) return undefined;
+	const labelEnd = match.index + match[0].lastIndexOf(section.label) + section.label.length;
+	const bodyStart = text.indexOf("\n", labelEnd);
+	if (bodyStart < 0) return "";
+	const nextHeader = new RegExp(
+		`^\\s*(?:#+\\s*)?(?:${REPORT_SECTIONS.map(candidate => candidate.label).join("|")})\\b`,
+		"m",
+	);
+	const body = text.slice(bodyStart + 1);
+	const nextHeaderIndex = body.search(nextHeader);
+	return (nextHeaderIndex < 0 ? body : body.slice(0, nextHeaderIndex)).trim();
+}
+
 export function missingReportParts(text: string): string[] {
 	const trimmed = text.trim();
 	if (trimmed.startsWith("{")) {
@@ -133,10 +153,21 @@ export function missingReportParts(text: string): string[] {
 			/* fall through to headed-text validation */
 		}
 	}
-	const missing = REPORT_SECTIONS.filter(section => !section.pattern.test(text)).map(section => section.label);
 	const verdict = parseAuditVerdict(text);
-	if (!verdict) missing.unshift("VERDICT: PASS | NEEDS_FIX | BLOCKED");
-	const findings = /^\s*(?:#+\s*)?FINDINGS\b[^\n]*\n([\s\S]*?)(?=^\s*(?:#+\s*)?ACCEPTANCE COVERAGE\b)/m.exec(text)?.[1];
+	const missing = REPORT_SECTIONS.flatMap(section => {
+		const body = reportSectionBody(text, section);
+		if (body === undefined) return [section.label];
+		if (body.length === 0 && !(verdict === "PASS" && section.label === "FINDINGS")) {
+			return [`${section.label} (label present but no content)`];
+		}
+		return [];
+	});
+	if (!/^\s*VERDICT\s*:\s*(?:PASS|NEEDS_FIX|BLOCKED)\b/.test(trimmed)) {
+		missing.unshift("VERDICT: PASS | NEEDS_FIX | BLOCKED (must be first)");
+	} else if (!verdict) {
+		missing.unshift("VERDICT: PASS | NEEDS_FIX | BLOCKED");
+	}
+	const findings = reportSectionBody(text, REPORT_SECTIONS[0]);
 	if (verdict === "NEEDS_FIX" && !hasStructuredFinding(findings ?? "")) {
 		missing.push("at least one finding under NEEDS_FIX");
 	}
@@ -153,6 +184,27 @@ export function reportForwarded(body: string, report: string): boolean {
 	return needle.length > 0 && normalize(body).includes(needle);
 }
 
+
+/**
+ * Undo task-result transport wrappers (HOME-137): reports can arrive as a JSON
+ * string literal or as the agent host's `{"report":"..."}` object. Preserve
+ * direct JSON audit reports for missingReportParts to validate separately.
+ */
+export function decodeJsonQuoted(text: string): string {
+	const trimmed = text.trim();
+	if ((!trimmed.startsWith('"') || !trimmed.endsWith('"')) && !trimmed.startsWith("{")) return trimmed;
+	try {
+		const parsed: unknown = JSON.parse(trimmed);
+		if (typeof parsed === "string") return parsed.trim();
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && "report" in parsed) {
+			const report = parsed.report;
+			if (typeof report === "string") return report.trim();
+		}
+	} catch {
+		/* not a transport wrapper — use as-is */
+	}
+	return trimmed;
+}
 /**
  * Bare auditor report from a task tool result. The task tool wraps subagent
  * output in `<task-result ...><output>...</output></task-result>` transport
@@ -162,10 +214,10 @@ export function reportForwarded(body: string, report: string): boolean {
  */
 export function extractAuditReport(details: unknown, contentText: string): string {
 	const detailOutput = (details as { results?: Array<{ output?: unknown }> } | undefined)?.results?.[0]?.output;
-	if (typeof detailOutput === "string" && detailOutput.trim()) return detailOutput.trim();
+	if (typeof detailOutput === "string" && detailOutput.trim()) return decodeJsonQuoted(detailOutput);
 	const wrapped = /<output>\n?([\s\S]*?)\n?<\/output>/.exec(contentText);
-	if (wrapped?.[1]?.trim()) return wrapped[1].trim();
-	return contentText.trim();
+	if (wrapped?.[1]?.trim()) return decodeJsonQuoted(wrapped[1]);
+	return decodeJsonQuoted(contentText);
 }
 
 export const AUDIT_CONTRACT = auditContract.trim();
@@ -178,6 +230,8 @@ interface AuditGate {
 	/** Verdict-structured report text, once received. */
 	report?: string;
 	verdict?: AuditVerdict;
+	/** Missing-parts summary of the last REFUSED report (undefined = none refused). */
+	lastRefusal?: string;
 	forwarded: boolean;
 }
 
@@ -244,7 +298,7 @@ export default function modelBookends(pi: ExtensionAPI) {
 		if (!ownerSession(ctx) || !gate.armed) return undefined;
 
 		if (event.toolName === "task") {
-			const input = event.input as { tasks?: Array<{ agent?: string; task?: unknown }> };
+			const input = event.input as { tasks?: Array<{ agent?: string; task?: unknown; outputSchema?: unknown }> };
 			if (!Array.isArray(input.tasks)) return undefined;
 			const auditors = input.tasks.filter(task => task?.agent === "auditor");
 			if (auditors.length === 0) return undefined;
@@ -254,6 +308,11 @@ export default function modelBookends(pi: ExtensionAPI) {
 			const [auditor] = auditors;
 			if (typeof auditor.task !== "string") {
 				return { block: true, reason: "Audit gate: auditor task must include a string body with all five required sections." };
+			}
+			// HOME-137: schema serialization mangles the plain-text report (JSON-quoted
+			// one-liner) — the auditor returns canonical headed text, never schema output.
+			if (auditor.outputSchema !== undefined && auditor.outputSchema !== null) {
+				return { block: true, reason: schemaRefused.trim() };
 			}
 			if (gate.auditorCallId !== undefined) {
 				return {
@@ -277,7 +336,12 @@ export default function modelBookends(pi: ExtensionAPI) {
 			const input = event.input as { action?: string; kind?: string; body?: string };
 			if (input.action !== "comment" || input.kind !== "review") return undefined;
 			if (!gate.report) {
-				return { block: true, reason: "Audit gate: run the auditor before posting the review — the review must carry its verbatim report." };
+				return {
+					block: true,
+					reason: gate.lastRefusal
+						? prompt.render(refusedNotice, { reasons: gate.lastRefusal })
+						: "Audit gate: run the auditor before posting the review — the review must carry its verbatim report.",
+				};
 			}
 			if (!reportForwarded(typeof input.body === "string" ? input.body : "", gate.report)) {
 				return { block: true, reason: "Audit gate: the review body must include the auditor's report VERBATIM — copy it unmodified." };
@@ -300,22 +364,20 @@ export default function modelBookends(pi: ExtensionAPI) {
 			const text = extractAuditReport(event.details, contentText);
 			const missingParts = event.isError ? ["(auditor task failed)"] : missingReportParts(text);
 			if (missingParts.length > 0) {
-				// Failed or structurally incomplete run: release the slot so a FRESH auditor can be spawned.
+				// Failed or structurally incomplete run: release the slot so a FRESH auditor
+				// can be spawned, and tell the SESSION why (HOME-137) — a side-channel-only
+				// warning left the model believing no audit ran, looping paid retries.
 				gate.auditorCallId = undefined;
-				try {
-					ctx.ui.notify(
-						`Audit gate: auditor report unusable — missing ${missingParts.join("; ")}. Spawn a fresh auditor.`,
-						"warning",
-					);
-				} catch {
-					/* headless */
-				}
-				return undefined;
+				gate.lastRefusal = missingParts.join("; ");
+				return {
+					content: [...event.content, { type: "text", text: prompt.render(refusedNotice, { reasons: gate.lastRefusal }) }],
+				};
 			}
 			const verdict = parseAuditVerdict(text);
 			if (!verdict) return undefined; // unreachable: missingReportParts covers it
 			gate.report = text;
 			gate.verdict = verdict;
+			gate.lastRefusal = undefined;
 			return undefined;
 		}
 
@@ -345,7 +407,12 @@ export default function modelBookends(pi: ExtensionAPI) {
 		if (!ownerSession(ctx) || !gate.armed) return undefined;
 		if (!gate.report) {
 			gate.auditorCallId = undefined;
-			return { continue: true, additionalContext: stopNoAudit.trim() };
+			return {
+				continue: true,
+				additionalContext: gate.lastRefusal
+					? prompt.render(stopRefused, { reasons: gate.lastRefusal }).trim()
+					: stopNoAudit.trim(),
+			};
 		}
 		if (!gate.forwarded) {
 			return { continue: true, additionalContext: stopNotForwarded.trim() };

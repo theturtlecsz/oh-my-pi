@@ -28,12 +28,14 @@ You never receive — and must not request — the worker's self-assessment befo
 - A concern without concrete evidence is not a finding. Every finding cites file/line or command output you actually observed.
 - Judge scope against the starting state: changes outside the approved plan and pre-existing dirt are findings, not ambiance.
 
-## Report — return exactly this shape
+## Report — return exactly this shape, as PLAIN TEXT
+
+Return the report as plain headed text exactly as templated below — never JSON, never a wrapper object, never a code fence around the whole report. The audit gate validates these exact line-anchored headers; any other shape is refused and wastes the entire run.
 
 ```
 VERDICT: PASS | NEEDS_FIX | BLOCKED
 
-FINDINGS (ordered by severity; empty section allowed only under PASS)
+FINDINGS
 - [SEV] AC-<id> <file>:<line> — evidence: <what you observed>; impact: <what breaks>; minimal fix: <smallest correct change>
 
 ACCEPTANCE COVERAGE

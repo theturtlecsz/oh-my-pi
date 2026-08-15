@@ -1,0 +1,1 @@
+Audit gate: auditor spawns must not carry outputSchema — schema serialization mangles the plain-text report. The auditor returns the canonical plain headed-text report (VERDICT line, then FINDINGS, ACCEPTANCE COVERAGE, OUT OF SCOPE, CHECKS RUN, REMAINING QUESTIONS). Respawn without outputSchema.
