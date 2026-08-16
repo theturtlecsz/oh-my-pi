@@ -207,6 +207,7 @@ function devinGpt56Families(variant: "luna" | "sol" | "terra", name: string): re
 }
 
 const GEMINI_3_FLASH_FAMILY_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High];
+const GEMINI_MANDATORY_FLASH_FAMILY_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High];
 const GEMINI_3_PRO_FAMILY_EFFORTS: readonly Effort[] = [Effort.Low, Effort.High];
 
 /**
@@ -276,21 +277,20 @@ function geminiLevelFlashFamily(version: "3.6" | "3.7", ...additionalMembers: st
 		name: `Gemini ${version} Flash`,
 		members: [`${id}-low`, `${id}-medium`, `${id}-high`, ...additionalMembers],
 		routing: {
-			[Effort.Minimal]: `${id}-low`,
 			[Effort.Low]: `${id}-low`,
 			[Effort.Medium]: `${id}-medium`,
 			[Effort.High]: `${id}-high`,
 		},
 		thinking: {
 			mode: "google-level",
-			efforts: GEMINI_3_FLASH_FAMILY_EFFORTS,
+			efforts: GEMINI_MANDATORY_FLASH_FAMILY_EFFORTS,
 			requiresEffort: true,
 		},
 	};
 }
 
 const GEMINI_36_FLASH_FAMILY = geminiLevelFlashFamily("3.6", "gemini-3.6-flash-tiered");
-const GEMINI_37_FLASH_FAMILY = geminiLevelFlashFamily("3.7");
+const GEMINI_37_FLASH_FAMILY = geminiLevelFlashFamily("3.7", "gemini-3.7-flash-tiered");
 
 function geminiProFamily(mode: "budget" | "google-level"): EffortVariantFamily {
 	const budget = mode === "budget";

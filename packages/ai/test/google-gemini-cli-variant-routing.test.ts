@@ -57,6 +57,33 @@ function collapsedFlashModel(): Model<"google-gemini-cli"> {
 	} satisfies ModelSpec<"google-gemini-cli">);
 }
 
+function mandatoryFlashModel(version: "3.6" | "3.7"): Model<"google-gemini-cli"> {
+	const id = `gemini-${version}-flash`;
+	return buildModel({
+		id,
+		requestModelId: `${id}-low`,
+		name: `Gemini ${version} Flash`,
+		api: "google-gemini-cli",
+		provider: "google-antigravity",
+		baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+		reasoning: true,
+		thinking: {
+			mode: "google-level",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+			effortRouting: {
+				[Effort.Low]: `${id}-low`,
+				[Effort.Medium]: `${id}-medium`,
+				[Effort.High]: `${id}-high`,
+			},
+			requiresEffort: true,
+		},
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_048_576,
+		maxTokens: 65_536,
+	} satisfies ModelSpec<"google-gemini-cli">);
+}
+
 function collapsedClaudeModel(): Model<"google-gemini-cli"> {
 	return buildModel({
 		id: "claude-sonnet-4-6",
@@ -103,7 +130,7 @@ function unroutedModel(): Model<"google-gemini-cli"> {
 async function captureRequest(
 	model: Model<"google-gemini-cli">,
 	reasoning: Effort | undefined,
-	options: { forceReasoningOff?: boolean } = {},
+	options: { disableReasoning?: boolean; forceReasoningOff?: boolean } = {},
 ): Promise<{ body: CapturedRequestBody; attributedModel: string }> {
 	let requestBody: string | undefined;
 	const fetchMock: FetchImpl = (_input, init) => {
@@ -113,6 +140,7 @@ async function captureRequest(
 	const stream = streamSimple(model, context, {
 		apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
 		reasoning,
+		disableReasoning: options.disableReasoning,
 		forceReasoningOff: options.forceReasoningOff,
 		fetch: fetchMock,
 	});
@@ -120,8 +148,18 @@ async function captureRequest(
 	if (!requestBody) throw new Error("request body was not captured");
 	return { body: JSON.parse(requestBody) as CapturedRequestBody, attributedModel: result.model };
 }
-
 describe("google-gemini-cli effort-tier variant routing", () => {
+	for (const version of ["3.6", "3.7"] as const) {
+		it(`uses the mandatory ${version} Flash low level when reasoning is disabled`, async () => {
+			const off = await captureRequest(mandatoryFlashModel(version), undefined, { disableReasoning: true });
+
+			expect(off.body.model).toBe(`gemini-${version}-flash-low`);
+			expect(off.body.request?.generationConfig?.thinkingConfig).toEqual({
+				includeThoughts: true,
+				thinkingLevel: "LOW",
+			});
+		});
+	}
 	it("routes each effort to its backing wire id with the per-tier budget and attributes usage to the logical id", async () => {
 		const high = await captureRequest(collapsedFlashModel(), Effort.High);
 		expect(high.body.model).toBe("gemini-3-flash-agent");

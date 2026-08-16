@@ -7,7 +7,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
 import { buildOpenAICompat, buildOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog/compat/openai";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { openrouterModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
@@ -809,28 +809,65 @@ describe("model cache spec round trip", () => {
 		}
 	});
 
-	it("invalidates schema-v10 rows that predate computer-use capability provenance", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-legacy-computer-cache-"));
+	it("invalidates v13 Gemini 3.7 Flash tiered metadata with the unsupported minimal effort", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-legacy-gemini-flash-cache-"));
 		const dbPath = path.join(tempDir, "models.db");
-		const model = buildModel({
-			id: "legacy-inferred-computer",
-			name: "Legacy inferred computer",
-			api: "openai-responses",
-			provider: "openai",
-			baseUrl: "https://api.openai.com/v1",
+		const legacy = buildModel({
+			id: "gemini-3.7-flash-tiered",
+			requestModelId: "gemini-3.7-flash-tiered",
+			name: "Gemini 3.7 Flash Tiered",
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: "https://daily-cloudcode-pa.googleapis.com",
 			reasoning: true,
+			thinking: {
+				mode: "google-level",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					[Effort.Minimal]: "gemini-3.7-flash-low",
+					[Effort.Low]: "gemini-3.7-flash-low",
+					[Effort.Medium]: "gemini-3.7-flash-medium",
+					[Effort.High]: "gemini-3.7-flash-high",
+				},
+				requiresEffort: true,
+			},
 			input: ["text", "image"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 400_000,
-			maxTokens: 128_000,
-		} satisfies ModelSpec<"openai-responses">);
+			contextWindow: 1_048_576,
+			maxTokens: 65_536,
+		} satisfies ModelSpec<"google-gemini-cli">);
+		const corrected: ModelSpec<"google-gemini-cli"> = {
+			...legacy,
+			id: "gemini-3.7-flash",
+			requestModelId: "gemini-3.7-flash-low",
+			name: "Gemini 3.7 Flash",
+			thinking: {
+				mode: "google-level",
+				efforts: [Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					[Effort.Low]: "gemini-3.7-flash-low",
+					[Effort.Medium]: "gemini-3.7-flash-medium",
+					[Effort.High]: "gemini-3.7-flash-high",
+				},
+				requiresEffort: true,
+			},
+		};
 		try {
-			writeModelCache("legacy-computer-cache-test", Date.now(), [model], true, "", dbPath);
+			writeModelCache("legacy-gemini-flash-cache-test", Date.now(), [legacy], true, "", dbPath);
 			const db = new Database(dbPath);
-			db.run("UPDATE model_cache SET version = 10 WHERE provider_id = ?", ["legacy-computer-cache-test"]);
+			db.run("UPDATE model_cache SET version = 13 WHERE provider_id = ?", ["legacy-gemini-flash-cache-test"]);
 			db.close();
 
-			expect(readModelCache("legacy-computer-cache-test", Infinity, Date.now, dbPath)).toBeNull();
+			const resolved = await resolveProviderModels(
+				{
+					providerId: "legacy-gemini-flash-cache-test",
+					staticModels: [corrected],
+					cacheDbPath: dbPath,
+				},
+				"offline",
+			);
+			expect(resolved.models.map(model => model.id)).toEqual(["gemini-3.7-flash"]);
+			expect(resolved.models[0]?.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High]);
 			const verified = new Database(dbPath, { readonly: true });
 			const row = verified.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM model_cache").get();
 			verified.close();

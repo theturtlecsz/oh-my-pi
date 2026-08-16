@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Gemini 3.6/3.7 Flash advertising unsupported `minimal` thinking to Cloud Code Assist; minimum effort now clamps to `low` and stale cached metadata is invalidated automatically ([#HOME-136](https://linear.app/issue/HOME-136)).
+
 ## [17.3.2] - 2026-08-13
 
 ### Added
