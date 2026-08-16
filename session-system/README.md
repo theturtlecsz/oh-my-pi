@@ -7,6 +7,12 @@ checkout `/home/thetu/oh-my-pi`), merged with full history 2026-08-13;
 `zimmermanc/session-system` is the frozen pre-merge archive. The live
 locations are symlinks created by `install.sh`.
 
+## Future Work Ledger contract
+
+`python/omp-work/` owns the ratified `work.omp.dev/v1` contract for the future
+PostgreSQL Work Ledger. It defines no live runtime switch; Linear remains the
+authority until the controlled cutover work activates the service.
+
 ## Layout → live location
 
 | Repo path | Symlinked from | What it is |
