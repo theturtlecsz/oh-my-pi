@@ -1,0 +1,3370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract_version": "work.omp.dev/v1",
+  "models": {
+    "AcceptanceCriterionView": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion": {
+          "title": "Criterion",
+          "type": "string"
+        },
+        "position": {
+          "title": "Position",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "criterion",
+        "position"
+      ],
+      "title": "AcceptanceCriterionView",
+      "type": "object"
+    },
+    "ApiError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Id"
+        },
+        "diagnostics": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "title": "ApiError",
+      "type": "object"
+    },
+    "Candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "allocated_at": {
+          "format": "date-time",
+          "title": "Allocated At",
+          "type": "string"
+        },
+        "candidate_id": {
+          "format": "uuid",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "candidate_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Sha256",
+          "type": "string"
+        },
+        "commit_sha": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{7,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Commit Sha"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "work_id",
+        "revision_id",
+        "candidate_sha256",
+        "allocated_at"
+      ],
+      "title": "Candidate",
+      "type": "object"
+    },
+    "CloseoutIntentView": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "format": "uuid",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "intent_id": {
+          "format": "uuid",
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "requested_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested At"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "completed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id",
+        "work_id",
+        "revision_id",
+        "candidate_id",
+        "state"
+      ],
+      "title": "CloseoutIntentView",
+      "type": "object"
+    },
+    "CloseoutResult": {
+      "$defs": {
+        "CloseoutIntentView": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "intent_id": {
+              "format": "uuid",
+              "title": "Intent Id",
+              "type": "string"
+            },
+            "requested_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested At"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "pending",
+                "completed"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "intent_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "state"
+          ],
+          "title": "CloseoutIntentView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "intent": {
+          "$ref": "#/$defs/CloseoutIntentView"
+        },
+        "type": {
+          "const": "request_closeout",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "intent"
+      ],
+      "title": "CloseoutResult",
+      "type": "object"
+    },
+    "CommandResponse": {
+      "$defs": {
+        "CloseoutIntentView": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "intent_id": {
+              "format": "uuid",
+              "title": "Intent Id",
+              "type": "string"
+            },
+            "requested_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested At"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "pending",
+                "completed"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "intent_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "state"
+          ],
+          "title": "CloseoutIntentView",
+          "type": "object"
+        },
+        "CloseoutResult": {
+          "additionalProperties": false,
+          "properties": {
+            "intent": {
+              "$ref": "#/$defs/CloseoutIntentView"
+            },
+            "type": {
+              "const": "request_closeout",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "intent"
+          ],
+          "title": "CloseoutResult",
+          "type": "object"
+        },
+        "CreateWorkBatchResult": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/CreatedWorkItem"
+              },
+              "title": "Items",
+              "type": "array"
+            },
+            "type": {
+              "const": "create_work_batch",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "title": "CreateWorkBatchResult",
+          "type": "object"
+        },
+        "CreatedWorkItem": {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "key",
+            "state"
+          ],
+          "title": "CreatedWorkItem",
+          "type": "object"
+        },
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        },
+        "EvidenceResult": {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "append_evidence",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "receipt"
+          ],
+          "title": "EvidenceResult",
+          "type": "object"
+        },
+        "FocusResult": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "set_focus",
+                "clear_focus"
+              ],
+              "title": "Type",
+              "type": "string"
+            },
+            "version": {
+              "title": "Version",
+              "type": "integer"
+            },
+            "work_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Work Id"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "workspace_id",
+            "owner_id",
+            "work_id",
+            "version"
+          ],
+          "title": "FocusResult",
+          "type": "object"
+        },
+        "OperationReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "diagnostics": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 8,
+              "title": "Diagnostics",
+              "type": "array"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            },
+            "request_id": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            },
+            "request_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Request Sha256",
+              "type": "string"
+            },
+            "result_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Result Sha256",
+              "type": "string"
+            },
+            "state": {
+              "$ref": "#/$defs/OperationState"
+            }
+          },
+          "required": [
+            "operation_id",
+            "request_id",
+            "state",
+            "request_sha256",
+            "result_sha256"
+          ],
+          "title": "OperationReceipt",
+          "type": "object"
+        },
+        "OperationState": {
+          "enum": [
+            "applied",
+            "replayed",
+            "rejected",
+            "pending_approval"
+          ],
+          "title": "OperationState",
+          "type": "string"
+        },
+        "ProjectHealthResult": {
+          "additionalProperties": false,
+          "properties": {
+            "health": {
+              "$ref": "#/$defs/ProjectHealthView"
+            },
+            "type": {
+              "const": "record_project_health",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "health"
+          ],
+          "title": "ProjectHealthResult",
+          "type": "object"
+        },
+        "ProjectHealthView": {
+          "additionalProperties": false,
+          "properties": {
+            "health": {
+              "enum": [
+                "onTrack",
+                "atRisk",
+                "offTrack"
+              ],
+              "title": "Health",
+              "type": "string"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "workspace_id",
+            "health",
+            "updated_at"
+          ],
+          "title": "ProjectHealthView",
+          "type": "object"
+        },
+        "RelationResult": {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "title": "Active",
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "parent",
+                "blocks",
+                "duplicate_of",
+                "related"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "source_work_id": {
+              "format": "uuid",
+              "title": "Source Work Id",
+              "type": "string"
+            },
+            "target_work_id": {
+              "format": "uuid",
+              "title": "Target Work Id",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "put_relation",
+                "remove_relation"
+              ],
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source_work_id",
+            "target_work_id",
+            "kind",
+            "active"
+          ],
+          "title": "RelationResult",
+          "type": "object"
+        },
+        "ReviseWorkResult": {
+          "additionalProperties": false,
+          "properties": {
+            "changed": {
+              "title": "Changed",
+              "type": "boolean"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "revise_work",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "revision_id",
+            "changed"
+          ],
+          "title": "ReviseWorkResult",
+          "type": "object"
+        },
+        "WorkItemResult": {
+          "additionalProperties": false,
+          "properties": {
+            "row_version": {
+              "title": "Row Version",
+              "type": "integer"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "set_work_state",
+                "complete_work"
+              ],
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_id",
+            "state",
+            "row_version"
+          ],
+          "title": "WorkItemResult",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "receipt": {
+          "$ref": "#/$defs/OperationReceipt"
+        },
+        "result": {
+          "discriminator": {
+            "mapping": {
+              "append_evidence": "#/$defs/EvidenceResult",
+              "clear_focus": "#/$defs/FocusResult",
+              "complete_work": "#/$defs/WorkItemResult",
+              "create_work_batch": "#/$defs/CreateWorkBatchResult",
+              "put_relation": "#/$defs/RelationResult",
+              "record_project_health": "#/$defs/ProjectHealthResult",
+              "remove_relation": "#/$defs/RelationResult",
+              "request_closeout": "#/$defs/CloseoutResult",
+              "revise_work": "#/$defs/ReviseWorkResult",
+              "set_focus": "#/$defs/FocusResult",
+              "set_work_state": "#/$defs/WorkItemResult"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CreateWorkBatchResult"
+            },
+            {
+              "$ref": "#/$defs/ReviseWorkResult"
+            },
+            {
+              "$ref": "#/$defs/WorkItemResult"
+            },
+            {
+              "$ref": "#/$defs/RelationResult"
+            },
+            {
+              "$ref": "#/$defs/FocusResult"
+            },
+            {
+              "$ref": "#/$defs/EvidenceResult"
+            },
+            {
+              "$ref": "#/$defs/CloseoutResult"
+            },
+            {
+              "$ref": "#/$defs/ProjectHealthResult"
+            }
+          ],
+          "title": "Result"
+        }
+      },
+      "required": [
+        "receipt",
+        "result"
+      ],
+      "title": "CommandResponse",
+      "type": "object"
+    },
+    "CreateWorkBatchResult": {
+      "$defs": {
+        "CreatedWorkItem": {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "key",
+            "state"
+          ],
+          "title": "CreatedWorkItem",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CreatedWorkItem"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "type": {
+          "const": "create_work_batch",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "items"
+      ],
+      "title": "CreateWorkBatchResult",
+      "type": "object"
+    },
+    "CreatedWorkItem": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "key",
+        "state"
+      ],
+      "title": "CreatedWorkItem",
+      "type": "object"
+    },
+    "EvidenceReceipt": {
+      "$defs": {
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Sha256"
+        },
+        "candidate_commit": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{7,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Commit"
+        },
+        "candidate_id": {
+          "format": "uuid",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "candidate_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Sha256"
+        },
+        "independent": {
+          "default": false,
+          "title": "Independent",
+          "type": "boolean"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "title": "Issued At",
+          "type": "string"
+        },
+        "issuer": {
+          "title": "Issuer",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EvidenceKind"
+        },
+        "payload_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Payload Sha256",
+          "type": "string"
+        },
+        "receipt_id": {
+          "format": "uuid",
+          "title": "Receipt Id",
+          "type": "string"
+        },
+        "remote_commit": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{7,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Commit"
+        },
+        "remote_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Ref"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "enum": [
+                "PASS",
+                "NEEDS_FIX",
+                "BLOCKED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verdict"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "receipt_id",
+        "work_id",
+        "revision_id",
+        "candidate_id",
+        "kind",
+        "payload_sha256",
+        "issuer",
+        "issued_at"
+      ],
+      "title": "EvidenceReceipt",
+      "type": "object"
+    },
+    "EvidenceResult": {
+      "$defs": {
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "receipt": {
+          "$ref": "#/$defs/EvidenceReceipt"
+        },
+        "type": {
+          "const": "append_evidence",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "receipt"
+      ],
+      "title": "EvidenceResult",
+      "type": "object"
+    },
+    "FocusResult": {
+      "additionalProperties": false,
+      "properties": {
+        "owner_id": {
+          "format": "uuid",
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "set_focus",
+            "clear_focus"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "integer"
+        },
+        "work_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Work Id"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "workspace_id",
+        "owner_id",
+        "work_id",
+        "version"
+      ],
+      "title": "FocusResult",
+      "type": "object"
+    },
+    "FocusSlot": {
+      "additionalProperties": false,
+      "properties": {
+        "owner_id": {
+          "format": "uuid",
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 0,
+          "title": "Version",
+          "type": "integer"
+        },
+        "work_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Id"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "owner_id",
+        "version"
+      ],
+      "title": "FocusSlot",
+      "type": "object"
+    },
+    "OperationReceipt": {
+      "$defs": {
+        "OperationState": {
+          "enum": [
+            "applied",
+            "replayed",
+            "rejected",
+            "pending_approval"
+          ],
+          "title": "OperationState",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "request_id": {
+          "format": "uuid",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Result Sha256",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        }
+      },
+      "required": [
+        "operation_id",
+        "request_id",
+        "state",
+        "request_sha256",
+        "result_sha256"
+      ],
+      "title": "OperationReceipt",
+      "type": "object"
+    },
+    "ProjectHealthResult": {
+      "$defs": {
+        "ProjectHealthView": {
+          "additionalProperties": false,
+          "properties": {
+            "health": {
+              "enum": [
+                "onTrack",
+                "atRisk",
+                "offTrack"
+              ],
+              "title": "Health",
+              "type": "string"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "workspace_id",
+            "health",
+            "updated_at"
+          ],
+          "title": "ProjectHealthView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "health": {
+          "$ref": "#/$defs/ProjectHealthView"
+        },
+        "type": {
+          "const": "record_project_health",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "health"
+      ],
+      "title": "ProjectHealthResult",
+      "type": "object"
+    },
+    "ProjectHealthView": {
+      "additionalProperties": false,
+      "properties": {
+        "health": {
+          "enum": [
+            "onTrack",
+            "atRisk",
+            "offTrack"
+          ],
+          "title": "Health",
+          "type": "string"
+        },
+        "project_id": {
+          "format": "uuid",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "workspace_id",
+        "health",
+        "updated_at"
+      ],
+      "title": "ProjectHealthView",
+      "type": "object"
+    },
+    "RelationEdge": {
+      "$defs": {
+        "RelationKind": {
+          "enum": [
+            "parent",
+            "blocks",
+            "duplicate_of",
+            "related"
+          ],
+          "title": "RelationKind",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "default": true,
+          "title": "Active",
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/RelationKind"
+        },
+        "source_work_id": {
+          "format": "uuid",
+          "title": "Source Work Id",
+          "type": "string"
+        },
+        "target_work_id": {
+          "format": "uuid",
+          "title": "Target Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "source_work_id",
+        "target_work_id",
+        "kind"
+      ],
+      "title": "RelationEdge",
+      "type": "object"
+    },
+    "RelationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "title": "Active",
+          "type": "boolean"
+        },
+        "kind": {
+          "enum": [
+            "parent",
+            "blocks",
+            "duplicate_of",
+            "related"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "source_work_id": {
+          "format": "uuid",
+          "title": "Source Work Id",
+          "type": "string"
+        },
+        "target_work_id": {
+          "format": "uuid",
+          "title": "Target Work Id",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "put_relation",
+            "remove_relation"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "source_work_id",
+        "target_work_id",
+        "kind",
+        "active"
+      ],
+      "title": "RelationResult",
+      "type": "object"
+    },
+    "ReviseWorkResult": {
+      "additionalProperties": false,
+      "properties": {
+        "changed": {
+          "title": "Changed",
+          "type": "boolean"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "revise_work",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "revision_id",
+        "changed"
+      ],
+      "title": "ReviseWorkResult",
+      "type": "object"
+    },
+    "StoredOperationView": {
+      "$defs": {
+        "CloseoutIntentView": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "intent_id": {
+              "format": "uuid",
+              "title": "Intent Id",
+              "type": "string"
+            },
+            "requested_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested At"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "pending",
+                "completed"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "intent_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "state"
+          ],
+          "title": "CloseoutIntentView",
+          "type": "object"
+        },
+        "CloseoutResult": {
+          "additionalProperties": false,
+          "properties": {
+            "intent": {
+              "$ref": "#/$defs/CloseoutIntentView"
+            },
+            "type": {
+              "const": "request_closeout",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "intent"
+          ],
+          "title": "CloseoutResult",
+          "type": "object"
+        },
+        "CreateWorkBatchResult": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/CreatedWorkItem"
+              },
+              "title": "Items",
+              "type": "array"
+            },
+            "type": {
+              "const": "create_work_batch",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "title": "CreateWorkBatchResult",
+          "type": "object"
+        },
+        "CreatedWorkItem": {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "key",
+            "state"
+          ],
+          "title": "CreatedWorkItem",
+          "type": "object"
+        },
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        },
+        "EvidenceResult": {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "append_evidence",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "receipt"
+          ],
+          "title": "EvidenceResult",
+          "type": "object"
+        },
+        "FocusResult": {
+          "additionalProperties": false,
+          "properties": {
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "set_focus",
+                "clear_focus"
+              ],
+              "title": "Type",
+              "type": "string"
+            },
+            "version": {
+              "title": "Version",
+              "type": "integer"
+            },
+            "work_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Work Id"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "workspace_id",
+            "owner_id",
+            "work_id",
+            "version"
+          ],
+          "title": "FocusResult",
+          "type": "object"
+        },
+        "OperationReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "diagnostics": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 8,
+              "title": "Diagnostics",
+              "type": "array"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            },
+            "request_id": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            },
+            "request_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Request Sha256",
+              "type": "string"
+            },
+            "result_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Result Sha256",
+              "type": "string"
+            },
+            "state": {
+              "$ref": "#/$defs/OperationState"
+            }
+          },
+          "required": [
+            "operation_id",
+            "request_id",
+            "state",
+            "request_sha256",
+            "result_sha256"
+          ],
+          "title": "OperationReceipt",
+          "type": "object"
+        },
+        "OperationState": {
+          "enum": [
+            "applied",
+            "replayed",
+            "rejected",
+            "pending_approval"
+          ],
+          "title": "OperationState",
+          "type": "string"
+        },
+        "ProjectHealthResult": {
+          "additionalProperties": false,
+          "properties": {
+            "health": {
+              "$ref": "#/$defs/ProjectHealthView"
+            },
+            "type": {
+              "const": "record_project_health",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "health"
+          ],
+          "title": "ProjectHealthResult",
+          "type": "object"
+        },
+        "ProjectHealthView": {
+          "additionalProperties": false,
+          "properties": {
+            "health": {
+              "enum": [
+                "onTrack",
+                "atRisk",
+                "offTrack"
+              ],
+              "title": "Health",
+              "type": "string"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "workspace_id",
+            "health",
+            "updated_at"
+          ],
+          "title": "ProjectHealthView",
+          "type": "object"
+        },
+        "RelationResult": {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "title": "Active",
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "parent",
+                "blocks",
+                "duplicate_of",
+                "related"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "source_work_id": {
+              "format": "uuid",
+              "title": "Source Work Id",
+              "type": "string"
+            },
+            "target_work_id": {
+              "format": "uuid",
+              "title": "Target Work Id",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "put_relation",
+                "remove_relation"
+              ],
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source_work_id",
+            "target_work_id",
+            "kind",
+            "active"
+          ],
+          "title": "RelationResult",
+          "type": "object"
+        },
+        "ReviseWorkResult": {
+          "additionalProperties": false,
+          "properties": {
+            "changed": {
+              "title": "Changed",
+              "type": "boolean"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "revise_work",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "revision_id",
+            "changed"
+          ],
+          "title": "ReviseWorkResult",
+          "type": "object"
+        },
+        "WorkItemResult": {
+          "additionalProperties": false,
+          "properties": {
+            "row_version": {
+              "title": "Row Version",
+              "type": "integer"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "set_work_state",
+                "complete_work"
+              ],
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_id",
+            "state",
+            "row_version"
+          ],
+          "title": "WorkItemResult",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "command_type": {
+          "title": "Command Type",
+          "type": "string"
+        },
+        "correlation_id": {
+          "format": "uuid",
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "receipt": {
+          "$ref": "#/$defs/OperationReceipt"
+        },
+        "request_id": {
+          "format": "uuid",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "append_evidence": "#/$defs/EvidenceResult",
+                  "clear_focus": "#/$defs/FocusResult",
+                  "complete_work": "#/$defs/WorkItemResult",
+                  "create_work_batch": "#/$defs/CreateWorkBatchResult",
+                  "put_relation": "#/$defs/RelationResult",
+                  "record_project_health": "#/$defs/ProjectHealthResult",
+                  "remove_relation": "#/$defs/RelationResult",
+                  "request_closeout": "#/$defs/CloseoutResult",
+                  "revise_work": "#/$defs/ReviseWorkResult",
+                  "set_focus": "#/$defs/FocusResult",
+                  "set_work_state": "#/$defs/WorkItemResult"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/CreateWorkBatchResult"
+                },
+                {
+                  "$ref": "#/$defs/ReviseWorkResult"
+                },
+                {
+                  "$ref": "#/$defs/WorkItemResult"
+                },
+                {
+                  "$ref": "#/$defs/RelationResult"
+                },
+                {
+                  "$ref": "#/$defs/FocusResult"
+                },
+                {
+                  "$ref": "#/$defs/EvidenceResult"
+                },
+                {
+                  "$ref": "#/$defs/CloseoutResult"
+                },
+                {
+                  "$ref": "#/$defs/ProjectHealthResult"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result"
+        }
+      },
+      "required": [
+        "receipt",
+        "command_type",
+        "request_id",
+        "correlation_id"
+      ],
+      "title": "StoredOperationView",
+      "type": "object"
+    },
+    "StrictModel": {
+      "additionalProperties": false,
+      "properties": {},
+      "title": "StrictModel",
+      "type": "object"
+    },
+    "WorkAlias": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "pattern": "^(HOME|OMP)-[1-9][0-9]*$",
+          "title": "Key",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "imported",
+            "local"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "primary": {
+          "const": true,
+          "title": "Primary",
+          "type": "boolean"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "key",
+        "primary",
+        "origin"
+      ],
+      "title": "WorkAlias",
+      "type": "object"
+    },
+    "WorkItemResult": {
+      "additionalProperties": false,
+      "properties": {
+        "row_version": {
+          "title": "Row Version",
+          "type": "integer"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "set_work_state",
+            "complete_work"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "work_id",
+        "state",
+        "row_version"
+      ],
+      "title": "WorkItemResult",
+      "type": "object"
+    },
+    "WorkItemView": {
+      "$defs": {
+        "Candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "allocated_at": {
+              "format": "date-time",
+              "title": "Allocated At",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_id",
+            "work_id",
+            "revision_id",
+            "candidate_sha256",
+            "allocated_at"
+          ],
+          "title": "Candidate",
+          "type": "object"
+        },
+        "WorkAlias": {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "pattern": "^(HOME|OMP)-[1-9][0-9]*$",
+              "title": "Key",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "imported",
+                "local"
+              ],
+              "title": "Origin",
+              "type": "string"
+            },
+            "primary": {
+              "const": true,
+              "title": "Primary",
+              "type": "boolean"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "key",
+            "primary",
+            "origin"
+          ],
+          "title": "WorkAlias",
+          "type": "object"
+        },
+        "WorkRevision": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "created_by": {
+              "title": "Created By",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "revision_number": {
+              "minimum": 1,
+              "title": "Revision Number",
+              "type": "integer"
+            },
+            "scope": {
+              "title": "Scope",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision_id",
+            "work_id",
+            "revision_number",
+            "title",
+            "description",
+            "scope",
+            "acceptance_criteria",
+            "content_sha256",
+            "created_by",
+            "created_at"
+          ],
+          "title": "WorkRevision",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "alias": {
+          "$ref": "#/$defs/WorkAlias"
+        },
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Candidate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "revision": {
+          "$ref": "#/$defs/WorkRevision"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "workspace_id",
+        "alias",
+        "state",
+        "revision"
+      ],
+      "title": "WorkItemView",
+      "type": "object"
+    },
+    "WorkRevision": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Acceptance Criteria",
+          "type": "array"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "created_by": {
+          "title": "Created By",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "revision_number": {
+          "minimum": 1,
+          "title": "Revision Number",
+          "type": "integer"
+        },
+        "scope": {
+          "title": "Scope",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision_id",
+        "work_id",
+        "revision_number",
+        "title",
+        "description",
+        "scope",
+        "acceptance_criteria",
+        "content_sha256",
+        "created_by",
+        "created_at"
+      ],
+      "title": "WorkRevision",
+      "type": "object"
+    },
+    "WorkflowView": {
+      "$defs": {
+        "Candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "allocated_at": {
+              "format": "date-time",
+              "title": "Allocated At",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_id",
+            "work_id",
+            "revision_id",
+            "candidate_sha256",
+            "allocated_at"
+          ],
+          "title": "Candidate",
+          "type": "object"
+        },
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        },
+        "RelationEdge": {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "default": true,
+              "title": "Active",
+              "type": "boolean"
+            },
+            "kind": {
+              "$ref": "#/$defs/RelationKind"
+            },
+            "source_work_id": {
+              "format": "uuid",
+              "title": "Source Work Id",
+              "type": "string"
+            },
+            "target_work_id": {
+              "format": "uuid",
+              "title": "Target Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "source_work_id",
+            "target_work_id",
+            "kind"
+          ],
+          "title": "RelationEdge",
+          "type": "object"
+        },
+        "RelationKind": {
+          "enum": [
+            "parent",
+            "blocks",
+            "duplicate_of",
+            "related"
+          ],
+          "title": "RelationKind",
+          "type": "string"
+        },
+        "WorkAlias": {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "pattern": "^(HOME|OMP)-[1-9][0-9]*$",
+              "title": "Key",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "imported",
+                "local"
+              ],
+              "title": "Origin",
+              "type": "string"
+            },
+            "primary": {
+              "const": true,
+              "title": "Primary",
+              "type": "boolean"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "key",
+            "primary",
+            "origin"
+          ],
+          "title": "WorkAlias",
+          "type": "object"
+        },
+        "WorkItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "alias": {
+              "$ref": "#/$defs/WorkAlias"
+            },
+            "archived": {
+              "default": false,
+              "title": "Archived",
+              "type": "boolean"
+            },
+            "candidate": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Candidate"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "revision": {
+              "$ref": "#/$defs/WorkRevision"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "workspace_id",
+            "alias",
+            "state",
+            "revision"
+          ],
+          "title": "WorkItemView",
+          "type": "object"
+        },
+        "WorkRevision": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "created_by": {
+              "title": "Created By",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "revision_number": {
+              "minimum": 1,
+              "title": "Revision Number",
+              "type": "integer"
+            },
+            "scope": {
+              "title": "Scope",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision_id",
+            "work_id",
+            "revision_number",
+            "title",
+            "description",
+            "scope",
+            "acceptance_criteria",
+            "content_sha256",
+            "created_by",
+            "created_at"
+          ],
+          "title": "WorkRevision",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "$ref": "#/$defs/WorkItemView"
+        },
+        "receipts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceReceipt"
+          },
+          "title": "Receipts",
+          "type": "array"
+        },
+        "relations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RelationEdge"
+          },
+          "title": "Relations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "item"
+      ],
+      "title": "WorkflowView",
+      "type": "object"
+    },
+    "WorkspaceTree": {
+      "$defs": {
+        "Candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "allocated_at": {
+              "format": "date-time",
+              "title": "Allocated At",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{7,64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_id",
+            "work_id",
+            "revision_id",
+            "candidate_sha256",
+            "allocated_at"
+          ],
+          "title": "Candidate",
+          "type": "object"
+        },
+        "RelationEdge": {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "default": true,
+              "title": "Active",
+              "type": "boolean"
+            },
+            "kind": {
+              "$ref": "#/$defs/RelationKind"
+            },
+            "source_work_id": {
+              "format": "uuid",
+              "title": "Source Work Id",
+              "type": "string"
+            },
+            "target_work_id": {
+              "format": "uuid",
+              "title": "Target Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "source_work_id",
+            "target_work_id",
+            "kind"
+          ],
+          "title": "RelationEdge",
+          "type": "object"
+        },
+        "RelationKind": {
+          "enum": [
+            "parent",
+            "blocks",
+            "duplicate_of",
+            "related"
+          ],
+          "title": "RelationKind",
+          "type": "string"
+        },
+        "WorkAlias": {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "pattern": "^(HOME|OMP)-[1-9][0-9]*$",
+              "title": "Key",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "imported",
+                "local"
+              ],
+              "title": "Origin",
+              "type": "string"
+            },
+            "primary": {
+              "const": true,
+              "title": "Primary",
+              "type": "boolean"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "key",
+            "primary",
+            "origin"
+          ],
+          "title": "WorkAlias",
+          "type": "object"
+        },
+        "WorkItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "alias": {
+              "$ref": "#/$defs/WorkAlias"
+            },
+            "archived": {
+              "default": false,
+              "title": "Archived",
+              "type": "boolean"
+            },
+            "candidate": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Candidate"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "revision": {
+              "$ref": "#/$defs/WorkRevision"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "workspace_id",
+            "alias",
+            "state",
+            "revision"
+          ],
+          "title": "WorkItemView",
+          "type": "object"
+        },
+        "WorkRevision": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "created_by": {
+              "title": "Created By",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "revision_number": {
+              "minimum": 1,
+              "title": "Revision Number",
+              "type": "integer"
+            },
+            "scope": {
+              "title": "Scope",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision_id",
+            "work_id",
+            "revision_number",
+            "title",
+            "description",
+            "scope",
+            "acceptance_criteria",
+            "content_sha256",
+            "created_by",
+            "created_at"
+          ],
+          "title": "WorkRevision",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/WorkItemView"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "relations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RelationEdge"
+          },
+          "title": "Relations",
+          "type": "array"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "items"
+      ],
+      "title": "WorkspaceTree",
+      "type": "object"
+    }
+  }
+}

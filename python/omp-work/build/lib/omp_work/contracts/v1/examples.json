@@ -1,0 +1,8 @@
+{
+  "immutable_revision": {"current_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "proposed_same_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "proposed_changed_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "same_content": "noop", "changed_content": "append", "new_revision_number": 2},
+  "relation_cycle": {"edges": ["A blocks B", "B blocks C"], "rejected": "C blocks A", "error": "relation_cycle", "related_triangle": true},
+  "idempotency": {"operation_id": "00000000-0000-7000-8000-000000000001", "stored_request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "changed_request_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "retry_state": "replayed", "changed_body_error": "idempotency_conflict"},
+  "stale_evidence": {"bound_revision": 1, "current_revision": 2, "error": "stale_evidence"},
+  "pushed_branch": {"candidate_commit": "abcdef123", "matching_remote": "abcdef123", "mismatched_remote": "deadbeef", "matching_result": "no_blockers", "mismatched_result": "completion_blocked", "closeout_intent": "recoverable", "work_state": "not_DONE"},
+  "cutover": {"anomalies": [{"code": "attachment_content_unavailable", "disposition": "quarantined"}, {"code": "unsupported_non_workflow_object", "disposition": "quarantined"}], "parity_differences": []}
+}

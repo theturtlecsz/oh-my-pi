@@ -1,0 +1,2 @@
+[console_scripts]
+omp-work = omp_work.__main__:main

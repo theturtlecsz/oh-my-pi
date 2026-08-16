@@ -1,0 +1,14 @@
+GRANT SELECT ON ALL TABLES IN SCHEMA omp_control, omp_work, omp_evidence, omp_audit, omp_integration, omp_fleet TO omp_work_backup;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA omp_control, omp_work, omp_evidence, omp_audit, omp_integration, omp_fleet TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_control GRANT SELECT ON TABLES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_control GRANT USAGE, SELECT ON SEQUENCES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_work GRANT USAGE, SELECT ON SEQUENCES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_evidence GRANT USAGE, SELECT ON SEQUENCES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_audit GRANT USAGE, SELECT ON SEQUENCES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_integration GRANT USAGE, SELECT ON SEQUENCES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_fleet GRANT USAGE, SELECT ON SEQUENCES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_work GRANT SELECT ON TABLES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_evidence GRANT SELECT ON TABLES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_audit GRANT SELECT ON TABLES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_integration GRANT SELECT ON TABLES TO omp_work_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE omp_work_owner IN SCHEMA omp_fleet GRANT SELECT ON TABLES TO omp_work_backup;

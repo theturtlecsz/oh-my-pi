@@ -1,0 +1,27 @@
+Metadata-Version: 2.4
+Name: omp-work
+Version: 0.1.0
+Summary: Versioned Work Ledger domain contract
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi<1,>=0.112
+Requires-Dist: httpx<1,>=0.27
+Requires-Dist: pydantic<2.13,>=2.12.5
+Requires-Dist: psycopg[binary]<3.4,>=3.3.4
+Requires-Dist: uvicorn<1,>=0.30
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+
+# omp-work
+
+Executable, versioned `work.omp.dev/v1` Work Ledger contract plus its local PostgreSQL operator tooling. It contains no WorkService server, importer, or runtime backend switch.
+
+```sh
+PYTHONPATH=src python3 -m omp_work schema --check
+PYTHONPATH=src python3 -m omp_work hash
+PYTHONPATH=src python3 -m omp_work validate --require-approval
+```
+
+Operational bootstrap, health, and backup commands are documented in [the Work Ledger operations runbook](../../docs/work-ledger-operations.md).
+
+Owner approval creates `src/omp_work/contracts/v1/approval.json`; it is deliberately absent until the owner approves the printed digest.

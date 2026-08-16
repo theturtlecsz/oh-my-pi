@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import secrets
+from uuid import UUID, uuid4
+from psycopg import sql
+
+from . import backup
+from .config import OperationsConfig
+from .database import bootstrap, check, collect_health, migrate
+from omp_work.integration.exporter import LinearExporter
+from omp_work.integration.importer import LinearImporter
+
+
+def _write_secret(path: Path, value: str) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = path.with_suffix(".next")
+    temporary.write_text(value + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
+
+
+def credentials_init(config: OperationsConfig) -> None:
+    for role in ("postgres", "omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup"):
+        path = config.secret_path(role)
+        if path.exists():
+            raise ValueError("credentials already initialized")
+        _write_secret(path, secrets.token_urlsafe(32))
+    _write_secret(config.secret_path("gpg-passphrase"), secrets.token_urlsafe(48))
+    _write_secret(config.secret_path("operator-actor-id"), str(uuid4()))
+
+
+def credentials_rotate(config: OperationsConfig, role: str) -> None:
+    if role not in {"omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup"}:
+        raise ValueError("invalid role")
+    from .database import _connect
+    replacement = secrets.token_urlsafe(32)
+    temporary = config.secret_path(role).with_suffix(".next")
+    _write_secret(temporary, replacement)
+    try:
+        with _connect(config, "postgres", "postgres") as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET log_statement = 'none'; SET log_min_error_statement = 'panic'")
+                cur.execute(sql.SQL("ALTER ROLE {} PASSWORD {}").format(sql.Identifier(role), sql.Literal(replacement)))
+    except Exception as error:
+        raise RuntimeError("credential rotation failed; recovery credential retained") from error
+    os.replace(temporary, config.secret_path(role))
+
+def add_parser(parser: argparse.ArgumentParser) -> None:
+    commands = parser.add_subparsers(dest="ops_command", required=True)
+    commands.add_parser("bootstrap")
+    migrate_parser = commands.add_parser("migrate")
+    migrate_parser.add_argument("--target", type=int)
+    migrate_parser.add_argument("--lock-timeout", type=int, default=30)
+    commands.add_parser("check")
+    health = commands.add_parser("health")
+    health.add_argument("--mode", choices=("live", "ready"), default="ready")
+    health.add_argument("--json", action="store_true")
+    credentials = commands.add_parser("credentials").add_subparsers(dest="credentials_command", required=True)
+    credentials.add_parser("init")
+    rotate = credentials.add_parser("rotate")
+    rotate.add_argument("role")
+    backup_parser = commands.add_parser("backup").add_subparsers(dest="backup_command", required=True)
+    backup_parser.add_parser("provision-target")
+    backup_parser.add_parser("verify-target")
+    backup_parser.add_parser("create")
+    backup_parser.add_parser("wal")
+    restore = commands.add_parser("restore").add_subparsers(dest="restore_command", required=True)
+    drill = restore.add_parser("drill")
+    drill.add_argument("--source", choices=("latest",), default="latest")
+    drill.add_argument("--reason", choices=("clean-instance", "monthly", "manual"), required=True)
+    linear_export = commands.add_parser("linear-export").add_subparsers(dest="linear_export_command", required=True)
+    for mode in ("full", "delta"):
+        export = linear_export.add_parser(mode)
+        export.add_argument("--workspace-id", required=True)
+    resume = linear_export.add_parser("resume")
+    resume.add_argument("--export-id", required=True)
+    linear_import = commands.add_parser("linear-import").add_subparsers(dest="linear_import_command", required=True)
+    stage = linear_import.add_parser("stage")
+    stage.add_argument("--workspace-id", required=True)
+    stage.add_argument("--export-id", required=True)
+    stage.add_argument("--mapping-file", required=True)
+    reconcile = linear_import.add_parser("reconcile")
+    reconcile.add_argument("--batch-id", required=True)
+    promote = linear_import.add_parser("promote")
+    promote.add_argument("--batch-id", required=True)
+
+def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> None:
+    config = config or OperationsConfig.defaults()
+    command = args.ops_command
+    if command == "bootstrap":
+        bootstrap(config)
+    elif command == "migrate":
+        migrate(config, args.target, args.lock_timeout)
+    elif command == "check":
+        print(json.dumps(check(config), sort_keys=True))
+    elif command == "health":
+        report = collect_health(config)
+        if args.json:
+            print(report.model_dump_json())
+        if (args.mode == "live" and not report.live) or (args.mode == "ready" and not report.ready):
+            raise SystemExit(1)
+    elif command == "credentials":
+        if args.credentials_command == "init":
+            credentials_init(config)
+        else:
+            credentials_rotate(config, args.role)
+    elif command == "backup":
+        if args.backup_command == "provision-target":
+            backup.provision_target(config)
+        elif args.backup_command == "verify-target":
+            backup.verify_target(config)
+        elif args.backup_command == "create":
+            print(backup.create(config))
+        else:
+            print(backup.upload_wal(config))
+    elif command == "linear-export":
+        exporter = LinearExporter(config)
+        if args.linear_export_command == "full":
+            manifest = exporter.full(UUID(args.workspace_id))
+        elif args.linear_export_command == "delta":
+            manifest = exporter.delta(UUID(args.workspace_id))
+        else:
+            manifest = exporter.resume(UUID(args.export_id))
+        blocking = any(anomaly.disposition == "blocking" for anomaly in manifest.anomalies)
+        print(json.dumps({
+            "anomaly_codes": sorted({anomaly.code for anomaly in manifest.anomalies}),
+            "attachment_dispositions": manifest.attachment_dispositions.model_dump(),
+            "base_export_id": str(manifest.base_export_id) if manifest.base_export_id else None,
+            "counts": manifest.dimension_counts.model_dump(),
+            "hashes": manifest.dimension_hashes.model_dump(),
+            "export_id": str(manifest.export_id),
+            "manifest_path": manifest.artifacts["manifest"].path,
+            "manifest_sha256": manifest.manifest_sha256,
+            "mode": manifest.mode,
+            "raw_export_sha256": manifest.raw_export_sha256,
+            "source_lower_bound": manifest.source_lower_bound.isoformat() if manifest.source_lower_bound else None,
+            "source_watermark": manifest.source_boundary.isoformat(),
+            "state": "blocked" if blocking else "complete",
+        }, sort_keys=True))
+        if blocking:
+            raise SystemExit(2)
+    elif command == "linear-import":
+        importer = LinearImporter(config)
+        if args.linear_import_command == "stage":
+            summary = importer.stage(UUID(args.workspace_id), UUID(args.export_id), Path(args.mapping_file))
+        elif args.linear_import_command == "reconcile":
+            summary = importer.reconcile(UUID(args.batch_id))
+        else:
+            summary = importer.promote(UUID(args.batch_id))
+        output = {
+            "anomaly_codes": summary.anomaly_codes,
+            "artifacts": summary.artifacts,
+            "base_batch_id": str(summary.base_batch_id) if summary.base_batch_id else None,
+            "batch_id": str(summary.batch_id),
+            "disposition_counts": summary.disposition_counts,
+            "export_id": str(summary.export_id),
+            "mapping_file_sha256": summary.mapping_file_sha256,
+            "parity_hashes": summary.parity_hashes,
+            "reconciliation_sha256": summary.reconciliation_sha256,
+            "state": summary.state,
+            "transformation_version": summary.transformation_version,
+            "workspace_id": str(summary.workspace_id),
+        }
+        print(json.dumps(output, sort_keys=True))
+        if summary.state == "blocked":
+            raise SystemExit(2)
+    else:
+        print(backup.restore_drill(config, reason=args.reason))

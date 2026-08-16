@@ -1,0 +1,46 @@
+{
+  "contract_version": "work.omp.dev/v1",
+  "transport": "loopback_http",
+  "reads": [
+    "GET /v1/work-items/{key}",
+    "GET /v1/work-items/{key}/workflow",
+    "GET /v1/workspaces/{workspace_id}/tree",
+    "GET /v1/workspaces/{workspace_id}/focus/{owner_id}",
+    "GET /v1/operations/{operation_id}",
+    "GET /v1/health/live",
+    "GET /v1/health/ready"
+  ],
+  "command_types": [
+    "create_work_batch", "revise_work", "set_work_state", "put_relation", "remove_relation", "set_focus", "clear_focus", "append_evidence", "request_closeout", "complete_work", "record_project_health", "stage_import_batch", "promote_import_batch", "activate_cutover"
+  ],
+  "error_codes": [
+    "invalid_request", "unauthenticated", "forbidden", "approval_required", "revision_conflict", "idempotency_conflict", "relation_cycle", "focus_conflict", "stale_evidence", "completion_blocked", "cutover_invariant", "unavailable"
+  ],
+  "scopes": ["work.read", "work.candidate.read", "work.mutate", "work.approve", "work.close", "work.import", "work.operate"],
+  "workflow_mapping": {
+    "/intake": "create_work_batch", "/capture": "create_work_batch", "/plan": "candidate allocation plus plan evidence", "/now": "focus reads/set/clear", "/summary": "verification/audit/closeout evidence", "/done": "complete_work"
+  },
+  "source_scope": {
+    "include": ["HOME team worlds/initiatives", "surfaces/projects and health updates", "promises/milestones", "work/issues across active completed canceled duplicate archived states", "states labels parents dependencies", "comments with OMP markers", "attachment metadata URLs", "referenced users"],
+    "exclude": ["other teams", "unrelated workspace documents", "attachment bytes unless explicit evidence"]
+  },
+  "dependency_graph": {
+    "HOME-142": ["HOME-143", "HOME-144", "HOME-145"],
+    "HOME-143": ["HOME-144", "HOME-146"],
+    "HOME-144": ["HOME-146", "HOME-147"],
+    "HOME-145": ["HOME-146"],
+    "HOME-146": ["HOME-148"],
+    "HOME-147": ["HOME-148"],
+    "HOME-148": ["HOME-149"]
+  },
+  "security_policy": {
+    "database_roles": ["omp_work_owner", "omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup"],
+    "owner_host_scopes": ["work.read", "work.mutate", "work.approve", "work.close"],
+    "task_agent_scopes": ["work.candidate.read"],
+    "auditor_scopes": ["work.candidate.read"],
+    "importer_scopes": ["work.import"],
+    "operator_scopes": ["work.operate"],
+    "rls": "force_workspace_actor_claims_no_public_no_bypassrls",
+    "credentials": "operator_managed_mode_0600_host_only_no_agent_or_postgres_dsn"
+  }
+}

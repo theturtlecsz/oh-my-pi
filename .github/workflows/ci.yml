@@ -5,6 +5,8 @@ on:
       branches: [main]
       paths:
          - "packages/**"
+         - "python/**"
+         - "infra/work-ledger/**"
          - "crates/**"
          - "scripts/**"
          - "bazel/**"
@@ -30,6 +32,8 @@ on:
       branches: [main]
       paths:
          - "packages/**"
+         - "python/**"
+         - "infra/work-ledger/**"
          - "crates/**"
          - "scripts/**"
          - "bazel/**"
@@ -911,3 +915,12 @@ jobs:
                   -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
                   commit -m "omp ${{ needs.release_metadata.outputs.release-tag }}" -- Formula/omp.rb
               git push origin HEAD:main
+
+   work_ledger_postgres:
+      name: Work Ledger PostgreSQL integration
+      runs-on: ubuntu-22.04
+      steps:
+         - uses: actions/checkout@v4
+         - uses: astral-sh/setup-uv@v6
+         - name: Run PostgreSQL integration
+           run: bun run test:py:work-ledger:integration
