@@ -6,6 +6,7 @@ from hashlib import sha256
 import os
 from pathlib import Path
 import shutil
+import tempfile
 import socket
 from subprocess import CalledProcessError, run
 import time
@@ -48,7 +49,9 @@ def provision_target(config: OperationsConfig) -> None:
 
 def verify_target(config: OperationsConfig) -> None:
     key = f"{config.prefix}/probe/{uuid4()}"
-    _aws(config, ["s3api", "put-object", "--bucket", config.bucket, "--key", key, "--body", "/dev/null"])
+    # aws CLI rejects /dev/null as --body (character device, not a regular file).
+    with tempfile.NamedTemporaryFile() as empty:
+        _aws(config, ["s3api", "put-object", "--bucket", config.bucket, "--key", key, "--body", empty.name])
     _aws(config, ["s3api", "head-object", "--bucket", config.bucket, "--key", key])
     _aws(config, ["s3api", "delete-object", "--bucket", config.bucket, "--key", key])
 
