@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from omp_work.operations.config import OperationsConfig
-from pg_native import native_postgres
+from pg_native import native_postgres, seed_authority
 from omp_work.operations.database import bootstrap
 from omp_work.v1.models import CommandEnvelope, CreateWorkBatchCommand, CreateWorkBatchPayload, CreateWorkInput
 from omp_work.v1.server import create_app
@@ -38,6 +38,7 @@ def test_loopback_service_replays_real_postgres_commands_and_enforces_capabiliti
     with native_postgres(tmp_path, config.port):
         bootstrap(config)
         workspace_id, actor_id, operation_id = uuid4(), uuid4(), uuid4()
+        seed_authority(config.connection_kwargs("postgres"), workspace_id, actor_id)
         capabilities = tmp_path / "capabilities"
         capabilities.mkdir(mode=0o700)
         (capabilities / "owner.json").write_text(json.dumps({"token": "owner-token", "actor_id": str(actor_id), "actor_kind": "owner", "workspaces": [str(workspace_id)], "scopes": ["work.read", "work.mutate"]}))

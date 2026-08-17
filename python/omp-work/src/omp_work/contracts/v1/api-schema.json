@@ -21,6 +21,45 @@
       "title": "AcceptanceCriterionView",
       "type": "object"
     },
+    "ActivateCutoverResult": {
+      "additionalProperties": false,
+      "properties": {
+        "activated_at": {
+          "format": "date-time",
+          "title": "Activated At",
+          "type": "string"
+        },
+        "authority": {
+          "const": "work",
+          "title": "Authority",
+          "type": "string"
+        },
+        "candidate_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Manifest Sha256",
+          "type": "string"
+        },
+        "epoch_id": {
+          "format": "uuid",
+          "title": "Epoch Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "activate_cutover",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "epoch_id",
+        "authority",
+        "candidate_manifest_sha256",
+        "activated_at"
+      ],
+      "title": "ActivateCutoverResult",
+      "type": "object"
+    },
     "ApiError": {
       "additionalProperties": false,
       "properties": {
@@ -67,6 +106,80 @@
         "code"
       ],
       "title": "ApiError",
+      "type": "object"
+    },
+    "AuthorityView": {
+      "additionalProperties": false,
+      "properties": {
+        "activated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Activated At"
+        },
+        "authority": {
+          "enum": [
+            "linear",
+            "work"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "epoch_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Epoch Id"
+        },
+        "epoch_state": {
+          "anyOf": [
+            {
+              "enum": [
+                "active",
+                "sealed",
+                "rolled_back"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Epoch State"
+        },
+        "first_work_mutation_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "First Work Mutation At"
+        }
+      },
+      "required": [
+        "authority"
+      ],
+      "title": "AuthorityView",
       "type": "object"
     },
     "Candidate": {
@@ -263,6 +376,45 @@
     },
     "CommandResponse": {
       "$defs": {
+        "ActivateCutoverResult": {
+          "additionalProperties": false,
+          "properties": {
+            "activated_at": {
+              "format": "date-time",
+              "title": "Activated At",
+              "type": "string"
+            },
+            "authority": {
+              "const": "work",
+              "title": "Authority",
+              "type": "string"
+            },
+            "candidate_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Manifest Sha256",
+              "type": "string"
+            },
+            "epoch_id": {
+              "format": "uuid",
+              "title": "Epoch Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "activate_cutover",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "epoch_id",
+            "authority",
+            "candidate_manifest_sha256",
+            "activated_at"
+          ],
+          "title": "ActivateCutoverResult",
+          "type": "object"
+        },
         "Candidate": {
           "additionalProperties": false,
           "properties": {
@@ -932,6 +1084,7 @@
         "result": {
           "discriminator": {
             "mapping": {
+              "activate_cutover": "#/$defs/ActivateCutoverResult",
               "append_evidence": "#/$defs/EvidenceResult",
               "clear_focus": "#/$defs/FocusResult",
               "complete_work": "#/$defs/WorkItemResult",
@@ -974,6 +1127,9 @@
             },
             {
               "$ref": "#/$defs/ProjectHealthResult"
+            },
+            {
+              "$ref": "#/$defs/ActivateCutoverResult"
             }
           ],
           "title": "Result"
@@ -1970,6 +2126,45 @@
     },
     "StoredOperationView": {
       "$defs": {
+        "ActivateCutoverResult": {
+          "additionalProperties": false,
+          "properties": {
+            "activated_at": {
+              "format": "date-time",
+              "title": "Activated At",
+              "type": "string"
+            },
+            "authority": {
+              "const": "work",
+              "title": "Authority",
+              "type": "string"
+            },
+            "candidate_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Manifest Sha256",
+              "type": "string"
+            },
+            "epoch_id": {
+              "format": "uuid",
+              "title": "Epoch Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "activate_cutover",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "epoch_id",
+            "authority",
+            "candidate_manifest_sha256",
+            "activated_at"
+          ],
+          "title": "ActivateCutoverResult",
+          "type": "object"
+        },
         "Candidate": {
           "additionalProperties": false,
           "properties": {
@@ -2655,6 +2850,7 @@
             {
               "discriminator": {
                 "mapping": {
+                  "activate_cutover": "#/$defs/ActivateCutoverResult",
                   "append_evidence": "#/$defs/EvidenceResult",
                   "clear_focus": "#/$defs/FocusResult",
                   "complete_work": "#/$defs/WorkItemResult",
@@ -2697,6 +2893,9 @@
                 },
                 {
                   "$ref": "#/$defs/ProjectHealthResult"
+                },
+                {
+                  "$ref": "#/$defs/ActivateCutoverResult"
                 }
               ]
             },

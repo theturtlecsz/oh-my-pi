@@ -14,6 +14,7 @@ from uuid import uuid4
 from omp_work import contract_sha256, validate_bundle
 from .artifacts import decrypt_file, encrypt_file
 from .config import OperationsConfig
+from .database import migration_set_sha256, migrations
 
 
 def _run(arguments: list[str], *, env: dict[str, str] | None = None) -> bytes:
@@ -165,8 +166,27 @@ def _record_evidence(
         with conn.cursor() as cur:
             cur.execute("SELECT pg_current_wal_lsn()")
             source_lsn = cur.fetchone()[0]
+            receipt_sha256 = sha256(
+                json.dumps(
+                    {
+                        "backup_id": backup_id,
+                        "byte_count": byte_count,
+                        "contract_sha256": contract_sha256(),
+                        "duration_seconds": duration,
+                        "kind": kind,
+                        "migration_set_sha256": migration_set_sha256(),
+                        "object_prefix": prefix,
+                        "outcome": outcome,
+                        "source_lsn": str(source_lsn),
+                        "source_timeline": "source-primary",
+                        "started_at": started.isoformat(),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
             cur.execute(
-                "INSERT INTO omp_control.operations_evidence (kind, started_at, ended_at, source_timeline, source_lsn, contract_sha256, migration_set_sha256, backup_id, object_prefix, byte_count, outcome, duration_seconds) VALUES (%s, %s, clock_timestamp(), %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                "INSERT INTO omp_control.operations_evidence (kind, started_at, ended_at, source_timeline, source_lsn, contract_sha256, migration_set_sha256, backup_id, object_prefix, byte_count, outcome, duration_seconds, receipt_sha256) VALUES (%s, %s, clock_timestamp(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
                 (
                     kind,
                     started,
@@ -179,6 +199,7 @@ def _record_evidence(
                     byte_count,
                     outcome,
                     duration,
+                    receipt_sha256,
                 ),
             )
             return str(cur.fetchone()[0])
@@ -191,7 +212,6 @@ def restore_drill(config: OperationsConfig, *, reason: str) -> str:
     backup_id: str | None = None
     prefix: str | None = None
     staging = config.state_dir / "restore-drills" / str(uuid4())
-    container = f"omp-work-restore-{uuid4().hex}"
     try:
         prefix, _ = _latest_backup(config)
         manifest = staging / "manifest.json"
@@ -206,29 +226,11 @@ def restore_drill(config: OperationsConfig, *, reason: str) -> str:
         _download_decrypt(config, dump_key, dump)
         port = _free_port()
         password = config.read_secret("postgres")
-        _run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--detach",
-                "--name",
-                container,
-                "-v",
-                f"{config.secret_path('postgres')}:/run/omp-postgres-password:ro",
-                "-e",
-                "POSTGRES_PASSWORD_FILE=/run/omp-postgres-password",
-                "-p",
-                f"127.0.0.1:{port}:5432",
-                "postgres:18.3-bookworm@sha256:80630f83606d8db77d30b3851b16a9f78be2d0d4dda6f7b82a1fdca5ebe3acba",
-            ]
-        )
-        for _ in range(60):
-            if run(["docker", "exec", container, "pg_isready", "-U", "postgres"], capture_output=True).returncode == 0:
-                break
-            time.sleep(0.25)
-        else:
-            raise RuntimeError("restore target did not become ready")
+        data_dir = staging / "pgdata"
+        sock_dir = staging / "pgsock"
+        sock_dir.mkdir(mode=0o700)
+        _run(["initdb", "-D", str(data_dir), "-U", "postgres", "--auth-local=trust", "--auth-host=scram-sha-256", "-E", "UTF8", f"--pwfile={config.secret_path('postgres')}"])
+        _run(["pg_ctl", "-D", str(data_dir), "-l", str(staging / "postgres.log"), "-w", "-o", f"-p {port} -k {sock_dir} -c listen_addresses=127.0.0.1", "start"])
         env = os.environ | {"PGPASSWORD": password}
         _run(["pg_restore", "--host", "127.0.0.1", "--port", str(port), "--username", "postgres", "--dbname", "postgres", "--exit-on-error", str(dump)], env=env)
         actual = _run(["psql", "--host", "127.0.0.1", "--port", str(port), "--username", "postgres", "--dbname", "postgres", "--tuples-only", "--no-align", "--command", "SELECT count(*) FROM omp_control.schema_migrations"], env=env).strip()
@@ -258,5 +260,6 @@ def restore_drill(config: OperationsConfig, *, reason: str) -> str:
             pass
         raise
     finally:
-        run(["docker", "rm", "--force", container], capture_output=True)
+        if (staging / "pgdata" / "PG_VERSION").exists():
+            run(["pg_ctl", "-D", str(staging / "pgdata"), "-m", "immediate", "-w", "stop"], capture_output=True)
         shutil.rmtree(staging, ignore_errors=True)

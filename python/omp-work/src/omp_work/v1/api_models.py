@@ -134,8 +134,24 @@ class ProjectHealthResult(StrictModel):
     health: ProjectHealthView
 
 
+class ActivateCutoverResult(StrictModel):
+    type: Literal["activate_cutover"]
+    epoch_id: UUID
+    authority: Literal["work"]
+    candidate_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    activated_at: datetime
+
+
+class AuthorityView(StrictModel):
+    authority: Literal["linear", "work"]
+    epoch_id: UUID | None = None
+    epoch_state: Literal["active", "sealed", "rolled_back"] | None = None
+    activated_at: datetime | None = None
+    first_work_mutation_at: datetime | None = None
+
+
 CommandResult = Annotated[
-    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseoutResult | ProjectHealthResult,
+    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseoutResult | ProjectHealthResult | ActivateCutoverResult,
     Field(discriminator="type"),
 ]
 

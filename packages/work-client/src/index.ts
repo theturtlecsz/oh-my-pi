@@ -163,6 +163,48 @@ export type CompletionInput = {
 export type CompleteWorkPayload = { input: CompletionInput };
 export type RecordProjectHealthPayload = { project_id: UUID; health: ProjectHealth };
 
+export type CommandSmokeResult = { command_type: string; passed: boolean };
+export type ReconciliationCounts = {
+	worlds: number;
+	surfaces: number;
+	promises: number;
+	work_items: number;
+	states: number;
+	labels: number;
+	relations: number;
+	comments: number;
+	attachments: number;
+	users: number;
+};
+export type ReconciliationHashes = Record<keyof ReconciliationCounts, string>;
+export type CutoverManifest = {
+	epoch_id: UUID;
+	contract_version: string;
+	contract_sha256: string;
+	schema_sha256: string;
+	transform_version: string;
+	transform_sha256: string;
+	source_boundary: string;
+	source_watermark: string;
+	raw_export_sha256: string;
+	import_batch_id: UUID;
+	dimension_counts: ReconciliationCounts;
+	dimension_hashes: ReconciliationHashes;
+	parity_groups: Record<string, string>;
+	anomalies: { code: string; disposition: string }[];
+	parity_differences: string[];
+	backup_receipt_sha256: string;
+	restore_receipt_sha256: string;
+	command_smoke_results: CommandSmokeResult[];
+	code_fingerprint: string;
+	config_fingerprint: string;
+	freeze_at: string;
+	activated_at: string | null;
+	revoked_at: string | null;
+	actor: string;
+};
+export type ActivateCutoverPayload = { manifest: CutoverManifest };
+
 export type Command =
 	| { type: "create_work_batch"; payload: CreateWorkBatchPayload }
 	| { type: "revise_work"; payload: ReviseWorkPayload }
@@ -175,7 +217,8 @@ export type Command =
 	| { type: "finalize_candidate"; payload: FinalizeCandidatePayload }
 	| { type: "request_closeout"; payload: RequestCloseoutPayload }
 	| { type: "complete_work"; payload: CompleteWorkPayload }
-	| { type: "record_project_health"; payload: RecordProjectHealthPayload };
+	| { type: "record_project_health"; payload: RecordProjectHealthPayload }
+	| { type: "activate_cutover"; payload: ActivateCutoverPayload };
 
 // ---- command results ----
 
@@ -202,7 +245,22 @@ export type CommandResult =
 	| { type: "append_evidence"; receipt: EvidenceReceipt }
 	| { type: "finalize_candidate"; candidate: Candidate }
 	| { type: "request_closeout"; intent: CloseoutIntentView }
-	| { type: "record_project_health"; health: ProjectHealthView };
+	| { type: "record_project_health"; health: ProjectHealthView }
+	| {
+			type: "activate_cutover";
+			epoch_id: UUID;
+			authority: "work";
+			candidate_manifest_sha256: string;
+			activated_at: string;
+	  };
+
+export type AuthorityView = {
+	authority: "linear" | "work";
+	epoch_id: UUID | null;
+	epoch_state: "active" | "sealed" | "rolled_back" | null;
+	activated_at: string | null;
+	first_work_mutation_at: string | null;
+};
 
 // ---- read views ----
 
@@ -363,6 +421,10 @@ export class WorkClient {
 
 	operation(operationId: UUID): Promise<StoredOperation> {
 		return this.request("GET", `/v1/operations/${operationId}`) as Promise<StoredOperation>;
+	}
+
+	authority(): Promise<AuthorityView> {
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/authority`) as Promise<AuthorityView>;
 	}
 
 	/** Liveness/readiness probes — unauthenticated by design, so a missing or

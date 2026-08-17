@@ -19,7 +19,7 @@ from omp_work.operations.database import _connect
 from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.models import Anomaly, ReconciliationCounts, ReconciliationHashes, RelationEdge, RelationKind
 from omp_work.v1.semantics import would_create_cycle
-from .linear import LinearClient, LinearStream, load_credential
+from .linear import LinearClient, LinearStream, load_credential, refresh_credential
 
 DIMENSIONS = ("worlds", "surfaces", "promises", "work_items", "states", "labels", "relations", "comments", "attachments", "users")
 WORKFLOW_PREFIXES = ("**Plan approved**", "**Execution handoff**", "**Session review**", "**Close proposed**", "**Owner verdict in session:")
@@ -324,7 +324,10 @@ class LinearExporter:
         provenance: dict[tuple[LinearStream, str], str] = {}
         anomalies: list[Anomaly] = []
         try:
-            credential = load_credential(self.config.secret_path("linear-export.json"))
+            credential_path = self.config.secret_path("linear-export.json")
+            credential = load_credential(credential_path)
+            if credential.kind == "oauth":
+                credential = refresh_credential(credential_path, transport=self.transport)
             client = LinearClient(credential, transport=self.transport)
             try:
                 if mode == "full":

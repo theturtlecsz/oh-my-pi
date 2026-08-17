@@ -9,21 +9,36 @@ from uuid import UUID, uuid4
 from psycopg import sql
 
 from . import backup
-from .capabilities import _write_secret, provision_candidate_reader, provision_owner
+from .capabilities import _write_secret, provision_candidate_reader, provision_cutover, provision_owner
 from .config import OperationsConfig
 from .database import bootstrap, check, collect_health, migrate
 from omp_work.integration.exporter import LinearExporter
 from omp_work.integration.importer import LinearImporter
+from omp_work.integration.linear import oauth_login
 
 
-def credentials_init(config: OperationsConfig) -> None:
+def _read_or_create_uuid(config: OperationsConfig, name: str) -> UUID:
+    path = config.secret_path(name)
+    if path.exists():
+        try:
+            return UUID(config.read_secret(name))
+        except ValueError as error:
+            raise ValueError(f"existing {name} credential is malformed or unprotected; refusing to replace it") from error
+    _write_secret(path, str(uuid4()))
+    return UUID(config.read_secret(name))
+
+
+def credentials_init(config: OperationsConfig) -> tuple[UUID, UUID]:
     for role in ("postgres", "omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup"):
         path = config.secret_path(role)
-        if path.exists():
-            raise ValueError("credentials already initialized")
-        _write_secret(path, secrets.token_urlsafe(32))
-    _write_secret(config.secret_path("gpg-passphrase"), secrets.token_urlsafe(48))
-    _write_secret(config.secret_path("operator-actor-id"), str(uuid4()))
+        if not path.exists():
+            _write_secret(path, secrets.token_urlsafe(32))
+    passphrase = config.secret_path("gpg-passphrase")
+    if not passphrase.exists():
+        _write_secret(passphrase, secrets.token_urlsafe(48))
+    actor_id = _read_or_create_uuid(config, "operator-actor-id")
+    workspace_id = _read_or_create_uuid(config, "workspace-id")
+    return workspace_id, actor_id
 
 
 def credentials_rotate(config: OperationsConfig, role: str) -> None:
@@ -65,6 +80,8 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     reader.add_argument("--workspace-id", required=True)
     reader.add_argument("--candidate-id", action="append", required=True)
     reader.add_argument("--name", default="candidate-reader")
+    cutover = capabilities.add_parser("cutover")
+    cutover.add_argument("--rotate", action="store_true")
     backup_parser = commands.add_parser("backup").add_subparsers(dest="backup_command", required=True)
     backup_parser.add_parser("provision-target")
     backup_parser.add_parser("verify-target")
@@ -75,6 +92,9 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     drill.add_argument("--source", choices=("latest",), default="latest")
     drill.add_argument("--reason", choices=("clean-instance", "monthly", "manual"), required=True)
     linear_export = commands.add_parser("linear-export").add_subparsers(dest="linear_export_command", required=True)
+    oauth_login_parser = linear_export.add_parser("oauth-login")
+    oauth_login_parser.add_argument("--client-id", required=True)
+    oauth_login_parser.add_argument("--force", action="store_true")
     for mode in ("full", "delta"):
         export = linear_export.add_parser(mode)
         export.add_argument("--workspace-id", required=True)
@@ -107,12 +127,15 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
             raise SystemExit(1)
     elif command == "credentials":
         if args.credentials_command == "init":
-            credentials_init(config)
+            workspace_id, actor_id = credentials_init(config)
+            print(json.dumps({"workspace_id": str(workspace_id), "owner_id": str(actor_id)}, sort_keys=True))
         else:
             credentials_rotate(config, args.role)
     elif command == "capabilities":
         if args.capabilities_command == "init":
             path = provision_owner(config, workspace_id=UUID(args.workspace_id), owner_id=UUID(args.owner_id), base_url=args.base_url)
+        elif args.capabilities_command == "cutover":
+            path = provision_cutover(config, workspace_id=config.workspace_id(), actor_id=config.actor_id(), rotate=args.rotate)
         else:
             path = provision_candidate_reader(config, workspace_id=UUID(args.workspace_id), candidate_ids=tuple(UUID(value) for value in args.candidate_id), name=args.name)
         print(path)
@@ -126,6 +149,10 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
         else:
             print(backup.upload_wal(config))
     elif command == "linear-export":
+        if args.linear_export_command == "oauth-login":
+            credential = oauth_login(config.secret_path("linear-export.json"), client_id=args.client_id, force=args.force)
+            print(json.dumps({"expires_at": credential.expires_at.isoformat(), "scopes": sorted(credential.scopes)}, sort_keys=True))
+            return
         exporter = LinearExporter(config)
         if args.linear_export_command == "full":
             manifest = exporter.full(UUID(args.workspace_id))

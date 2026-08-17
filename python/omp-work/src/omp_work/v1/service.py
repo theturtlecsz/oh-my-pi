@@ -37,7 +37,7 @@ class WorkService:
         scope = self._scopes[envelope.command.type]
         if scope not in principal.scopes:
             raise WorkError("forbidden", status=403)
-        if envelope.command.type in {"stage_import_batch", "promote_import_batch", "activate_cutover"}:
+        if envelope.command.type in {"stage_import_batch", "promote_import_batch"}:
             raise WorkError("unavailable", status=503)
         try:
             return self._store.execute(envelope, actor_id=principal.actor_id, actor_kind=principal.actor_kind, required_scope=scope)
@@ -50,6 +50,7 @@ class WorkService:
                 "focus_conflict": 409,
                 "stale_evidence": 409,
                 "completion_blocked": 409,
+                "cutover_invariant": 409,
                 "unavailable": 503,
             }
             raise WorkError(error.code, status=statuses.get(error.code, 409), diagnostics=error.diagnostics) from error

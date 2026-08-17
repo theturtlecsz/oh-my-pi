@@ -155,6 +155,13 @@
               "title": "Parity Differences",
               "type": "array"
             },
+            "parity_groups": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Parity Groups",
+              "type": "object"
+            },
             "raw_export_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Raw Export Sha256",
@@ -214,6 +221,7 @@
             "import_batch_id",
             "dimension_counts",
             "dimension_hashes",
+            "parity_groups",
             "anomalies",
             "backup_receipt_sha256",
             "restore_receipt_sha256",
@@ -523,6 +531,13 @@
               "title": "Parity Differences",
               "type": "array"
             },
+            "parity_groups": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Parity Groups",
+              "type": "object"
+            },
             "raw_export_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Raw Export Sha256",
@@ -582,6 +597,7 @@
             "import_batch_id",
             "dimension_counts",
             "dimension_hashes",
+            "parity_groups",
             "anomalies",
             "backup_receipt_sha256",
             "restore_receipt_sha256",
@@ -1168,7 +1184,8 @@
         "issue": {
           "enum": [
             "HOME-142",
-            "HOME-147"
+            "HOME-147",
+            "HOME-148"
           ],
           "title": "Issue",
           "type": "string"
@@ -1999,6 +2016,13 @@
               "title": "Parity Differences",
               "type": "array"
             },
+            "parity_groups": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Parity Groups",
+              "type": "object"
+            },
             "raw_export_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Raw Export Sha256",
@@ -2058,6 +2082,7 @@
             "import_batch_id",
             "dimension_counts",
             "dimension_hashes",
+            "parity_groups",
             "anomalies",
             "backup_receipt_sha256",
             "restore_receipt_sha256",
@@ -5193,6 +5218,13 @@
           "title": "Parity Differences",
           "type": "array"
         },
+        "parity_groups": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Parity Groups",
+          "type": "object"
+        },
         "raw_export_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Raw Export Sha256",
@@ -5252,6 +5284,7 @@
         "import_batch_id",
         "dimension_counts",
         "dimension_hashes",
+        "parity_groups",
         "anomalies",
         "backup_receipt_sha256",
         "restore_receipt_sha256",

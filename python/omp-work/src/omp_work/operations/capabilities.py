@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -10,15 +12,23 @@ from uuid import UUID, uuid4
 from .config import OperationsConfig
 
 OWNER_SCOPES = ("work.read", "work.mutate", "work.approve", "work.close")
+CUTOVER_SCOPES = ("work.operate", "work.read")
 DEFAULT_BASE_URL = "http://127.0.0.1:54322"
 
 
 def _write_secret(path: Path, value: str) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_suffix(".next")
-    temporary.write_text(value + "\n", encoding="utf-8")
-    temporary.chmod(0o600)
-    os.replace(temporary, path)
+    if path.parent.stat().st_mode & 0o777 != 0o700:
+        raise ValueError(f"unsafe credential directory permissions: {path.parent}")
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(value + "\n")
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
 
 
 def capabilities_dir(config: OperationsConfig) -> Path:
@@ -80,6 +90,13 @@ def write_client_config(config: OperationsConfig, *, workspace_id: UUID, owner_i
 def provision_owner(config: OperationsConfig, *, workspace_id: UUID, owner_id: UUID, base_url: str = DEFAULT_BASE_URL) -> Path:
     bearer = write_capability(config, "owner", actor_id=owner_id, actor_kind="owner", workspaces=(workspace_id,), scopes=OWNER_SCOPES)
     return write_client_config(config, workspace_id=workspace_id, owner_id=owner_id, base_url=base_url, bearer_file=bearer)
+
+
+def provision_cutover(config: OperationsConfig, *, workspace_id: UUID, actor_id: UUID, rotate: bool = False) -> Path:
+    path = capabilities_dir(config) / "cutover.json"
+    if path.exists() and not rotate:
+        raise ValueError("cutover capability exists; pass rotate=True to replace it")
+    return write_capability(config, "cutover", actor_id=actor_id, actor_kind="operator", workspaces=(workspace_id,), scopes=CUTOVER_SCOPES)
 
 
 def provision_candidate_reader(config: OperationsConfig, *, workspace_id: UUID, candidate_ids: tuple[UUID, ...], name: str = "candidate-reader") -> Path:

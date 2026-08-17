@@ -17,6 +17,7 @@ _READS = frozenset({
     "GET /v1/workspaces/{workspace_id}/tree",
     "GET /v1/workspaces/{workspace_id}/focus/{owner_id}",
     "GET /v1/operations/{operation_id}",
+    "GET /v1/workspaces/{workspace_id}/authority",
     "GET /v1/health/live",
     "GET /v1/health/ready",
 })

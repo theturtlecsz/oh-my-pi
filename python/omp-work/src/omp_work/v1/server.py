@@ -86,6 +86,10 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
     def focus(request: Request, workspace_id: UUID, owner_id: UUID) -> JSONResponse:
         return read_route(request, workspace_id, "focus", str(owner_id))
 
+    @app.get("/v1/workspaces/{workspace_id}/authority")
+    def authority(request: Request, workspace_id: UUID) -> JSONResponse:
+        return read_route(request, workspace_id, "authority", "")
+
     @app.get("/v1/operations/{operation_id}")
     def operation(request: Request, operation_id: UUID, x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID")) -> JSONResponse:
         return read_route(request, x_omp_workspace_id, "operation", str(operation_id))

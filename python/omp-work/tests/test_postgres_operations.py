@@ -19,7 +19,7 @@ import omp_work.integration.exporter as exporter_module
 from omp_work.integration.exporter import LinearExporter
 from omp_work.operations.artifacts import decrypt_file, encrypt_file
 from omp_work.operations.config import OperationsConfig
-from pg_native import native_postgres
+from pg_native import native_postgres, seed_authority
 from omp_work.operations import backup
 from omp_work.operations.database import bootstrap, collect_health, migration_set_sha256, migrations
 from omp_work.v1.models import CommandEnvelope, CreateWorkBatchCommand, CreateWorkBatchPayload, CreateWorkInput
@@ -43,14 +43,14 @@ def config(tmp_path: Path) -> OperationsConfig:
         path.write_text(str(uuid4()) if role == "operator-actor-id" else secrets.token_urlsafe(24))
         path.chmod(0o600)
     linear = credentials / "linear-export.json"
-    linear.write_text(json.dumps({"kind": "oauth", "access_token": "read-only-token", "scopes": ["read"], "expires_at": "2099-01-01T00:00:00Z"}))
+    linear.write_text(json.dumps({"kind": "oauth", "access_token": "read-only-token", "refresh_token": "refresh-token", "client_id": "test-client", "scopes": ["read"], "expires_at": "2099-01-01T00:00:00Z"}))
     linear.chmod(0o600)
     return OperationsConfig(config_dir=tmp_path / "config", state_dir=tmp_path / "state", data_dir=tmp_path / "data", port=_free_port())
 
 
 def test_pinned_migration_set_is_forward_only() -> None:
     files = migrations()
-    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     assert all(path.name.startswith(f"{ordinal:04d}_") for ordinal, path in files)
     assert len(migration_set_sha256()) == 64
 
@@ -191,10 +191,14 @@ def test_bootstrap_migrates_pinned_postgres(config: OperationsConfig, monkeypatc
                     cursor.execute("SELECT state FROM omp_integration.raw_exports WHERE export_id=%s", (base_export_id,))
                     assert cursor.fetchone() == ("complete",)
         with psycopg.connect(**config.connection_kwargs("omp_work_app")) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                cursor.execute("SELECT state FROM omp_integration.raw_exports WHERE export_id=%s", (base_export_id,))
+                assert cursor.fetchone() == ("complete",)
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 with connection.transaction(), connection.cursor() as cursor:
                     cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
-                    cursor.execute("SELECT state FROM omp_integration.raw_exports WHERE export_id=%s", (base_export_id,))
+                    cursor.execute("UPDATE omp_integration.raw_exports SET state='blocked' WHERE export_id=%s", (base_export_id,))
 
         artifact_dir = config.data_dir / "artifact-check"
         artifact_dir.mkdir(parents=True, mode=0o700)
@@ -291,6 +295,7 @@ def test_store_creates_and_replays_batch(config: OperationsConfig) -> None:
     with native_postgres(config.state_dir, config.port):
         bootstrap(config)
         workspace_id, operation_id, actor_id = uuid4(), uuid4(), uuid4()
+        seed_authority(config.connection_kwargs("postgres"), workspace_id, actor_id)
         command = CreateWorkBatchCommand(type="create_work_batch", payload=CreateWorkBatchPayload(items=(CreateWorkInput(client_ref="a", title=" first "), CreateWorkInput(client_ref="b", title="second"))))
         first = CommandEnvelope(api_version="work.omp.dev/v1", workspace_id=workspace_id, operation_id=operation_id, request_id=uuid4(), correlation_id=uuid4(), command=command)
         store = PostgresWorkStore(config)

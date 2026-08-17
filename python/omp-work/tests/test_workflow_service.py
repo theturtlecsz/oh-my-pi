@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from omp_work.operations.config import OperationsConfig
-from pg_native import native_postgres
+from pg_native import native_postgres, seed_authority
 from omp_work.operations.database import bootstrap
 from omp_work.v1.canonical import sha256
 from omp_work.v1.server import create_app
@@ -47,10 +47,11 @@ def service(tmp_path_factory: pytest.TempPathFactory):
         owner = capabilities / "owner.json"
         owner.write_text(json.dumps({"token": "owner-token", "actor_id": str(OWNER), "actor_kind": "owner", "workspaces": [], "scopes": ["work.read", "work.mutate", "work.approve", "work.close"]}))
         owner.chmod(0o600)
-        yield SimpleNamespace(client=TestClient(create_app(config, capabilities_dir=capabilities)), capabilities=capabilities)
+        yield SimpleNamespace(client=TestClient(create_app(config, capabilities_dir=capabilities)), capabilities=capabilities, config=config)
 
 
 def _grant(service, workspace_id) -> None:
+    seed_authority(service.config.connection_kwargs("postgres"), workspace_id, OWNER)
     owner = service.capabilities / "owner.json"
     data = json.loads(owner.read_text())
     if str(workspace_id) not in data["workspaces"]:

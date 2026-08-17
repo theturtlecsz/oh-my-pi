@@ -20,7 +20,7 @@ from omp_work.integration.importer import ImportBatchSummary, LinearImporter, pa
 from omp_work.operations import cli as operations_cli
 from omp_work.operations.artifacts import decrypt_file, read_json_artifact, resolve_artifact_path
 from omp_work.operations.config import OperationsConfig
-from pg_native import native_postgres
+from pg_native import native_postgres, seed_authority
 from omp_work.operations.database import bootstrap, _connect
 from omp_work.v1.canonical import sha256
 
@@ -46,7 +46,7 @@ def config(tmp_path: Path) -> OperationsConfig:
     op_path.write_text(str(uuid4()))
     op_path.chmod(0o600)
     linear = credentials / "linear-export.json"
-    linear.write_text(json.dumps({"kind": "oauth", "access_token": "read-only-token", "scopes": ["read"], "expires_at": "2099-01-01T00:00:00Z"}))
+    linear.write_text(json.dumps({"kind": "oauth", "access_token": "read-only-token", "refresh_token": "refresh-token", "client_id": "test-client", "scopes": ["read"], "expires_at": "2099-01-01T00:00:00Z"}))
     linear.chmod(0o600)
     return OperationsConfig(config_dir=tmp_path / "config", state_dir=tmp_path / "state", data_dir=tmp_path / "data", port=_free_port())
 

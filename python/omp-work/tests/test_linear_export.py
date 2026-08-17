@@ -39,7 +39,7 @@ ISSUE_B = "00000000-0000-7000-8000-000000000146"
 
 
 def credential() -> LinearCredential:
-    return LinearCredential(kind="oauth", access_token="secret", scopes=("read",), expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
+    return LinearCredential(kind="oauth", access_token="secret", refresh_token="refresh", client_id="test-client", scopes=("read",), expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
 
 
 @pytest.mark.parametrize("stream", list(LinearStream))
@@ -157,7 +157,7 @@ def test_credential_file_failures_are_fixed_and_redacted(tmp_path: Path) -> None
     path = tmp_path / "linear-export.json"
     with pytest.raises(ValueError, match="^linear_credential_missing$"):
         load_credential(path)
-    path.write_text(json.dumps({"kind": "oauth", "access_token": "do-not-leak", "scopes": ["admin"], "expires_at": "2099-01-01T00:00:00Z"}))
+    path.write_text(json.dumps({"kind": "oauth", "access_token": "do-not-leak", "refresh_token": "refresh-token", "client_id": "test-client", "scopes": ["admin"], "expires_at": "2099-01-01T00:00:00Z"}))
     path.chmod(0o600)
     with pytest.raises(ValueError) as captured:
         load_credential(path)
@@ -306,7 +306,7 @@ def export_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Operations
     credentials = tmp_path / "config" / "credentials"
     credentials.mkdir(parents=True, mode=0o700)
     linear = credentials / "linear-export.json"
-    linear.write_text(json.dumps({"kind": "oauth", "access_token": "secret-token", "scopes": ["read"], "expires_at": "2099-01-01T00:00:00Z"}))
+    linear.write_text(json.dumps({"kind": "oauth", "access_token": "secret-token", "refresh_token": "refresh-token", "client_id": "test-client", "scopes": ["read"], "expires_at": "2099-01-01T00:00:00Z"}))
     linear.chmod(0o600)
     for name, value in (("gpg-passphrase", "passphrase"), ("operator-actor-id", str(uuid4()))):
         path = credentials / name

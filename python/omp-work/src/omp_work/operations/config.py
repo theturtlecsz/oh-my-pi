@@ -42,10 +42,12 @@ class OperationsConfig:
     def read_secret(self, name: str) -> str:
         path = self.secret_path(name)
         try:
-            mode = stat.S_IMODE(path.stat().st_mode)
+            metadata = path.stat()
         except FileNotFoundError as error:
             raise ValueError(f"missing credential file: {path}") from error
-        if mode != 0o600:
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+            raise ValueError(f"credential file must be a regular file owned by the current user: {path}")
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
             raise ValueError(f"unsafe credential file permissions: {path}")
         value = path.read_text(encoding="utf-8").strip()
         if not value:
@@ -54,6 +56,9 @@ class OperationsConfig:
 
     def actor_id(self) -> UUID:
         return UUID(self.read_secret("operator-actor-id"))
+
+    def workspace_id(self) -> UUID:
+        return UUID(self.read_secret("workspace-id"))
 
     def connection_kwargs(self, role: str) -> dict[str, object]:
         return {"host": self.host, "port": self.port, "dbname": self.database, "user": role, "password": self.read_secret(role)}

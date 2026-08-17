@@ -1,0 +1,40 @@
+{
+  "schema_version": "linear-import-map/v1",
+  "repositories": {
+    "oh-my-pi": {
+      "key": "oh-my-pi",
+      "name": "oh-my-pi",
+      "url": "https://github.com/theturtlecsz/oh-my-pi.git"
+    },
+    "omp-webui": {
+      "key": "omp-webui",
+      "name": "omp-webui",
+      "url": "https://github.com/theturtlecsz/omp-webui"
+    },
+    "kavedarr": {
+      "key": "kavedarr",
+      "name": "kavedarr",
+      "url": "https://github.com/theturtlecsz/kavedarr.git"
+    },
+    "media-discovery": {
+      "key": "media-discovery",
+      "name": "media-discovery",
+      "url": "https://github.com/theturtlecsz/media-discovery.git"
+    }
+  },
+  "project_repositories": {
+    "88c939c5-7646-42fd-abb6-ec62a767646a": "oh-my-pi",
+    "8babee2b-43e1-4c32-9493-2b1781e03bb9": "oh-my-pi",
+    "199a45fc-39f0-4b6c-a13c-83c50b6dedcb": "omp-webui",
+    "05122891-0e9f-4941-8e21-cae774447508": "kavedarr",
+    "260f7391-92cb-444f-80b8-df4a85296a83": "media-discovery",
+    "36df7639-fb24-438b-9598-a0dd0ad965f8": "media-discovery",
+    "26a32856-70f3-4b84-8811-b3df7b892f5e": "media-discovery",
+    "cee2cbe7-e238-41a2-a101-32574d8ab204": "media-discovery",
+    "747cf1b6-aa8e-4d28-9173-80423956d86f": "media-discovery",
+    "241dcc46-eea1-4acf-978a-4a9f3ba469b4": "media-discovery",
+    "e3d93034-527f-4f98-a050-c456d28dda41": "media-discovery",
+    "9609dfbc-ee63-4619-90a4-00a51713edee": "media-discovery"
+  },
+  "unprojected_repository": "oh-my-pi"
+}

@@ -9,10 +9,14 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg.rows import dict_row
 
+from omp_work import CONTRACT_VERSION, contract_sha256
+from omp_work.integration.importer import TRANSFORMATION_VERSION
 from omp_work.operations.config import OperationsConfig
+from omp_work.operations.database import migration_set_sha256
+from omp_work.operations.fingerprints import code_fingerprint, config_fingerprint, transform_sha256
 from .canonical import canonical_json, command_sha256, sha256
 from .models import Candidate, CommandEnvelope, CompletionInput, EvidenceReceipt, OperationReceipt, OperationState, RelationEdge
-from .semantics import completion_blockers, would_create_cycle
+from .semantics import completion_blockers, validate_cutover_manifest, would_create_cycle
 
 _RECEIPT_FIELDS = "receipt_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit"
 
@@ -57,7 +61,7 @@ class PostgresWorkStore:
 
     def _execute(self, envelope: CommandEnvelope, actor_id: UUID, actor_kind: str, required_scope: str, request_hash: str, attempt: int) -> tuple[OperationReceipt, dict[str, object]]:
         command = envelope.command
-        serializable = command.type in {"create_work_batch", "put_relation", "remove_relation", "finalize_candidate"}
+        serializable = command.type in {"create_work_batch", "put_relation", "remove_relation", "finalize_candidate", "activate_cutover"}
         conflict = False
         with self._transaction(envelope.workspace_id, actor_id, serializable=serializable) as cur:
             cur.execute("SELECT request_sha256, response, result_sha256, diagnostics FROM omp_control.idempotent_commands WHERE workspace_id=%s AND operation_id=%s FOR UPDATE", (envelope.workspace_id, envelope.operation_id))
@@ -71,6 +75,10 @@ class PostgresWorkStore:
                     result = dict(stored["response"] or {})
                     return OperationReceipt(operation_id=envelope.operation_id, request_id=envelope.request_id, state=OperationState.REPLAYED, request_sha256=request_hash, result_sha256=stored["result_sha256"], diagnostics=tuple(stored["diagnostics"])), result
             if not conflict:
+                if command.type != "activate_cutover":
+                    cur.execute("SELECT epoch_id FROM omp_control.workspace_authority WHERE workspace_id=%s", (envelope.workspace_id,))
+                    if cur.fetchone() is None:
+                        raise WorkStoreError("cutover_invariant", ("authority_absent",))
                 if command.type == "create_work_batch":
                     result = self._create_batch(cur, envelope)
                 elif command.type == "revise_work":
@@ -95,10 +103,14 @@ class PostgresWorkStore:
                     result = self._request_closeout(cur, envelope)
                 elif command.type == "complete_work":
                     result = self._complete_work(cur, envelope)
+                elif command.type == "activate_cutover":
+                    result = self._activate_cutover(cur, envelope)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
                 self._record_event(cur, envelope, actor_id, actor_kind, result)
+                if command.type != "activate_cutover":
+                    cur.execute("UPDATE omp_control.workspace_authority SET first_work_mutation_at=clock_timestamp() WHERE workspace_id=%s AND first_work_mutation_at IS NULL", (envelope.workspace_id,))
                 cur.execute("INSERT INTO omp_control.idempotent_commands(workspace_id,operation_id,request_id,correlation_id,command_type,required_scope,request_sha256,state,response,result_sha256,attempt_count,diagnostics) VALUES(%s,%s,%s,%s,%s,%s,%s,'applied',%s,%s,%s,%s)", (envelope.workspace_id, envelope.operation_id, envelope.request_id, envelope.correlation_id, command.type, required_scope, request_hash, json.dumps(result), result_hash, attempt, []))
                 return OperationReceipt(operation_id=envelope.operation_id, request_id=envelope.request_id, state=OperationState.APPLIED, request_sha256=request_hash, result_sha256=result_hash), result
         raise WorkStoreError("idempotency_conflict")
@@ -340,6 +352,63 @@ class PostgresWorkStore:
         cur.execute("INSERT INTO omp_work.project_health(workspace_id,project_id,health) VALUES(%s,%s,%s) ON CONFLICT(workspace_id,project_id) DO UPDATE SET health=EXCLUDED.health,updated_at=clock_timestamp() RETURNING updated_at", (envelope.workspace_id,payload.project_id,payload.health))
         return {"type": "record_project_health", "health": {"workspace_id": str(envelope.workspace_id), "project_id": str(payload.project_id), "health": payload.health, "updated_at": cur.fetchone()["updated_at"].isoformat()}}
 
+    def _activate_cutover(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
+        manifest = envelope.command.payload.manifest
+        workspace_id = envelope.workspace_id
+
+        def reject(*diagnostics: str) -> None:
+            raise WorkStoreError("cutover_invariant", diagnostics)
+
+        cur.execute("SELECT epoch_id FROM omp_control.workspace_authority WHERE workspace_id=%s", (workspace_id,))
+        if cur.fetchone() is not None:
+            reject("authority_already_active")
+        if manifest.contract_version != CONTRACT_VERSION or manifest.contract_sha256 != contract_sha256():
+            reject("contract_fingerprint_mismatch")
+        if manifest.schema_sha256 != migration_set_sha256():
+            reject("schema_fingerprint_mismatch")
+        if manifest.transform_version != TRANSFORMATION_VERSION or manifest.transform_sha256 != transform_sha256():
+            reject("transform_fingerprint_mismatch")
+        if manifest.code_fingerprint != code_fingerprint() or manifest.config_fingerprint != config_fingerprint(self._config):
+            reject("code_config_fingerprint_mismatch")
+        try:
+            validate_cutover_manifest(manifest.anomalies, manifest.parity_differences)
+        except ValueError:
+            reject("manifest_invariants_failed")
+        if not manifest.command_smoke_results or any(not smoke.passed for smoke in manifest.command_smoke_results):
+            reject("command_smoke_failed")
+
+        cur.execute("SELECT export_id, state, parity_hashes FROM omp_integration.import_batches WHERE workspace_id=%s AND batch_id=%s", (workspace_id, manifest.import_batch_id))
+        batch = cur.fetchone()
+        if batch is None or batch["state"] != "promoted":
+            reject("import_batch_not_promoted")
+        persisted = dict(batch["parity_hashes"] or {})
+        if persisted.get("dimension_counts") != manifest.dimension_counts.model_dump() or persisted.get("dimension_hashes") != manifest.dimension_hashes.model_dump():
+            reject("dimension_parity_mismatch")
+        if persisted.get("parity_groups") != manifest.parity_groups:
+            reject("parity_group_mismatch")
+        cur.execute("SELECT source_boundary, raw_export_sha256, state FROM omp_integration.raw_exports WHERE workspace_id=%s AND export_id=%s", (workspace_id, batch["export_id"]))
+        export = cur.fetchone()
+        if export is None or export["state"] != "complete" or export["raw_export_sha256"] != manifest.raw_export_sha256 or export["source_boundary"].isoformat() != manifest.source_boundary:
+            reject("source_boundary_mismatch")
+        cur.execute("SELECT export_id FROM omp_integration.raw_exports WHERE workspace_id=%s AND state='complete' ORDER BY completed_at DESC, export_id DESC LIMIT 1", (workspace_id,))
+        latest = cur.fetchone()
+        if latest is None or latest["export_id"] != batch["export_id"]:
+            reject("stale_import_batch")
+        cur.execute("SELECT count(*) AS n FROM omp_integration.migration_anomalies WHERE workspace_id=%s AND batch_id=%s AND disposition='blocking'", (workspace_id, manifest.import_batch_id))
+        if cur.fetchone()["n"]:
+            reject("blocking_anomalies")
+        for kind, outcome_pattern, receipt in (("backup", "passed", manifest.backup_receipt_sha256), ("restore_drill", "passed:%", manifest.restore_receipt_sha256)):
+            cur.execute("SELECT 1 FROM omp_control.operations_evidence WHERE kind=%s AND outcome LIKE %s AND receipt_sha256=%s", (kind, outcome_pattern, receipt))
+            if cur.fetchone() is None:
+                reject(f"{kind}_receipt_mismatch")
+
+        manifest_json = json.loads(manifest.model_dump_json())
+        manifest_hash = sha256(manifest_json)
+        cur.execute("INSERT INTO omp_control.cutover_epochs(epoch_id,workspace_id,state,candidate_manifest,candidate_manifest_sha256,activated_at) VALUES(%s,%s,'active',%s,%s,clock_timestamp())", (manifest.epoch_id, workspace_id, json.dumps(manifest_json), manifest_hash))
+        cur.execute("INSERT INTO omp_control.workspace_authority(workspace_id,epoch_id,activated_at) VALUES(%s,%s,clock_timestamp()) RETURNING activated_at", (workspace_id, manifest.epoch_id))
+        activated_at = cur.fetchone()["activated_at"]
+        return {"type": "activate_cutover", "epoch_id": str(manifest.epoch_id), "authority": "work", "candidate_manifest_sha256": manifest_hash, "activated_at": activated_at.isoformat()}
+
     def _item_view(self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, *, key: str, candidate_allowlist: frozenset[UUID] | None = None) -> dict[str, object]:
         cur.execute("SELECT i.work_id,i.workspace_id,i.state,i.project_id,i.archived,i.current_candidate_id,a.key,a.origin,r.revision_id,r.revision_number,r.title,r.description,r.scope,r.content_sha256,r.created_by,r.supplied_at FROM omp_work.work_items i JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias JOIN omp_work.work_revisions r ON r.revision_id=i.current_revision_id WHERE i.workspace_id=%s AND a.key=%s", (workspace_id, key))
         row = cur.fetchone()
@@ -401,4 +470,10 @@ class PostgresWorkStore:
                 if not row or not row["result_sha256"]:
                     raise WorkStoreError("invalid_request")
                 return {"receipt": {"operation_id": row["operation_id"], "request_id": row["request_id"], "state": row["state"], "request_sha256": row["request_sha256"], "result_sha256": row["result_sha256"], "diagnostics": list(row["diagnostics"])}, "command_type": row["command_type"], "request_id": row["request_id"], "correlation_id": row["correlation_id"], "result": row["response"]}
+            if kind == "authority":
+                cur.execute("SELECT a.epoch_id,a.activated_at,a.first_work_mutation_at,e.state AS epoch_state FROM omp_control.workspace_authority a JOIN omp_control.cutover_epochs e ON e.epoch_id=a.epoch_id AND e.workspace_id=a.workspace_id WHERE a.workspace_id=%s", (workspace_id,))
+                row = cur.fetchone()
+                if not row:
+                    return {"authority": "linear", "epoch_id": None, "epoch_state": None, "activated_at": None, "first_work_mutation_at": None}
+                return {"authority": "work", "epoch_id": str(row["epoch_id"]), "epoch_state": row["epoch_state"], "activated_at": row["activated_at"].isoformat(), "first_work_mutation_at": row["first_work_mutation_at"].isoformat() if row["first_work_mutation_at"] else None}
             raise WorkStoreError("invalid_request")

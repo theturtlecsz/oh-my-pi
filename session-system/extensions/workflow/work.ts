@@ -423,8 +423,9 @@ export function createWorkBackend(
 		async statusLines(now: NowRef | null): Promise<string[]> {
 			const lines: string[] = [];
 			try {
-				const [live, ready] = await Promise.all([client.healthLive(), client.healthReady()]);
+				const [live, ready, authority] = await Promise.all([client.healthLive(), client.healthReady(), client.authority()]);
 				lines.push(`service: ${ready.ready ? "ready" : live.live ? "live, not ready" : "down"}${ready.alerts.length ? ` (${ready.alerts.join("; ")})` : ""}`);
+				lines.push(`authority: ${authority.authority}${authority.epoch_id ? ` (epoch ${authority.epoch_id.slice(0, 8)}…, ${authority.epoch_state}${authority.first_work_mutation_at ? ", writes active" : ", no writes yet"})` : ""}`);
 			} catch (e) {
 				lines.push(`service: unreachable — ${oneRecovery(redactSecrets(String(e)))}`);
 				return bounded(lines);

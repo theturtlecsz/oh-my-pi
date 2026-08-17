@@ -213,6 +213,7 @@ class CutoverManifest(StrictModel):
     import_batch_id: UUID
     dimension_counts: ReconciliationCounts
     dimension_hashes: ReconciliationHashes
+    parity_groups: dict[str, str]
     anomalies: tuple[Anomaly, ...]
     parity_differences: tuple[str, ...] = ()
     backup_receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -538,4 +539,4 @@ class Approval(StrictModel):
     contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_by: Literal["owner"]
     approved_at: datetime
-    issue: Literal["HOME-142", "HOME-147"]
+    issue: Literal["HOME-142", "HOME-147", "HOME-148"]
