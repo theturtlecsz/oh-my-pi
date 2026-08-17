@@ -28,15 +28,18 @@ export function isLoopback(url: string): boolean {
 	}
 }
 
+/** Shared XDG-aware config root (client.json, pending ops, the Linear freeze marker). */
+export function ompWorkConfigDir(): string {
+	return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "omp-work");
+}
+
 function configPath(): string {
-	const xdg = process.env.XDG_CONFIG_HOME;
-	return join(xdg || join(homedir(), ".config"), "omp-work", "client.json");
+	return join(ompWorkConfigDir(), "client.json");
 }
 
 /** Durable pending-operation journal directory (workflow/pending-ops.ts). */
 export function pendingOpsDir(): string {
-	const xdg = process.env.XDG_CONFIG_HOME;
-	return join(xdg || join(homedir(), ".config"), "omp-work", "pending-operations");
+	return join(ompWorkConfigDir(), "pending-operations");
 }
 
 /** null = not configured (extension stays dormant); throws on malformed config. */

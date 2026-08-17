@@ -17,9 +17,17 @@ if (process.env.OMP_WORK_POSTGRES_INTEGRATION !== "1") {
 	process.exit(0);
 }
 
-const WORKSPACE = "00000000-0000-4000-8000-0000000000aa";
-const OWNER = "00000000-0000-4000-8000-0000000000bb";
+// HOME-148 reuse mode (cutover coordinator): the coordinator owns postgres, the
+// service, and capabilities; this script drives the probe repo + harness against
+// the already-running service. Env: OMP_WORK_SMOKE_REUSE=1,
+// OMP_WORK_SMOKE_BASE_URL, OMP_WORK_SMOKE_WORKSPACE, OMP_WORK_SMOKE_OWNER,
+// OMP_WORK_SMOKE_XDG (isolated config root), OMP_WORK_SMOKE_CAPABILITIES
+// (dir holding owner.json), OMP_WORK_SMOKE_PROJECT (imported project name).
+const REUSE = process.env.OMP_WORK_SMOKE_REUSE === "1";
+const WORKSPACE = process.env.OMP_WORK_SMOKE_WORKSPACE ?? "00000000-0000-4000-8000-0000000000aa";
+const OWNER = process.env.OMP_WORK_SMOKE_OWNER ?? "00000000-0000-4000-8000-0000000000bb";
 const PROJECT = "00000000-0000-4000-8000-0000000000cc";
+const PROJECT_NAME = process.env.OMP_WORK_SMOKE_PROJECT ?? "Smoke Project";
 
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const pythonDir = path.join(repoRoot, "python/omp-work");
@@ -33,22 +41,38 @@ function freePort(): number {
 }
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-work-smoke-"));
-const xdg = path.join(root, "xdg");
+const xdg = REUSE ? (process.env.OMP_WORK_SMOKE_XDG ?? path.join(root, "xdg")) : path.join(root, "xdg");
 const home = path.join(root, "home");
 fs.mkdirSync(xdg, { recursive: true });
 fs.mkdirSync(home, { recursive: true });
 const pgPort = freePort();
 const httpPort = freePort();
-const baseUrl = `http://127.0.0.1:${httpPort}`;
+const baseUrl = REUSE ? (process.env.OMP_WORK_SMOKE_BASE_URL ?? "") : `http://127.0.0.1:${httpPort}`;
+if (REUSE && !baseUrl) throw new Error("reuse mode requires OMP_WORK_SMOKE_BASE_URL");
 const pgData = path.join(root, "pgdata");
 let service: { kill(): void } | undefined;
 const cleanup = () => {
+	if (REUSE) {
+		// The coordinator owns postgres, the service, and the provided XDG tree.
+		fs.rmSync(root, { recursive: true, force: true });
+		return;
+	}
 	service?.kill();
 	Bun.spawnSync(["pg_ctl", "-D", pgData, "-m", "immediate", "stop"], { stdout: "ignore", stderr: "ignore" });
 	fs.rmSync(root, { recursive: true, force: true });
 };
 
 try {
+	if (REUSE) {
+		// Wire the isolated XDG exactly like `capabilities init` would: owner
+		// capability + the shared client.json contract (see capabilities.py).
+		const capsDir = path.join(xdg, "omp/work-ledger/capabilities");
+		fs.mkdirSync(capsDir, { recursive: true });
+		fs.copyFileSync(path.join(process.env.OMP_WORK_SMOKE_CAPABILITIES ?? "", "owner.json"), path.join(capsDir, "owner.json"));
+		const clientDir = path.join(xdg, "omp-work");
+		fs.mkdirSync(clientDir, { recursive: true });
+		fs.writeFileSync(path.join(clientDir, "client.json"), JSON.stringify({ base_url: baseUrl, workspace_id: WORKSPACE, owner_id: OWNER, bearer_file: path.join(capsDir, "owner.json") }, null, 2), { mode: 0o600 });
+	}
 	const py = (args: string[]) => {
 		const run = Bun.spawnSync(["uv", "run", "python", "-m", "omp_work", ...args], {
 			cwd: pythonDir,
@@ -57,32 +81,39 @@ try {
 		if (run.exitCode !== 0) throw new Error(`omp_work ${args.join(" ")} failed: ${run.stderr.toString()}`);
 		return run.stdout.toString();
 	};
-	py(["ops", "credentials", "init"]);
-	const pgSecret = fs.readFileSync(path.join(xdg, "omp/work-ledger/credentials/postgres"), "utf8").trim();
-	// local postgres: initdb as the current user, TCP loopback + a private socket dir
-	const pwfile = path.join(root, "pgpw");
-	fs.writeFileSync(pwfile, `${pgSecret}\n`, { mode: 0o600 });
-	let run = Bun.spawnSync(["initdb", "-D", pgData, "-U", "postgres", "--pwfile", pwfile, "--auth-host=scram-sha-256", "--auth-local=trust"], { stderr: "pipe" });
-	if (run.exitCode !== 0) throw new Error(`initdb failed: ${run.stderr.toString()}`);
-	run = Bun.spawnSync(["pg_ctl", "-D", pgData, "-w", "-l", path.join(root, "pg.log"), "-o", `-p ${pgPort} -k ${root} -c listen_addresses=127.0.0.1`, "start"], { stderr: "pipe" });
-	if (run.exitCode !== 0) throw new Error(`pg_ctl start failed: ${run.stderr.toString()}`);
+	if (!REUSE) py(["ops", "credentials", "init"]);
+	const pgSecret = REUSE ? "" : fs.readFileSync(path.join(xdg, "omp/work-ledger/credentials/postgres"), "utf8").trim();
+	if (!REUSE) {
+		// local postgres: initdb as the current user, TCP loopback + a private socket dir
+		const pwfile = path.join(root, "pgpw");
+		fs.writeFileSync(pwfile, `${pgSecret}\n`, { mode: 0o600 });
+		let run = Bun.spawnSync(["initdb", "-D", pgData, "-U", "postgres", "--pwfile", pwfile, "--auth-host=scram-sha-256", "--auth-local=trust"], { stderr: "pipe" });
+		if (run.exitCode !== 0) throw new Error(`initdb failed: ${run.stderr.toString()}`);
+		run = Bun.spawnSync(["pg_ctl", "-D", pgData, "-w", "-l", path.join(root, "pg.log"), "-o", `-p ${pgPort} -k ${root} -c listen_addresses=127.0.0.1`, "start"], { stderr: "pipe" });
+		if (run.exitCode !== 0) throw new Error(`pg_ctl start failed: ${run.stderr.toString()}`);
+	}
 	const psql = (sql: string) => {
 		const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "postgres", "-d", "omp_work", "-v", "ON_ERROR_STOP=1", "-c", sql], {
 			env: { ...process.env, PGPASSWORD: pgSecret },
 		});
 		if (res.exitCode !== 0) throw new Error(`psql failed: ${res.stderr.toString()}`);
 	};
-	for (let attempt = 0; attempt < 30; attempt++) {
-		// Integration exception: awaits a real postgres condition (pg_isready exit code); the sleep is only the poll interval.
-		if (Bun.spawnSync(["pg_isready", "-h", "127.0.0.1", "-p", String(pgPort)]).exitCode === 0) break;
-		if (attempt === 29) throw new Error("postgres never became ready");
-		await Bun.sleep(500);
+	if (!REUSE) {
+		for (let attempt = 0; attempt < 30; attempt++) {
+			// Integration exception: awaits a real postgres condition (pg_isready exit code); the sleep is only the poll interval.
+			if (Bun.spawnSync(["pg_isready", "-h", "127.0.0.1", "-p", String(pgPort)]).exitCode === 0) break;
+			if (attempt === 29) throw new Error("postgres never became ready");
+			await Bun.sleep(500);
+		}
+		py(["ops", "bootstrap"]);
+		py(["ops", "capabilities", "init", "--workspace-id", WORKSPACE, "--owner-id", OWNER, "--base-url", baseUrl]);
+		// Projects enter the ledger only via the Linear import (no v1 command
+		// creates them). Seed the smoke project the way the importer leaves it.
+		psql(`INSERT INTO omp_control.workspaces(workspace_id) VALUES ('${WORKSPACE}') ON CONFLICT DO NOTHING; INSERT INTO omp_work.projects(project_id, workspace_id, name, kind) VALUES ('${PROJECT}', '${WORKSPACE}', 'Smoke Project', 'surface');`);
+		// Test-only authority seeding (mirrors tests/pg_native.py::seed_authority):
+		// the HOME-148 mutation fence refuses every write until Work is authoritative.
+		psql(`INSERT INTO omp_control.cutover_epochs(workspace_id, epoch_id, state, candidate_manifest, candidate_manifest_sha256) VALUES ('${WORKSPACE}', '00000000-0000-4000-8000-0000000000dd', 'sealed', '{}'::jsonb, '${"0".repeat(64)}') ON CONFLICT DO NOTHING; INSERT INTO omp_control.workspace_authority(workspace_id, epoch_id) VALUES ('${WORKSPACE}', '00000000-0000-4000-8000-0000000000dd') ON CONFLICT DO NOTHING;`);
 	}
-	py(["ops", "bootstrap"]);
-	py(["ops", "capabilities", "init", "--workspace-id", WORKSPACE, "--owner-id", OWNER, "--base-url", baseUrl]);
-	// Projects enter the ledger only via the Linear import (no v1 command
-	// creates them). Seed the smoke project the way the importer leaves it.
-	psql(`INSERT INTO omp_control.workspaces(workspace_id) VALUES ('${WORKSPACE}') ON CONFLICT DO NOTHING; INSERT INTO omp_work.projects(project_id, workspace_id, name, kind) VALUES ('${PROJECT}', '${WORKSPACE}', 'Smoke Project', 'surface');`);
 
 	// git: bare remote + probe repo scoped to the smoke project
 	const remote = path.join(root, "remote.git");
@@ -97,7 +128,7 @@ try {
 	git(probe, ["init", "-q", "-b", "main"]);
 	git(probe, ["config", "user.email", "smoke@example.com"]);
 	git(probe, ["config", "user.name", "Smoke"]);
-	fs.writeFileSync(path.join(probe, ".work-project"), "Smoke Project\n");
+	fs.writeFileSync(path.join(probe, ".work-project"), `${PROJECT_NAME}\n`);
 	git(probe, ["add", ".work-project"]);
 	git(probe, ["commit", "-q", "-m", "init"]);
 	git(probe, ["remote", "add", "origin", remote]);
@@ -105,7 +136,7 @@ try {
 	const initialSha = git(probe, ["rev-parse", "HEAD"]);
 
 	// service up (spawned only now: __main__ checks DB readiness before uvicorn starts)
-	service = Bun.spawn(["uv", "run", "python", "-m", "omp_work", "serve", "--port", String(httpPort), "--capabilities-dir", path.join(xdg, "omp/work-ledger/capabilities")], {
+	if (!REUSE) service = Bun.spawn(["uv", "run", "python", "-m", "omp_work", "serve", "--port", String(httpPort), "--capabilities-dir", path.join(xdg, "omp/work-ledger/capabilities")], {
 		cwd: pythonDir,
 		env: { ...process.env, XDG_CONFIG_HOME: xdg, XDG_STATE_HOME: xdg, XDG_DATA_HOME: xdg, OMP_WORK_POSTGRES_PORT: String(pgPort) },
 		stdout: "ignore",
@@ -132,6 +163,7 @@ try {
 	if (process.env.SMOKE_DEBUG) console.error(JSON.stringify(out, null, 1));
 	const key = String(out.key);
 	assert.match(key, /^(HOME|OMP)-\d+$/, "captured item key");
+	assert.ok(String(out.firstScreen).length > 0 && !String(out.firstScreen).includes("error"), "first screen renders");
 	assert.ok(String(out.captured).includes("Captured →"), "/capture filed the item");
 	assert.ok(String(out.nowAfterSelect).includes(key), "/now selected the item");
 	assert.equal(out.plan, "stamped", "plan stamp landed");

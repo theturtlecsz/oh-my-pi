@@ -30,6 +30,7 @@ import {
 	type WorkflowBackend,
 	type WorkflowCheckpoint,
 } from "./backend";
+import { ompWorkConfigDir } from "./config";
 
 /** Resolve a committed single-line marker file (e.g. .linear-project, .work-project)
  *  from the git toplevel of cwd, falling back to the primary checkout root via
@@ -65,6 +66,8 @@ const QUEUE_LABEL = "waiting-on-chris";
 const DRAIN_MAX_QUEUE = 8;
 const DRAIN_MAX_AGE_DAYS = 14;
 const KEY_FILE = join(homedir(), ".config", "linear.env");
+/** Written atomically by `ops cutover execute`; presence freezes every Linear mutation. */
+const FREEZE_FILE = join(ompWorkConfigDir(), "linear-frozen.json");
 const API = "https://api.linear.app/graphql";
 const DONE_SUFFIX: Record<string, string> = { completed: " (done)", canceled: " (done)" };
 const STATE_BAND: Record<string, number> = { started: 0, planned: 1 };
@@ -83,6 +86,16 @@ export function apiKey(): string | null {
 async function gql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
 	const key = apiKey();
 	if (!key) throw new Error(`no key file at ${KEY_FILE}`);
+	if (/^\s*mutation\b/.test(query)) {
+		let frozen = false;
+		try {
+			readFileSync(FREEZE_FILE);
+			frozen = true;
+		} catch {
+			/* marker absent — writes still allowed */
+		}
+		if (frozen) throw new Error("linear_frozen: Linear writes are frozen by the Work Ledger cutover — request never sent");
+	}
 	const res = await fetch(API, {
 		method: "POST",
 		headers: { Authorization: key, "Content-Type": "application/json" },

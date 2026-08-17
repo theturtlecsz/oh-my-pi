@@ -351,7 +351,7 @@ def test_credentials_init_is_idempotent_and_cutover_capability_is_guarded(tmp_pa
 
     path = provision_cutover(config, workspace_id=workspace_id, actor_id=actor_id)
     data = json.loads(path.read_text())
-    assert data["actor_id"] == str(actor_id) and data["scopes"] == ["work.operate"] and data["workspaces"] == [str(workspace_id)]
+    assert data["actor_id"] == str(actor_id) and data["scopes"] == ["work.operate", "work.read"] and data["workspaces"] == [str(workspace_id)]
     with pytest.raises(ValueError, match="rotate"):
         provision_cutover(config, workspace_id=workspace_id, actor_id=actor_id)
     rotated = provision_cutover(config, workspace_id=workspace_id, actor_id=actor_id, rotate=True)

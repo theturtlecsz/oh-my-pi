@@ -100,6 +100,14 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
         export.add_argument("--workspace-id", required=True)
     resume = linear_export.add_parser("resume")
     resume.add_argument("--export-id", required=True)
+    cutover = commands.add_parser("cutover").add_subparsers(dest="cutover_command", required=True)
+    cutover.add_parser("preflight")
+    rehearse = cutover.add_parser("rehearse")
+    rehearse.add_argument("--ordinal", type=int, required=True, choices=(1, 2))
+    rehearse.add_argument("--retain-candidate", action="store_true")
+    cutover.add_parser("execute")
+    cutover.add_parser("finalize")
+    cutover.add_parser("rollback")
     linear_import = commands.add_parser("linear-import").add_subparsers(dest="linear_import_command", required=True)
     stage = linear_import.add_parser("stage")
     stage.add_argument("--workspace-id", required=True)
@@ -203,5 +211,22 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
         print(json.dumps(output, sort_keys=True))
         if summary.state == "blocked":
             raise SystemExit(2)
+    elif command == "cutover":
+        from . import cutover as cutover_ops
+        mapping = Path(os.environ.get("OMP_WORK_IMPORT_MAP", "infra/work-ledger/linear-import-map.json"))
+        try:
+            if args.cutover_command == "preflight":
+                print(json.dumps(cutover_ops.preflight(config, mapping_file=mapping), indent=2, sort_keys=True, default=str))
+            elif args.cutover_command == "rehearse":
+                print(json.dumps(cutover_ops.rehearse(config, ordinal=args.ordinal, retain_candidate=args.retain_candidate, mapping_file=mapping), indent=2, sort_keys=True, default=str))
+            elif args.cutover_command == "execute":
+                print(json.dumps(cutover_ops.execute(config, mapping_file=mapping), indent=2, sort_keys=True, default=str))
+            elif args.cutover_command == "finalize":
+                print(json.dumps(cutover_ops.finalize(config), indent=2, sort_keys=True, default=str))
+            else:
+                print(json.dumps(cutover_ops.rollback(config), indent=2, sort_keys=True, default=str))
+        except cutover_ops.CutoverBlocked as err:
+            print(json.dumps({"blocked": err.blockers}, indent=2, sort_keys=True))
+            raise SystemExit(2) from err
     else:
         print(backup.restore_drill(config, reason=args.reason))

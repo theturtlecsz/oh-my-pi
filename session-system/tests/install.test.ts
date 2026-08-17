@@ -46,10 +46,14 @@ describe("install.sh", () => {
 		expect(fs.realpathSync(live(LINEAR_ENTRY))).toBe(fs.realpathSync(path.join(ss, "extensions/linear-now.ts")));
 		expect(fs.existsSync(live(WORK_ENTRY))).toBe(false);
 	});
-	test("is idempotent on re-run", () => {
-		const second = run();
-		expect(second.exitCode).toBe(0);
-		expect(second.stdout.toString()).not.toContain("linked"); // all "ok"
+	test("re-run flips atomically: staged set is retired and exactly one backend entry is live", () => {
+		expect(run().exitCode).toBe(0);
+		expect(fs.lstatSync(live(".omp/agent/extensions")).isDirectory()).toBe(true);
+		// staged sets from every run (including crashed ones) are retired
+		const leftovers = fs.readdirSync(live(".omp/agent")).filter((n) => n.startsWith(".extensions-set.") || n.startsWith(".extensions-legacy."));
+		expect(leftovers).toHaveLength(0);
+		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(true);
+		expect(fs.existsSync(live(WORK_ENTRY))).toBe(false);
 	});
 	test("--backend work installs exactly one entry: work live, linear gone, workflow kept", () => {
 		expect(run(["--backend", "work"]).exitCode).toBe(0);

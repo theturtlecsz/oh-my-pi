@@ -89,6 +89,9 @@ const summaryMessage = {
 	message: { role: "custom", customType: "skill-prompt", attribution: "user", details: { name: "summary", path: "/x/SKILL.md" }, content: "summary", timestamp: Date.now() },
 };
 
+// 0. First-screen sanity: what the operator sees on first open (HOME-148).
+out.firstScreen = await execute({ action: "status" });
+
 // 1. /capture files the item (owner-confirmed), then /now selects it.
 const cmdCtx = runner.createCommandContext();
 const capture = extension.commands.get("capture");

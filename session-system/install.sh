@@ -33,23 +33,63 @@ unplace() { # remove a live artifact left by the other backend
   [ -e "$dst" ] || [ -L "$dst" ] && { rm -rf "$dst"; echo "removed $dst"; } || true
 }
 
-# workflow/ is shared support code: linear-now.ts and work-now.ts both import it.
-# Exactly one top-level backend entry is live at a time; the other is removed.
-place extensions/workflow "$HOME/.omp/agent/extensions/workflow"
+# workflow/ and the model-bookends files are shared support code; exactly one
+# top-level backend entry (linear-now.ts or work-now.ts) is live at a time.
+# The whole extensions set is staged in a sibling directory and activated with a
+# single renameat2(RENAME_EXCHANGE): a reader always sees the complete old set or
+# the complete new set, and a crash before the exchange leaves the old set
+# untouched. On a first install (nothing to exchange) a bare rename(2) is atomic.
+EXT_DIR="$HOME/.omp/agent/extensions"
+SET_DIR="$HOME/.omp/agent/.extensions-set.$BACKEND.$$"
+mkdir -p "$SET_DIR"
+stage() { # stage <repo-relative> <name-in-set>
+  local src="$REPO/$1" dst="$SET_DIR/$2"
+  if [ "$MODE" = "copy" ]; then cp -r "$src" "$dst"; else ln -s "$src" "$dst"; fi
+  echo "staged  $EXT_DIR/$2"
+}
+stage extensions/workflow workflow
 if [ "$BACKEND" = "work" ]; then
-  place extensions/work-now.ts "$HOME/.omp/agent/extensions/work-now.ts"
-  unplace "$HOME/.omp/agent/extensions/linear-now.ts"
+  stage extensions/work-now.ts work-now.ts
 else
-  place extensions/linear-now.ts "$HOME/.omp/agent/extensions/linear-now.ts"
-  unplace "$HOME/.omp/agent/extensions/work-now.ts"
+  stage extensions/linear-now.ts linear-now.ts
 fi
-place extensions/model-bookends.ts "$HOME/.omp/agent/extensions/model-bookends.ts"
-place extensions/model-bookends-audit.md "$HOME/.omp/agent/extensions/model-bookends-audit.md"
-place extensions/model-bookends-refused.md "$HOME/.omp/agent/extensions/model-bookends-refused.md"
-place extensions/model-bookends-schema-refused.md "$HOME/.omp/agent/extensions/model-bookends-schema-refused.md"
-place extensions/model-bookends-stop-no-audit.md "$HOME/.omp/agent/extensions/model-bookends-stop-no-audit.md"
-place extensions/model-bookends-stop-not-forwarded.md "$HOME/.omp/agent/extensions/model-bookends-stop-not-forwarded.md"
-place extensions/model-bookends-stop-refused.md "$HOME/.omp/agent/extensions/model-bookends-stop-refused.md"
+stage extensions/model-bookends.ts model-bookends.ts
+stage extensions/model-bookends-audit.md model-bookends-audit.md
+stage extensions/model-bookends-refused.md model-bookends-refused.md
+stage extensions/model-bookends-schema-refused.md model-bookends-schema-refused.md
+stage extensions/model-bookends-stop-no-audit.md model-bookends-stop-no-audit.md
+stage extensions/model-bookends-stop-not-forwarded.md model-bookends-stop-not-forwarded.md
+stage extensions/model-bookends-stop-refused.md model-bookends-stop-refused.md
+
+exchange_dirs() { # exchange_dirs <live-dir> <staged-dir> — atomic swap (x86_64 Linux)
+  python3 - "$1" "$2" <<'PY'
+import ctypes, os, sys
+libc = ctypes.CDLL(None, use_errno=True)
+# renameat2(AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE): syscall 316 on x86_64
+a, b = os.fsencode(sys.argv[1]), os.fsencode(sys.argv[2])
+if libc.syscall(316, -100, a, -100, b, 2) != 0:
+    err = ctypes.get_errno()
+    raise OSError(err, os.strerror(err))
+PY
+}
+if [ -d "$EXT_DIR" ] && [ ! -L "$EXT_DIR" ]; then
+  exchange_dirs "$EXT_DIR" "$SET_DIR"   # SET_DIR now holds the old tree
+  rm -rf "$SET_DIR"
+  echo "flipped $EXT_DIR (atomic exchange)"
+elif [ -e "$EXT_DIR" ] || [ -L "$EXT_DIR" ]; then
+  # foreign layout (symlink/file) not produced by this script: replace wholesale
+  mv "$EXT_DIR" "$HOME/.omp/agent/.extensions-legacy.$$"
+  mv -T "$SET_DIR" "$EXT_DIR"
+  rm -rf "$HOME/.omp/agent/.extensions-legacy.$$"
+  echo "flipped $EXT_DIR (replaced foreign layout)"
+else
+  mv -T "$SET_DIR" "$EXT_DIR"
+  echo "flipped $EXT_DIR (first install)"
+fi
+for old in "$HOME/.omp/agent"/.extensions-set.*; do
+  [ -e "$old" ] || continue
+  rm -rf "$old"   # crashed leftovers from earlier runs
+done
 place agents/auditor.md           "$HOME/.omp/agent/agents/auditor.md"
 place rules/work-plan.md      "$HOME/.omp/agent/rules/work-plan.md"
 unplace "$HOME/.omp/agent/rules/linear-plan.md"

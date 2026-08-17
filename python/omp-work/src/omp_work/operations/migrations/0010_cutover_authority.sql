@@ -56,6 +56,8 @@ BEGIN
 END $$;
 CREATE TRIGGER workspace_authority_guard BEFORE UPDATE ON omp_control.workspace_authority FOR EACH ROW EXECUTE FUNCTION omp_control.guard_workspace_authority();
 ALTER TABLE omp_control.operations_evidence ADD COLUMN receipt_sha256 text CHECK (receipt_sha256 ~ '^[0-9a-f]{64}$');
+-- Legacy rows predate receipts: backfill a deterministic per-row 64-hex value.
+UPDATE omp_control.operations_evidence SET receipt_sha256 = encode(sha256(('legacy-pre-home-148:' || id::text)::bytea), 'hex') WHERE receipt_sha256 IS NULL;
 ALTER TABLE omp_control.operations_evidence ALTER COLUMN receipt_sha256 SET NOT NULL;
 -- The 0003 install_workspace_rls already permits omp_control; apply the same
 -- forced workspace-claim policy to the authority tables.
