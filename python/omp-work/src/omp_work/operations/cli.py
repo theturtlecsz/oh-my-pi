@@ -108,6 +108,7 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     cutover.add_parser("execute")
     cutover.add_parser("finalize")
     cutover.add_parser("rollback")
+    cutover.add_parser("status")
     linear_import = commands.add_parser("linear-import").add_subparsers(dest="linear_import_command", required=True)
     stage = linear_import.add_parser("stage")
     stage.add_argument("--workspace-id", required=True)
@@ -223,8 +224,10 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
                 print(json.dumps(cutover_ops.execute(config, mapping_file=mapping), indent=2, sort_keys=True, default=str))
             elif args.cutover_command == "finalize":
                 print(json.dumps(cutover_ops.finalize(config), indent=2, sort_keys=True, default=str))
-            else:
+            elif args.cutover_command == "rollback":
                 print(json.dumps(cutover_ops.rollback(config), indent=2, sort_keys=True, default=str))
+            elif args.cutover_command == "status":
+                print(json.dumps(cutover_ops.status(config), indent=2, sort_keys=True, default=str))
         except cutover_ops.CutoverBlocked as err:
             print(json.dumps({"blocked": err.blockers}, indent=2, sort_keys=True))
             raise SystemExit(2) from err

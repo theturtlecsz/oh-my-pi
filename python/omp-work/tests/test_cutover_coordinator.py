@@ -141,3 +141,29 @@ def test_rollback_pre_mutation_restores_linear(tmp_path: Path, monkeypatch: pyte
             assert cur.fetchone() == ("rolled_back", "pre_write")
             cur.execute("SELECT count(*) FROM omp_control.workspace_authority WHERE workspace_id = %s", (str(WORKSPACE),))
             assert cur.fetchone() == (0,), "work authority gone"
+
+
+@pytest.mark.skipif(os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1", reason="set OMP_WORK_POSTGRES_INTEGRATION=1")
+def test_status_reports_epoch_and_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    config = _config(tmp_path)
+    empty = cutover.status(config)
+    assert empty["authority"] == "linear" and empty["epoch"] is None and empty["freeze_marker"] is False
+    with native_postgres(tmp_path, config.port):
+        bootstrap(config)
+        state = _candidate_state(config.port)
+        epoch_id = state["window"]["epoch_id"]
+        with psycopg.connect(**config.connection_kwargs("postgres")) as conn, conn.cursor() as cur:
+            cur.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (str(WORKSPACE),))
+            cur.execute(
+                "INSERT INTO omp_control.cutover_epochs(workspace_id, epoch_id, state, candidate_manifest, candidate_manifest_sha256, revoked_at) VALUES (%s, %s, 'sealed', '{}'::jsonb, %s, clock_timestamp())",
+                (str(WORKSPACE), str(epoch_id), "0" * 64),
+            )
+            cur.execute("INSERT INTO omp_control.workspace_authority(workspace_id, epoch_id, first_work_mutation_at) VALUES (%s, %s, clock_timestamp())", (str(WORKSPACE), str(epoch_id)))
+            conn.commit()
+        _write_state(config, state)
+        report = cutover.status(config)
+        assert report["authority"] == "work"
+        epoch = report["epoch"]
+        assert epoch["epoch_id"] == epoch_id and epoch["state"] == "sealed"
+        assert epoch["first_work_mutation_at"] is not None and epoch["revoked_at"] is not None

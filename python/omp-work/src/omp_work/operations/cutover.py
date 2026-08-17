@@ -202,7 +202,8 @@ def _epoch_row(config: OperationsConfig, workspace_id: UUID) -> dict[str, object
     while Work is still authoritative."""
     with psycopg.connect(**config.connection_kwargs("postgres")) as connection, connection.cursor() as cur:
         cur.execute(
-            "SELECT e.epoch_id, e.state, a.first_work_mutation_at, e.candidate_manifest_sha256"
+            "SELECT e.epoch_id, e.state, a.first_work_mutation_at, e.candidate_manifest_sha256,"
+            " e.revoked_at, e.final_report_sha256"
             " FROM omp_control.cutover_epochs e"
             " LEFT JOIN omp_control.workspace_authority a ON a.epoch_id = e.epoch_id"
             " WHERE e.workspace_id = %s ORDER BY e.activated_at DESC LIMIT 1",
@@ -211,7 +212,7 @@ def _epoch_row(config: OperationsConfig, workspace_id: UUID) -> dict[str, object
         row = cur.fetchone()
     if row is None:
         return None
-    return {"epoch_id": row[0], "state": row[1], "first_work_mutation_at": row[2], "candidate_manifest_sha256": row[3]}
+    return {"epoch_id": row[0], "state": row[1], "first_work_mutation_at": row[2], "candidate_manifest_sha256": row[3], "revoked_at": row[4], "final_report_sha256": row[5]}
 
 
 # --- preflight ---
@@ -715,3 +716,39 @@ def rollback(config: OperationsConfig) -> dict[str, object]:
     state["window"] = {"state": "rolled_back", "at": datetime.now(timezone.utc).isoformat()}
     _save_state(config, state)
     return {"rolled_back": True, "epoch_id": str(epoch["epoch_id"]) if epoch else None}
+
+
+# --- status ---
+
+def status(config: OperationsConfig) -> dict[str, object]:
+    """Read-only operator view: coordinator state plus the epoch/authority record."""
+    state = _load_state(config)
+    report: dict[str, object] = {
+        "rehearsals": state.get("rehearsals", {}),
+        "candidate_retained": isinstance(state.get("candidate"), dict),
+        "window": state.get("window"),
+        "freeze_marker": freeze_marker_path().exists(),
+        "fingerprints": _fingerprints(),
+    }
+    epoch: dict[str, object] | None = None
+    candidate = state.get("candidate")
+    window = state.get("window")
+    if isinstance(candidate, dict):
+        port = int(window["port"]) if isinstance(window, dict) and "port" in window else config.port
+        try:
+            row = _epoch_row(replace(config, port=port), UUID(str(candidate["workspace_id"])))
+        except Exception as error:  # cluster may be stopped; status must stay read-only-safe
+            row = {"error": f"{type(error).__name__}: {error}"}
+        if row is not None:
+            epoch = {
+                "epoch_id": str(row.get("epoch_id", "")),
+                "state": row.get("state"),
+                "first_work_mutation_at": str(row["first_work_mutation_at"]) if row.get("first_work_mutation_at") else None,
+                "revoked_at": str(row["revoked_at"]) if row.get("revoked_at") else None,
+                "candidate_manifest_sha256": row.get("candidate_manifest_sha256"),
+                "final_report_sha256": row.get("final_report_sha256"),
+                "error": row.get("error"),
+            }
+    report["epoch"] = epoch
+    report["authority"] = "work" if isinstance(epoch, dict) and epoch.get("state") in ("active", "sealed") else "linear"
+    return report
