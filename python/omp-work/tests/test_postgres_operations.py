@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 
@@ -50,7 +51,7 @@ def config(tmp_path: Path) -> OperationsConfig:
 
 def test_pinned_migration_set_is_forward_only() -> None:
     files = migrations()
-    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     assert all(path.name.startswith(f"{ordinal:04d}_") for ordinal, path in files)
     assert len(migration_set_sha256()) == 64
 
@@ -70,6 +71,109 @@ def test_latest_backup_uses_completion_timestamp(monkeypatch: pytest.MonkeyPatch
     )
     prefix, _ = backup._latest_backup(config)
     assert prefix == "work-ledger/v1/base/a/newer/"
+
+
+def test_latest_backup_can_select_exact_completed_id(monkeypatch: pytest.MonkeyPatch, config: OperationsConfig) -> None:
+    monkeypatch.setattr(
+        backup,
+        "_aws",
+        lambda *_: json.dumps(
+            {
+                "Contents": [
+                    {"Key": "work-ledger/v1/base/2026/08/17/wrong/COMPLETE", "LastModified": "2026-08-17T02:00:00Z"},
+                    {"Key": "work-ledger/v1/base/2026/08/17/wanted/COMPLETE", "LastModified": "2026-08-17T01:00:00Z"},
+                ]
+            }
+        ).encode(),
+    )
+    prefix, _ = backup._latest_backup(config, "wanted")
+    assert prefix == "work-ledger/v1/base/2026/08/17/wanted/"
+
+
+def test_backup_completion_marker_uses_regular_empty_file(monkeypatch: pytest.MonkeyPatch, config: OperationsConfig) -> None:
+    marker_uploads: list[tuple[bool, int]] = []
+    monkeypatch.setattr(backup, "validate_bundle", lambda **kwargs: None)
+    monkeypatch.setattr(backup, "_record_evidence", lambda *args, **kwargs: None)
+
+    def fake_run(arguments: list[str], **kwargs: object) -> bytes:
+        if arguments[0] == "pg_dump":
+            Path(arguments[arguments.index("--file") + 1]).write_bytes(b"dump")
+        elif arguments[0] == "pg_basebackup":
+            physical_dir = Path(arguments[arguments.index("--pgdata") + 1])
+            physical_dir.mkdir()
+            (physical_dir / "base.tar.gz").write_bytes(b"physical")
+        elif arguments[0] == "tar":
+            Path(arguments[arguments.index("-cf") + 1]).write_bytes(b"archive")
+        return b""
+
+    def fake_encrypt(source: Path, destination: Path, passphrase: Path) -> str:
+        destination.write_bytes(source.read_bytes())
+        return "0" * 64
+
+    def fake_aws(config: OperationsConfig, arguments: list[str]) -> bytes:
+        if arguments[0:2] == ["s3api", "put-object"] and arguments[arguments.index("--key") + 1].endswith("/COMPLETE"):
+            body = Path(arguments[arguments.index("--body") + 1])
+            marker_uploads.append((body.is_file(), body.stat().st_size))
+        return b"{}"
+
+    monkeypatch.setattr(backup, "_run", fake_run)
+    monkeypatch.setattr(backup, "encrypt_file", fake_encrypt)
+    monkeypatch.setattr(backup, "_aws", fake_aws)
+
+    backup.create(config)
+
+    assert marker_uploads == [(True, 0)]
+
+
+def test_restore_drill_runs_on_clean_cluster_with_bounded_socket(monkeypatch: pytest.MonkeyPatch, config: OperationsConfig) -> None:
+    deep_config = replace(config, state_dir=config.state_dir / ("nested-" * 20))
+    prefix = f"{config.prefix}/base/2026/08/17/backup-id/"
+    startup_options: list[str] = []
+    restore_arguments: list[str] = []
+    monkeypatch.setattr(backup, "validate_bundle", lambda **kwargs: None)
+    monkeypatch.setattr(backup, "_latest_backup", lambda *args: (prefix, {}))
+    monkeypatch.setattr(backup, "_record_evidence", lambda *args, **kwargs: "receipt")
+
+    def fake_download(config: OperationsConfig, key: str, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if key.endswith("manifest.json.gpg"):
+            destination.write_text(json.dumps({
+                "backup_id": "backup-id",
+                "contract_sha256": backup.contract_sha256(),
+                "migration_set_sha256": backup.migration_set_sha256(),
+                "objects": [{"key": f"{prefix}ledger.dump.gpg", "sha256": "0" * 64}],
+            }))
+        else:
+            destination.write_bytes(b"dump")
+
+    def fake_run(arguments: list[str], **kwargs: object) -> bytes:
+        if arguments[0] == "pg_ctl":
+            startup_options.append(arguments[arguments.index("-o") + 1])
+        if arguments[0] == "pg_restore":
+            restore_arguments.extend(arguments)
+        if arguments[0] == "psql":
+            return str(len(backup.migrations())).encode()
+        return b""
+
+    monkeypatch.setattr(backup, "_download_decrypt", fake_download)
+    monkeypatch.setattr(backup, "_run", fake_run)
+
+    assert backup.restore_drill(deep_config, reason="socket-boundary", backup_id="backup-id") == "receipt"
+    socket_dir = startup_options[0].split(" -k ", 1)[1].split(" ", 1)[0]
+    assert len(f"{socket_dir}/.s.PGSQL.65535") < 108
+    assert "--no-owner" in restore_arguments and "--no-privileges" in restore_arguments
+
+
+def test_restore_drill_forwards_requested_backup_id(monkeypatch: pytest.MonkeyPatch, config: OperationsConfig) -> None:
+    """A final-window restore must drill the backup it just created, not a newer upload."""
+    monkeypatch.setattr(backup, "validate_bundle", lambda **kwargs: None)
+
+    def selected(config: OperationsConfig, backup_id: str | None = None) -> tuple[str, dict[str, object]]:
+        raise RuntimeError(f"selected:{backup_id}")
+
+    monkeypatch.setattr(backup, "_latest_backup", selected)
+    with pytest.raises(RuntimeError, match="selected:wanted"):
+        backup.restore_drill(config, reason="pre-activation-final", backup_id="wanted")
 
 
 class _LinearFixture:

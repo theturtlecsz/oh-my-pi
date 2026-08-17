@@ -20,7 +20,7 @@ uv run --project python/omp-work omp-work ops backup verify-target
 uv run --project python/omp-work omp-work ops backup create
 uv run --project python/omp-work omp-work ops backup wal
 ```
-Run the isolated restore drill after the first clean backup and monthly thereafter. It restores the latest completed logical backup into a disposable pinned PostgreSQL 18.3 container, verifies every applied migration, and records the drill outcome in the source ledger:
+Run the isolated restore drill after the first clean backup and monthly thereafter. It restores the latest completed logical backup into a disposable native PostgreSQL 18 instance, verifies every applied migration, and records the drill outcome in the source ledger:
 
 ```sh
 uv run --project python/omp-work omp-work ops restore drill --reason clean-instance
@@ -37,21 +37,25 @@ Loss of primary is manual fencing: stop the service, preserve its PostgreSQL and
 
 ## Cutover (HOME-148)
 
-The coordinator drives rehearsal, the freeze window, finalization, and rollback. Its state lives at `~/.config/omp/work-ledger/cutover-state.json`; the Linear freeze marker at `$XDG_CONFIG_HOME/omp-work/linear-frozen.json`.
+The coordinator drives rehearsal, the freeze window, managed-service promotion, finalization, and rollback. Its state lives at `~/.config/omp/work-ledger/cutover-state.json`; the Linear freeze marker at `$XDG_CONFIG_HOME/omp-work/linear-frozen.json`. `execute` promotes the retained candidate onto the standard PostgreSQL/HTTP ports, enables `omp-work-postgres.service` and `omp-work-service.service`, proves `/v1/health/ready`, and only then swaps the session-system selector.
 
 ```sh
-uv run --project python/omp-work omp-work ops cutover preflight
-uv run --project python/omp-work omp-work ops cutover rehearse --ordinal 1
-uv run --project python/omp-work omp-work ops cutover rehearse --ordinal 2 --retain-candidate
-uv run --project python/omp-work omp-work ops cutover execute
+map=infra/work-ledger/linear-import-map.json
+plan=/absolute/path/to/approved-HOME-148-plan.md
+uv run --project python/omp-work omp-work ops cutover preflight --mapping-file "$map"
+uv run --project python/omp-work omp-work ops cutover rehearse --ordinal 1 --mapping-file "$map"
+uv run --project python/omp-work omp-work ops cutover rehearse --ordinal 2 --retain-candidate --mapping-file "$map"
+uv run --project python/omp-work omp-work ops cutover execute --mapping-file "$map" --plan-file "$plan"
 uv run --project python/omp-work omp-work ops cutover finalize   # after the personal key is revoked in Linear settings
+uv run --project python/omp-work omp-work ops cutover status
 ```
 
-Every gate failure exits 2 with a JSON `blocked` list; nothing is half-applied.
+Before activation, every failed gate returns Linear to sole authority, archives the poisoned candidate under the state directory, and removes rehearsal 2 admission. After activation, failures stay frozen and report `repair_required`; they never guess that Linear is authoritative.
 
 ### Recovery branches
 
-- **Before the first WorkService mutation** (`workspace_authority.first_work_mutation_at IS NULL`): `ops cutover rollback` is the supported path. It rolls the epoch back and deletes the authority row in one transaction while Linear stays frozen, switches the selector to `--backend linear`, and removes the freeze marker last. If the marker exists but no epoch row is locatable, rollback refuses — verify no Work authority exists before removing the marker by hand.
-- **After the first WorkService mutation**: rollback is refused; repair/restore is the only path. Restore a verified backup into a fresh data directory (see loss-of-primary above), `ops check`, `ops health --mode ready`, repoint the service. The epoch stays `active` until `finalize` seals it.
-- **Execute interrupted mid-window**: the coordinator persists the window (epoch id, candidate pgdata, ports) immediately after activation, so a rerun of `rollback` or `finalize` can still locate the candidate database. The first-mutation timestamp, not the window record, decides legality.
-- **Retained candidate drift**: if code, contract, or migration fingerprints change between rehearsal 2 and `execute`, execute refuses; discard the candidate and rerun rehearsal 2 from empty state.
+- **Before activation**: Linear auto-unfreezes. The failed candidate and final-delta chain are retained as evidence but cannot be reused. Run a fresh rehearsal 2 before another execute.
+- **After activation, before the first WorkService mutation** (`workspace_authority.first_work_mutation_at IS NULL`): `ops cutover rollback` is the supported path. It rolls the epoch back and deletes the authority row in one transaction while Linear stays frozen, stops/disables the managed WorkService units and backup timers, switches the selector to `--backend linear`, and removes the freeze marker last. If the marker exists but no epoch row is locatable, rollback refuses — verify no Work authority exists before removing the marker by hand.
+- **After the first WorkService mutation**: rollback is refused. Re-run the same `ops cutover execute` command; database authority plus the nominated request stamp selects post-write recovery. Recovery may run after T+60 but performs no new production mutation: it reconstructs an interrupted attestation receipt, uses disposable clones for mutation smoke, and only verifies production focus. If the authoritative database is damaged, restore a verified backup into a fresh data directory, run `ops check` and `ops health --mode ready`, repoint the managed unit, then resume execute. The epoch stays `active` until `finalize` seals it.
+- **Unknown authority**: `ops cutover status` reports `authority: unknown` when the candidate database cannot be queried while Linear is frozen. Keep the marker and selector unchanged; restore database reachability before choosing rollback or repair.
+- **Retained candidate drift**: if code, contract, migration, or imported source fingerprints change between rehearsal 2 and `execute`, execute refuses. Discard the candidate and rerun rehearsal 2 from empty state.

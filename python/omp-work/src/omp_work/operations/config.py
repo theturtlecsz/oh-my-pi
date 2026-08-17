@@ -29,6 +29,7 @@ class OperationsConfig:
             state_dir=Path(os.environ.get("XDG_STATE_HOME", home / ".local/state")) / "omp" / "work-ledger",
             data_dir=Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")) / "omp" / "work-ledger",
             port=int(os.environ.get("OMP_WORK_POSTGRES_PORT", "54321")),
+            prefix=os.environ.get("OMP_WORK_S3_PREFIX", "work-ledger/v1"),
             endpoint_url=os.environ.get("OMP_WORK_S3_ENDPOINT"),
         )
 

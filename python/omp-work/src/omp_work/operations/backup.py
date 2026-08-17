@@ -88,7 +88,9 @@ def create(config: OperationsConfig) -> str:
         encrypted_manifest = staging / "manifest.json.gpg"
         encrypt_file(manifest, encrypted_manifest, config.secret_path("gpg-passphrase"))
         _aws(config, ["s3api", "put-object", "--bucket", config.bucket, "--key", f"{base}/manifest.json.gpg", "--body", str(encrypted_manifest)])
-        _aws(config, ["s3api", "put-object", "--bucket", config.bucket, "--key", f"{base}/COMPLETE", "--body", "/dev/null"])
+        complete = staging / "COMPLETE"
+        complete.touch()
+        _aws(config, ["s3api", "put-object", "--bucket", config.bucket, "--key", f"{base}/COMPLETE", "--body", str(complete)])
         _record_evidence(
             config,
             kind="backup",
@@ -131,7 +133,31 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _latest_backup(config: OperationsConfig) -> tuple[str, dict[str, object]]:
+def clone_primary(config: OperationsConfig, destination: Path) -> None:
+    """Take a consistent physical clone without stopping the authoritative primary."""
+    if destination.exists():
+        raise FileExistsError(destination)
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _run(
+        [
+            "pg_basebackup",
+            "--host",
+            config.host,
+            "--port",
+            str(config.port),
+            "--username",
+            "omp_work_backup",
+            "--format=plain",
+            "--wal-method=stream",
+            "--checkpoint=fast",
+            "--pgdata",
+            str(destination),
+        ],
+        env=_postgres_env(config),
+    )
+
+
+def _latest_backup(config: OperationsConfig, backup_id: str | None = None) -> tuple[str, dict[str, object]]:
     response = json.loads(
         _aws(config, ["s3api", "list-objects-v2", "--bucket", config.bucket, "--prefix", f"{config.prefix}/base/", "--output", "json"])
     )
@@ -140,7 +166,11 @@ def _latest_backup(config: OperationsConfig) -> tuple[str, dict[str, object]]:
         for item in response.get("Contents", [])
         if isinstance(item, dict) and isinstance(item.get("Key"), str) and item["Key"].endswith("/COMPLETE")
     ]
-    if not completed:
+    if backup_id is not None:
+        completed = [item for item in completed if item["Key"].endswith(f"/{backup_id}/COMPLETE")]
+        if len(completed) != 1:
+            raise RuntimeError("requested complete backup not found")
+    elif not completed:
         raise RuntimeError("no complete backup available")
     prefix = max(completed, key=lambda item: str(item.get("LastModified", "")))["Key"].removesuffix("COMPLETE")
     return prefix, response
@@ -208,15 +238,15 @@ def _record_evidence(
             return str(cur.fetchone()[0])
 
 
-def restore_drill(config: OperationsConfig, *, reason: str) -> str:
+def restore_drill(config: OperationsConfig, *, reason: str, backup_id: str | None = None) -> str:
     validate_bundle(require_approval=True)
     started = datetime.now(timezone.utc)
     began = time.monotonic()
-    backup_id: str | None = None
     prefix: str | None = None
     staging = config.state_dir / "restore-drills" / str(uuid4())
+    sock_dir: Path | None = None
     try:
-        prefix, _ = _latest_backup(config)
+        prefix, _ = _latest_backup(config, backup_id)
         manifest = staging / "manifest.json"
         staging.mkdir(mode=0o700, parents=True, exist_ok=False)
         _download_decrypt(config, f"{prefix}manifest.json.gpg", manifest)
@@ -230,13 +260,12 @@ def restore_drill(config: OperationsConfig, *, reason: str) -> str:
         port = _free_port()
         password = config.read_secret("postgres")
         data_dir = staging / "pgdata"
-        sock_dir = staging / "pgsock"
-        sock_dir.mkdir(mode=0o700)
+        sock_dir = Path(tempfile.mkdtemp(prefix="omp-work-pg-"))
         _run(["initdb", "-D", str(data_dir), "-U", "postgres", "--auth-local=trust", "--auth-host=scram-sha-256", "-E", "UTF8", f"--pwfile={config.secret_path('postgres')}"])
         _run(["pg_ctl", "-D", str(data_dir), "-l", str(staging / "postgres.log"), "-w", "-o", f"-p {port} -k {sock_dir} -c listen_addresses=127.0.0.1", "start"])
         env = os.environ | {"PGPASSWORD": password}
-        _run(["pg_restore", "--host", "127.0.0.1", "--port", str(port), "--username", "postgres", "--dbname", "postgres", "--exit-on-error", str(dump)], env=env)
-        actual = _run(["psql", "--host", "127.0.0.1", "--port", str(port), "--username", "postgres", "--dbname", "postgres", "--tuples-only", "--no-align", "--command", "SELECT count(*) FROM omp_control.schema_migrations"], env=env).strip()
+        _run(["pg_restore", "--host", "127.0.0.1", "--port", str(port), "--username", "postgres", "--dbname", "postgres", "--no-owner", "--no-privileges", "--exit-on-error", str(dump)], env=env)
+        actual = _run(["psql", "--host", "127.0.0.1", "--port", str(port), "--username", "postgres", "--dbname", "postgres", "--tuples-only", "--no-align", "--command", "SELECT count(*) FROM omp_control.schema_migrations"], env=env).decode().strip()
         if actual != str(len(migrations())):
             raise RuntimeError("restore migration verification failed")
         return _record_evidence(
@@ -266,3 +295,5 @@ def restore_drill(config: OperationsConfig, *, reason: str) -> str:
         if (staging / "pgdata" / "PG_VERSION").exists():
             run(["pg_ctl", "-D", str(staging / "pgdata"), "-m", "immediate", "-w", "stop"], capture_output=True)
         shutil.rmtree(staging, ignore_errors=True)
+        if sock_dir is not None:
+            shutil.rmtree(sock_dir, ignore_errors=True)

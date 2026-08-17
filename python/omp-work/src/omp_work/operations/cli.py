@@ -101,11 +101,15 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     resume = linear_export.add_parser("resume")
     resume.add_argument("--export-id", required=True)
     cutover = commands.add_parser("cutover").add_subparsers(dest="cutover_command", required=True)
-    cutover.add_parser("preflight")
+    preflight = cutover.add_parser("preflight")
+    preflight.add_argument("--mapping-file", default="infra/work-ledger/linear-import-map.json")
     rehearse = cutover.add_parser("rehearse")
     rehearse.add_argument("--ordinal", type=int, required=True, choices=(1, 2))
     rehearse.add_argument("--retain-candidate", action="store_true")
-    cutover.add_parser("execute")
+    rehearse.add_argument("--mapping-file", default="infra/work-ledger/linear-import-map.json")
+    execute = cutover.add_parser("execute")
+    execute.add_argument("--mapping-file", default="infra/work-ledger/linear-import-map.json")
+    execute.add_argument("--plan-file", required=True, help="Approved plan markdown; hashed into the manifest and attested as the first Work mutation")
     cutover.add_parser("finalize")
     cutover.add_parser("rollback")
     cutover.add_parser("status")
@@ -182,7 +186,7 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
             "mode": manifest.mode,
             "raw_export_sha256": manifest.raw_export_sha256,
             "source_lower_bound": manifest.source_lower_bound.isoformat() if manifest.source_lower_bound else None,
-            "source_watermark": manifest.source_boundary.isoformat(),
+            "source_watermark": manifest.source_watermark.isoformat() if manifest.source_watermark else None,
             "state": "blocked" if blocking else "complete",
         }, sort_keys=True))
         if blocking:
@@ -214,14 +218,14 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
             raise SystemExit(2)
     elif command == "cutover":
         from . import cutover as cutover_ops
-        mapping = Path(os.environ.get("OMP_WORK_IMPORT_MAP", "infra/work-ledger/linear-import-map.json"))
+        mapping = Path(getattr(args, "mapping_file", os.environ.get("OMP_WORK_IMPORT_MAP", "infra/work-ledger/linear-import-map.json")))
         try:
             if args.cutover_command == "preflight":
                 print(json.dumps(cutover_ops.preflight(config, mapping_file=mapping), indent=2, sort_keys=True, default=str))
             elif args.cutover_command == "rehearse":
                 print(json.dumps(cutover_ops.rehearse(config, ordinal=args.ordinal, retain_candidate=args.retain_candidate, mapping_file=mapping), indent=2, sort_keys=True, default=str))
             elif args.cutover_command == "execute":
-                print(json.dumps(cutover_ops.execute(config, mapping_file=mapping), indent=2, sort_keys=True, default=str))
+                print(json.dumps(cutover_ops.execute(config, mapping_file=mapping, plan_file=Path(args.plan_file)), indent=2, sort_keys=True, default=str))
             elif args.cutover_command == "finalize":
                 print(json.dumps(cutover_ops.finalize(config), indent=2, sort_keys=True, default=str))
             elif args.cutover_command == "rollback":

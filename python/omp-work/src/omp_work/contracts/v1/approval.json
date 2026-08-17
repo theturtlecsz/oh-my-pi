@@ -1,7 +1,7 @@
 {
-  "contract_version": "work.omp.dev/v1",
-  "contract_sha256": "bf953267a59bb09af322f4b91971a7d9e891755fb58da33e755d28eeaeac434e",
-  "approved_by": "owner",
-  "approved_at": "2026-08-17T00:00:00Z",
-  "issue": "HOME-148"
+ "contract_version": "work.omp.dev/v1",
+ "contract_sha256": "a3a1ef46f2a728862c5627438c63252f514fec0f2831d0b2b3425ebe6ecbe8a6",
+ "approved_by": "owner",
+ "approved_at": "2026-08-17T00:00:00Z",
+ "issue": "HOME-148"
 }

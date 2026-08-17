@@ -222,6 +222,11 @@ class CutoverManifest(StrictModel):
     code_fingerprint: str
     config_fingerprint: str
     freeze_at: datetime
+    linear_credential_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    plan_name: str
+    plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    plan_work_id: UUID
+    first_mutation_request_id: UUID
     activated_at: datetime | None = None
     revoked_at: datetime | None = None
     actor: str
@@ -338,6 +343,17 @@ class ActivateCutoverPayload(StrictModel):
     manifest: CutoverManifest
 
 
+class AttestCutoverPlanPayload(StrictModel):
+    """The anointed first WorkService mutation: binds the approved plan bytes to the
+    imported ledger item. Non-candidate-mutating so the gate-nominated request can
+    never be rejected by domain candidate rules."""
+    epoch_id: UUID
+    work_id: UUID
+    plan_name: str
+    plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    plan_artifact: str
+
+
 class CreateWorkBatchCommand(StrictModel):
     type: Literal["create_work_batch"]
     payload: CreateWorkBatchPayload
@@ -413,8 +429,13 @@ class ActivateCutoverCommand(StrictModel):
     payload: ActivateCutoverPayload
 
 
+class AttestCutoverPlanCommand(StrictModel):
+    type: Literal["attest_cutover_plan"]
+    payload: AttestCutoverPlanPayload
+
+
 Command = Annotated[
-    CreateWorkBatchCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | FinalizeCandidateCommand | RequestCloseoutCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand,
+    CreateWorkBatchCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | FinalizeCandidateCommand | RequestCloseoutCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand | AttestCutoverPlanCommand,
     Field(discriminator="type"),
 ]
 

@@ -137,6 +137,11 @@
               "title": "Epoch Id",
               "type": "string"
             },
+            "first_mutation_request_id": {
+              "format": "uuid",
+              "title": "First Mutation Request Id",
+              "type": "string"
+            },
             "freeze_at": {
               "format": "date-time",
               "title": "Freeze At",
@@ -145,6 +150,11 @@
             "import_batch_id": {
               "format": "uuid",
               "title": "Import Batch Id",
+              "type": "string"
+            },
+            "linear_credential_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Linear Credential Sha256",
               "type": "string"
             },
             "parity_differences": {
@@ -161,6 +171,20 @@
               },
               "title": "Parity Groups",
               "type": "object"
+            },
+            "plan_name": {
+              "title": "Plan Name",
+              "type": "string"
+            },
+            "plan_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Plan Sha256",
+              "type": "string"
+            },
+            "plan_work_id": {
+              "format": "uuid",
+              "title": "Plan Work Id",
+              "type": "string"
             },
             "raw_export_sha256": {
               "pattern": "^[0-9a-f]{64}$",
@@ -229,6 +253,11 @@
             "code_fingerprint",
             "config_fingerprint",
             "freeze_at",
+            "linear_credential_sha256",
+            "plan_name",
+            "plan_sha256",
+            "plan_work_id",
+            "first_mutation_request_id",
             "actor"
           ],
           "title": "CutoverManifest",
@@ -513,6 +542,11 @@
               "title": "Epoch Id",
               "type": "string"
             },
+            "first_mutation_request_id": {
+              "format": "uuid",
+              "title": "First Mutation Request Id",
+              "type": "string"
+            },
             "freeze_at": {
               "format": "date-time",
               "title": "Freeze At",
@@ -521,6 +555,11 @@
             "import_batch_id": {
               "format": "uuid",
               "title": "Import Batch Id",
+              "type": "string"
+            },
+            "linear_credential_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Linear Credential Sha256",
               "type": "string"
             },
             "parity_differences": {
@@ -537,6 +576,20 @@
               },
               "title": "Parity Groups",
               "type": "object"
+            },
+            "plan_name": {
+              "title": "Plan Name",
+              "type": "string"
+            },
+            "plan_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Plan Sha256",
+              "type": "string"
+            },
+            "plan_work_id": {
+              "format": "uuid",
+              "title": "Plan Work Id",
+              "type": "string"
             },
             "raw_export_sha256": {
               "pattern": "^[0-9a-f]{64}$",
@@ -605,6 +658,11 @@
             "code_fingerprint",
             "config_fingerprint",
             "freeze_at",
+            "linear_credential_sha256",
+            "plan_name",
+            "plan_sha256",
+            "plan_work_id",
+            "first_mutation_request_id",
             "actor"
           ],
           "title": "CutoverManifest",
@@ -1201,6 +1259,103 @@
       "title": "Approval",
       "type": "object"
     },
+    "AttestCutoverPlanCommand": {
+      "$defs": {
+        "AttestCutoverPlanPayload": {
+          "additionalProperties": false,
+          "description": "The anointed first WorkService mutation: binds the approved plan bytes to the\nimported ledger item. Non-candidate-mutating so the gate-nominated request can\nnever be rejected by domain candidate rules.",
+          "properties": {
+            "epoch_id": {
+              "format": "uuid",
+              "title": "Epoch Id",
+              "type": "string"
+            },
+            "plan_artifact": {
+              "title": "Plan Artifact",
+              "type": "string"
+            },
+            "plan_name": {
+              "title": "Plan Name",
+              "type": "string"
+            },
+            "plan_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Plan Sha256",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "epoch_id",
+            "work_id",
+            "plan_name",
+            "plan_sha256",
+            "plan_artifact"
+          ],
+          "title": "AttestCutoverPlanPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AttestCutoverPlanPayload"
+        },
+        "type": {
+          "const": "attest_cutover_plan",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "AttestCutoverPlanCommand",
+      "type": "object"
+    },
+    "AttestCutoverPlanPayload": {
+      "additionalProperties": false,
+      "description": "The anointed first WorkService mutation: binds the approved plan bytes to the\nimported ledger item. Non-candidate-mutating so the gate-nominated request can\nnever be rejected by domain candidate rules.",
+      "properties": {
+        "epoch_id": {
+          "format": "uuid",
+          "title": "Epoch Id",
+          "type": "string"
+        },
+        "plan_artifact": {
+          "title": "Plan Artifact",
+          "type": "string"
+        },
+        "plan_name": {
+          "title": "Plan Name",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "epoch_id",
+        "work_id",
+        "plan_name",
+        "plan_sha256",
+        "plan_artifact"
+      ],
+      "title": "AttestCutoverPlanPayload",
+      "type": "object"
+    },
     "AuditEvent": {
       "additionalProperties": false,
       "properties": {
@@ -1606,6 +1761,63 @@
           "title": "AppendEvidencePayload",
           "type": "object"
         },
+        "AttestCutoverPlanCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/AttestCutoverPlanPayload"
+            },
+            "type": {
+              "const": "attest_cutover_plan",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "AttestCutoverPlanCommand",
+          "type": "object"
+        },
+        "AttestCutoverPlanPayload": {
+          "additionalProperties": false,
+          "description": "The anointed first WorkService mutation: binds the approved plan bytes to the\nimported ledger item. Non-candidate-mutating so the gate-nominated request can\nnever be rejected by domain candidate rules.",
+          "properties": {
+            "epoch_id": {
+              "format": "uuid",
+              "title": "Epoch Id",
+              "type": "string"
+            },
+            "plan_artifact": {
+              "title": "Plan Artifact",
+              "type": "string"
+            },
+            "plan_name": {
+              "title": "Plan Name",
+              "type": "string"
+            },
+            "plan_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Plan Sha256",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "epoch_id",
+            "work_id",
+            "plan_name",
+            "plan_sha256",
+            "plan_artifact"
+          ],
+          "title": "AttestCutoverPlanPayload",
+          "type": "object"
+        },
         "Candidate": {
           "additionalProperties": false,
           "properties": {
@@ -1998,6 +2210,11 @@
               "title": "Epoch Id",
               "type": "string"
             },
+            "first_mutation_request_id": {
+              "format": "uuid",
+              "title": "First Mutation Request Id",
+              "type": "string"
+            },
             "freeze_at": {
               "format": "date-time",
               "title": "Freeze At",
@@ -2006,6 +2223,11 @@
             "import_batch_id": {
               "format": "uuid",
               "title": "Import Batch Id",
+              "type": "string"
+            },
+            "linear_credential_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Linear Credential Sha256",
               "type": "string"
             },
             "parity_differences": {
@@ -2022,6 +2244,20 @@
               },
               "title": "Parity Groups",
               "type": "object"
+            },
+            "plan_name": {
+              "title": "Plan Name",
+              "type": "string"
+            },
+            "plan_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Plan Sha256",
+              "type": "string"
+            },
+            "plan_work_id": {
+              "format": "uuid",
+              "title": "Plan Work Id",
+              "type": "string"
             },
             "raw_export_sha256": {
               "pattern": "^[0-9a-f]{64}$",
@@ -2090,6 +2326,11 @@
             "code_fingerprint",
             "config_fingerprint",
             "freeze_at",
+            "linear_credential_sha256",
+            "plan_name",
+            "plan_sha256",
+            "plan_work_id",
+            "first_mutation_request_id",
             "actor"
           ],
           "title": "CutoverManifest",
@@ -2957,6 +3198,7 @@
             "mapping": {
               "activate_cutover": "#/$defs/ActivateCutoverCommand",
               "append_evidence": "#/$defs/AppendEvidenceCommand",
+              "attest_cutover_plan": "#/$defs/AttestCutoverPlanCommand",
               "clear_focus": "#/$defs/ClearFocusCommand",
               "complete_work": "#/$defs/CompleteWorkCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
@@ -3018,6 +3260,9 @@
             },
             {
               "$ref": "#/$defs/ActivateCutoverCommand"
+            },
+            {
+              "$ref": "#/$defs/AttestCutoverPlanCommand"
             }
           ],
           "title": "Command"
@@ -5200,6 +5445,11 @@
           "title": "Epoch Id",
           "type": "string"
         },
+        "first_mutation_request_id": {
+          "format": "uuid",
+          "title": "First Mutation Request Id",
+          "type": "string"
+        },
         "freeze_at": {
           "format": "date-time",
           "title": "Freeze At",
@@ -5208,6 +5458,11 @@
         "import_batch_id": {
           "format": "uuid",
           "title": "Import Batch Id",
+          "type": "string"
+        },
+        "linear_credential_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Linear Credential Sha256",
           "type": "string"
         },
         "parity_differences": {
@@ -5224,6 +5479,20 @@
           },
           "title": "Parity Groups",
           "type": "object"
+        },
+        "plan_name": {
+          "title": "Plan Name",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "plan_work_id": {
+          "format": "uuid",
+          "title": "Plan Work Id",
+          "type": "string"
         },
         "raw_export_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -5292,6 +5561,11 @@
         "code_fingerprint",
         "config_fingerprint",
         "freeze_at",
+        "linear_credential_sha256",
+        "plan_name",
+        "plan_sha256",
+        "plan_work_id",
+        "first_mutation_request_id",
         "actor"
       ],
       "title": "CutoverManifest",

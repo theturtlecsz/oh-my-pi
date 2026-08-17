@@ -87,9 +87,16 @@ try {
 		// local postgres: initdb as the current user, TCP loopback + a private socket dir
 		const pwfile = path.join(root, "pgpw");
 		fs.writeFileSync(pwfile, `${pgSecret}\n`, { mode: 0o600 });
-		let run = Bun.spawnSync(["initdb", "-D", pgData, "-U", "postgres", "--pwfile", pwfile, "--auth-host=scram-sha-256", "--auth-local=trust"], { stderr: "pipe" });
-		if (run.exitCode !== 0) throw new Error(`initdb failed: ${run.stderr.toString()}`);
-		run = Bun.spawnSync(["pg_ctl", "-D", pgData, "-w", "-l", path.join(root, "pg.log"), "-o", `-p ${pgPort} -k ${root} -c listen_addresses=127.0.0.1`, "start"], { stderr: "pipe" });
+		const initdb = (() => {
+			try {
+				return Bun.spawnSync(["initdb", "-D", pgData, "-U", "postgres", "--pwfile", pwfile, "--auth-host=scram-sha-256", "--auth-local=trust"], { stderr: "pipe" });
+			} finally {
+				// initdb is the only consumer; the superuser password must not linger in the smoke tree.
+				fs.rmSync(pwfile, { force: true });
+			}
+		})();
+		if (initdb.exitCode !== 0) throw new Error(`initdb failed: ${initdb.stderr.toString()}`);
+		const run = Bun.spawnSync(["pg_ctl", "-D", pgData, "-w", "-l", path.join(root, "pg.log"), "-o", `-p ${pgPort} -k ${root} -c listen_addresses=127.0.0.1`, "start"], { stderr: "pipe" });
 		if (run.exitCode !== 0) throw new Error(`pg_ctl start failed: ${run.stderr.toString()}`);
 	}
 	const psql = (sql: string) => {
@@ -207,6 +214,31 @@ try {
 	const bound = view.receipts.filter(r => r.candidate_id === finalCandidateId);
 	assert.deepEqual(bound.map(r => r.kind).sort(), ["audit", "closeout", "plan", "push", "verification"], "receipt set bound to final candidate");
 	assert.equal(bound.find(r => r.kind === "push")?.remote_commit, headSha, "push receipt binds the remote commit");
+
+	// HOME-148: machine-readable results for the cutover coordinator. Each entry
+	// is recomputed from the real harness output — never a literal — so a softened
+	// assertion above cannot silently turn into a PASS here.
+	const resultsPath = process.env.OMP_WORK_SMOKE_RESULTS;
+	if (resultsPath) {
+		const results = [
+			{ command_type: "first_screen", passed: String(out.firstScreen).length > 0 && !String(out.firstScreen).includes("error") },
+			{ command_type: "capture", passed: /^(HOME|OMP)-\d+$/.test(key) && String(out.captured).includes("Captured →") },
+			{ command_type: "now_select", passed: String(out.nowAfterSelect).includes(key) },
+			{ command_type: "plan_stamp", passed: out.plan === "stamped" },
+			{ command_type: "summary_freeze", passed: headSha !== initialSha && git(probe, ["show", "HEAD:smoke.txt"]) === "candidate payload" },
+			{ command_type: "auditor_spawn", passed: out.spawnBlocked === false },
+			{ command_type: "verification", passed: String(out.verification).includes("verification receipt recorded") },
+			{ command_type: "audit", passed: String(out.audit).includes("audit receipt recorded") },
+			{ command_type: "closeout", passed: String(out.closeout).includes("closeout receipt recorded") },
+			{ command_type: "request_closeout", passed: String(out.requestCloseout).includes("close") },
+			{ command_type: "done_push", passed: notices.includes("pushed") && notices.includes("done") && remoteSha === headSha },
+			{ command_type: "focus_cleared", passed: String(out.now).includes("NOW unset") },
+			{ command_type: "loopback_only", passed: urls.length > 0 && urls.every(url => ["127.0.0.1", "::1", "localhost", "[::1]"].includes(new URL(url).hostname)) },
+			{ command_type: "workflow_view", passed: view.item.state === "DONE" && view.item.candidate?.commit_sha === headSha && bound.map(r => r.kind).sort().join(",") === "audit,closeout,plan,push,verification" },
+		];
+		fs.mkdirSync(path.dirname(resultsPath), { recursive: true });
+		fs.writeFileSync(resultsPath, JSON.stringify({ results }, null, 1));
+	}
 
 	console.log(`work-service-candidate-smoke: PASS (${key} done, candidate ${headSha.slice(0, 12)} pushed, ${urls.length} loopback requests)`);
 } finally {

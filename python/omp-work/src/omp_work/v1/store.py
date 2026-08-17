@@ -76,9 +76,13 @@ class PostgresWorkStore:
                     return OperationReceipt(operation_id=envelope.operation_id, request_id=envelope.request_id, state=OperationState.REPLAYED, request_sha256=request_hash, result_sha256=stored["result_sha256"], diagnostics=tuple(stored["diagnostics"])), result
             if not conflict:
                 if command.type != "activate_cutover":
-                    cur.execute("SELECT epoch_id FROM omp_control.workspace_authority WHERE workspace_id=%s", (envelope.workspace_id,))
-                    if cur.fetchone() is None:
+                    cur.execute("SELECT first_work_mutation_at, expected_first_request_id FROM omp_control.workspace_authority WHERE workspace_id=%s", (envelope.workspace_id,))
+                    authority = cur.fetchone()
+                    if authority is None:
                         raise WorkStoreError("cutover_invariant", ("authority_absent",))
+                    expected = authority["expected_first_request_id"]
+                    if authority["first_work_mutation_at"] is None and expected is not None and (envelope.request_id != expected or command.type != "attest_cutover_plan"):
+                        raise WorkStoreError("cutover_invariant", ("awaiting_cutover_plan_attestation",))
                 if command.type == "create_work_batch":
                     result = self._create_batch(cur, envelope)
                 elif command.type == "revise_work":
@@ -105,12 +109,14 @@ class PostgresWorkStore:
                     result = self._complete_work(cur, envelope)
                 elif command.type == "activate_cutover":
                     result = self._activate_cutover(cur, envelope)
+                elif command.type == "attest_cutover_plan":
+                    result = self._attest_cutover_plan(cur, envelope)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
                 self._record_event(cur, envelope, actor_id, actor_kind, result)
                 if command.type != "activate_cutover":
-                    cur.execute("UPDATE omp_control.workspace_authority SET first_work_mutation_at=clock_timestamp() WHERE workspace_id=%s AND first_work_mutation_at IS NULL", (envelope.workspace_id,))
+                    cur.execute("UPDATE omp_control.workspace_authority SET first_work_mutation_at=clock_timestamp(), first_work_mutation_request_id=%s WHERE workspace_id=%s AND first_work_mutation_at IS NULL", (envelope.request_id, envelope.workspace_id))
                 cur.execute("INSERT INTO omp_control.idempotent_commands(workspace_id,operation_id,request_id,correlation_id,command_type,required_scope,request_sha256,state,response,result_sha256,attempt_count,diagnostics) VALUES(%s,%s,%s,%s,%s,%s,%s,'applied',%s,%s,%s,%s)", (envelope.workspace_id, envelope.operation_id, envelope.request_id, envelope.correlation_id, command.type, required_scope, request_hash, json.dumps(result), result_hash, attempt, []))
                 return OperationReceipt(operation_id=envelope.operation_id, request_id=envelope.request_id, state=OperationState.APPLIED, request_sha256=request_hash, result_sha256=result_hash), result
         raise WorkStoreError("idempotency_conflict")
@@ -386,10 +392,12 @@ class PostgresWorkStore:
             reject("dimension_parity_mismatch")
         if persisted.get("parity_groups") != manifest.parity_groups:
             reject("parity_group_mismatch")
-        cur.execute("SELECT source_boundary, raw_export_sha256, state FROM omp_integration.raw_exports WHERE workspace_id=%s AND export_id=%s", (workspace_id, batch["export_id"]))
+        cur.execute("SELECT source_boundary, source_watermark, raw_export_sha256, state FROM omp_integration.raw_exports WHERE workspace_id=%s AND export_id=%s", (workspace_id, batch["export_id"]))
         export = cur.fetchone()
         if export is None or export["state"] != "complete" or export["raw_export_sha256"] != manifest.raw_export_sha256 or export["source_boundary"].isoformat() != manifest.source_boundary:
             reject("source_boundary_mismatch")
+        if export["source_watermark"] is None or export["source_watermark"].isoformat() != manifest.source_watermark:
+            reject("source_watermark_mismatch")
         cur.execute("SELECT export_id FROM omp_integration.raw_exports WHERE workspace_id=%s AND state='complete' ORDER BY completed_at DESC, export_id DESC LIMIT 1", (workspace_id,))
         latest = cur.fetchone()
         if latest is None or latest["export_id"] != batch["export_id"]:
@@ -404,10 +412,39 @@ class PostgresWorkStore:
 
         manifest_json = json.loads(manifest.model_dump_json())
         manifest_hash = sha256(manifest_json)
-        cur.execute("INSERT INTO omp_control.cutover_epochs(epoch_id,workspace_id,state,candidate_manifest,candidate_manifest_sha256,activated_at) VALUES(%s,%s,'active',%s,%s,clock_timestamp())", (manifest.epoch_id, workspace_id, json.dumps(manifest_json), manifest_hash))
-        cur.execute("INSERT INTO omp_control.workspace_authority(workspace_id,epoch_id,activated_at) VALUES(%s,%s,clock_timestamp()) RETURNING activated_at", (workspace_id, manifest.epoch_id))
+        cur.execute("INSERT INTO omp_control.cutover_epochs(epoch_id,workspace_id,state,candidate_manifest,candidate_manifest_sha256,linear_credential_sha256,activated_at) VALUES(%s,%s,'active',%s,%s,%s,clock_timestamp())", (manifest.epoch_id, workspace_id, json.dumps(manifest_json), manifest_hash, manifest.linear_credential_sha256))
+        cur.execute("INSERT INTO omp_control.workspace_authority(workspace_id,epoch_id,activated_at,expected_first_request_id) VALUES(%s,%s,clock_timestamp(),%s) RETURNING activated_at", (workspace_id, manifest.epoch_id, manifest.first_mutation_request_id))
         activated_at = cur.fetchone()["activated_at"]
         return {"type": "activate_cutover", "epoch_id": str(manifest.epoch_id), "authority": "work", "candidate_manifest_sha256": manifest_hash, "activated_at": activated_at.isoformat()}
+
+    def _attest_cutover_plan(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
+        """The anointed first mutation. Every field must reproduce the sealed manifest
+        exactly; the command mutates no candidate state, so the gate-nominated request
+        cannot be rejected by domain rules."""
+        payload = envelope.command.payload
+        cur.execute("SELECT epoch_id, first_work_mutation_at FROM omp_control.workspace_authority WHERE workspace_id=%s", (envelope.workspace_id,))
+        authority = cur.fetchone()
+        if authority is None or authority["epoch_id"] != payload.epoch_id:
+            raise WorkStoreError("cutover_invariant", ("attestation_epoch_mismatch",))
+        if authority["first_work_mutation_at"] is not None:
+            raise WorkStoreError("cutover_invariant", ("attestation_must_be_first_mutation",))
+        cur.execute("SELECT state, candidate_manifest FROM omp_control.cutover_epochs WHERE epoch_id=%s AND workspace_id=%s", (payload.epoch_id, envelope.workspace_id))
+        epoch = cur.fetchone()
+        if epoch is None or epoch["state"] != "active":
+            raise WorkStoreError("cutover_invariant", ("attestation_epoch_not_active",))
+        manifest = dict(epoch["candidate_manifest"] or {})
+        if payload.plan_sha256 != manifest.get("plan_sha256") or payload.plan_name != manifest.get("plan_name") or str(payload.work_id) != str(manifest.get("plan_work_id")):
+            raise WorkStoreError("cutover_invariant", ("attestation_manifest_mismatch",))
+        cur.execute("SELECT 1 FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s", (envelope.workspace_id, payload.work_id))
+        if cur.fetchone() is None:
+            raise WorkStoreError("invalid_request", ("attestation work item absent",))
+        # Transaction-side cutoff: a client timeout cannot stop a commit, so the
+        # anointed mutation itself refuses past freeze_at + the plan's one-hour window.
+        cur.execute("SELECT clock_timestamp() > (%s::timestamptz + interval '60 minutes') AS expired", (str(manifest.get("freeze_at")),))
+        if cur.fetchone()["expired"]:
+            raise WorkStoreError("cutover_invariant", ("attestation_window_expired",))
+        cur.execute("INSERT INTO omp_control.cutover_plan_attestations(workspace_id,epoch_id,work_id,request_id,plan_name,plan_sha256,plan_artifact,issuer) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (envelope.workspace_id, payload.epoch_id, payload.work_id, envelope.request_id, payload.plan_name, payload.plan_sha256, payload.plan_artifact, str(manifest.get("actor", "owner"))))
+        return {"type": "attest_cutover_plan", "epoch_id": str(payload.epoch_id), "work_id": str(payload.work_id), "plan_sha256": payload.plan_sha256}
 
     def _item_view(self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, *, key: str, candidate_allowlist: frozenset[UUID] | None = None) -> dict[str, object]:
         cur.execute("SELECT i.work_id,i.workspace_id,i.state,i.project_id,i.archived,i.current_candidate_id,a.key,a.origin,r.revision_id,r.revision_number,r.title,r.description,r.scope,r.content_sha256,r.created_by,r.supplied_at FROM omp_work.work_items i JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias JOIN omp_work.work_revisions r ON r.revision_id=i.current_revision_id WHERE i.workspace_id=%s AND a.key=%s", (workspace_id, key))

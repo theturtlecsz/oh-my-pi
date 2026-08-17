@@ -136,6 +136,7 @@ class ExportManifest(_Strict):
     source_started_at: datetime
     source_lower_bound: datetime | None = None
     source_boundary: datetime
+    source_watermark: datetime | None = None
     source_hashes: SourceHashIndex
     dimension_counts: ReconciliationCounts
     dimension_hashes: ReconciliationHashes
@@ -239,12 +240,12 @@ class ExportLedger:
             if cursor.rowcount != 1:
                 raise RuntimeError("pagination_count_hash_gap")
 
-    def finalize(self, export_id: UUID, boundary: datetime, raw_hash: str, manifest_hash: str, blocked: bool) -> None:
+    def finalize(self, export_id: UUID, boundary: datetime, source_watermark: datetime | None, raw_hash: str, manifest_hash: str, blocked: bool) -> None:
         with self._connection() as connection, connection.transaction(), connection.cursor() as cursor:
             self._claims(cursor)
             cursor.execute(
-                "UPDATE omp_integration.raw_exports SET raw_export_sha256=%s,manifest_sha256=%s,state=%s,completed_at=clock_timestamp() WHERE export_id=%s AND workspace_id=%s AND state='running' AND source_boundary=%s",
-                (raw_hash, manifest_hash, "blocked" if blocked else "complete", export_id, self.workspace_id, boundary),
+                "UPDATE omp_integration.raw_exports SET source_watermark=%s,raw_export_sha256=%s,manifest_sha256=%s,state=%s,completed_at=clock_timestamp() WHERE export_id=%s AND workspace_id=%s AND state='running' AND source_boundary=%s",
+                (source_watermark, raw_hash, manifest_hash, "blocked" if blocked else "complete", export_id, self.workspace_id, boundary),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("pagination_count_hash_gap")
@@ -350,6 +351,15 @@ class LinearExporter:
                     raise RuntimeError("pagination_count_hash_gap")
                 source_hashes = self._merge_indexes(base_hashes, source_hashes, boundary, anomalies)
             validation_records = self._merge_record_sets(base_records, records, boundary, anomalies)
+            source_watermark = max(
+                (
+                    entry.updated_at
+                    for dimension in DIMENSIONS
+                    for entry in getattr(source_hashes, dimension).values()
+                    if entry.updated_at is not None
+                ),
+                default=None,
+            )
             anomalies.extend(self._anomalies(validation_records, source_hashes))
             anomalies = self._unique_anomalies(anomalies)
             dispositions = self._attachment_dispositions(validation_records[LinearStream.attachments], source_hashes.work_items)
@@ -382,6 +392,7 @@ class LinearExporter:
                 source_started_at=started,
                 source_lower_bound=lower,
                 source_boundary=boundary,
+                source_watermark=source_watermark,
                 source_hashes=source_hashes,
                 dimension_counts=counts,
                 dimension_hashes=hashes,
@@ -396,7 +407,7 @@ class LinearExporter:
             manifest = draft.model_copy(update={"manifest_sha256": manifest_hash})
             manifest_artifact = self._write_report(root, staging, "manifest", manifest.model_dump(mode="json"), artifacts)
             returned = manifest.model_copy(update={"artifacts": {**manifest.artifacts, "manifest": manifest_artifact}})
-            ledger.finalize(export_id, boundary, raw_hash, manifest_hash, any(item.disposition == "blocking" for item in anomalies))
+            ledger.finalize(export_id, boundary, source_watermark, raw_hash, manifest_hash, any(item.disposition == "blocking" for item in anomalies))
             return returned
         finally:
             shutil.rmtree(staging, ignore_errors=True)

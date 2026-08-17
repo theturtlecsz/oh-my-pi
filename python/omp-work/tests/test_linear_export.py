@@ -278,10 +278,10 @@ class MemoryLedger:
             raise RuntimeError("pagination_count_hash_gap")
         self.runs[export_id] = run.model_copy(update={"source_boundary": boundary})
 
-    def finalize(self, export_id: UUID, boundary: datetime, raw_hash: str, manifest_hash: str, blocked: bool) -> None:
+    def finalize(self, export_id: UUID, boundary: datetime, source_watermark: datetime | None, raw_hash: str, manifest_hash: str, blocked: bool) -> None:
         run = self.runs[export_id]
         assert run.source_boundary == boundary and run.state == "running"
-        self.runs[export_id] = run.model_copy(update={"state": "blocked" if blocked else "complete"})
+        self.runs[export_id] = run.model_copy(update={"source_watermark": source_watermark, "state": "blocked" if blocked else "complete"})
 
 
 def _copy_encrypt(source: Path, destination: Path, passphrase_file: Path, *, mode: int = 0o600) -> str:

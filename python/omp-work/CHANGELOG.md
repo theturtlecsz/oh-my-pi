@@ -11,10 +11,11 @@
 - Candidate-bounded `work.candidate.read` capabilities with explicit non-empty `candidate_ids` allowlists; such principals can only read the allowlisted current candidate's workflow and can never mutate.
 - Typed workflow reads returning current candidate, closeout intents, project, and full receipt projections; bounded tree reads (1000 items / 5000 relations).
 - `ops capabilities init|candidate-reader` provisioning (mode-0700 directory, mode-0600 capability and loopback client-config files) and a loopback `omp-work-service` systemd unit in the work-ledger installer.
+- Controlled Linear-to-WorkService cutover with source-watermarked imports, exact-backup receipts, immutable rehearsal/final evidence, fenced Linear writes, atomic authority/selector and managed-service activation, bounded pre-write rollback, post-write repair recovery, and read-only OAuth recovery exports.
 
 ### Changed
 
-- PostgreSQL backups now use the dedicated backup role to export every RLS-protected ledger table, and restore drills verify the latest completed backup in an isolated PostgreSQL 18.3 instance.
+- PostgreSQL backups now use the dedicated backup role to export every RLS-protected ledger table, and restore drills verify the selected completed backup in an isolated native PostgreSQL 18 instance.
 - Linear exports now use static read-only stream queries, encrypted immutable artifacts, redacted reconciliation summaries, and explicit scoped-OAuth or owner-managed personal-key authentication.
 - Completion now requires a finalized candidate with a non-null full object ID, closeout review evidence, and a push receipt resolving to that exact commit; a negative latest audit permits a new planned-candidate attempt on the same revision, and revision changes still invalidate all prior candidates and receipts.
 - Receipt storage now keeps the canonical caller payload body in `payload` with issuer/verdict/binding metadata in dedicated columns (migration 0008, additive).

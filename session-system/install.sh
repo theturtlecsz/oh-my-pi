@@ -7,16 +7,35 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"
 MODE="link"
 BACKEND="linear"
+EXPECT_BACKEND=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --copy) MODE="copy" ;;
     --backend) BACKEND="${2:?--backend needs linear|work}"; shift ;;
     --backend=*) BACKEND="${1#--backend=}" ;;
-    *) echo "usage: install.sh [--copy] [--backend linear|work]" >&2; exit 2 ;;
+    --expect-backend) EXPECT_BACKEND="${2:?--expect-backend needs linear|work}"; shift ;;
+    --expect-backend=*) EXPECT_BACKEND="${1#--expect-backend=}" ;;
+    *) echo "usage: install.sh [--copy] [--backend linear|work] [--expect-backend linear|work]" >&2; exit 2 ;;
   esac
   shift
 done
 case "$BACKEND" in linear|work) ;; *) echo "unknown backend: $BACKEND" >&2; exit 2 ;; esac
+
+# --expect-backend: read-only verification mode. Prints the installed backend and
+# exits non-zero on mismatch. Never touches the live set.
+if [ -n "$EXPECT_BACKEND" ]; then
+  case "$EXPECT_BACKEND" in linear|work) ;; *) echo "unknown backend: $EXPECT_BACKEND" >&2; exit 2 ;; esac
+  EXT_DIR="$HOME/.omp/agent/extensions"
+  installed="unknown"
+  if [ -e "$EXT_DIR/work-now.ts" ] && [ ! -e "$EXT_DIR/linear-now.ts" ]; then installed="work"; fi
+  if [ -e "$EXT_DIR/linear-now.ts" ] && [ ! -e "$EXT_DIR/work-now.ts" ]; then installed="linear"; fi
+  if [ "$installed" != "$EXPECT_BACKEND" ]; then
+    echo "expected backend $EXPECT_BACKEND, installed: $installed" >&2
+    exit 1
+  fi
+  echo "backend $installed"
+  exit 0
+fi
 
 place() { # place <repo-relative> <live-path>
   local src="$REPO/$1" dst="$2"

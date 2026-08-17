@@ -1,25 +1,29 @@
 """HOME-148: cutover authority — pre-activation fence, exact activation, replay, staleness, and epoch transitions."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 import secrets
 import socket
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import psycopg
 import pytest
 
 from omp_work import CONTRACT_VERSION, contract_sha256
 from omp_work.integration.importer import TRANSFORMATION_VERSION
+from omp_work.operations import cutover
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import bootstrap, migration_set_sha256
+from omp_work.operations.capabilities import CUTOVER_SCOPES, OWNER_SCOPES
 from omp_work.operations.fingerprints import code_fingerprint, config_fingerprint, transform_sha256
 from omp_work.v1.models import (
     ActivateCutoverCommand,
     ActivateCutoverPayload,
+    AttestCutoverPlanCommand,
+    AttestCutoverPlanPayload,
     CommandEnvelope,
     CreateWorkBatchCommand,
     CreateWorkBatchPayload,
@@ -28,6 +32,7 @@ from omp_work.v1.models import (
     ReconciliationCounts,
     ReconciliationHashes,
 )
+from omp_work.v1.service import Principal, WorkError, WorkService
 from omp_work.v1.store import PostgresWorkStore, WorkStoreError
 from pg_native import native_postgres, seed_authority
 
@@ -75,20 +80,76 @@ def _manifest(config: OperationsConfig, workspace_id: UUID, batch_id: UUID, epoc
         "command_smoke_results": [{"command_type": "create_work_batch", "passed": True}],
         "code_fingerprint": code_fingerprint(),
         "config_fingerprint": config_fingerprint(config),
-        "freeze_at": BOUNDARY.isoformat(),
+        "freeze_at": datetime.now(timezone.utc).isoformat(),
+        "linear_credential_sha256": "a" * 64,
+        "plan_name": "test-plan.md",
+        "plan_sha256": "b" * 64,
+        "plan_work_id": str(uuid5(NAMESPACE_URL, f"home-148-plan:{epoch_id}")),
+        "first_mutation_request_id": str(uuid5(NAMESPACE_URL, f"home-148-first-request:{epoch_id}")),
         "actor": "operator",
     }
     data.update(updates)
     return CutoverManifest.model_validate(data)
 
+def test_manifest_reads_parameterized_backup_receipts(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    workspace_id, export_id, batch_id, backup_id = uuid4(), uuid4(), uuid4(), uuid4()
+    parity = {
+        "dimension_counts": {dimension: 0 for dimension in ReconciliationCounts.model_fields},
+        "dimension_hashes": {dimension: "0" * 64 for dimension in ReconciliationHashes.model_fields},
+        "parity_groups": PARITY_GROUPS,
+    }
 
-def _seed_candidate(config: OperationsConfig, workspace_id: UUID, batch_id: UUID, export_id: UUID) -> None:
+    with native_postgres(tmp_path, config.port):
+        bootstrap(config)
+        with psycopg.connect(**config.connection_kwargs("postgres"), autocommit=True) as connection:
+            connection.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)", (workspace_id,))
+            connection.execute(
+                "INSERT INTO omp_integration.raw_exports(export_id,workspace_id,team_key,mode,source_started_at,source_boundary,source_watermark,state,storage_root,raw_export_sha256,manifest_sha256,completed_at) "
+                "VALUES (%s,%s,'HOME','full',%s,%s,%s,'complete','test/export',%s,%s,%s)",
+                (export_id, workspace_id, BOUNDARY, BOUNDARY, BOUNDARY, RAW_HASH, RAW_HASH, BOUNDARY),
+            )
+            connection.execute(
+                "INSERT INTO omp_integration.import_batches(batch_id,workspace_id,export_id,transformation_version,mapping_file_sha256,state,reconciliation_sha256,parity_hashes,artifact_root,promoted_at) "
+                "VALUES (%s,%s,%s,%s,%s,'promoted',%s,%s::jsonb,'test/import',%s)",
+                (batch_id, workspace_id, export_id, TRANSFORMATION_VERSION, RAW_HASH, RAW_HASH, json.dumps(parity), BOUNDARY),
+            )
+            for kind, receipt in (("backup", BACKUP_RECEIPT), ("restore_drill", RESTORE_RECEIPT)):
+                connection.execute(
+                    "INSERT INTO omp_control.operations_evidence(kind,started_at,contract_sha256,migration_set_sha256,backup_id,outcome,receipt_sha256) "
+                    "VALUES (%s,%s,%s,%s,%s,'passed:test',%s)",
+                    (kind, BOUNDARY, contract_sha256(), migration_set_sha256(), backup_id, receipt),
+                )
+
+        manifest = cutover._build_manifest(
+            config,
+            workspace_id=workspace_id,
+            batch_id=batch_id,
+            smoke_results=[cutover.CommandSmokeResult(command_type="create_work_batch", passed=True)],
+            freeze_at=BOUNDARY,
+            backup_id=str(backup_id),
+            credential_sha256=RAW_HASH,
+            plan={"name": "plan", "sha256": RAW_HASH, "work_id": str(uuid4())},
+            first_mutation_request_id=uuid4(),
+        )
+
+    assert manifest.backup_receipt_sha256 == BACKUP_RECEIPT
+    assert manifest.restore_receipt_sha256 == RESTORE_RECEIPT
+
+
+
+def _seed_candidate(config: OperationsConfig, workspace_id: UUID, batch_id: UUID, export_id: UUID, epoch_id: UUID) -> None:
     with psycopg.connect(**config.connection_kwargs("postgres"), autocommit=True) as connection:
         connection.execute("SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)", (str(workspace_id), str(config.actor_id())))
         connection.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+        # The imported HOME-148 stand-in: attestation targets exactly this item.
         connection.execute(
-            "INSERT INTO omp_integration.raw_exports (export_id,workspace_id,team_key,mode,source_started_at,source_boundary,state,storage_root,raw_export_sha256,manifest_sha256,completed_at) VALUES (%s,%s,'HOME','full',%s,%s,'complete','linear-exports/test',%s,%s,%s)",
-            (export_id, workspace_id, BOUNDARY, BOUNDARY, RAW_HASH, "f" * 64, BOUNDARY),
+            "INSERT INTO omp_work.work_items(workspace_id, work_id, state) VALUES (%s, %s, 'BACKLOG')",
+            (workspace_id, uuid5(NAMESPACE_URL, f"home-148-plan:{epoch_id}")),
+        )
+        connection.execute(
+            "INSERT INTO omp_integration.raw_exports (export_id,workspace_id,team_key,mode,source_started_at,source_boundary,source_watermark,state,storage_root,raw_export_sha256,manifest_sha256,completed_at) VALUES (%s,%s,'HOME','full',%s,%s,%s,'complete','linear-exports/test',%s,%s,%s)",
+            (export_id, workspace_id, BOUNDARY, BOUNDARY, BOUNDARY, RAW_HASH, "f" * 64, BOUNDARY),
         )
         connection.execute(
             "INSERT INTO omp_integration.import_batches (batch_id,workspace_id,export_id,transformation_version,mapping_file_sha256,state,reconciliation_sha256,parity_hashes,artifact_root,staged_at,reconciled_at,promoted_at) VALUES (%s,%s,%s,%s,%s,'promoted',%s,%s::jsonb,'linear-imports/test',%s,%s,%s)",
@@ -145,28 +206,91 @@ def test_activation_applies_replays_once_and_stamps_first_mutation(tmp_path: Pat
     with native_postgres(tmp_path, config.port):
         bootstrap(config)
         workspace_id, actor_id, batch_id, export_id, epoch_id, operation_id = uuid4(), uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
-        _seed_candidate(config, workspace_id, batch_id, export_id)
+        _seed_candidate(config, workspace_id, batch_id, export_id, epoch_id)
         store = PostgresWorkStore(config)
 
-        receipt, result = _activate(store, workspace_id, _manifest(config, workspace_id, batch_id, epoch_id), actor_id, operation_id)
+        manifest = _manifest(config, workspace_id, batch_id, epoch_id)
+        receipt, result = _activate(store, workspace_id, manifest, actor_id, operation_id)
         assert receipt.state.value == "applied" and result["authority"] == "work"
-        replay_receipt, replay_result = _activate(store, workspace_id, _manifest(config, workspace_id, batch_id, epoch_id), actor_id, operation_id)
+        replay_receipt, replay_result = _activate(store, workspace_id, manifest, actor_id, operation_id)
         assert replay_receipt.state.value == "replayed" and replay_result == result
 
         with pytest.raises(WorkStoreError, match="cutover_invariant"):
             _activate(store, workspace_id, _manifest(config, workspace_id, batch_id, uuid4()), actor_id)
 
+        # The gate: before the anointed attestation lands, every other mutation —
+        # and an attestation with the wrong request id — is refused.
+        with pytest.raises(WorkStoreError, match="cutover_invariant"):
+            store.execute(_create_envelope(workspace_id), actor_id=actor_id, actor_kind="owner", required_scope="work.mutate")
+        attest = AttestCutoverPlanCommand(
+            type="attest_cutover_plan",
+            payload=AttestCutoverPlanPayload(
+                epoch_id=epoch_id,
+                work_id=manifest.plan_work_id,
+                plan_name=manifest.plan_name,
+                plan_sha256=manifest.plan_sha256,
+                plan_artifact="cutover/plan/test-plan.json.gpg",
+            ),
+        )
+        with pytest.raises(WorkStoreError, match="cutover_invariant"):
+            store.execute(_envelope(workspace_id, attest), actor_id=actor_id, actor_kind="operator", required_scope="work.operate")
+
+        nominated = _envelope(workspace_id, attest).model_copy(update={"request_id": manifest.first_mutation_request_id})
+        service = WorkService(store)
+        owner = Principal(actor_id=actor_id, actor_kind="owner", workspaces=frozenset({workspace_id}), scopes=frozenset(OWNER_SCOPES))
+        operator = Principal(actor_id=actor_id, actor_kind="operator", workspaces=frozenset({workspace_id}), scopes=frozenset(CUTOVER_SCOPES))
+        with pytest.raises(WorkError, match="forbidden") as denied:
+            service.execute(owner, nominated)
+        assert denied.value.status == 403
+        attestation_receipt, _ = service.execute(operator, nominated)
+        assert attestation_receipt.state.value == "applied"
+        with psycopg.connect(**config.connection_kwargs("postgres")) as connection:
+            stamped_at, stamped_request = connection.execute(
+                "SELECT first_work_mutation_at, first_work_mutation_request_id FROM omp_control.workspace_authority WHERE workspace_id=%s", (workspace_id,)
+            ).fetchone()
+        assert stamped_at is not None and str(stamped_request) == str(manifest.first_mutation_request_id)
+
         first = store.execute(_create_envelope(workspace_id), actor_id=actor_id, actor_kind="owner", required_scope="work.mutate")
         assert first[0].state.value == "applied"
-        with psycopg.connect(**config.connection_kwargs("postgres")) as connection:
-            stamped = connection.execute("SELECT first_work_mutation_at FROM omp_control.workspace_authority WHERE workspace_id=%s", (workspace_id,)).fetchone()[0]
-        assert stamped is not None
         store.execute(_create_envelope(workspace_id), actor_id=actor_id, actor_kind="owner", required_scope="work.mutate")
         with psycopg.connect(**config.connection_kwargs("postgres")) as connection:
-            assert connection.execute("SELECT first_work_mutation_at FROM omp_control.workspace_authority WHERE workspace_id=%s", (workspace_id,)).fetchone()[0] == stamped
+            row = connection.execute("SELECT first_work_mutation_at, first_work_mutation_request_id FROM omp_control.workspace_authority WHERE workspace_id=%s", (workspace_id,)).fetchone()
+        assert row[0] == stamped_at and str(row[1]) == str(manifest.first_mutation_request_id)
 
         authority = store.read(workspace_id, actor_id, "authority", "")
         assert authority["authority"] == "work" and authority["epoch_id"] == str(epoch_id) and authority["first_work_mutation_at"] is not None
+
+
+def test_attestation_rejects_after_window_expires(tmp_path: Path) -> None:
+    """Transaction-side cutoff: a client timeout cannot stop a commit, so the store
+    itself refuses the anointed mutation past freeze_at + the one-hour window."""
+    config = _config(tmp_path)
+    with native_postgres(tmp_path, config.port):
+        bootstrap(config)
+        workspace_id, actor_id, batch_id, export_id, epoch_id = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
+        _seed_candidate(config, workspace_id, batch_id, export_id, epoch_id)
+        store = PostgresWorkStore(config)
+        stale = (datetime.now(timezone.utc) - timedelta(minutes=61)).isoformat()
+        manifest = _manifest(config, workspace_id, batch_id, epoch_id, freeze_at=stale)
+        receipt, _ = _activate(store, workspace_id, manifest, actor_id)
+        assert receipt.state.value == "applied"
+        attest = AttestCutoverPlanCommand(
+            type="attest_cutover_plan",
+            payload=AttestCutoverPlanPayload(
+                epoch_id=epoch_id,
+                work_id=manifest.plan_work_id,
+                plan_name=manifest.plan_name,
+                plan_sha256=manifest.plan_sha256,
+                plan_artifact="cutover/plan/test-plan.json.gpg",
+            ),
+        )
+        nominated = _envelope(workspace_id, attest).model_copy(update={"request_id": manifest.first_mutation_request_id})
+        with pytest.raises(WorkStoreError, match="cutover_invariant") as caught:
+            store.execute(nominated, actor_id=actor_id, actor_kind="operator", required_scope="work.operate")
+        assert caught.value.diagnostics == ("attestation_window_expired",)
+        with psycopg.connect(**config.connection_kwargs("postgres")) as connection:
+            assert connection.execute("SELECT first_work_mutation_at FROM omp_control.workspace_authority WHERE workspace_id=%s", (workspace_id,)).fetchone() == (None,)
+            assert connection.execute("SELECT count(*) FROM omp_control.cutover_plan_attestations").fetchone() == (0,)
 
 
 @pytest.mark.parametrize(
@@ -183,8 +307,8 @@ def test_activation_rejects_invalid_manifests(tmp_path: Path, override: dict[str
     config = _config(tmp_path)
     with native_postgres(tmp_path, config.port):
         bootstrap(config)
-        workspace_id, actor_id, batch_id, export_id = uuid4(), uuid4(), uuid4(), uuid4()
-        _seed_candidate(config, workspace_id, batch_id, export_id)
+        workspace_id, actor_id, batch_id, export_id, epoch_id = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
+        _seed_candidate(config, workspace_id, batch_id, export_id, epoch_id)
         store = PostgresWorkStore(config)
         with pytest.raises(WorkStoreError) as captured:
             _activate(store, workspace_id, _manifest(config, workspace_id, batch_id, uuid4(), **override), actor_id)
@@ -197,8 +321,8 @@ def test_stale_batch_rejects(tmp_path: Path) -> None:
     config = _config(tmp_path)
     with native_postgres(tmp_path, config.port):
         bootstrap(config)
-        workspace_id, actor_id, batch_id, export_id = uuid4(), uuid4(), uuid4(), uuid4()
-        _seed_candidate(config, workspace_id, batch_id, export_id)
+        workspace_id, actor_id, batch_id, export_id, epoch_id = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
+        _seed_candidate(config, workspace_id, batch_id, export_id, epoch_id)
         newer = datetime(2026, 8, 17, 13, 0, tzinfo=timezone.utc)
         with psycopg.connect(**config.connection_kwargs("postgres"), autocommit=True) as connection:
             connection.execute("SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)", (str(workspace_id), str(config.actor_id())))
@@ -217,7 +341,7 @@ def test_epoch_transitions_are_one_way(tmp_path: Path) -> None:
     with native_postgres(tmp_path, config.port):
         bootstrap(config)
         workspace_id, actor_id, batch_id, export_id, epoch_id = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
-        _seed_candidate(config, workspace_id, batch_id, export_id)
+        _seed_candidate(config, workspace_id, batch_id, export_id, epoch_id)
         store = PostgresWorkStore(config)
         _activate(store, workspace_id, _manifest(config, workspace_id, batch_id, epoch_id), actor_id)
         with psycopg.connect(**config.connection_kwargs("postgres"), autocommit=True) as connection:

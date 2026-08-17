@@ -142,6 +142,13 @@ class ActivateCutoverResult(StrictModel):
     activated_at: datetime
 
 
+class AttestCutoverPlanResult(StrictModel):
+    type: Literal["attest_cutover_plan"]
+    epoch_id: UUID
+    work_id: UUID
+    plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class AuthorityView(StrictModel):
     authority: Literal["linear", "work"]
     epoch_id: UUID | None = None
@@ -151,7 +158,7 @@ class AuthorityView(StrictModel):
 
 
 CommandResult = Annotated[
-    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseoutResult | ProjectHealthResult | ActivateCutoverResult,
+    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseoutResult | ProjectHealthResult | ActivateCutoverResult | AttestCutoverPlanResult,
     Field(discriminator="type"),
 ]
 

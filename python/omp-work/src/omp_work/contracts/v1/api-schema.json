@@ -108,6 +108,39 @@
       "title": "ApiError",
       "type": "object"
     },
+    "AttestCutoverPlanResult": {
+      "additionalProperties": false,
+      "properties": {
+        "epoch_id": {
+          "format": "uuid",
+          "title": "Epoch Id",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "type": {
+          "const": "attest_cutover_plan",
+          "title": "Type",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "epoch_id",
+        "work_id",
+        "plan_sha256"
+      ],
+      "title": "AttestCutoverPlanResult",
+      "type": "object"
+    },
     "AuthorityView": {
       "additionalProperties": false,
       "properties": {
@@ -413,6 +446,39 @@
             "activated_at"
           ],
           "title": "ActivateCutoverResult",
+          "type": "object"
+        },
+        "AttestCutoverPlanResult": {
+          "additionalProperties": false,
+          "properties": {
+            "epoch_id": {
+              "format": "uuid",
+              "title": "Epoch Id",
+              "type": "string"
+            },
+            "plan_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Plan Sha256",
+              "type": "string"
+            },
+            "type": {
+              "const": "attest_cutover_plan",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "epoch_id",
+            "work_id",
+            "plan_sha256"
+          ],
+          "title": "AttestCutoverPlanResult",
           "type": "object"
         },
         "Candidate": {
@@ -1086,6 +1152,7 @@
             "mapping": {
               "activate_cutover": "#/$defs/ActivateCutoverResult",
               "append_evidence": "#/$defs/EvidenceResult",
+              "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
               "clear_focus": "#/$defs/FocusResult",
               "complete_work": "#/$defs/WorkItemResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
@@ -1130,6 +1197,9 @@
             },
             {
               "$ref": "#/$defs/ActivateCutoverResult"
+            },
+            {
+              "$ref": "#/$defs/AttestCutoverPlanResult"
             }
           ],
           "title": "Result"
@@ -2165,6 +2235,39 @@
           "title": "ActivateCutoverResult",
           "type": "object"
         },
+        "AttestCutoverPlanResult": {
+          "additionalProperties": false,
+          "properties": {
+            "epoch_id": {
+              "format": "uuid",
+              "title": "Epoch Id",
+              "type": "string"
+            },
+            "plan_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Plan Sha256",
+              "type": "string"
+            },
+            "type": {
+              "const": "attest_cutover_plan",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "epoch_id",
+            "work_id",
+            "plan_sha256"
+          ],
+          "title": "AttestCutoverPlanResult",
+          "type": "object"
+        },
         "Candidate": {
           "additionalProperties": false,
           "properties": {
@@ -2852,6 +2955,7 @@
                 "mapping": {
                   "activate_cutover": "#/$defs/ActivateCutoverResult",
                   "append_evidence": "#/$defs/EvidenceResult",
+                  "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
                   "clear_focus": "#/$defs/FocusResult",
                   "complete_work": "#/$defs/WorkItemResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
@@ -2896,6 +3000,9 @@
                 },
                 {
                   "$ref": "#/$defs/ActivateCutoverResult"
+                },
+                {
+                  "$ref": "#/$defs/AttestCutoverPlanResult"
                 }
               ]
             },
