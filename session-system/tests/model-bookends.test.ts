@@ -59,14 +59,21 @@ interface Harness {
 	notifies: string[];
 }
 
-async function makeHarness(depth = 0, opts: { intakeConfigured?: boolean; hasCredential?: boolean } = {}): Promise<Harness> {
-	const { intakeConfigured = true, hasCredential = true } = opts;
+async function makeHarness(depth = 0, opts: { intakeConfigured?: boolean; hasCredential?: boolean; auditRole?: string } = {}): Promise<Harness> {
+	const { intakeConfigured = true, hasCredential = true, auditRole = "openai/gpt-5.2" } = opts;
 	const result = await loadExtensions([extPath], repoRoot);
 	if (result.errors.length > 0) throw new Error(result.errors.map(e => e.error).join("; "));
 	const fableModel = { id: "claude-fable-5", provider: "anthropic", name: "Claude Fable 5", api: "anthropic-messages" };
-	const fakeRegistry = { getAvailable: () => [fableModel], hasProvider: () => true };
+	// HOME-147: the audit gate refuses same-family auditors — the harness session
+	// runs on a different provider family than @audit resolves to.
+	const gptModel = { id: "gpt-5.2", provider: "openai", name: "GPT 5.2", api: "openai-responses" };
+	const fakeRegistry = { getAvailable: () => [fableModel, gptModel], hasProvider: () => true };
 	const fakeSettings = {
-		getModelRole: (role: string) => (intakeConfigured && role === "intake" ? "anthropic/claude-fable-5:high" : undefined),
+		getModelRole: (role: string) => {
+			if (intakeConfigured && role === "intake") return "anthropic/claude-fable-5:high";
+			if (role === "audit") return auditRole;
+			return undefined;
+		},
 		get: () => undefined,
 		getStorage: () => undefined,
 	};
@@ -98,7 +105,7 @@ async function makeHarness(depth = 0, opts: { intakeConfigured?: boolean; hasCre
 			},
 		} as never,
 		{
-			getModel: () => undefined,
+			getModel: () => fableModel,
 			isIdle: () => true,
 			abort: () => {},
 			hasPendingMessages: () => false,
@@ -120,8 +127,8 @@ const taskCall = (id: string, input: Record<string, unknown>) =>
 	({ type: "tool_call", toolName: "task", toolCallId: id, input }) as never;
 const auditorCall = (id: string, task: unknown = FULL_AUDIT_TASK) =>
 	taskCall(id, { context: "audit the completed work", tasks: [{ agent: "auditor", task }] });
-const linearReview = (id: string, body: string) =>
-	({ type: "tool_call", toolName: "linear", toolCallId: id, input: { action: "comment", kind: "review", body } }) as never;
+const workForward = (id: string, body: string) =>
+	({ type: "tool_call", toolName: "work", toolCallId: id, input: { action: "append_evidence", kind: "audit", body } }) as never;
 /** Mirrors the real task tool result: content wraps the report in <task-result>
  *  transport metadata; details.results[0].output carries the exact report
  *  (observed in the HOME-131 dry-run transcript). */
@@ -140,12 +147,12 @@ const taskResult = (id: string, text: string, isError = false) =>
 		details: isError ? undefined : { results: [{ output: text }] },
 		isError,
 	}) as never;
-const linearResult = (id: string, body: string, success = true) =>
+const workResult = (id: string, body: string, success = true) =>
 	({
 		type: "tool_result",
-		toolName: "linear",
+		toolName: "work",
 		toolCallId: id,
-		input: { action: "comment", kind: "review", body },
+		input: { action: "append_evidence", kind: "audit", body },
 		content: [{ type: "text", text: success ? "ok" : "REFUSED" }],
 		details: { success },
 		isError: false,
@@ -395,6 +402,24 @@ describe("audit gate", () => {
 		expect((await h.runner.emitToolCall(auditorCall("t1")))?.block).toBeUndefined();
 	});
 
+	test("armed: refuses a same-family auditor before spawn (HOME-147 independence)", async () => {
+		const h = await makeHarness(0, { auditRole: "anthropic/claude-fable-5" });
+		await armSummary(h);
+		const res = await h.runner.emitToolCall(auditorCall("t1"));
+		expect(res?.block).toBe(true);
+		expect(res?.reason).toContain("same model family");
+		// the refused spawn must not consume the one-auditor slot
+		expect((await h.runner.emitToolCall(auditorCall("t2")))?.block).toBe(true);
+	});
+
+	test("armed: fails closed when @audit cannot be resolved", async () => {
+		const h = await makeHarness(0, { auditRole: "openai/not-registered" });
+		await armSummary(h);
+		const res = await h.runner.emitToolCall(auditorCall("t1"));
+		expect(res?.block).toBe(true);
+		expect(res?.reason).toContain("could not resolve @audit");
+	});
+
 	test("armed: rejects an auditor mixed with other tasks", async () => {
 		const h = await makeHarness();
 		await armSummary(h);
@@ -442,7 +467,7 @@ describe("audit gate", () => {
 		const call = await h.runner.emitToolCall(auditorCall("aud-1"));
 		expect(call?.block).toBeUndefined();
 		await h.runner.emitToolResult(taskResult("aud-1", JSON.stringify(PASS_REPORT)));
-		const verbatim = await h.runner.emitToolCall(linearReview("l1", `Review\n\n${PASS_REPORT}`));
+		const verbatim = await h.runner.emitToolCall(workForward("l1", `Review\n\n${PASS_REPORT}`));
 		expect(verbatim?.block).toBeUndefined();
 	});
 
@@ -458,7 +483,7 @@ describe("audit gate", () => {
 		expect(appended).toContain("REFUSED");
 		expect(appended).toContain("FINDINGS");
 		// review block now names the refusal instead of claiming no audit ran
-		const blocked = await h.runner.emitToolCall(linearReview("l1", "body"));
+		const blocked = await h.runner.emitToolCall(workForward("l1", "body"));
 		expect(blocked?.block).toBe(true);
 		expect(blocked?.reason).toContain("REFUSED");
 		// stop guidance distinguishes refusal from no-audit
@@ -469,8 +494,8 @@ describe("audit gate", () => {
 		// slot is free: a fresh auditor with a usable report completes the attempt
 		await runAuditor(h, "aud-2");
 		const body = `Review\n\n${PASS_REPORT}`;
-		expect((await h.runner.emitToolCall(linearReview("l2", body)))?.block).toBeUndefined();
-		await h.runner.emitToolResult(linearResult("l2", body));
+		expect((await h.runner.emitToolCall(workForward("l2", body)))?.block).toBeUndefined();
+		await h.runner.emitToolResult(workResult("l2", body));
 		expect(await h.runner.emit(sessionStop())).toBeUndefined();
 	});
 
@@ -501,13 +526,13 @@ describe("audit gate", () => {
 	test("review comment is blocked before the audit and when the report is paraphrased", async () => {
 		const h = await makeHarness();
 		await armSummary(h);
-		const early = await h.runner.emitToolCall(linearReview("l1", "review without audit"));
+		const early = await h.runner.emitToolCall(workForward("l1", "review without audit"));
 		expect(early?.block).toBe(true);
 		await runAuditor(h);
-		const paraphrased = await h.runner.emitToolCall(linearReview("l2", "auditor passed everything"));
+		const paraphrased = await h.runner.emitToolCall(workForward("l2", "auditor passed everything"));
 		expect(paraphrased?.block).toBe(true);
 		expect(paraphrased?.reason).toContain("VERBATIM");
-		const verbatim = await h.runner.emitToolCall(linearReview("l3", `Session review...\n\n${PASS_REPORT}\n\nCharter...`));
+		const verbatim = await h.runner.emitToolCall(workForward("l3", `Session review...\n\n${PASS_REPORT}\n\nCharter...`));
 		expect(verbatim?.block).toBeUndefined();
 	});
 
@@ -516,7 +541,7 @@ describe("audit gate", () => {
 		await armSummary(h);
 		await runAuditor(h);
 		const body = `Review\n\n${PASS_REPORT}`;
-		await h.runner.emitToolResult(linearResult("l1", body, false));
+		await h.runner.emitToolResult(workResult("l1", body, false));
 		const stop = await h.runner.emit(sessionStop());
 		expect((stop as { continue?: boolean } | undefined)?.continue).toBe(true);
 	});
@@ -531,8 +556,8 @@ describe("audit gate", () => {
 		const stopBeforeForward = await h.runner.emit(sessionStop());
 		expect((stopBeforeForward as { continue?: boolean } | undefined)?.continue).toBe(true);
 		const body = `Review\n\n${needsFix}`;
-		expect((await h.runner.emitToolCall(linearReview("l1", body)))?.block).toBeUndefined();
-		await h.runner.emitToolResult(linearResult("l1", body));
+		expect((await h.runner.emitToolCall(workForward("l1", body)))?.block).toBeUndefined();
+		await h.runner.emitToolResult(workResult("l1", body));
 		const stopAfterForward = await h.runner.emit(sessionStop());
 		expect(stopAfterForward).toBeUndefined();
 	});

@@ -13,8 +13,10 @@
  * attempt; fixes happen afterward and the next owner-entered /summary starts a
  * fresh auditor (state resets on session switch).
  */
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { registerAuditReceipt } from "./workflow/audit-bridge";
 // Static audit instructions (HOME-131) — installed alongside this extension so the
 // relative import resolves in both link and copy modes.
 import auditContract from "./model-bookends-audit.md" with { type: "text" };
@@ -25,7 +27,7 @@ import stopRefused from "./model-bookends-stop-refused.md" with { type: "text" }
 import stopNotForwarded from "./model-bookends-stop-not-forwarded.md" with { type: "text" };
 
 /** Effort pinned by HOME-131: /intake always runs Fable at :high. */
-export const INTAKE_THINKING_LEVEL = "high";
+export const INTAKE_THINKING_LEVEL = ThinkingLevel.High;
 
 /** The five labeled sections every auditor task must inline (HOME-131 input contract). */
 export const AUDIT_INPUT_SECTIONS: ReadonlyArray<{ label: string; pattern: RegExp }> = [
@@ -328,13 +330,31 @@ export default function modelBookends(pi: ExtensionAPI) {
 					reason: `Audit gate: auditor task is missing required sections: ${missing.join("; ")}. Inline all five labeled sections in the task text.`,
 				};
 			}
+			// HOME-147: the auditor must be independent — a different model family
+			// than the armed session model. Unresolved @audit fails closed.
+			const auditModel = ctx.models.resolve("@audit");
+			const sessionModel = ctx.models.current();
+			if (!auditModel) {
+				return { block: true, reason: "Audit gate: could not resolve @audit — fix modelRoles.audit and retry; the auditor must run on a different model family than the session." };
+			}
+			if (!sessionModel) {
+				return { block: true, reason: "Audit gate: no session model is set — cannot prove auditor independence; refusing the spawn." };
+			}
+			if (ctx.models.family(auditModel) === ctx.models.family(sessionModel)) {
+				return {
+					block: true,
+					reason: "Audit gate: @audit resolves to the same model family as the session model — an auditor grades cold, never its own family. Point modelRoles.audit at another family.",
+				};
+			}
 			gate.auditorCallId = event.toolCallId;
 			return undefined;
 		}
 
-		if (event.toolName === "linear") {
+		if (event.toolName === "work") {
 			const input = event.input as { action?: string; kind?: string; body?: string };
-			if (input.action !== "comment" || input.kind !== "review") return undefined;
+			// Unified surface (HOME-147): BOTH backends expose the `work` tool; the
+			// forward is exactly action:"append_evidence" kind:"audit".
+			if (!(input.action === "append_evidence" && input.kind === "audit")) return undefined;
 			if (!gate.report) {
 				return {
 					block: true,
@@ -378,20 +398,20 @@ export default function modelBookends(pi: ExtensionAPI) {
 			gate.report = text;
 			gate.verdict = verdict;
 			gate.lastRefusal = undefined;
+			// HOME-147: the work backend's append_evidence kind:"audit" binds the exact
+			// persisted bytes through this receipt — register what the REAL auditor emitted.
+			registerAuditReceipt(text, verdict);
 			return undefined;
 		}
 
-		// linear-now refuses writes as NORMAL results (isError false, details.success false):
-		// forwarding is confirmed only on an explicit success:true review write.
-		if (event.toolName === "linear" && gate.report && !event.isError) {
+		// The workflow host refuses writes as NORMAL results (isError false,
+		// details.success false): forwarding is confirmed only on an explicit
+		// success:true review write.
+		if (event.toolName === "work" && gate.report && !event.isError) {
 			const input = event.input as { action?: string; kind?: string; body?: string };
 			const success = (event.details as { success?: boolean } | undefined)?.success === true;
-			if (
-				success &&
-				input.action === "comment" &&
-				input.kind === "review" &&
-				reportForwarded(typeof input.body === "string" ? input.body : "", gate.report)
-			) {
+			const isForward = input.action === "append_evidence" && input.kind === "audit";
+			if (success && isForward && reportForwarded(typeof input.body === "string" ? input.body : "", gate.report)) {
 				gate.forwarded = true;
 				gate.armed = false; // attempt complete — PASS or NEEDS_FIX alike; verdict consequences live in the review
 			}

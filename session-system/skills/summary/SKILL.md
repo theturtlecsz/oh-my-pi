@@ -1,6 +1,6 @@
 ---
 name: summary
-description: End-of-session closing ritual — actually invokes the questionyourself and whatsmissing skills over the whole session, writes a SESSION REVIEW for the owner, runs the Linear close ritual (project health updates, capture triage, propose-closes, NOW handoff), and writes a standing loop-session prompt that keeps the current long-running goal iterating across sessions. Use ONLY when the owner has literally entered /summary — never because a session seems to be ending, work finished, or wrap-up wording appeared (HOME-114); /done runs its own separate flow.
+description: End-of-session closing ritual — actually invokes the questionyourself and whatsmissing skills over the whole session, writes a SESSION REVIEW for the owner, runs the Work Ledger close ritual (project health updates, capture triage, close requests, NOW handoff), and writes a standing loop-session prompt that keeps the current long-running goal iterating across sessions. Use ONLY when the owner has literally entered /summary — never because a session seems to be ending, work finished, or wrap-up wording appeared (HOME-114); /done runs its own separate flow.
 ---
 
 # /summary — session closing ritual
@@ -8,7 +8,7 @@ description: End-of-session closing ritual — actually invokes the questionyour
 Run this when the owner enters /summary. It exists to answer four questions
 honestly: *what actually happened, what is shaky about it, what is nobody
 looking at, and what should the next session do.* It fuses the
-`questionyourself` and `whatsmissing` audits with the amended law-28 Linear
+`questionyourself` and `whatsmissing` audits with the amended law-28 Work Ledger
 close contract (law 27 is the uniform memory law, HOME-112 — no per-session
 vault ingest) and adds the one thing that contract lacks: forward-looking
 handoff.
@@ -75,11 +75,11 @@ as these are, just run them:
 - Live state of anything deployed or changed: `systemctl` is-active on
   touched services/timers, relevant journal tails, DB or API spot-checks of
   the session's claims.
-- Linear (owner page, team HOME): one bounded read — in-flight projects with
-  health, the `now` holder, and the `waiting-on-chris` queue. Where the
-  `linear` tool is available use it (`tree`, `my_now`, `waiting`); otherwise
-  query the GraphQL API directly (key at `~/.config/linear.env`). This is the
-  record the close ritual updates.
+- Work Ledger (owner page): one bounded read — in-flight projects with
+  health, the `now` holder, and the `waiting-on-chris` queue. Use the
+  workflow tool (`work` under the Work Ledger backend, `linear` under the
+  Linear adapter) with `tree`, `my_now`, `waiting`; never query a backend
+  API directly. This is the record the close ritual updates.
 - TASKS.md / decision-queue state for anything parked.
 
 Anything you cannot re-verify goes in an explicit **UNVERIFIED** list — never
@@ -118,7 +118,7 @@ Audits BEFORE summary — never write the summary first and let the audits
 anchor on it. Fold Phase 1–2 findings in; the summary must absorb them, not
 contradict them.
 
-The review OPENS with the completion tree (HOME-109): call the `linear` tool
+The review OPENS with the completion tree (HOME-109): call the workflow tool
 with `action:"my_now"` and paste its output verbatim, then explain in plain
 words what this session changed in that tree. Only then the sections below.
 
@@ -141,7 +141,7 @@ sections survive in plain words — the two reconcile, neither is repealed.)
 - **UNVERIFIED** — claims that could not be re-grounded, explicitly labeled.
 - **PARKED ON YOU** — every item waiting on the owner (decision, approval,
   in-person action), each with a one-line "how to unblock." Each item here
-  must ALSO exist in Linear carrying the `waiting-on-chris` label (file it in
+  must ALSO exist in the ledger carrying the `waiting-on-chris` label (file it in
   Phase 5 if it doesn't) — chat prose evaporates, the label is the queue.
 - **PRODUCT MOVED** — what the household can see/do now that it couldn't
   this morning. If nothing, say nothing moved.
@@ -200,7 +200,7 @@ adapted to the repo:
 - **Starting state** — repo, branch, expected head commit, liveness probes
   for anything that might still be running.
 - **Queue sources, in priority order** — where the session builds its work
-  queue (the Linear surface/promise tree and its open issues first, then the
+  queue (the ledger surface/promise tree and its open items first, then the
   goal's roadmap/spec, open recommendations in named artifacts, labeled
   stubs). The session builds the queue itself and executes top to
   bottom; it never stops because "one charter's worth" is done.
@@ -223,9 +223,9 @@ say why the loop form doesn't fit when you use one.
 
 **Prompt hygiene, all forms:**
 
-- **Deliver the charter through the session review.** In Linear-weave estates
+- **Deliver the charter through the session review.** In ledger-routed estates
   (routing law, owner-ratified 2026-08-10), include the next-session charter in
-  Phase 5's single typed review comment on the current issue. NEVER post a
+  Phase 5's single typed closeout receipt on the current item. NEVER post a
   second handoff comment or write PROMPT-*.md/handoff files. Elsewhere, save to
   `.omc/handoffs/PROMPT-<topic>-<date>.md` AND show it in chat. Never end by
   telling the owner to save it.
@@ -242,30 +242,31 @@ say why the loop form doesn't fit when you use one.
 
 **Pre-delivery check (run, don't skim):** (1) Phases 1 and 2 actually
 invoked their skills via the Skill tool this session; (2) the charter is inside
-the single Phase 5 review body in Linear-weave estates, else its file exists;
+the single Phase 5 review body in ledger-routed estates, else its file exists;
 (3) the prompt is a loop charter tied to a named standing goal, or justifies the
 single-task exception; (4) every embedded command was executed or probed this
 session; (5) every touched project got health plus one line, or is listed as not
 updated with a reason; (6) every finding is filed, listed UNVERIFIED, or dropped
 out loud; (7) NOW was re-verified and remains the reviewed issue.
 
-## Phase 5 — The Linear close ritual
+## Phase 5 — The close ritual
 
-Linear (team HOME) is the owner page. Where the `linear` tool is available,
-perform these writes in order; otherwise preview equivalent payloads before the
-API writes:
+The Work Ledger is the owner page. Perform these writes through the workflow
+tool (`work` or `linear`, whichever backend is installed) in order:
 
 1. **Project updates** — every touched project gets honest health plus one
-   plain-language line via `update_health`. Include another project when this
+   plain-language line via `record_health`. Include another project when this
    session moved its dependency or promise.
 2. **Capture triage** — every stray finding, watch-item, or parked idea becomes
-   an issue via `create_issue`, or is explicitly dropped. Chat and local ledgers
-   are not destinations.
-3. **Propose closes** — finished issues get `propose_close`; the owner verdict
+   a work item via `create_work`, or is explicitly dropped. Chat and local
+   ledgers are not destinations.
+3. **Request closes** — finished items get `request_closeout`; the owner verdict
    still closes them.
-4. **Session review + handoff** — call the `linear` tool exactly once on the
-   current NOW/executing issue with `action:"comment"`, `kind:"review"`, and the
-   review `body`.
+4. **Verification + session review** — on the current NOW/executing item, post
+   `action:"append_evidence"`, `kind:"verification"` with the concrete check
+   evidence (what ran, what passed, what remains unverified). Then call the
+   workflow tool exactly once with `action:"append_evidence"`, `kind:"closeout"`,
+   and the review `body`.
    The body carries all technical evidence from Section 1 plus the complete
    next-session state and loop charter from Section 2. The host adds the
    `Session review` prefix and current plan hash; require `success:true`.

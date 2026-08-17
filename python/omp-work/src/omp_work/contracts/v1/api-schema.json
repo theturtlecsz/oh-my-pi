@@ -90,7 +90,7 @@
         "commit_sha": {
           "anyOf": [
             {
-              "pattern": "^[0-9a-f]{7,64}$",
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
               "type": "string"
             },
             {
@@ -99,6 +99,15 @@
           ],
           "default": null,
           "title": "Commit Sha"
+        },
+        "kind": {
+          "default": "planned",
+          "enum": [
+            "planned",
+            "final"
+          ],
+          "title": "Kind",
+          "type": "string"
         },
         "revision_id": {
           "format": "uuid",
@@ -254,6 +263,67 @@
     },
     "CommandResponse": {
       "$defs": {
+        "Candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "allocated_at": {
+              "format": "date-time",
+              "title": "Allocated At",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_id",
+            "work_id",
+            "revision_id",
+            "candidate_sha256",
+            "allocated_at"
+          ],
+          "title": "Candidate",
+          "type": "object"
+        },
         "CloseoutIntentView": {
           "additionalProperties": false,
           "properties": {
@@ -354,6 +424,10 @@
         "CreatedWorkItem": {
           "additionalProperties": false,
           "properties": {
+            "client_ref": {
+              "title": "Client Ref",
+              "type": "string"
+            },
             "key": {
               "title": "Key",
               "type": "string"
@@ -362,6 +436,10 @@
               "format": "uuid",
               "title": "Revision Id",
               "type": "string"
+            },
+            "row_version": {
+              "title": "Row Version",
+              "type": "integer"
             },
             "state": {
               "title": "State",
@@ -374,10 +452,12 @@
             }
           },
           "required": [
+            "client_ref",
             "work_id",
             "revision_id",
             "key",
-            "state"
+            "state",
+            "row_version"
           ],
           "title": "CreatedWorkItem",
           "type": "object"
@@ -388,7 +468,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -412,7 +493,7 @@
             "candidate_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -457,6 +538,11 @@
             "kind": {
               "$ref": "#/$defs/EvidenceKind"
             },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
             "payload_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Payload Sha256",
@@ -470,7 +556,7 @@
             "remote_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -550,6 +636,25 @@
             "receipt"
           ],
           "title": "EvidenceResult",
+          "type": "object"
+        },
+        "FinalizeCandidateResult": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate": {
+              "$ref": "#/$defs/Candidate"
+            },
+            "type": {
+              "const": "finalize_candidate",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "candidate"
+          ],
+          "title": "FinalizeCandidateResult",
           "type": "object"
         },
         "FocusResult": {
@@ -831,6 +936,7 @@
               "clear_focus": "#/$defs/FocusResult",
               "complete_work": "#/$defs/WorkItemResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
+              "finalize_candidate": "#/$defs/FinalizeCandidateResult",
               "put_relation": "#/$defs/RelationResult",
               "record_project_health": "#/$defs/ProjectHealthResult",
               "remove_relation": "#/$defs/RelationResult",
@@ -861,6 +967,9 @@
               "$ref": "#/$defs/EvidenceResult"
             },
             {
+              "$ref": "#/$defs/FinalizeCandidateResult"
+            },
+            {
               "$ref": "#/$defs/CloseoutResult"
             },
             {
@@ -882,6 +991,10 @@
         "CreatedWorkItem": {
           "additionalProperties": false,
           "properties": {
+            "client_ref": {
+              "title": "Client Ref",
+              "type": "string"
+            },
             "key": {
               "title": "Key",
               "type": "string"
@@ -890,6 +1003,10 @@
               "format": "uuid",
               "title": "Revision Id",
               "type": "string"
+            },
+            "row_version": {
+              "title": "Row Version",
+              "type": "integer"
             },
             "state": {
               "title": "State",
@@ -902,10 +1019,12 @@
             }
           },
           "required": [
+            "client_ref",
             "work_id",
             "revision_id",
             "key",
-            "state"
+            "state",
+            "row_version"
           ],
           "title": "CreatedWorkItem",
           "type": "object"
@@ -936,6 +1055,10 @@
     "CreatedWorkItem": {
       "additionalProperties": false,
       "properties": {
+        "client_ref": {
+          "title": "Client Ref",
+          "type": "string"
+        },
         "key": {
           "title": "Key",
           "type": "string"
@@ -944,6 +1067,10 @@
           "format": "uuid",
           "title": "Revision Id",
           "type": "string"
+        },
+        "row_version": {
+          "title": "Row Version",
+          "type": "integer"
         },
         "state": {
           "title": "State",
@@ -956,10 +1083,12 @@
         }
       },
       "required": [
+        "client_ref",
         "work_id",
         "revision_id",
         "key",
-        "state"
+        "state",
+        "row_version"
       ],
       "title": "CreatedWorkItem",
       "type": "object"
@@ -972,7 +1101,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -996,7 +1126,7 @@
         "candidate_commit": {
           "anyOf": [
             {
-              "pattern": "^[0-9a-f]{7,64}$",
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
               "type": "string"
             },
             {
@@ -1041,6 +1171,11 @@
         "kind": {
           "$ref": "#/$defs/EvidenceKind"
         },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
         "payload_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Payload Sha256",
@@ -1054,7 +1189,7 @@
         "remote_commit": {
           "anyOf": [
             {
-              "pattern": "^[0-9a-f]{7,64}$",
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
               "type": "string"
             },
             {
@@ -1125,7 +1260,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -1149,7 +1285,7 @@
             "candidate_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -1194,6 +1330,11 @@
             "kind": {
               "$ref": "#/$defs/EvidenceKind"
             },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
             "payload_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Payload Sha256",
@@ -1207,7 +1348,7 @@
             "remote_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -1287,6 +1428,88 @@
         "receipt"
       ],
       "title": "EvidenceResult",
+      "type": "object"
+    },
+    "FinalizeCandidateResult": {
+      "$defs": {
+        "Candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "allocated_at": {
+              "format": "date-time",
+              "title": "Allocated At",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_id",
+            "work_id",
+            "revision_id",
+            "candidate_sha256",
+            "allocated_at"
+          ],
+          "title": "Candidate",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/Candidate"
+        },
+        "type": {
+          "const": "finalize_candidate",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "candidate"
+      ],
+      "title": "FinalizeCandidateResult",
       "type": "object"
     },
     "FocusResult": {
@@ -1375,6 +1598,33 @@
         "version"
       ],
       "title": "FocusSlot",
+      "type": "object"
+    },
+    "HealthView": {
+      "additionalProperties": false,
+      "properties": {
+        "alerts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Alerts",
+          "type": "array"
+        },
+        "live": {
+          "title": "Live",
+          "type": "boolean"
+        },
+        "ready": {
+          "title": "Ready",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "live",
+        "ready"
+      ],
+      "title": "HealthView",
       "type": "object"
     },
     "OperationReceipt": {
@@ -1530,6 +1780,74 @@
       "title": "ProjectHealthView",
       "type": "object"
     },
+    "ProjectView": {
+      "additionalProperties": false,
+      "properties": {
+        "health": {
+          "anyOf": [
+            {
+              "enum": [
+                "onTrack",
+                "atRisk",
+                "offTrack"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Health"
+        },
+        "health_updated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Health Updated At"
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Key"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "project_id": {
+          "format": "uuid",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "workspace_id",
+        "name"
+      ],
+      "title": "ProjectView",
+      "type": "object"
+    },
     "RelationEdge": {
       "$defs": {
         "RelationKind": {
@@ -1652,6 +1970,67 @@
     },
     "StoredOperationView": {
       "$defs": {
+        "Candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "allocated_at": {
+              "format": "date-time",
+              "title": "Allocated At",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_id",
+            "work_id",
+            "revision_id",
+            "candidate_sha256",
+            "allocated_at"
+          ],
+          "title": "Candidate",
+          "type": "object"
+        },
         "CloseoutIntentView": {
           "additionalProperties": false,
           "properties": {
@@ -1752,6 +2131,10 @@
         "CreatedWorkItem": {
           "additionalProperties": false,
           "properties": {
+            "client_ref": {
+              "title": "Client Ref",
+              "type": "string"
+            },
             "key": {
               "title": "Key",
               "type": "string"
@@ -1760,6 +2143,10 @@
               "format": "uuid",
               "title": "Revision Id",
               "type": "string"
+            },
+            "row_version": {
+              "title": "Row Version",
+              "type": "integer"
             },
             "state": {
               "title": "State",
@@ -1772,10 +2159,12 @@
             }
           },
           "required": [
+            "client_ref",
             "work_id",
             "revision_id",
             "key",
-            "state"
+            "state",
+            "row_version"
           ],
           "title": "CreatedWorkItem",
           "type": "object"
@@ -1786,7 +2175,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -1810,7 +2200,7 @@
             "candidate_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -1855,6 +2245,11 @@
             "kind": {
               "$ref": "#/$defs/EvidenceKind"
             },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
             "payload_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Payload Sha256",
@@ -1868,7 +2263,7 @@
             "remote_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -1948,6 +2343,25 @@
             "receipt"
           ],
           "title": "EvidenceResult",
+          "type": "object"
+        },
+        "FinalizeCandidateResult": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate": {
+              "$ref": "#/$defs/Candidate"
+            },
+            "type": {
+              "const": "finalize_candidate",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "candidate"
+          ],
+          "title": "FinalizeCandidateResult",
           "type": "object"
         },
         "FocusResult": {
@@ -2245,6 +2659,7 @@
                   "clear_focus": "#/$defs/FocusResult",
                   "complete_work": "#/$defs/WorkItemResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
+                  "finalize_candidate": "#/$defs/FinalizeCandidateResult",
                   "put_relation": "#/$defs/RelationResult",
                   "record_project_health": "#/$defs/ProjectHealthResult",
                   "remove_relation": "#/$defs/RelationResult",
@@ -2273,6 +2688,9 @@
                 },
                 {
                   "$ref": "#/$defs/EvidenceResult"
+                },
+                {
+                  "$ref": "#/$defs/FinalizeCandidateResult"
                 },
                 {
                   "$ref": "#/$defs/CloseoutResult"
@@ -2398,7 +2816,7 @@
             "commit_sha": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -2407,6 +2825,15 @@
               ],
               "default": null,
               "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
@@ -2554,6 +2981,19 @@
           ],
           "default": null
         },
+        "project_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
         "revision": {
           "$ref": "#/$defs/WorkRevision"
         },
@@ -2672,7 +3112,7 @@
             "commit_sha": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -2681,6 +3121,15 @@
               ],
               "default": null,
               "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
@@ -2703,13 +3152,69 @@
           "title": "Candidate",
           "type": "object"
         },
+        "CloseoutIntentView": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "intent_id": {
+              "format": "uuid",
+              "title": "Intent Id",
+              "type": "string"
+            },
+            "requested_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested At"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "pending",
+                "completed"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "intent_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "state"
+          ],
+          "title": "CloseoutIntentView",
+          "type": "object"
+        },
         "EvidenceKind": {
           "enum": [
             "plan",
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -2733,7 +3238,7 @@
             "candidate_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -2778,6 +3283,11 @@
             "kind": {
               "$ref": "#/$defs/EvidenceKind"
             },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
             "payload_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Payload Sha256",
@@ -2791,7 +3301,7 @@
             "remote_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -2852,6 +3362,74 @@
             "issued_at"
           ],
           "title": "EvidenceReceipt",
+          "type": "object"
+        },
+        "ProjectView": {
+          "additionalProperties": false,
+          "properties": {
+            "health": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "onTrack",
+                    "atRisk",
+                    "offTrack"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Health"
+            },
+            "health_updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Health Updated At"
+            },
+            "key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Key"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "workspace_id",
+            "name"
+          ],
+          "title": "ProjectView",
           "type": "object"
         },
         "RelationEdge": {
@@ -2957,6 +3535,19 @@
                 }
               ],
               "default": null
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
             },
             "revision": {
               "$ref": "#/$defs/WorkRevision"
@@ -3056,8 +3647,27 @@
       },
       "additionalProperties": false,
       "properties": {
+        "closeout": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CloseoutIntentView"
+          },
+          "title": "Closeout",
+          "type": "array"
+        },
         "item": {
           "$ref": "#/$defs/WorkItemView"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "receipts": {
           "default": [],
@@ -3105,7 +3715,7 @@
             "commit_sha": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -3114,6 +3724,15 @@
               ],
               "default": null,
               "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
@@ -3134,6 +3753,74 @@
             "allocated_at"
           ],
           "title": "Candidate",
+          "type": "object"
+        },
+        "ProjectView": {
+          "additionalProperties": false,
+          "properties": {
+            "health": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "onTrack",
+                    "atRisk",
+                    "offTrack"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Health"
+            },
+            "health_updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Health Updated At"
+            },
+            "key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Key"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "project_id": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_id",
+            "workspace_id",
+            "name"
+          ],
+          "title": "ProjectView",
           "type": "object"
         },
         "RelationEdge": {
@@ -3239,6 +3926,19 @@
                 }
               ],
               "default": null
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
             },
             "revision": {
               "$ref": "#/$defs/WorkRevision"
@@ -3343,6 +4043,14 @@
             "$ref": "#/$defs/WorkItemView"
           },
           "title": "Items",
+          "type": "array"
+        },
+        "projects": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProjectView"
+          },
+          "title": "Projects",
           "type": "array"
         },
         "relations": {

@@ -8,7 +8,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "done" | "footer"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "done" | "footer" | "audit"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -63,9 +63,9 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.firstBody).not.toContain(String(out.hashB));
 		expect(record(out.stopFirst).additionalContext).toContain("Post one silent workflow checkpoint");
 		expect(out.stopSecond, "continuation is injected only once").toBeNull();
-		expect(out.evidence).toContain("comment posted");
-		expect(out.statusAfterEvidence, "evidence cannot settle handoff debt").toContain("⚠");
-		expect(out.handoff).toContain("comment posted");
+		expect(out.evidence, "ambient untyped notes are refused with the kind menu").toContain("kind required");
+		expect(out.statusAfterEvidence, "a refused note cannot settle handoff debt").toContain("⚠");
+		expect(out.handoff).toContain("handoff receipt recorded on HOME-1");
 		expect(out.statusAfterHandoff).not.toContain("⚠");
 		expect(out.stopAfterHandoff).toBeNull();
 	});
@@ -76,7 +76,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.noPlanReview).toContain("Run /plan first");
 		expect(out.beforeInvocation).toContain("literally enter /summary");
 		expect(out.afterPaste).toContain("literally enter /summary");
-		expect(out.afterStructured).toContain("comment posted");
+		expect(out.afterStructured).toContain("closeout receipt recorded on HOME-1");
 		const reviews = list(out.reviewBodies);
 		expect(reviews).toHaveLength(1);
 		expect(reviews[0]).toContain("**Session review**");
@@ -108,6 +108,16 @@ describe("HOME-122 workflow sequence", () => {
 		expect(record(out.doneWrites)).toMatchObject({ closed: 1, removeNow: 1, verdictComments: 1 });
 		expect(out.now).toBe("NOW unset");
 		expect(record(out.afterSecondDone)).toMatchObject({ closed: 1, removeNow: 1 });
+	});
+
+	test("the audit bridge binds verbatim bytes to exactly one recorded receipt", () => {
+		const out = run("audit");
+		expect(out.spawnBlocked, "the auditor spawn clears the gate").toBe(false);
+		expect(out.unauthorized, "audit is a close-ritual kind").toContain("literally enter /summary");
+		expect(out.edited, "edited bytes never match the receipt").toContain("no fresh auditor receipt matches");
+		expect(out.exact).toContain("audit receipt recorded on HOME-1 (verdict PASS)");
+		expect(out.replay, "the receipt is consumed by the first match").toContain("no fresh auditor receipt matches");
+		expect(out.auditBodies, "exactly one audit comment landed").toBe(1);
 	});
 
 	test("footer splits the inline current issue from the lower summary", () => {

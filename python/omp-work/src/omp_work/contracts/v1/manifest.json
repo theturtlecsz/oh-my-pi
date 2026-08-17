@@ -1,9 +1,11 @@
 {
   "paths": [
+    "candidate-hash.json",
     "contract.json",
     "decisions/0001-domain-source-and-security.md",
     "decisions/0002-evidence-completion-and-recovery.md",
     "decisions/0003-one-ledger-cutover.md",
+    "decisions/0004-home-147-pre-cutover-amendment.md",
     "examples.json",
     "manifest.json",
     "schema.json"

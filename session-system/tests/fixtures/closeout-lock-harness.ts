@@ -28,8 +28,8 @@ const result = await loadExtensions([extPath], probe);
 if (result.errors.length > 0) throw new Error(result.errors.map(error => error.error).join("; "));
 const ext = result.extensions[0];
 if (!ext) throw new Error("linear-now extension did not load");
-const tool = ext.tools.get("linear");
-if (!tool) throw new Error("linear tool missing");
+const tool = ext.tools.get("work");
+if (!tool) throw new Error("work tool missing");
 
 const skillPromptMessage = {
 	role: "custom",
@@ -55,7 +55,7 @@ const attemptAction = async (label: string, params: Record<string, unknown>, ctx
 	}
 };
 const attempt = (label: string, ctx: ExtensionContext): Promise<void> =>
-	attemptAction(label, { action: "update_health", project: "P", health: "onTrack", body: "b" }, ctx);
+	attemptAction(label, { action: "record_health", project: "P", health: "onTrack", body: "b" }, ctx);
 
 const uiCalls: string[] = [];
 
@@ -123,8 +123,8 @@ if (mode === "legacy-host") {
 	await attempt("before", ctx);
 	if (mode === "input") {
 		// Full locked-action coverage on the pristine instance.
-		await attemptAction("before_propose_close", { action: "propose_close", issue: "HOME-1", body: "b" }, ctx);
-		await attemptAction("before_archive_issue", { action: "archive_issue", issue: "HOME-1" }, ctx);
+		await attemptAction("before_request_closeout", { action: "request_closeout", work: "HOME-1", body: "b" }, ctx);
+		await attemptAction("before_cancel_work", { action: "cancel_work", work: "HOME-1" }, ctx);
 		await runner.emitInput("/summary", undefined, "interactive");
 		await attempt("afterUnlock", ctx);
 		await runner.emit({ type: "session_switch", reason: "new" } as never);

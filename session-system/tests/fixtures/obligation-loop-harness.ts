@@ -3,6 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
+import { confirmRoundTrip } from "./two-phase";
 
 const probe = process.argv[2];
 if (!probe) throw new Error("usage: harness <probe-repo>");
@@ -42,8 +43,8 @@ const loaded = await loadExtensions([path.join(repoRoot, "session-system/extensi
 if (loaded.errors.length > 0) throw new Error(loaded.errors.map(error => error.error).join("; "));
 const extension = loaded.extensions[0];
 if (!extension) throw new Error("linear-now extension did not load");
-const tool = extension.tools.get("linear");
-if (!tool) throw new Error("linear tool missing");
+const tool = extension.tools.get("work");
+if (!tool) throw new Error("work tool missing");
 const stopHandler = extension.handlers.get("session_stop")?.[0];
 if (!stopHandler) throw new Error("session_stop handler missing");
 
@@ -85,7 +86,7 @@ const stop = async (file: string): Promise<string> => {
 	return "none";
 };
 
-await toolText({ action: "set_now", issue: "HOME-1", confirm: true });
+await confirmRoundTrip(toolText, { action: "set_now", work: "HOME-1" });
 const local = path.join(probe, "sessions", "one", "local");
 fs.mkdirSync(local, { recursive: true });
 const planFile = path.join(local, "work-plan.md");
@@ -97,7 +98,7 @@ out.fileOnly = await stop(sessionFile);
 const planContent = "# Work\n\n## Approach\n1. Change it\n\n## Verification\n1. Check it\n";
 await runner.emit({ type: "plan_approved", planFilePath: "local://work-plan.md", planContent, title: "Work" } as never);
 out.approved = await stop(sessionFile);
-out.handoff = await toolText({ action: "comment", issue: "HOME-1", kind: "handoff", body: "done / none / resume" });
+out.handoff = await toolText({ action: "append_evidence", work: "HOME-1", kind: "handoff", body: "done / none / resume" });
 out.settled = await stop(sessionFile);
 fs.writeFileSync(planFile, "# still inert after rewrite\n");
 out.rewrittenFile = await stop(sessionFile);

@@ -27,11 +27,12 @@ def receipt(kind: EvidenceKind, **updates: object) -> EvidenceReceipt:
         "revision_id": REVISION,
         "candidate_id": CANDIDATE,
         "kind": kind,
+        "payload": {"note": kind.value},
         "payload_sha256": "a" * 64,
         "issuer": "owner",
         "issued_at": NOW,
         "candidate_sha256": "b" * 64,
-        "candidate_commit": "abcdef123",
+        "candidate_commit": "c" * 40,
     }
     data.update(updates)
     return EvidenceReceipt.model_validate(data)
@@ -43,7 +44,8 @@ def candidate(**updates: object) -> Candidate:
         "work_id": WORK,
         "revision_id": REVISION,
         "candidate_sha256": "b" * 64,
-        "commit_sha": "abcdef123",
+        "commit_sha": "c" * 40,
+        "kind": "final",
         "allocated_at": NOW,
     }
     data.update(updates)
@@ -79,7 +81,7 @@ def test_command_envelope_rejects_unknown_nested_payload_fields() -> None:
         "operation_id": "00000000-0000-7000-8000-000000000010",
         "request_id": "00000000-0000-7000-8000-000000000011",
         "correlation_id": "00000000-0000-7000-8000-000000000012",
-        "command": {"type": "create_work_batch", "payload": {"work_items": ["one"], "unknown": True}},
+        "command": {"type": "create_work_batch", "payload": {"items": [{"client_ref": "one", "title": "one"}], "unknown": True}},
     }
     with pytest.raises(ValueError, match="unknown"):
         CommandEnvelope.model_validate(envelope)
@@ -129,7 +131,7 @@ def test_idempotent_retry_replays_only_identical_body() -> None:
 
 
 def test_command_hash_ignores_attempt_identifiers() -> None:
-    command = {"type": "create_work_batch", "payload": {"work_items": ["one"]}}
+    command = {"type": "create_work_batch", "payload": {"items": [{"client_ref": "one", "title": "one"}]}}
     first = CommandEnvelope.model_validate({"api_version": "work.omp.dev/v1", "workspace_id": str(WORK), "operation_id": str(uuid4()), "request_id": str(uuid4()), "correlation_id": str(uuid4()), "command": command})
     retry = first.model_copy(update={"request_id": uuid4(), "correlation_id": uuid4()})
     assert command_sha256(first) == command_sha256(retry)
@@ -137,23 +139,23 @@ def test_command_hash_ignores_attempt_identifiers() -> None:
 
 def test_stale_evidence_blocks_completion_after_revision_changes() -> None:
     stale = receipt(EvidenceKind.VERIFICATION, revision_id=UUID("00000000-0000-7000-8000-000000000099"))
-    result = completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=(receipt(EvidenceKind.PLAN), stale, receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.PUSH, remote_commit="abcdef123")), closeout_requested=True))
+    result = completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=(receipt(EvidenceKind.PLAN), stale, receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.PUSH, remote_commit="c" * 40)), closeout_requested=True))
     assert {blocker.code for blocker in result} >= {"verification_missing", "stale_evidence"}
 
 
 def test_pushed_branch_requires_remote_candidate_and_preserves_closeout() -> None:
-    receipts = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.PUSH, remote_commit="deadbeef"))
+    receipts = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.CLOSEOUT), receipt(EvidenceKind.PUSH, remote_commit="d" * 40))
     blocked = completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=receipts, closeout_requested=True))
     assert {blocker.code for blocker in blocked} == {"push_unverified"}
-    fresh = (*receipts[:-1], receipt(EvidenceKind.PUSH, remote_commit="abcdef123"))
+    fresh = (*receipts[:-1], receipt(EvidenceKind.PUSH, remote_commit="c" * 40))
     assert completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=fresh, closeout_requested=True)) == ()
 
 
 def test_completion_rejects_work_and_revision_binding_mismatches() -> None:
-    receipts = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.PUSH, remote_commit="abcdef123"))
+    receipts = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.PUSH, remote_commit="c" * 40))
     wrong_work = CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(work_id=UUID("00000000-0000-7000-8000-000000000098")), receipts=receipts, closeout_requested=True)
     wrong_revision = CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(revision_id=UUID("00000000-0000-7000-8000-000000000097")), receipts=receipts, closeout_requested=True)
-    wrong_receipt = CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=(*receipts[:-1], receipt(EvidenceKind.PUSH, work_id=UUID("00000000-0000-7000-8000-000000000096"), remote_commit="abcdef123")), closeout_requested=True)
+    wrong_receipt = CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=(*receipts[:-1], receipt(EvidenceKind.PUSH, work_id=UUID("00000000-0000-7000-8000-000000000096"), remote_commit="c" * 40)), closeout_requested=True)
     for input in (wrong_work, wrong_revision, wrong_receipt):
         assert "stale_evidence" in {blocker.code for blocker in completion_blockers(input)}
 
@@ -173,3 +175,76 @@ def test_bundle_approval_and_tamper_detection(tmp_path: Path, monkeypatch: pytes
     contract_path.write_text(contract_path.read_text().replace("HOME team worlds/initiatives", "HOME team workflow worlds/initiatives"))
     with pytest.raises(ValueError, match="approval hash mismatch"):
         omp_work.validate_bundle(require_approval=True)
+
+
+def test_planned_candidate_and_missing_closeout_evidence_block_completion() -> None:
+    receipts = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.PUSH, remote_commit="c" * 40))
+    planned = CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(kind="planned", commit_sha=None), receipts=receipts, closeout_requested=True)
+    assert {blocker.code for blocker in completion_blockers(planned)} >= {"candidate_not_final", "push_unverified"}
+    no_closeout = CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=receipts, closeout_requested=True)
+    assert {blocker.code for blocker in completion_blockers(no_closeout)} == {"closeout_missing"}
+
+
+def test_evidence_payload_body_is_bounded() -> None:
+    with pytest.raises(ValueError, match="1 MiB"):
+        receipt(EvidenceKind.HANDOFF, payload={"data": "x" * 1048576})
+
+
+def test_batch_payload_validates_refs_and_relations() -> None:
+    from omp_work.v1.models import CreateWorkBatchPayload
+
+    with pytest.raises(ValueError, match="unique"):
+        CreateWorkBatchPayload.model_validate({"items": [{"client_ref": "a", "title": "one"}, {"client_ref": "a", "title": "two"}]})
+    with pytest.raises(ValueError, match="same request"):
+        CreateWorkBatchPayload.model_validate({"items": [{"client_ref": "a", "title": "one"}], "relations": [{"source_ref": "a", "target_ref": "missing", "kind": "parent"}]})
+    with pytest.raises(ValueError, match="self"):
+        CreateWorkBatchPayload.model_validate({"items": [{"client_ref": "a", "title": "one"}], "relations": [{"source_ref": "a", "target_ref": "a", "kind": "blocks"}]})
+    with pytest.raises(ValueError, match="DONE"):
+        CreateWorkBatchPayload.model_validate({"items": [{"client_ref": "a", "title": "one", "state": "DONE"}]})
+    payload = CreateWorkBatchPayload.model_validate({"items": [{"client_ref": "a", "title": "one"}], "relations": []})
+    assert payload.items[0].state == "BACKLOG"
+
+
+def test_candidate_hash_matches_golden_vectors() -> None:
+    from omp_work.v1.canonical import CANDIDATE_HASH_ALGORITHM, candidate_sha256
+
+    fixture = json.loads((Path(omp_work._contract_dir()) / "candidate-hash.json").read_text(encoding="utf-8"))
+    assert fixture["algorithm"] == CANDIDATE_HASH_ALGORITHM
+    for vector in fixture["vectors"]:
+        # Sorting and validation live inside the helper: input order and stored bytes are pinned.
+        assert candidate_sha256(vector["commit_sha"], vector["paths"]) == vector["candidate_sha256"], vector["name"]
+        assert sorted(vector["paths"], key=lambda path: path.encode("utf-8")) == vector["paths_sorted"], vector["name"]
+
+
+def test_candidate_hash_rejects_noncanonical_inputs() -> None:
+    from omp_work.v1.canonical import candidate_sha256
+
+    with pytest.raises(ValueError):
+        candidate_sha256("0123456789abcdef0123456789abcdef01234567", [])
+    with pytest.raises(ValueError):
+        candidate_sha256("0123456789abcdef0123456789abcdef01234567", ["a.ts", "a.ts"])
+    with pytest.raises(ValueError):
+        candidate_sha256("0123456789abcdef0123456789abcdef01234567", ["dir/"])
+    with pytest.raises(ValueError):
+        candidate_sha256("abc123", ["a.ts"])  # abbreviated object ids never bind a candidate
+
+
+def test_client_config_lands_on_the_shared_ts_client_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Cross-language contract: session-system/extensions/workflow/config.ts reads
+    # exactly XDG_CONFIG_HOME/omp-work/client.json; the CLI must write it there.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from omp_work.operations.capabilities import write_client_config
+    from omp_work.operations.config import OperationsConfig
+
+    config = OperationsConfig(config_dir=tmp_path / "svc", state_dir=tmp_path / "state", data_dir=tmp_path / "data", port=54322)
+    bearer = tmp_path / "owner.json"
+    bearer.write_text("{}")
+    bearer.chmod(0o600)
+    path = write_client_config(config, workspace_id=WORK, owner_id=REVISION, base_url="http://127.0.0.1:54322", bearer_file=bearer)
+    assert path == tmp_path / "omp-work" / "client.json"
+    assert path.stat().st_mode & 0o777 == 0o600
+    data = json.loads(path.read_text())
+    assert data["workspace_id"] == str(WORK)
+    assert data["bearer_file"] == str(bearer)
+    with pytest.raises(ValueError):
+        write_client_config(config, workspace_id=WORK, owner_id=REVISION, base_url="https://work.example.com", bearer_file=bearer)

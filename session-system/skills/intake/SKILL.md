@@ -1,16 +1,16 @@
 ---
 name: intake
-description: Socratic intake — turn a vague idea, an existing plan/draft, or a finished blueprint into a published Linear issue. Use for /intake, "intake this", stress-testing or grilling a plan before building, deep interviews, or spec re-baselines. Supersedes grilling, deep-grill, and deep-interview for owner-side intake; ends at the published Linear issue — execution lanes pull from Linear.
+description: Socratic intake — turn a vague idea, an existing plan/draft, or a finished blueprint into a published Work Ledger item. Use for /intake, "intake this", stress-testing or grilling a plan before building, deep interviews, or spec re-baselines. Supersedes grilling, deep-grill, and deep-interview for owner-side intake; ends at the published work item — execution lanes pull from the ledger.
 ---
 
-# /intake — Socratic intake → Linear blueprint
+# /intake — Socratic intake → Work Ledger blueprint
 
 Internal skill (owner-specific doctrine and estate wiring; not for distribution).
 
 One lane, one skill: taxonomy scan → budgeted Socratic interview with entity-graph
-tracking → blueprint artifact → pre-publish lint → two-phase Linear publication.
-Execution is OUT of scope: intake ends after owner-confirmed Linear publication.
-The extension selects the first published issue (or batch parent) as NOW inside
+tracking → blueprint artifact → pre-publish lint → two-phase ledger publication.
+Execution is OUT of scope: intake ends after owner-confirmed ledger publication.
+The extension selects the first published item (or batch parent) as NOW inside
 that confirmed operation; no second prompt or manual state change follows.
 
 Provenance: blueprint HOME-43 (deep-grill session 2026-08-11). This skill replaced
@@ -21,7 +21,7 @@ Enforcement map (every rule here has a mechanical checkpoint, not a reminder):
 questions → G1–G6 pre-send gate, checked immediately before EVERY AskUserQuestion;
 visible scan → BINDING, rendered before the session's first question,
 lint-checked below;
-blueprint → lint gate, checked before ANY Linear write; writes → two-phase preview,
+blueprint → lint gate, checked before ANY ledger write; writes → two-phase preview,
 owner yes required. If a checkpoint fails, fix and re-check — never proceed.
 
 ## Entry seams (three; same engine, different entry state)
@@ -261,9 +261,9 @@ One per complaint — a session normally carries one; when a session surfaces �
 INDEPENDENT complaints (no blocking relation between the deliverables), each
 gets its own blueprint and its own single-issue two-phase publication; never a
 manufactured parent (owner-codified 2026-08-13 from the HOME-108/109
-deviation). Each blueprint doubles verbatim as its Linear issue description.
+deviation). Each blueprint doubles verbatim as its work-item description.
 Drafted in the session-local scratch (`local://intake-{slug}.md`) for the lint pass ONLY —
-after publication returns success:true, the Linear issue is the sole record
+after publication returns success:true, the work item is the sole record
 (routing law: local artifacts don't survive and must not shadow the issue;
 never write blueprints to durable paths, and never to `.omc/*` — that is an
 OMC-era home, obs #107). Sections, in order:
@@ -297,7 +297,7 @@ No side effects before lint passes — the ontology lives at the ledger. Check:
 - [ ] Every Deferred item carries a category tag.
 - [ ] Every noun used in acceptance criteria is defined in Entities & Rules (or
       the section is legitimately absent because no new noun was minted).
-- [ ] Target Linear project exists — probe xd://linear, don't assume.
+- [ ] Target surface exists — probe the workflow tool's `tree`, don't assume.
 - [ ] Blocking edges among proposed issues are acyclic.
 - [ ] The visible scan was shown before the session's first question (a
       no-question session still shows it).
@@ -316,26 +316,26 @@ On lint failure: report the failing checks, fix the blueprint (asking at most on
 follow-up question if a fix needs owner input, budget permitting), re-lint. Never
 publish a failing blueprint.
 
-## Publication (two-phase, via xd://linear)
+## Publication (two-phase, via the workflow tool)
 
 - **Single issue** (default): `create_issue` with the blueprint as description.
   Two-phase: first call returns the payload preview — show it to the owner
-  verbatim, including that the issue becomes NOW; repeat with `confirm:true`
+  verbatim, including that the item becomes NOW; repeat with `confirm:true`
   only after his yes.
 - **Conditional split**: only when ONE complaint's blueprint decomposes into ≥2
   independently verifiable slices that share blocking relations — the split is
   a decomposition of a single deliverable, never a bundling of independent
   complaints (those each get their own single-issue publication; Blueprint
-  section). Parent issue holds the blueprint; children hold the slices
-  with NATIVE Linear blocking links (never text-described edges); ONE batch
+  section). Parent item holds the blueprint; children hold the slices
+  with NATIVE blocking links (never text-described edges); ONE batch
   preview = one owner yes for the whole set. GATED: before attempting any split
-  publish, read the xd://linear device doc and confirm `create_issue` exposes
-  parent/blocks/batch params (charter: ~/.omp/agent/charters/linear-batch-publish.md).
+  publish, confirm the installed workflow tool's `create_issue` exposes
+  parent/blocks/batch params.
   If the params are absent, publish the single-issue path and record the split as
-  deferred on the issue.
+  deferred on the item.
 - Never assume a write landed without `success:true`.
 
-Intake ends here. Native publication selects the first issue or batch parent as
+Intake ends here. Native publication selects the first item or batch parent as
 NOW; do not ask Chris to select it again. Do not start building inside intake —
 the next owner action is `/plan`.
 
@@ -350,7 +350,7 @@ green-lights unverified architecture.
 
 Plain language throughout (no jargon; "I don't understand" = full stop, re-explain
 and re-ask). Explore the codebase instead of asking anything the code can answer
-— facts only; judgment calls are always asked (see Visible scan). No Linear
+— facts only; judgment calls are always asked (see Visible scan). No ledger
 writes before the lint passes AND the owner explicitly confirms the two-phase
 preview.
 

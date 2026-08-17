@@ -8,8 +8,9 @@ const ss = path.join(repoRoot, "session-system");
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "ss-install-"));
 afterAll(() => fs.rmSync(home, { recursive: true, force: true }));
 
-const LINKS: Array<[string, string]> = [
-	[".omp/agent/extensions/linear-now.ts", "extensions/linear-now.ts"],
+const SHARED_LINKS: Array<[string, string]> = [
+	// workflow/ is shared support code: linear-now.ts and work-now.ts both import it
+	[".omp/agent/extensions/workflow", "extensions/workflow"],
 	[".omp/agent/extensions/model-bookends.ts", "extensions/model-bookends.ts"],
 	[".omp/agent/extensions/model-bookends-audit.md", "extensions/model-bookends-audit.md"],
 	[".omp/agent/extensions/model-bookends-refused.md", "extensions/model-bookends-refused.md"],
@@ -18,7 +19,7 @@ const LINKS: Array<[string, string]> = [
 	[".omp/agent/extensions/model-bookends-stop-not-forwarded.md", "extensions/model-bookends-stop-not-forwarded.md"],
 	[".omp/agent/extensions/model-bookends-stop-refused.md", "extensions/model-bookends-stop-refused.md"],
 	[".omp/agent/agents/auditor.md", "agents/auditor.md"],
-	[".omp/agent/rules/linear-plan.md", "rules/linear-plan.md"],
+	[".omp/agent/rules/work-plan.md", "rules/work-plan.md"],
 	["AGENTS.md", "agents/AGENTS.md"],
 	[".omp/agent/AGENTS.md", "agents/omp-AGENTS.md"],
 	[".agents/skills/summary", "skills/summary"],
@@ -26,23 +27,44 @@ const LINKS: Array<[string, string]> = [
 	[".agents/skills/whatsmissing", "skills/whatsmissing"],
 	[".omp/agent/skills/intake", "skills/intake"],
 ];
+const LINEAR_ENTRY = ".omp/agent/extensions/linear-now.ts";
+const WORK_ENTRY = ".omp/agent/extensions/work-now.ts";
 
-function run() {
-	return Bun.spawnSync(["bash", path.join(ss, "install.sh")], {
+function run(args: string[] = []) {
+	return Bun.spawnSync(["bash", path.join(ss, "install.sh"), ...args], {
 		env: { ...process.env, HOME: home },
 	});
 }
+const live = (p: string) => path.join(home, p);
 
 describe("install.sh", () => {
-	test("links every artifact into HOME", () => {
+	test("default backend links linear-now and removes the work entry", () => {
 		expect(run().exitCode).toBe(0);
-		for (const [live, src] of LINKS) {
-			expect(fs.realpathSync(path.join(home, live))).toBe(fs.realpathSync(path.join(ss, src)));
+		for (const [dst, src] of SHARED_LINKS) {
+			expect(fs.realpathSync(live(dst))).toBe(fs.realpathSync(path.join(ss, src)));
 		}
+		expect(fs.realpathSync(live(LINEAR_ENTRY))).toBe(fs.realpathSync(path.join(ss, "extensions/linear-now.ts")));
+		expect(fs.existsSync(live(WORK_ENTRY))).toBe(false);
 	});
 	test("is idempotent on re-run", () => {
 		const second = run();
 		expect(second.exitCode).toBe(0);
 		expect(second.stdout.toString()).not.toContain("linked"); // all "ok"
+	});
+	test("--backend work installs exactly one entry: work live, linear gone, workflow kept", () => {
+		expect(run(["--backend", "work"]).exitCode).toBe(0);
+		expect(fs.realpathSync(live(WORK_ENTRY))).toBe(fs.realpathSync(path.join(ss, "extensions/work-now.ts")));
+		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(false);
+		// shared support code stays installed under both backends
+		expect(fs.existsSync(live(".omp/agent/extensions/workflow/host.ts"))).toBe(true);
+		// switching back removes the work entry — never two backends at once
+		expect(run(["--backend", "linear"]).exitCode).toBe(0);
+		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(true);
+		expect(fs.existsSync(live(WORK_ENTRY))).toBe(false);
+		expect(fs.existsSync(live(".omp/agent/extensions/workflow/host.ts"))).toBe(true);
+	});
+	test("rejects an unknown backend", () => {
+		const bad = run(["--backend", "notion"]);
+		expect(bad.exitCode).toBe(2);
 	});
 });

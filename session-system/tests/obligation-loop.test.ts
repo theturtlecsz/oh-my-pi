@@ -29,7 +29,7 @@ test("only approval arms execution and only typed handoff settles it", () => {
 	const out = JSON.parse(child.stdout.toString()) as Record<string, string | number>;
 	expect(out.fileOnly, "creating a plan file must not imply approval or execution").toBe("none");
 	expect(out.approved).toContain("Post one silent workflow checkpoint");
-	expect(out.handoff).toContain("comment posted");
+	expect(out.handoff).toContain("handoff receipt recorded");
 	expect(out.settled).toBe("none");
 	expect(out.rewrittenFile, "file watchers must not resurrect settled workflow debt").toBe("none");
 	expect(out.planComments).toBe(1);

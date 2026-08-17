@@ -1,0 +1,1 @@
+WORKFLOW SEQUENCE: /intake creates and selects → /plan approves, stamps, and executes → execution handoff → /summary reviews → /done closes. The ledger tracks every stage; Chris never moves state, re-identifies the work, or answers bookkeeping prompts.

@@ -11,14 +11,14 @@
     "GET /v1/health/ready"
   ],
   "command_types": [
-    "create_work_batch", "revise_work", "set_work_state", "put_relation", "remove_relation", "set_focus", "clear_focus", "append_evidence", "request_closeout", "complete_work", "record_project_health", "stage_import_batch", "promote_import_batch", "activate_cutover"
+    "create_work_batch", "revise_work", "set_work_state", "put_relation", "remove_relation", "set_focus", "clear_focus", "append_evidence", "finalize_candidate", "request_closeout", "complete_work", "record_project_health", "stage_import_batch", "promote_import_batch", "activate_cutover"
   ],
   "error_codes": [
     "invalid_request", "unauthenticated", "forbidden", "approval_required", "revision_conflict", "idempotency_conflict", "relation_cycle", "focus_conflict", "stale_evidence", "completion_blocked", "cutover_invariant", "unavailable"
   ],
   "scopes": ["work.read", "work.candidate.read", "work.mutate", "work.approve", "work.close", "work.import", "work.operate"],
   "workflow_mapping": {
-    "/intake": "create_work_batch", "/capture": "create_work_batch", "/plan": "candidate allocation plus plan evidence", "/now": "focus reads/set/clear", "/summary": "verification/audit/closeout evidence", "/done": "complete_work"
+    "/intake": "create_work_batch", "/capture": "create_work_batch", "/plan": "candidate allocation plus plan evidence", "/now": "focus reads/set/clear", "/summary": "candidate finalization plus verification/audit/closeout evidence", "/done": "complete_work"
   },
   "source_scope": {
     "include": ["HOME team worlds/initiatives", "surfaces/projects and health updates", "promises/milestones", "work/issues across active completed canceled duplicate archived states", "states labels parents dependencies", "comments with OMP markers", "attachment metadata URLs", "referenced users"],

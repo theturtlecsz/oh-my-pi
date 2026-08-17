@@ -1,38 +1,39 @@
-# Linear weave — planning and work tracking
+# Work Ledger — planning and work tracking
 
-The owner's work lives in Linear (team HOME): initiatives = WORLDS, projects =
-SURFACE nouns with health, milestones = PROMISE sentences (owner verdict
-closes), issues = work. A `linear` tool is available: reads are free, writes
-always render an on-screen confirmation.
+The owner's work lives in the Work Ledger: WORLDS, SURFACE nouns with health,
+PROMISE sentences (owner verdict closes), work items. Exactly one workflow
+tool is installed — `linear` under the Linear backend, `work` under the
+Work Ledger backend: reads are free, writes always render an on-screen
+confirmation.
 
 ## Uniform memory law (owner-ratified 2026-08-13, HOME-112)
 
-state lives in Linear; knowledge lives in files; files change when reality
-changes — never on a session clock. The Linear close ritual is the only
+state lives in the ledger; knowledge lives in files; files change when reality
+changes — never on a session clock. The close ritual is the only
 mandatory per-session write set; no other store may carry a mandatory
 per-session write. Knowledge files (wikis, runbooks, references) update in
 the same pass as the work that changes them.
 
 When in plan mode or asked to plan:
 
-1. Consume the current NOW issue. If NOW is unset, direct Chris to `/intake` or
-   `/now`; NEVER create a duplicate issue from `/plan`.
-2. Ground the plan in that issue, the live tree, and bounded `my_now`/`waiting`
+1. Consume the current NOW item. If NOW is unset, direct Chris to `/intake` or
+   `/now`; NEVER create a duplicate item from `/plan`.
+2. Ground the plan in that item, the live tree, and bounded `my_now`/`waiting`
    reads. Plan against existing surfaces and promises; never invent a parallel
    tracker.
 3. Owner approval is the execution boundary. The host stamps the final plan
-   digest on the issue before allowing execution; no manual comment or NOW
+   digest on the item before allowing execution; no manual comment or NOW
    selection is required.
 
-Always: capture stray findings as issues instead of chasing them. `/summary`
+Always: capture stray findings as work items instead of chasing them. `/summary`
 records the typed session review; `/done` alone closes after that review.
-Keep Linear reads bounded; never dump the backlog into context.
+Keep ledger reads bounded; never dump the backlog into context.
 
 ## Routing law (owner-ratified 2026-08-10) — no prompt files, no file trackers
 
-Work routes through Linear, period. Open loops live as issues; session
-handoffs go through the NOW pointer and issue comments; per-item context
-lives ON the issue it belongs to. NEVER write a `~/PROMPT-*.md`, handoff
+Work routes through the ledger, period. Open loops live as work items; session
+handoffs go through the NOW pointer and item comments; per-item context
+lives ON the item it belongs to. NEVER write a `~/PROMPT-*.md`, handoff
 file, or any local file that tracks work state — that includes "on stop,
 rewrite this charter file" patterns from retired charters (archived in the
 session-system repo, `prompts/archive/`). A fresh session orients with the
@@ -42,9 +43,9 @@ law: media-discovery's TASKS.md is that product's engineering roadmap
 
 ## Workflow sequence (HOME-122)
 
-The issue is the durable cross-session state:
+The work item is the durable cross-session state:
 
-1. `/intake` publishes and natively selects the first issue or batch parent.
+1. `/intake` publishes and natively selects the first item or batch parent.
 2. `/plan` consumes NOW; owner approval stamps the final plan hash, approach,
    and verification list before execution starts.
 3. Execution stops with one typed `Execution handoff` when needed.
@@ -57,7 +58,8 @@ Evidence comments never settle handoff/review debt. Reads and NOW selection neve
 imply execution. Closeout remains literal-command-only: never infer `/summary`
 or `/done` from completion, and a keep-open verdict blocks closeout.
 
-Enforcement lives in `linear-now`: the start bookend and tool description inject
-one canonical sequence, plan approval fails closed if the stamp cannot land,
-typed comments advance only their own stage, and the footer shows only `⚠` while
-a hidden checkpoint remains owed.
+Enforcement lives in the workflow host (`linear-now` or `work-now` extension):
+the start bookend and tool description inject one canonical sequence, plan
+approval fails closed if the stamp cannot land, typed comments advance only
+their own stage, and the footer shows only `⚠` while a hidden checkpoint
+remains owed.

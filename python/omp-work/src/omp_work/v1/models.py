@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -38,6 +38,7 @@ class EvidenceKind(StrEnum):
     AUDIT = "audit"
     PUSH = "push"
     CLOSEOUT = "closeout"
+    HANDOFF = "handoff"
 
 
 class OperationState(StrEnum):
@@ -80,8 +81,15 @@ class Candidate(StrictModel):
     work_id: UUID
     revision_id: UUID
     candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    commit_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,64}$")
+    commit_sha: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    kind: Literal["planned", "final"] = "planned"
     allocated_at: datetime
+
+    @model_validator(mode="after")
+    def validate_final_commit(self) -> Candidate:
+        if self.kind == "final" and self.commit_sha is None:
+            raise ValueError("final candidates bind an exact commit")
+        return self
 
 
 class EvidenceReceipt(StrictModel):
@@ -90,16 +98,25 @@ class EvidenceReceipt(StrictModel):
     revision_id: UUID
     candidate_id: UUID
     kind: EvidenceKind
+    payload: dict[str, Any] = Field(default_factory=dict)
     payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     artifact_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     issuer: str
     issued_at: datetime
     candidate_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    candidate_commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,64}$")
+    candidate_commit: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
     verdict: Literal["PASS", "NEEDS_FIX", "BLOCKED"] | None = None
     independent: bool = False
     remote_ref: str | None = None
-    remote_commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,64}$")
+    remote_commit: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+
+    @model_validator(mode="after")
+    def validate_payload_size(self) -> EvidenceReceipt:
+        from .canonical import canonical_json
+
+        if len(canonical_json(self.payload).encode()) > 1048576:
+            raise ValueError("evidence payload exceeds 1 MiB")
+        return self
 
 
 class CompletionInput(StrictModel):
@@ -111,7 +128,7 @@ class CompletionInput(StrictModel):
 
 
 class CompletionBlocker(StrictModel):
-    code: Literal["plan_missing", "verification_missing", "audit_missing", "push_unverified", "stale_evidence", "closeout_missing"]
+    code: Literal["plan_missing", "verification_missing", "audit_missing", "push_unverified", "stale_evidence", "closeout_missing", "candidate_not_final"]
     detail: str
 
 
@@ -209,8 +226,46 @@ class CutoverManifest(StrictModel):
     actor: str
 
 
+class CreateWorkInput(StrictModel):
+    client_ref: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    title: str = Field(min_length=1)
+    description: str = ""
+    scope: str = ""
+    acceptance_criteria: tuple[str, ...] = ()
+    state: str = "BACKLOG"
+    project_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> CreateWorkInput:
+        if not self.title.strip():
+            raise ValueError("title must not be blank")
+        if not self.state.strip() or self.state == "DONE":
+            raise ValueError("initial state must be non-empty and not DONE")
+        return self
+
+
+class CreateBatchRelation(StrictModel):
+    source_ref: str = Field(min_length=1)
+    target_ref: str = Field(min_length=1)
+    kind: RelationKind
+
+
 class CreateWorkBatchPayload(StrictModel):
-    work_items: tuple[str, ...]
+    items: tuple[CreateWorkInput, ...] = Field(min_length=1)
+    relations: tuple[CreateBatchRelation, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_refs(self) -> CreateWorkBatchPayload:
+        refs = tuple(item.client_ref for item in self.items)
+        if len(set(refs)) != len(refs):
+            raise ValueError("client_ref values must be unique within a batch")
+        known = set(refs)
+        for relation in self.relations:
+            if relation.source_ref not in known or relation.target_ref not in known:
+                raise ValueError("batch relations must reference items in the same request")
+            if relation.source_ref == relation.target_ref:
+                raise ValueError("batch relations must not be self edges")
+        return self
 
 
 class ReviseWorkPayload(StrictModel):
@@ -245,6 +300,15 @@ class ClearFocusPayload(StrictModel):
 
 class AppendEvidencePayload(StrictModel):
     receipt: EvidenceReceipt
+
+
+class FinalizeCandidatePayload(StrictModel):
+    work_id: UUID
+    revision_id: UUID
+    planned_candidate_id: UUID
+    candidate_id: UUID
+    candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    commit_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
 class RequestCloseoutPayload(StrictModel):
@@ -313,6 +377,11 @@ class AppendEvidenceCommand(StrictModel):
     payload: AppendEvidencePayload
 
 
+class FinalizeCandidateCommand(StrictModel):
+    type: Literal["finalize_candidate"]
+    payload: FinalizeCandidatePayload
+
+
 class RequestCloseoutCommand(StrictModel):
     type: Literal["request_closeout"]
     payload: RequestCloseoutPayload
@@ -344,7 +413,7 @@ class ActivateCutoverCommand(StrictModel):
 
 
 Command = Annotated[
-    CreateWorkBatchCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | RequestCloseoutCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand,
+    CreateWorkBatchCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | FinalizeCandidateCommand | RequestCloseoutCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand,
     Field(discriminator="type"),
 ]
 
@@ -363,7 +432,7 @@ class WorkflowMapping(StrictModel):
     capture: Literal["create_work_batch"] = Field(alias="/capture")
     plan: Literal["candidate allocation plus plan evidence"] = Field(alias="/plan")
     now: Literal["focus reads/set/clear"] = Field(alias="/now")
-    summary: Literal["verification/audit/closeout evidence"] = Field(alias="/summary")
+    summary: Literal["candidate finalization plus verification/audit/closeout evidence"] = Field(alias="/summary")
     done: Literal["complete_work"] = Field(alias="/done")
 
 
@@ -469,4 +538,4 @@ class Approval(StrictModel):
     contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_by: Literal["owner"]
     approved_at: datetime
-    issue: Literal["HOME-142"]
+    issue: Literal["HOME-142", "HOME-147"]

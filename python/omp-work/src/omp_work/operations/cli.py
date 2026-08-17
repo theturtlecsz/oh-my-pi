@@ -9,18 +9,11 @@ from uuid import UUID, uuid4
 from psycopg import sql
 
 from . import backup
+from .capabilities import _write_secret, provision_candidate_reader, provision_owner
 from .config import OperationsConfig
 from .database import bootstrap, check, collect_health, migrate
 from omp_work.integration.exporter import LinearExporter
 from omp_work.integration.importer import LinearImporter
-
-
-def _write_secret(path: Path, value: str) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_suffix(".next")
-    temporary.write_text(value + "\n", encoding="utf-8")
-    temporary.chmod(0o600)
-    os.replace(temporary, path)
 
 
 def credentials_init(config: OperationsConfig) -> None:
@@ -63,6 +56,15 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     credentials.add_parser("init")
     rotate = credentials.add_parser("rotate")
     rotate.add_argument("role")
+    capabilities = commands.add_parser("capabilities").add_subparsers(dest="capabilities_command", required=True)
+    capability_init = capabilities.add_parser("init")
+    capability_init.add_argument("--workspace-id", required=True)
+    capability_init.add_argument("--owner-id", required=True)
+    capability_init.add_argument("--base-url", default="http://127.0.0.1:54322")
+    reader = capabilities.add_parser("candidate-reader")
+    reader.add_argument("--workspace-id", required=True)
+    reader.add_argument("--candidate-id", action="append", required=True)
+    reader.add_argument("--name", default="candidate-reader")
     backup_parser = commands.add_parser("backup").add_subparsers(dest="backup_command", required=True)
     backup_parser.add_parser("provision-target")
     backup_parser.add_parser("verify-target")
@@ -108,6 +110,12 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
             credentials_init(config)
         else:
             credentials_rotate(config, args.role)
+    elif command == "capabilities":
+        if args.capabilities_command == "init":
+            path = provision_owner(config, workspace_id=UUID(args.workspace_id), owner_id=UUID(args.owner_id), base_url=args.base_url)
+        else:
+            path = provision_candidate_reader(config, workspace_id=UUID(args.workspace_id), candidate_ids=tuple(UUID(value) for value in args.candidate_id), name=args.name)
+        print(path)
     elif command == "backup":
         if args.backup_command == "provision-target":
             backup.provision_target(config)

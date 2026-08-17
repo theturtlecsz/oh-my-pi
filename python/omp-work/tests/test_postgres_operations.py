@@ -7,7 +7,6 @@ from pathlib import Path
 import secrets
 import socket
 import subprocess
-import time
 import re
 from uuid import UUID, uuid4
 
@@ -20,13 +19,13 @@ import omp_work.integration.exporter as exporter_module
 from omp_work.integration.exporter import LinearExporter
 from omp_work.operations.artifacts import decrypt_file, encrypt_file
 from omp_work.operations.config import OperationsConfig
+from pg_native import native_postgres
 from omp_work.operations import backup
 from omp_work.operations.database import bootstrap, collect_health, migration_set_sha256, migrations
-from omp_work.v1.models import CommandEnvelope, CreateWorkBatchCommand, CreateWorkBatchPayload
+from omp_work.v1.models import CommandEnvelope, CreateWorkBatchCommand, CreateWorkBatchPayload, CreateWorkInput
 from omp_work.v1.store import PostgresWorkStore, WorkStoreError
 
 pytestmark = pytest.mark.skipif(os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1", reason="set OMP_WORK_POSTGRES_INTEGRATION=1")
-IMAGE = "postgres:18.3-bookworm@sha256:80630f83606d8db77d30b3851b16a9f78be2d0d4dda6f7b82a1fdca5ebe3acba"
 
 
 def _free_port() -> int:
@@ -51,7 +50,7 @@ def config(tmp_path: Path) -> OperationsConfig:
 
 def test_pinned_migration_set_is_forward_only() -> None:
     files = migrations()
-    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7]
+    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     assert all(path.name.startswith(f"{ordinal:04d}_") for ordinal, path in files)
     assert len(migration_set_sha256()) == 64
 
@@ -123,16 +122,7 @@ class _LinearFixture:
 
 
 def test_bootstrap_migrates_pinned_postgres(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:
-    name = f"omp-work-test-{secrets.token_hex(6)}"
-    subprocess.run(["docker", "run", "--rm", "--detach", "--privileged", "--name", name, "-e", f"POSTGRES_PASSWORD={config.read_secret('postgres')}", "-p", f"127.0.0.1:{config.port}:5432", IMAGE], check=True, capture_output=True)
-    try:
-        for _ in range(60):
-            ready = subprocess.run(["docker", "exec", name, "pg_isready", "-U", "postgres"], capture_output=True)
-            if ready.returncode == 0:
-                break
-            time.sleep(0.25)
-        else:
-            pytest.fail("pinned PostgreSQL did not become ready")
+    with native_postgres(config.state_dir, config.port):
         bootstrap(config)
         with psycopg.connect(**config.connection_kwargs("postgres"), autocommit=True) as connection:
             connection.execute("ALTER DATABASE omp_work SET timezone TO 'America/Detroit'")
@@ -294,22 +284,14 @@ def test_bootstrap_migrates_pinned_postgres(config: OperationsConfig, monkeypatc
         assert dump_result.returncode == 0, dump_result.stderr.decode()
         assert dump.stat().st_size > 0
         assert {"BACKUP_MISSING", "RESTORE_DRILL_MISSING"} <= set(report.alerts)
-    finally:
-        subprocess.run(["docker", "rm", "--force", name], check=False, capture_output=True)
 
 
 
 def test_store_creates_and_replays_batch(config: OperationsConfig) -> None:
-    name = f"omp-work-store-{secrets.token_hex(6)}"
-    subprocess.run(["docker", "run", "--rm", "--detach", "--privileged", "--name", name, "-e", f"POSTGRES_PASSWORD={config.read_secret('postgres')}", "-p", f"127.0.0.1:{config.port}:5432", IMAGE], check=True, capture_output=True)
-    try:
-        for _ in range(60):
-            if subprocess.run(["docker", "exec", name, "pg_isready", "-U", "postgres"], capture_output=True).returncode == 0:
-                break
-            time.sleep(0.25)
+    with native_postgres(config.state_dir, config.port):
         bootstrap(config)
         workspace_id, operation_id, actor_id = uuid4(), uuid4(), uuid4()
-        command = CreateWorkBatchCommand(type="create_work_batch", payload=CreateWorkBatchPayload(work_items=(" first ", "second")))
+        command = CreateWorkBatchCommand(type="create_work_batch", payload=CreateWorkBatchPayload(items=(CreateWorkInput(client_ref="a", title=" first "), CreateWorkInput(client_ref="b", title="second"))))
         first = CommandEnvelope(api_version="work.omp.dev/v1", workspace_id=workspace_id, operation_id=operation_id, request_id=uuid4(), correlation_id=uuid4(), command=command)
         store = PostgresWorkStore(config)
         receipt, result = store.execute(first, actor_id=actor_id, actor_kind="owner", required_scope="work.mutate")
@@ -317,7 +299,7 @@ def test_store_creates_and_replays_batch(config: OperationsConfig) -> None:
         replay_receipt, replay_result = store.execute(replay, actor_id=actor_id, actor_kind="owner", required_scope="work.mutate")
         assert receipt.state.value == "applied" and replay_receipt.state.value == "replayed"
         assert result == replay_result and [item["key"] for item in result["items"]] == ["OMP-1", "OMP-2"]
-        conflicting = first.model_copy(update={"command": CreateWorkBatchCommand(type="create_work_batch", payload=CreateWorkBatchPayload(work_items=("different",)))})
+        conflicting = first.model_copy(update={"command": CreateWorkBatchCommand(type="create_work_batch", payload=CreateWorkBatchPayload(items=(CreateWorkInput(client_ref="c", title="different"),)))})
         with pytest.raises(WorkStoreError, match="idempotency_conflict"):
             store.execute(conflicting, actor_id=actor_id, actor_kind="owner", required_scope="work.mutate")
         with psycopg.connect(**config.connection_kwargs("omp_work_app")) as connection:
@@ -325,5 +307,3 @@ def test_store_creates_and_replays_batch(config: OperationsConfig) -> None:
                 cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
                 cursor.execute("SELECT conflict_count FROM omp_control.idempotent_commands WHERE workspace_id=%s AND operation_id=%s", (workspace_id, operation_id))
                 assert cursor.fetchone() == (1,)
-    finally:
-        subprocess.run(["docker", "rm", "--force", name], check=False, capture_output=True)

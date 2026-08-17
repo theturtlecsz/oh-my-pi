@@ -52,6 +52,10 @@ def completion_blockers(input: CompletionInput) -> tuple[CompletionBlocker, ...]
     stale = input.candidate.work_id != input.work_id or input.candidate.revision_id != input.current_revision_id or len(fresh) != len(input.receipts)
     kinds = {receipt.kind for receipt in fresh}
     blockers: list[CompletionBlocker] = []
+    if input.candidate.kind != "final" or input.candidate.commit_sha is None:
+        blockers.append(CompletionBlocker(code="candidate_not_final", detail="completion requires a finalized candidate bound to an exact commit"))
+    if EvidenceKind.CLOSEOUT not in kinds:
+        blockers.append(CompletionBlocker(code="closeout_missing", detail="current candidate lacks closeout review evidence"))
     if EvidenceKind.PLAN not in kinds:
         blockers.append(CompletionBlocker(code="plan_missing", detail="current candidate lacks plan evidence"))
     if EvidenceKind.VERIFICATION not in kinds:

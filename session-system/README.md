@@ -7,23 +7,29 @@ checkout `/home/thetu/oh-my-pi`), merged with full history 2026-08-13;
 `zimmermanc/session-system` is the frozen pre-merge archive. The live
 locations are symlinks created by `install.sh`.
 
-## Future Work Ledger contract
+## Work Ledger backend (candidate)
 
-`python/omp-work/` owns the ratified `work.omp.dev/v1` contract for the future
-PostgreSQL Work Ledger. It defines no live runtime switch; Linear remains the
-authority until the controlled cutover work activates the service.
+`python/omp-work/` owns the ratified `work.omp.dev/v1` contract and the
+PostgreSQL Work Ledger service. HOME-147 ships it as a candidate workflow
+backend: `install.sh --backend work` installs `work-now.ts` (loopback-only,
+never reads or writes Linear, never falls back to it); `--backend linear`
+(the default) installs `linear-now.ts`. Exactly one backend is installed at a
+time. Linear remains the authority until the controlled cutover activates the
+service.
 
 ## Layout → live location
 
 | Repo path | Symlinked from | What it is |
 |---|---|---|
-| `extensions/linear-now.ts` | `~/.omp/agent/extensions/linear-now.ts` | The omp extension: start digest, NOW footer, /now //done //capture, bounded `linear` tool (two-phase owner-gated writes) |
+| `extensions/linear-now.ts` | `~/.omp/agent/extensions/linear-now.ts` | Linear backend entry (default): thin wiring onto workflow/host.ts + workflow/linear.ts |
+| `extensions/work-now.ts` | `~/.omp/agent/extensions/work-now.ts` | Work Ledger backend entry (`--backend work`): thin wiring onto workflow/host.ts + workflow/work.ts |
+| `extensions/workflow/` | `~/.omp/agent/extensions/workflow/` | Shared workflow host + backend adapters: NOW footer, start digest, /now //done //capture, unified `work` tool (two-phase owner-gated typed writes), transcript-bound receipts |
 | `extensions/model-bookends.ts` | `~/.omp/agent/extensions/model-bookends.ts` | HOME-131 bookends: /intake auto-routes to the intake role (Fable-high) and forwards to the skill; /summary arms a fail-closed audit gate (one fresh auditor, five required input sections, verbatim report into the typed review) |
 | `extensions/model-bookends-audit.md` | `~/.omp/agent/extensions/model-bookends-audit.md` | Static audit contract the extension injects when /summary arms |
 | `extensions/model-bookends-stop-no-audit.md` | `~/.omp/agent/extensions/model-bookends-stop-no-audit.md` | Settlement notice when no usable independent audit has run |
 | `extensions/model-bookends-stop-not-forwarded.md` | `~/.omp/agent/extensions/model-bookends-stop-not-forwarded.md` | Settlement notice when the audit report has not reached the review record |
 | `agents/auditor.md` | `~/.omp/agent/agents/auditor.md` | The `auditor` task agent: blocking, fresh-context final acceptance audit on `@audit`, verdict-structured report |
-| `rules/linear-plan.md` | `~/.omp/agent/rules/linear-plan.md` | omp plan-mode rule: ground plans in the Linear tree |
+| `rules/work-plan.md` | `~/.omp/agent/rules/work-plan.md` | omp plan-mode rule: ground plans in the ledger tree |
 | `agents/AGENTS.md` | `~/AGENTS.md` | Home-directory session protocol (bookends contract) |
 | `skills/summary` | `~/.agents/skills/summary` | /summary close ritual (cross-harness: pi + Claude Code) |
 | `skills/questionyourself` | `~/.agents/skills/questionyourself` | Confidence audit, invoked by summary |
@@ -37,14 +43,17 @@ authority until the controlled cutover work activates the service.
 
 ## Not in this repo
 
-- `~/.config/linear.env` — the Linear API key. Never commit it. Back it up
-  separately (it is the only secret the system needs).
-- `~/.omp/agent/linear-now.json` — runtime cache, regenerates itself.
+- `~/.config/linear.env` — the Linear API key (Linear backend only). Never
+  commit it. Back it up separately.
+- `~/.config/omp-work/client.json` — Work Ledger bearer + endpoint (work
+  backend only; without it the backend stays dormant with a warning).
+- `~/.omp/agent/linear-now.json` / `work-now.json` — runtime caches,
+  regenerate themselves.
 
 ## Dev loop
 
 Edit here → omp loads extensions at startup only → restart omp → prove live
-(drive the exact action; evidence comment on the Linear issue). Batch all
+(drive the exact action; typed evidence receipt on the ledger item). Batch all
 extension edits per restart. If a restart ever fails to load the extension
 via symlink, `install.sh --copy` falls back to copying files into place —
 then keep edits in the repo and re-run it.

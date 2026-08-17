@@ -43,8 +43,8 @@ describe("HOME-114 closeout lock (host-enforced)", () => {
 	test("owner-typed /summary unlocks; session switch re-locks", () => {
 		const out = run("input");
 		expect(out.before).toContain(LOCK);
-		expect(out.before_propose_close, "propose_close must be lock-refused").toContain(LOCK);
-		expect(out.before_archive_issue, "archive_issue must be lock-refused").toContain(LOCK);
+		expect(out.before_request_closeout, "request_closeout must be lock-refused").toContain(LOCK);
+		expect(out.before_cancel_work, "cancel_work must be lock-refused").toContain(LOCK);
 		expect(out.afterUnlock).not.toContain(LOCK);
 		expect(out.afterUnlock).toContain("CONFIRM REQUIRED");
 		expect(out.afterSwitch, "session switch must re-lock").toContain(LOCK);

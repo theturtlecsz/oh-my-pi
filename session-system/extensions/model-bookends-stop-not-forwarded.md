@@ -1,1 +1,1 @@
-Audit gate: the auditor report exists but has not been copied VERBATIM into the typed Linear review (linear tool, action:"comment", kind:"review"). Post it now.
+Audit gate: the auditor report exists but has not been forwarded VERBATIM — call the `work` tool with action:"append_evidence", kind:"audit", body = the report bytes exactly as the auditor emitted them. Post it now.

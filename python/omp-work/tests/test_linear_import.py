@@ -8,8 +8,6 @@ from pathlib import Path
 import re
 import secrets
 import socket
-import subprocess
-import time
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -22,12 +20,12 @@ from omp_work.integration.importer import ImportBatchSummary, LinearImporter, pa
 from omp_work.operations import cli as operations_cli
 from omp_work.operations.artifacts import decrypt_file, read_json_artifact, resolve_artifact_path
 from omp_work.operations.config import OperationsConfig
+from pg_native import native_postgres
 from omp_work.operations.database import bootstrap, _connect
 from omp_work.v1.canonical import sha256
 
 
 pytestmark = pytest.mark.skipif(os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1", reason="set OMP_WORK_POSTGRES_INTEGRATION=1")
-IMAGE = "postgres:18.3-bookworm@sha256:80630f83606d8db77d30b3851b16a9f78be2d0d4dda6f7b82a1fdca5ebe3acba"
 
 
 def _free_port() -> int:
@@ -55,24 +53,9 @@ def config(tmp_path: Path) -> OperationsConfig:
 
 @pytest.fixture
 def postgres_service(config: OperationsConfig):
-    name = f"omp-work-import-test-{secrets.token_hex(6)}"
-    subprocess.run(
-        ["docker", "run", "--rm", "--detach", "--privileged", "--name", name, "-e", f"POSTGRES_PASSWORD={config.read_secret('postgres')}", "-p", f"127.0.0.1:{config.port}:5432", IMAGE],
-        check=True,
-        capture_output=True,
-    )
-    try:
-        for _ in range(60):
-            ready = subprocess.run(["docker", "exec", name, "pg_isready", "-U", "postgres"], capture_output=True)
-            if ready.returncode == 0:
-                break
-            time.sleep(0.25)
-        else:
-            pytest.fail("pinned PostgreSQL did not become ready")
+    with native_postgres(config.state_dir, config.port):
         bootstrap(config)
         yield config
-    finally:
-        subprocess.run(["docker", "stop", name], check=False, capture_output=True)
 
 
 def _make_mapping_file(tmp_path: Path, filename: str = "mapping.json") -> Path:

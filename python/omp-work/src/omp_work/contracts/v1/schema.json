@@ -800,7 +800,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -824,7 +825,7 @@
             "candidate_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -869,6 +870,11 @@
             "kind": {
               "$ref": "#/$defs/EvidenceKind"
             },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
             "payload_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Payload Sha256",
@@ -882,7 +888,7 @@
             "remote_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -972,7 +978,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -996,7 +1003,7 @@
             "candidate_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -1041,6 +1048,11 @@
             "kind": {
               "$ref": "#/$defs/EvidenceKind"
             },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
             "payload_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Payload Sha256",
@@ -1054,7 +1066,7 @@
             "remote_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -1154,7 +1166,10 @@
           "type": "string"
         },
         "issue": {
-          "const": "HOME-142",
+          "enum": [
+            "HOME-142",
+            "HOME-147"
+          ],
           "title": "Issue",
           "type": "string"
         }
@@ -1359,7 +1374,7 @@
         "commit_sha": {
           "anyOf": [
             {
-              "pattern": "^[0-9a-f]{7,64}$",
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
               "type": "string"
             },
             {
@@ -1368,6 +1383,15 @@
           ],
           "default": null,
           "title": "Commit Sha"
+        },
+        "kind": {
+          "default": "planned",
+          "enum": [
+            "planned",
+            "final"
+          ],
+          "title": "Kind",
+          "type": "string"
         },
         "revision_id": {
           "format": "uuid",
@@ -1586,7 +1610,7 @@
             "commit_sha": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -1595,6 +1619,15 @@
               ],
               "default": null,
               "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
@@ -1752,6 +1785,31 @@
           "title": "CompletionInput",
           "type": "object"
         },
+        "CreateBatchRelation": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/RelationKind"
+            },
+            "source_ref": {
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "target_ref": {
+              "minLength": 1,
+              "title": "Target Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_ref",
+            "target_ref",
+            "kind"
+          ],
+          "title": "CreateBatchRelation",
+          "type": "object"
+        },
         "CreateWorkBatchCommand": {
           "additionalProperties": false,
           "properties": {
@@ -1774,18 +1832,86 @@
         "CreateWorkBatchPayload": {
           "additionalProperties": false,
           "properties": {
-            "work_items": {
+            "items": {
               "items": {
-                "type": "string"
+                "$ref": "#/$defs/CreateWorkInput"
               },
-              "title": "Work Items",
+              "minItems": 1,
+              "title": "Items",
+              "type": "array"
+            },
+            "relations": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/CreateBatchRelation"
+              },
+              "title": "Relations",
               "type": "array"
             }
           },
           "required": [
-            "work_items"
+            "items"
           ],
           "title": "CreateWorkBatchPayload",
+          "type": "object"
+        },
+        "CreateWorkInput": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "client_ref": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._-]+$",
+              "title": "Client Ref",
+              "type": "string"
+            },
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "scope": {
+              "default": "",
+              "title": "Scope",
+              "type": "string"
+            },
+            "state": {
+              "default": "BACKLOG",
+              "title": "State",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "client_ref",
+            "title"
+          ],
+          "title": "CreateWorkInput",
           "type": "object"
         },
         "CutoverManifest": {
@@ -1950,7 +2076,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -1974,7 +2101,7 @@
             "candidate_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -2019,6 +2146,11 @@
             "kind": {
               "$ref": "#/$defs/EvidenceKind"
             },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
             "payload_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Payload Sha256",
@@ -2032,7 +2164,7 @@
             "remote_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -2093,6 +2225,70 @@
             "issued_at"
           ],
           "title": "EvidenceReceipt",
+          "type": "object"
+        },
+        "FinalizeCandidateCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/FinalizeCandidatePayload"
+            },
+            "type": {
+              "const": "finalize_candidate",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "FinalizeCandidateCommand",
+          "type": "object"
+        },
+        "FinalizeCandidatePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "commit_sha": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Commit Sha",
+              "type": "string"
+            },
+            "planned_candidate_id": {
+              "format": "uuid",
+              "title": "Planned Candidate Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "planned_candidate_id",
+            "candidate_id",
+            "candidate_sha256",
+            "commit_sha"
+          ],
+          "title": "FinalizeCandidatePayload",
           "type": "object"
         },
         "FocusSlot": {
@@ -2739,6 +2935,7 @@
               "clear_focus": "#/$defs/ClearFocusCommand",
               "complete_work": "#/$defs/CompleteWorkCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
+              "finalize_candidate": "#/$defs/FinalizeCandidateCommand",
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
               "put_relation": "#/$defs/PutRelationCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
@@ -2775,6 +2972,9 @@
             },
             {
               "$ref": "#/$defs/AppendEvidenceCommand"
+            },
+            {
+              "$ref": "#/$defs/FinalizeCandidateCommand"
             },
             {
               "$ref": "#/$defs/RequestCloseoutCommand"
@@ -2871,7 +3071,7 @@
             "commit_sha": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -2880,6 +3080,15 @@
               ],
               "default": null,
               "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
@@ -2959,7 +3168,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -2983,7 +3193,7 @@
             "candidate_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -3028,6 +3238,11 @@
             "kind": {
               "$ref": "#/$defs/EvidenceKind"
             },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
             "payload_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Payload Sha256",
@@ -3041,7 +3256,7 @@
             "remote_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -3146,7 +3361,7 @@
             "commit_sha": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -3155,6 +3370,15 @@
               ],
               "default": null,
               "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
@@ -3221,7 +3445,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -3245,7 +3470,7 @@
             "candidate_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -3290,6 +3515,11 @@
             "kind": {
               "$ref": "#/$defs/EvidenceKind"
             },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
             "payload_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Payload Sha256",
@@ -3303,7 +3533,7 @@
             "remote_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -3389,7 +3619,8 @@
             "audit_missing",
             "push_unverified",
             "stale_evidence",
-            "closeout_missing"
+            "closeout_missing",
+            "candidate_not_final"
           ],
           "title": "Code",
           "type": "string"
@@ -3429,7 +3660,7 @@
             "commit_sha": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -3438,6 +3669,15 @@
               ],
               "default": null,
               "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
@@ -3466,7 +3706,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -3490,7 +3731,7 @@
             "candidate_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -3535,6 +3776,11 @@
             "kind": {
               "$ref": "#/$defs/EvidenceKind"
             },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
             "payload_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Payload Sha256",
@@ -3548,7 +3794,7 @@
             "remote_commit": {
               "anyOf": [
                 {
-                  "pattern": "^[0-9a-f]{7,64}$",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
                   "type": "string"
                 },
                 {
@@ -3868,7 +4114,7 @@
               "type": "string"
             },
             "/summary": {
-              "const": "verification/audit/closeout evidence",
+              "const": "candidate finalization plus verification/audit/closeout evidence",
               "title": "/Summary",
               "type": "string"
             }
@@ -4249,24 +4495,164 @@
       "title": "ContractExamples",
       "type": "object"
     },
+    "CreateBatchRelation": {
+      "$defs": {
+        "RelationKind": {
+          "enum": [
+            "parent",
+            "blocks",
+            "duplicate_of",
+            "related"
+          ],
+          "title": "RelationKind",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/RelationKind"
+        },
+        "source_ref": {
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        },
+        "target_ref": {
+          "minLength": 1,
+          "title": "Target Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_ref",
+        "target_ref",
+        "kind"
+      ],
+      "title": "CreateBatchRelation",
+      "type": "object"
+    },
     "CreateWorkBatchCommand": {
       "$defs": {
+        "CreateBatchRelation": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/RelationKind"
+            },
+            "source_ref": {
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "target_ref": {
+              "minLength": 1,
+              "title": "Target Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_ref",
+            "target_ref",
+            "kind"
+          ],
+          "title": "CreateBatchRelation",
+          "type": "object"
+        },
         "CreateWorkBatchPayload": {
           "additionalProperties": false,
           "properties": {
-            "work_items": {
+            "items": {
               "items": {
-                "type": "string"
+                "$ref": "#/$defs/CreateWorkInput"
               },
-              "title": "Work Items",
+              "minItems": 1,
+              "title": "Items",
+              "type": "array"
+            },
+            "relations": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/CreateBatchRelation"
+              },
+              "title": "Relations",
               "type": "array"
             }
           },
           "required": [
-            "work_items"
+            "items"
           ],
           "title": "CreateWorkBatchPayload",
           "type": "object"
+        },
+        "CreateWorkInput": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "client_ref": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._-]+$",
+              "title": "Client Ref",
+              "type": "string"
+            },
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "scope": {
+              "default": "",
+              "title": "Scope",
+              "type": "string"
+            },
+            "state": {
+              "default": "BACKLOG",
+              "title": "State",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "client_ref",
+            "title"
+          ],
+          "title": "CreateWorkInput",
+          "type": "object"
+        },
+        "RelationKind": {
+          "enum": [
+            "parent",
+            "blocks",
+            "duplicate_of",
+            "related"
+          ],
+          "title": "RelationKind",
+          "type": "string"
         }
       },
       "additionalProperties": false,
@@ -4288,20 +4674,184 @@
       "type": "object"
     },
     "CreateWorkBatchPayload": {
+      "$defs": {
+        "CreateBatchRelation": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/RelationKind"
+            },
+            "source_ref": {
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "target_ref": {
+              "minLength": 1,
+              "title": "Target Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_ref",
+            "target_ref",
+            "kind"
+          ],
+          "title": "CreateBatchRelation",
+          "type": "object"
+        },
+        "CreateWorkInput": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "client_ref": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._-]+$",
+              "title": "Client Ref",
+              "type": "string"
+            },
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "scope": {
+              "default": "",
+              "title": "Scope",
+              "type": "string"
+            },
+            "state": {
+              "default": "BACKLOG",
+              "title": "State",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "client_ref",
+            "title"
+          ],
+          "title": "CreateWorkInput",
+          "type": "object"
+        },
+        "RelationKind": {
+          "enum": [
+            "parent",
+            "blocks",
+            "duplicate_of",
+            "related"
+          ],
+          "title": "RelationKind",
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "properties": {
-        "work_items": {
+        "items": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/CreateWorkInput"
           },
-          "title": "Work Items",
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        },
+        "relations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CreateBatchRelation"
+          },
+          "title": "Relations",
           "type": "array"
         }
       },
       "required": [
-        "work_items"
+        "items"
       ],
       "title": "CreateWorkBatchPayload",
+      "type": "object"
+    },
+    "CreateWorkInput": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_criteria": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Acceptance Criteria",
+          "type": "array"
+        },
+        "client_ref": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "title": "Client Ref",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "scope": {
+          "default": "",
+          "title": "Scope",
+          "type": "string"
+        },
+        "state": {
+          "default": "BACKLOG",
+          "title": "State",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "client_ref",
+        "title"
+      ],
+      "title": "CreateWorkInput",
       "type": "object"
     },
     "CutoverExample": {
@@ -4804,7 +5354,8 @@
             "verification",
             "audit",
             "push",
-            "closeout"
+            "closeout",
+            "handoff"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -4828,7 +5379,7 @@
         "candidate_commit": {
           "anyOf": [
             {
-              "pattern": "^[0-9a-f]{7,64}$",
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
               "type": "string"
             },
             {
@@ -4873,6 +5424,11 @@
         "kind": {
           "$ref": "#/$defs/EvidenceKind"
         },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
         "payload_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Payload Sha256",
@@ -4886,7 +5442,7 @@
         "remote_commit": {
           "anyOf": [
             {
-              "pattern": "^[0-9a-f]{7,64}$",
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
               "type": "string"
             },
             {
@@ -4947,6 +5503,117 @@
         "issued_at"
       ],
       "title": "EvidenceReceipt",
+      "type": "object"
+    },
+    "FinalizeCandidateCommand": {
+      "$defs": {
+        "FinalizeCandidatePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "commit_sha": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Commit Sha",
+              "type": "string"
+            },
+            "planned_candidate_id": {
+              "format": "uuid",
+              "title": "Planned Candidate Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "planned_candidate_id",
+            "candidate_id",
+            "candidate_sha256",
+            "commit_sha"
+          ],
+          "title": "FinalizeCandidatePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/FinalizeCandidatePayload"
+        },
+        "type": {
+          "const": "finalize_candidate",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "FinalizeCandidateCommand",
+      "type": "object"
+    },
+    "FinalizeCandidatePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "format": "uuid",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "candidate_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Sha256",
+          "type": "string"
+        },
+        "commit_sha": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Commit Sha",
+          "type": "string"
+        },
+        "planned_candidate_id": {
+          "format": "uuid",
+          "title": "Planned Candidate Id",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "planned_candidate_id",
+        "candidate_id",
+        "candidate_sha256",
+        "commit_sha"
+      ],
+      "title": "FinalizeCandidatePayload",
       "type": "object"
     },
     "FocusSlot": {
@@ -6606,7 +7273,7 @@
           "type": "string"
         },
         "/summary": {
-          "const": "verification/audit/closeout evidence",
+          "const": "candidate finalization plus verification/audit/closeout evidence",
           "title": "/Summary",
           "type": "string"
         }

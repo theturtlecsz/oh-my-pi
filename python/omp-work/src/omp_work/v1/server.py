@@ -32,7 +32,11 @@ def _principal(request: Request, capabilities_dir: Path) -> Principal:
                 continue
             data = json.loads(path.read_text())
             if hmac.compare_digest(str(data["token"]), token):
-                return Principal(actor_id=UUID(data["actor_id"]), actor_kind=str(data["actor_kind"]), workspaces=frozenset(UUID(value) for value in data["workspaces"]), scopes=frozenset(data["scopes"]))
+                candidate_ids = frozenset(UUID(value) for value in data.get("candidate_ids", ())) or None
+                scopes = frozenset(data["scopes"])
+                if "work.candidate.read" in scopes and candidate_ids is None:
+                    continue
+                return Principal(actor_id=UUID(data["actor_id"]), actor_kind=str(data["actor_kind"]), workspaces=frozenset(UUID(value) for value in data["workspaces"]), scopes=scopes, candidate_ids=candidate_ids)
     except (OSError, KeyError, ValueError, json.JSONDecodeError):
         pass
     raise HTTPException(401, "unauthenticated")
@@ -72,7 +76,7 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
 
     @app.get("/v1/work-items/{key}/workflow")
     def workflow(request: Request, key: str, x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID")) -> JSONResponse:
-        return read_route(request, x_omp_workspace_id, "item", key)
+        return read_route(request, x_omp_workspace_id, "workflow", key)
 
     @app.get("/v1/workspaces/{workspace_id}/tree")
     def tree(request: Request, workspace_id: UUID) -> JSONResponse:

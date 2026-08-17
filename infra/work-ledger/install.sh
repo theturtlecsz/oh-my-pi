@@ -28,6 +28,18 @@ WantedBy=default.target
 '''
 units = {
     "omp-work-postgres.service": unit,
+    "omp-work-service.service": f"""[Unit]
+Description=OMP Work Ledger WorkService (loopback)
+After=omp-work-postgres.service
+
+[Service]
+Type=simple
+ExecStart={root}/python/omp-work/.venv/bin/python -m omp_work serve --capabilities-dir {config}/capabilities
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+""",
     "omp-work-backup.service": f"""[Service]
 Type=oneshot
 ExecStart={root}/python/omp-work/.venv/bin/omp-work ops backup create

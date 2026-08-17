@@ -12,6 +12,8 @@ if (!ext) throw new Error("linear-now extension did not load");
 
 const statuses: string[] = [];
 const ctx = {
+	// hand-rolled owner-session context (the runner normally supplies taskDepth)
+	taskDepth: 0,
 	models: undefined,
 	sessionManager: { getBranch: () => [] },
 	ui: {
@@ -25,11 +27,11 @@ const sessionStart = ext.handlers.get("session_start")?.[0];
 if (!sessionStart) throw new Error("session_start handler missing");
 await sessionStart({}, ctx);
 
-const tool = ext.tools.get("linear");
-if (!tool) throw new Error("linear tool missing");
+const tool = ext.tools.get("work");
+if (!tool) throw new Error("work tool missing");
 const refusal = await tool.definition.execute(
 	"refusal",
-	{ action: "create_issue", title: "must not inherit NOW's project" },
+	{ action: "create_work", title: "must not inherit NOW's project" },
 	undefined,
 	undefined,
 	ctx,
@@ -37,7 +39,7 @@ const refusal = await tool.definition.execute(
 const refusalText = refusal.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
 const explicit = await tool.definition.execute(
 	"explicit",
-	{ action: "create_issue", title: "explicit route", project: "Chosen Project" },
+	{ action: "create_work", title: "explicit route", project: "Chosen Project" },
 	undefined,
 	undefined,
 	ctx,

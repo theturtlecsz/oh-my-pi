@@ -21,19 +21,8 @@ class WorkItemView(StrictModel):
     state: str
     revision: WorkRevision
     candidate: Candidate | None = None
+    project_id: UUID | None = None
     archived: bool = False
-
-
-class WorkflowView(StrictModel):
-    item: WorkItemView
-    relations: tuple[RelationEdge, ...] = ()
-    receipts: tuple[EvidenceReceipt, ...] = ()
-
-
-class WorkspaceTree(StrictModel):
-    workspace_id: UUID
-    items: tuple[WorkItemView, ...]
-    relations: tuple[RelationEdge, ...] = ()
 
 
 class CloseoutIntentView(StrictModel):
@@ -45,6 +34,30 @@ class CloseoutIntentView(StrictModel):
     requested_at: datetime | None = None
 
 
+class ProjectView(StrictModel):
+    project_id: UUID
+    workspace_id: UUID
+    key: str | None = None
+    name: str
+    health: Literal["onTrack", "atRisk", "offTrack"] | None = None
+    health_updated_at: datetime | None = None
+
+
+class WorkflowView(StrictModel):
+    item: WorkItemView
+    relations: tuple[RelationEdge, ...] = ()
+    receipts: tuple[EvidenceReceipt, ...] = ()
+    closeout: tuple[CloseoutIntentView, ...] = ()
+    project: ProjectView | None = None
+
+
+class WorkspaceTree(StrictModel):
+    workspace_id: UUID
+    items: tuple[WorkItemView, ...]
+    relations: tuple[RelationEdge, ...] = ()
+    projects: tuple[ProjectView, ...] = ()
+
+
 class ProjectHealthView(StrictModel):
     project_id: UUID
     workspace_id: UUID
@@ -53,10 +66,12 @@ class ProjectHealthView(StrictModel):
 
 
 class CreatedWorkItem(StrictModel):
+    client_ref: str
     work_id: UUID
     revision_id: UUID
     key: str
     state: str
+    row_version: int
 
 
 class CreateWorkBatchResult(StrictModel):
@@ -98,6 +113,17 @@ class EvidenceResult(StrictModel):
     receipt: EvidenceReceipt
 
 
+class FinalizeCandidateResult(StrictModel):
+    type: Literal["finalize_candidate"]
+    candidate: Candidate
+
+
+class HealthView(StrictModel):
+    live: bool
+    ready: bool
+    alerts: tuple[str, ...] = ()
+
+
 class CloseoutResult(StrictModel):
     type: Literal["request_closeout"]
     intent: CloseoutIntentView
@@ -109,7 +135,7 @@ class ProjectHealthResult(StrictModel):
 
 
 CommandResult = Annotated[
-    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | RelationResult | FocusResult | EvidenceResult | CloseoutResult | ProjectHealthResult,
+    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseoutResult | ProjectHealthResult,
     Field(discriminator="type"),
 ]
 

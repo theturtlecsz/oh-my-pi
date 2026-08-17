@@ -1,0 +1,42 @@
+{
+  "algorithm": "work.omp.dev/v1/candidate-sha256",
+  "definition": "decisions/0004-home-147-pre-cutover-amendment.md item 6",
+  "vectors": [
+    {
+      "name": "ascii-unsorted",
+      "commit_sha": "0123456789abcdef0123456789abcdef01234567",
+      "paths": [
+        "b.txt",
+        "a/y.ts",
+        "a/x.ts"
+      ],
+      "paths_sorted": [
+        "a/x.ts",
+        "a/y.ts",
+        "b.txt"
+      ],
+      "candidate_sha256": "4acaffa884b31bcf4aedf25419198ae196a1d434730ac3491be41d8cd2da5ef8"
+    },
+    {
+      "name": "unicode-stored-bytes",
+      "commit_sha": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "paths": [
+        "ü/naïve.ts",
+        "sp ace/file name.md",
+        "pair/𝕏.ts",
+        "pair/.ts",
+        "case/a.ts",
+        "case/Z.ts"
+      ],
+      "paths_sorted": [
+        "case/Z.ts",
+        "case/a.ts",
+        "pair/.ts",
+        "pair/𝕏.ts",
+        "sp ace/file name.md",
+        "ü/naïve.ts"
+      ],
+      "candidate_sha256": "bad7f1a173064a31aa46b3bd0206e95eac016a57c0764e3b382873649cc33962"
+    }
+  ]
+}
