@@ -50,6 +50,8 @@ uv run --project python/omp-work omp-work ops cutover finalize   # after the per
 uv run --project python/omp-work omp-work ops cutover status
 ```
 
+Immutable evidence uses three distinct roots: rehearsal reports live under `data_dir/cutover/rehearsals/<run-id>/`, the executed plan artifact under `data_dir/cutover/epochs/<epoch-id>/`, and the sealed final report under `data_dir/cutover/finalize/<epoch-id>/`. `omp_control.cutover_epochs.final_report_sha256` binds that final report to the epoch.
+
 Before activation, every failed gate returns Linear to sole authority, archives the poisoned candidate under the state directory, and removes rehearsal 2 admission. After activation, failures stay frozen and report `repair_required`; they never guess that Linear is authoritative.
 
 ### Recovery branches

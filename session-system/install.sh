@@ -61,6 +61,16 @@ unplace() { # remove a live artifact left by the other backend
 EXT_DIR="$HOME/.omp/agent/extensions"
 SET_DIR="$HOME/.omp/agent/.extensions-set.$BACKEND.$$"
 mkdir -p "$SET_DIR"
+if [ -d "$EXT_DIR" ]; then
+  shopt -s dotglob nullglob
+  for src in "$EXT_DIR"/*; do
+    case "${src##*/}" in
+      workflow|linear-now.ts|work-now.ts|model-bookends.ts|model-bookends-audit.md|model-bookends-refused.md|model-bookends-schema-refused.md|model-bookends-stop-no-audit.md|model-bookends-stop-not-forwarded.md|model-bookends-stop-refused.md) continue ;;
+    esac
+    cp -a -- "$src" "$SET_DIR/"
+  done
+  shopt -u dotglob nullglob
+fi
 stage() { # stage <repo-relative> <name-in-set>
   local src="$REPO/$1" dst="$SET_DIR/$2"
   if [ "$MODE" = "copy" ]; then cp -r "$src" "$dst"; else ln -s "$src" "$dst"; fi

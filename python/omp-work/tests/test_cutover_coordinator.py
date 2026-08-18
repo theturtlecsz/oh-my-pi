@@ -139,6 +139,35 @@ def test_finalize_probes_provisioned_oauth_credential(tmp_path: Path, monkeypatc
     assert observed == {"path": config.secret_path("linear-export.json"), "token": "oauth-token"}
 
 
+def test_finalize_removes_configured_linear_env_path_after_existing_seal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    isolated_home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(isolated_home))
+    config = _config(tmp_path)
+    key_file = tmp_path / "configured-linear.env"
+    key_file.write_text("LINEAR_API_KEY=revoked\n", encoding="utf-8")
+    monkeypatch.setattr(cutover, "LINEAR_ENV_PATH", key_file)
+    epoch_id = uuid4()
+    _write_state(config, {
+        "candidate": {"workspace_id": str(WORKSPACE)},
+        "window": {"state": "executed", "port": config.port},
+    })
+    monkeypatch.setattr(cutover, "_epoch_row", lambda *_: {
+        "epoch_id": epoch_id,
+        "state": "sealed",
+        "revoked_at": datetime.now(timezone.utc),
+        "final_report_sha256": "sealed-report",
+    })
+
+    result = cutover.finalize(config)
+
+    assert result["state"] == "sealed"
+    assert not key_file.exists()
+    persisted = json.loads((config.config_dir / "cutover-state.json").read_text(encoding="utf-8"))
+    assert persisted["window"]["state"] == "finalized"
+
+
+
+
 def test_rehearse_two_requires_passing_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     config = _config(tmp_path)

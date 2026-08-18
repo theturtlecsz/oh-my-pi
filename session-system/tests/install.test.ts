@@ -67,6 +67,32 @@ describe("install.sh", () => {
 		expect(fs.existsSync(live(WORK_ENTRY))).toBe(false);
 		expect(fs.existsSync(live(".omp/agent/extensions/workflow/host.ts"))).toBe(true);
 	});
+	test("preserves unmanaged extensions across backend and copy-mode flips", () => {
+		const extensions = live(".omp/agent/extensions");
+		const regular = Buffer.from([0, 1, 2, 255]);
+		const hidden = Buffer.from("hidden\n");
+		const nested = Buffer.from([255, 0, 127]);
+		fs.writeFileSync(path.join(extensions, "custom.bin"), regular);
+		fs.writeFileSync(path.join(extensions, ".custom-hidden"), hidden);
+		fs.mkdirSync(path.join(extensions, "custom-dir"));
+		fs.writeFileSync(path.join(extensions, "custom-dir/nested.bin"), nested);
+		fs.symlinkSync("custom.bin", path.join(extensions, "custom-link"));
+		fs.symlinkSync("missing-target", path.join(extensions, "broken-link"));
+
+		const assertPreserved = (backend: "linear" | "work") => {
+			expect(fs.readFileSync(path.join(extensions, "custom.bin"))).toEqual(regular);
+			expect(fs.readFileSync(path.join(extensions, ".custom-hidden"))).toEqual(hidden);
+			expect(fs.readFileSync(path.join(extensions, "custom-dir/nested.bin"))).toEqual(nested);
+			expect(fs.readlinkSync(path.join(extensions, "custom-link"))).toBe("custom.bin");
+			expect(fs.readlinkSync(path.join(extensions, "broken-link"))).toBe("missing-target");
+			expect([LINEAR_ENTRY, WORK_ENTRY].filter((entry) => fs.existsSync(live(entry)))).toEqual([backend === "linear" ? LINEAR_ENTRY : WORK_ENTRY]);
+		};
+
+		expect(run(["--backend", "work"]).exitCode).toBe(0);
+		assertPreserved("work");
+		expect(run(["--copy", "--backend", "linear"]).exitCode).toBe(0);
+		assertPreserved("linear");
+	});
 	test("rejects an unknown backend", () => {
 		const bad = run(["--backend", "notion"]);
 		expect(bad.exitCode).toBe(2);

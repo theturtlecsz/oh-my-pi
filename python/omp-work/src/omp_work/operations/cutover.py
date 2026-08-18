@@ -1561,7 +1561,6 @@ def finalize(config: OperationsConfig) -> dict[str, object]:
     if not isinstance(candidate, dict):
         raise CutoverBlocked(["no candidate recorded"])
     workspace_id = UUID(str(candidate["workspace_id"]))
-    env_path = Path.home() / ".config" / "linear.env"
     epoch_config = replace(config, port=int(window["port"]))
     epoch = _epoch_row(epoch_config, workspace_id)
     if epoch is None:
@@ -1640,7 +1639,7 @@ def finalize(config: OperationsConfig) -> dict[str, object]:
     else:
         report = {"sealed": True, "revoked_at": str(epoch["revoked_at"])}
     # Key file removed only after revocation is proven AND the epoch is sealed.
-    env_path.unlink(missing_ok=True)
+    LINEAR_ENV_PATH.unlink(missing_ok=True)
     window["state"] = "finalized"
     window["finalized_at"] = datetime.now(timezone.utc).isoformat()
     _save_state(config, state)
