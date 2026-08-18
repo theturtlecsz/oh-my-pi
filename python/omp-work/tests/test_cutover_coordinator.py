@@ -544,10 +544,14 @@ def test_post_write_recovery_ignores_elapsed_ceiling_but_never_refocuses(tmp_pat
 def test_candidate_service_receives_rehearsal_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = replace(_config(tmp_path), prefix="work-ledger/v1/cutover/rehearsals/test")
     child_env: dict[str, str] = {}
+    child_command: list[str] = []
 
     def fake_popen(*args: object, **kwargs: object) -> SimpleNamespace:
+        command = args[0]
         env = kwargs["env"]
+        assert isinstance(command, list)
         assert isinstance(env, dict)
+        child_command.extend(str(part) for part in command)
         child_env.update((str(key), str(value)) for key, value in env.items())
         return SimpleNamespace()
 
@@ -558,7 +562,35 @@ def test_candidate_service_receives_rehearsal_prefix(tmp_path: Path, monkeypatch
     monkeypatch.setenv("OMP_WORK_S3_PREFIX", config.prefix)
 
     assert child_env["OMP_WORK_S3_PREFIX"] == config.prefix
+    assert child_command[0] == cutover.sys.executable
     assert OperationsConfig.defaults().prefix == config.prefix
+
+
+def test_temporary_service_releases_port_before_reuse() -> None:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        http_port = int(probe.getsockname()[1])
+    command = [cutover.sys.executable, "-m", "http.server", str(http_port), "--bind", "127.0.0.1"]
+
+    def start() -> subprocess.Popen[bytes]:
+        proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(40):
+            if proc.poll() is not None:
+                raise AssertionError("service exited before binding")
+            try:
+                with socket.create_connection(("127.0.0.1", http_port), timeout=0.1):
+                    return proc
+            except OSError:
+                cutover.time.sleep(0.05)
+        raise AssertionError("service did not bind")
+
+    first = start()
+    cutover._stop_service(first)
+    second = start()
+    try:
+        assert second.poll() is None
+    finally:
+        cutover._stop_service(second)
 
 
 def test_installer_renders_managed_candidate_runtime(tmp_path: Path) -> None:

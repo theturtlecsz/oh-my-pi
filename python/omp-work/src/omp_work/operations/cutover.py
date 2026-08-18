@@ -19,6 +19,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from uuid import UUID, uuid4
 
@@ -740,7 +741,7 @@ def _serve(config: OperationsConfig, http_port: int) -> subprocess.Popen[bytes]:
         "OMP_WORK_S3_PREFIX": config.prefix,
     }
     proc = subprocess.Popen(
-        ["uv", "run", "python", "-m", "omp_work", "serve", "--port", str(http_port), "--capabilities-dir", str(config.config_dir / "capabilities")],
+        [sys.executable, "-m", "omp_work", "serve", "--port", str(http_port), "--capabilities-dir", str(config.config_dir / "capabilities")],
         cwd=project, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     base = f"http://127.0.0.1:{http_port}"
@@ -751,8 +752,18 @@ def _serve(config: OperationsConfig, http_port: int) -> subprocess.Popen[bytes]:
         except httpx.HTTPError:
             pass
         time.sleep(0.5)
-    proc.kill()
+    _stop_service(proc)
     raise CutoverBlocked(["candidate service never became live"])
+
+def _stop_service(proc: subprocess.Popen[bytes]) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
 
 
 def _start_managed_runtime(config: OperationsConfig, *, pgdata: Path, http_port: int, workspace_id: UUID) -> None:
@@ -991,7 +1002,7 @@ def rehearse(config: OperationsConfig, *, ordinal: int, retain_candidate: bool, 
             try:
                 smoke = _run_smoke(config_a, base_url=f"http://127.0.0.1:{http_a}", workspace_id=workspace_id, owner_id=owner_id, work_dir=scratch / "smoke-a")
             finally:
-                service_a.kill()
+                _stop_service(service_a)
         finally:
             _pg_stop(clone_a)
 
@@ -1057,7 +1068,7 @@ def rehearse(config: OperationsConfig, *, ordinal: int, retain_candidate: bool, 
                     correlation_id=uuid4(),
                 )
             finally:
-                service_b.kill()
+                _stop_service(service_b)
         finally:
             _pg_stop(clone_b)
         success = True
@@ -1301,7 +1312,7 @@ def execute(config: OperationsConfig, *, mapping_file: Path, plan_file: Path) ->
                 try:
                     smoke = _run_smoke(clone_config, base_url=f"http://127.0.0.1:{clone_http}", workspace_id=workspace_id, owner_id=owner_id, work_dir=scratch / "smoke-final")
                 finally:
-                    smoke_service.kill()
+                    _stop_service(smoke_service)
             finally:
                 _pg_stop(clone)
             shutil.rmtree(clone, ignore_errors=True)
@@ -1364,7 +1375,7 @@ def execute(config: OperationsConfig, *, mapping_file: Path, plan_file: Path) ->
                 if response.receipt.state not in ("applied", "replayed"):
                     raise CutoverBlocked([f"activation rejected: {response.receipt.diagnostics}"])
             finally:
-                service.kill()
+                _stop_service(service)
             if _epoch_row(candidate_config, workspace_id) is None:
                 raise CutoverBlocked(["activation reported success but no epoch row exists"])
             _step_complete(config, state, window, "activation", {"epoch_id": str(manifest.epoch_id)})
@@ -1480,7 +1491,7 @@ def execute(config: OperationsConfig, *, mapping_file: Path, plan_file: Path) ->
                 try:
                     readiness_smoke = _run_smoke(clone_config, base_url=f"http://127.0.0.1:{clone_http}", workspace_id=workspace_id, owner_id=owner_id, work_dir=scratch / "smoke-readiness")
                 finally:
-                    clone_service.kill()
+                    _stop_service(clone_service)
             finally:
                 _pg_stop(clone)
             shutil.rmtree(clone, ignore_errors=True)
