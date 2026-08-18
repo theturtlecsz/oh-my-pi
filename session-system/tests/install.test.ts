@@ -78,6 +78,10 @@ describe("install.sh", () => {
 		fs.writeFileSync(path.join(extensions, "custom-dir/nested.bin"), nested);
 		fs.symlinkSync("custom.bin", path.join(extensions, "custom-link"));
 		fs.symlinkSync("missing-target", path.join(extensions, "broken-link"));
+		const rootMode = 0o700;
+		const rootMtimeSeconds = 978307200;
+		fs.chmodSync(extensions, rootMode);
+		fs.utimesSync(extensions, rootMtimeSeconds, rootMtimeSeconds);
 
 		const assertPreserved = (backend: "linear" | "work") => {
 			expect(fs.readFileSync(path.join(extensions, "custom.bin"))).toEqual(regular);
@@ -86,12 +90,36 @@ describe("install.sh", () => {
 			expect(fs.readlinkSync(path.join(extensions, "custom-link"))).toBe("custom.bin");
 			expect(fs.readlinkSync(path.join(extensions, "broken-link"))).toBe("missing-target");
 			expect([LINEAR_ENTRY, WORK_ENTRY].filter((entry) => fs.existsSync(live(entry)))).toEqual([backend === "linear" ? LINEAR_ENTRY : WORK_ENTRY]);
+			const root = fs.statSync(extensions);
+			expect(root.mode & 0o777).toBe(rootMode);
+			expect(Math.floor(root.mtimeMs / 1000)).toBe(rootMtimeSeconds);
 		};
 
 		expect(run(["--backend", "work"]).exitCode).toBe(0);
 		assertPreserved("work");
 		expect(run(["--copy", "--backend", "linear"]).exitCode).toBe(0);
 		assertPreserved("linear");
+	});
+	test("refuses an unreadable extension root before exchange", () => {
+		expect(run().exitCode).toBe(0);
+		const extensions = live(".omp/agent/extensions");
+		const sentinel = path.join(extensions, "keep.txt");
+		fs.writeFileSync(sentinel, "keep");
+		const mode = fs.statSync(extensions).mode & 0o777;
+		const result = (() => {
+			fs.chmodSync(extensions, 0);
+			try {
+				return run(["--backend", "work"]);
+			} finally {
+				fs.chmodSync(extensions, mode);
+			}
+		})();
+
+		expect(result.exitCode).not.toBe(0);
+		expect(result.stderr.toString()).toContain("extension root unreadable");
+		expect(fs.readFileSync(sentinel, "utf8")).toBe("keep");
+		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(true);
+		expect(fs.existsSync(live(WORK_ENTRY))).toBe(false);
 	});
 	test("rejects an unknown backend", () => {
 		const bad = run(["--backend", "notion"]);

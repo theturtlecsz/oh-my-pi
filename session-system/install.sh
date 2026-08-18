@@ -62,6 +62,10 @@ EXT_DIR="$HOME/.omp/agent/extensions"
 SET_DIR="$HOME/.omp/agent/.extensions-set.$BACKEND.$$"
 mkdir -p "$SET_DIR"
 if [ -d "$EXT_DIR" ]; then
+  if [ ! -r "$EXT_DIR" ] || [ ! -x "$EXT_DIR" ]; then
+    echo "extension root unreadable: $EXT_DIR" >&2
+    exit 1
+  fi
   shopt -s dotglob nullglob
   for src in "$EXT_DIR"/*; do
     case "${src##*/}" in
@@ -89,6 +93,10 @@ stage extensions/model-bookends-schema-refused.md model-bookends-schema-refused.
 stage extensions/model-bookends-stop-no-audit.md model-bookends-stop-no-audit.md
 stage extensions/model-bookends-stop-not-forwarded.md model-bookends-stop-not-forwarded.md
 stage extensions/model-bookends-stop-refused.md model-bookends-stop-refused.md
+if [ -d "$EXT_DIR" ]; then
+  chmod --reference="$EXT_DIR" "$SET_DIR"
+  touch --reference="$EXT_DIR" "$SET_DIR"
+fi
 
 exchange_dirs() { # exchange_dirs <live-dir> <staged-dir> — atomic swap (x86_64 Linux)
   python3 - "$1" "$2" <<'PY'
