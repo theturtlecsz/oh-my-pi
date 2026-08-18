@@ -8,8 +8,8 @@
  * /summary: arm a fail-closed audit gate. The gate injects the audit contract,
  * permits exactly ONE fresh `auditor` task whose input carries the five
  * required sections, and refuses to let the session settle until the auditor's
- * verbatim report has been copied into the typed Linear review comment
- * (kind:"review"). A NEEDS_FIX report still forwards — it ends the summary
+ * verbatim report has been forwarded through the backend-neutral `work` tool as
+ * typed `audit` evidence. A NEEDS_FIX report still forwards — it ends the summary
  * attempt; fixes happen afterward and the next owner-entered /summary starts a
  * fresh auditor (state resets on session switch).
  */

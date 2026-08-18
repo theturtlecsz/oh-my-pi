@@ -174,7 +174,10 @@ def test_rollback_refused_after_first_mutation(tmp_path: Path, monkeypatch: pyte
                 "INSERT INTO omp_control.cutover_epochs(workspace_id, epoch_id, state, candidate_manifest, candidate_manifest_sha256) VALUES (%s, %s, 'active', '{}'::jsonb, %s)",
                 (str(WORKSPACE), str(epoch_id), "0" * 64),
             )
-            cur.execute("INSERT INTO omp_control.workspace_authority(workspace_id, epoch_id, first_work_mutation_at) VALUES (%s, %s, clock_timestamp())", (str(WORKSPACE), str(epoch_id)))
+            cur.execute(
+                "INSERT INTO omp_control.workspace_authority(workspace_id, epoch_id, first_work_mutation_at, first_work_mutation_request_id) VALUES (%s, %s, clock_timestamp(), %s)",
+                (str(WORKSPACE), str(epoch_id), str(uuid4())),
+            )
             conn.commit()
         _write_state(config, _candidate_state(config.port))
         with pytest.raises(cutover.CutoverBlocked, match="repair/restore is the only path"):
@@ -748,13 +751,17 @@ def test_status_reports_epoch_and_authority(tmp_path: Path, monkeypatch: pytest.
         bootstrap(config)
         state = _candidate_state(config.port)
         epoch_id = state["window"]["epoch_id"]
+        request_id = uuid4()
         with psycopg.connect(**config.connection_kwargs("postgres")) as conn, conn.cursor() as cur:
             cur.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (str(WORKSPACE),))
             cur.execute(
                 "INSERT INTO omp_control.cutover_epochs(workspace_id, epoch_id, state, candidate_manifest, candidate_manifest_sha256, revoked_at) VALUES (%s, %s, 'sealed', '{}'::jsonb, %s, clock_timestamp())",
                 (str(WORKSPACE), str(epoch_id), "0" * 64),
             )
-            cur.execute("INSERT INTO omp_control.workspace_authority(workspace_id, epoch_id, first_work_mutation_at) VALUES (%s, %s, clock_timestamp())", (str(WORKSPACE), str(epoch_id)))
+            cur.execute(
+                "INSERT INTO omp_control.workspace_authority(workspace_id, epoch_id, first_work_mutation_at, first_work_mutation_request_id) VALUES (%s, %s, clock_timestamp(), %s)",
+                (str(WORKSPACE), str(epoch_id), str(request_id)),
+            )
             conn.commit()
         _write_state(config, state)
         report = cutover.status(config)
@@ -762,7 +769,29 @@ def test_status_reports_epoch_and_authority(tmp_path: Path, monkeypatch: pytest.
         epoch = report["epoch"]
         assert epoch["epoch_id"] == epoch_id and epoch["state"] == "sealed"
         assert epoch["first_work_mutation_at"] is not None and epoch["revoked_at"] is not None
+        assert epoch["first_work_mutation_request_id"] == str(request_id)
 
+
+
+@pytest.mark.skipif(os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1", reason="set OMP_WORK_POSTGRES_INTEGRATION=1")
+def test_workspace_authority_rejects_unpaired_first_mutation_insert(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    with native_postgres(tmp_path, config.port):
+        bootstrap(config)
+        epoch_id = uuid4()
+        with psycopg.connect(**config.connection_kwargs("postgres"), autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)", (str(WORKSPACE),))
+            cur.execute(
+                "INSERT INTO omp_control.cutover_epochs(workspace_id, epoch_id, state, candidate_manifest, candidate_manifest_sha256) VALUES (%s, %s, 'active', '{}'::jsonb, %s)",
+                (str(WORKSPACE), str(epoch_id), "0" * 64),
+            )
+            with pytest.raises(psycopg.errors.CheckViolation, match="workspace_authority_first_mutation_pairing"):
+                cur.execute(
+                    "INSERT INTO omp_control.workspace_authority(workspace_id, epoch_id, first_work_mutation_at) VALUES (%s, %s, clock_timestamp())",
+                    (str(WORKSPACE), str(epoch_id)),
+                )
+            cur.execute("SELECT count(*) FROM omp_control.workspace_authority WHERE workspace_id = %s", (str(WORKSPACE),))
+            assert cur.fetchone() == (0,)
 
 def test_status_reports_unknown_when_authority_database_is_unreachable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An outage while Linear is frozen must never be mislabeled as Linear authority."""

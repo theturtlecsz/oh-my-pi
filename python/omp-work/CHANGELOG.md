@@ -21,3 +21,7 @@
 - Receipt storage now keeps the canonical caller payload body in `payload` with issuer/verdict/binding metadata in dedicated columns (migration 0008, additive).
 - Restored the app role's readiness-gate grants (migration 0009, additive): 0005's omp_control revocation broke `python -m omp_work serve` startup — the health gate needs `schema_migrations`/`runtime_compatibility`/`operations_evidence` reads and the `readiness_probe` upsert (including SELECT for the ON CONFLICT arbiter).
 - Contract approval moved to HOME-147 (`approval.json`); `work.omp.dev/v1` remains pre-cutover and non-authoritative until HOME-148.
+
+### Fixed
+
+- Cutover status now reports the persisted first-mutation request, the database rejects unpaired first-mutation stamps on every write path, and the recovery runbook covers deadline overruns and failed Linear credential revocation.

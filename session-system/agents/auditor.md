@@ -32,6 +32,8 @@ You never receive — and must not request — the worker's self-assessment befo
 
 Return the report as plain headed text exactly as templated below — never JSON, never a wrapper object, never a code fence around the whole report. The audit gate validates these exact line-anchored headers; any other shape is refused and wastes the entire run.
 
+Use tools without progress prose. When complete, call `yield` exactly once with the full plain-text report string in `result.data` and omit `type`. The string MUST start at byte 0 with `VERDICT:`. NEVER yield `{}`, null, a wrapper object, or rely on prior assistant text.
+
 ```
 VERDICT: PASS | NEEDS_FIX | BLOCKED
 

@@ -238,8 +238,8 @@ def _epoch_row(config: OperationsConfig, workspace_id: UUID) -> dict[str, object
     while Work is still authoritative."""
     with psycopg.connect(**config.connection_kwargs("postgres")) as connection, connection.cursor() as cur:
         cur.execute(
-            "SELECT e.epoch_id, e.state, a.first_work_mutation_at, e.candidate_manifest_sha256,"
-            " e.revoked_at, e.final_report_sha256, (a.workspace_id IS NOT NULL)"
+            "SELECT e.epoch_id, e.state, a.first_work_mutation_at, a.first_work_mutation_request_id,"
+            " e.candidate_manifest_sha256, e.revoked_at, e.final_report_sha256, (a.workspace_id IS NOT NULL)"
             " FROM omp_control.cutover_epochs e"
             " LEFT JOIN omp_control.workspace_authority a ON a.epoch_id = e.epoch_id"
             " WHERE e.workspace_id = %s ORDER BY e.activated_at DESC LIMIT 1",
@@ -248,7 +248,7 @@ def _epoch_row(config: OperationsConfig, workspace_id: UUID) -> dict[str, object
         row = cur.fetchone()
     if row is None:
         return None
-    return {"epoch_id": row[0], "state": row[1], "first_work_mutation_at": row[2], "candidate_manifest_sha256": row[3], "revoked_at": row[4], "final_report_sha256": row[5], "authority_present": bool(row[6])}
+    return {"epoch_id": row[0], "state": row[1], "first_work_mutation_at": row[2], "first_work_mutation_request_id": row[3], "candidate_manifest_sha256": row[4], "revoked_at": row[5], "final_report_sha256": row[6], "authority_present": bool(row[7])}
 
 
 # --- cutover evidence: encrypted immutable reports, plan artifact, key material ---
