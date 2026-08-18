@@ -16,8 +16,6 @@ import psycopg
 import httpx
 import pytest
 
-import omp_work.integration.exporter as exporter_module
-from omp_work.integration.exporter import LinearExporter
 from omp_work.operations.artifacts import decrypt_file, encrypt_file
 from omp_work.operations.config import OperationsConfig
 from pg_native import native_postgres, seed_authority
@@ -43,9 +41,6 @@ def config(tmp_path: Path) -> OperationsConfig:
         path = credentials / role
         path.write_text(str(uuid4()) if role == "operator-actor-id" else secrets.token_urlsafe(24))
         path.chmod(0o600)
-    linear = credentials / "linear-export.json"
-    linear.write_text(json.dumps({"kind": "oauth", "access_token": "read-only-token", "refresh_token": "refresh-token", "client_id": "test-client", "scopes": ["read"], "expires_at": "2099-01-01T00:00:00Z"}))
-    linear.chmod(0o600)
     return OperationsConfig(config_dir=tmp_path / "config", state_dir=tmp_path / "state", data_dir=tmp_path / "data", port=_free_port())
 
 
@@ -176,53 +171,6 @@ def test_restore_drill_forwards_requested_backup_id(monkeypatch: pytest.MonkeyPa
         backup.restore_drill(config, reason="pre-activation-final", backup_id="wanted")
 
 
-class _LinearFixture:
-    def __init__(self, variant: str = "complete", *, interrupt_second_team_page: bool = False) -> None:
-        self.variant = variant
-        self.interrupt_second_team_page = interrupt_second_team_page
-        self.interrupted = False
-        self.calls: list[tuple[str, str | None]] = []
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        payload = json.loads(request.content)
-        operation_match = re.match(r"query (\w+)", payload["query"])
-        assert operation_match is not None
-        operation = operation_match.group(1)
-        after = payload["variables"]["after"]
-        self.calls.append((operation, after))
-        if self.interrupt_second_team_page and operation == "teams":
-            if after is None:
-                return httpx.Response(200, json={"data": {operation: {"nodes": self.nodes(operation), "pageInfo": {"hasNextPage": True, "endCursor": "saved-cursor"}}}})
-            if not self.interrupted:
-                self.interrupted = True
-                raise httpx.ConnectError("interrupted", request=request)
-        return httpx.Response(200, json={"data": {operation: {"nodes": self.nodes(operation), "pageInfo": {"hasNextPage": False, "endCursor": None}}}})
-
-    def nodes(self, operation: str) -> list[dict[str, object]]:
-        issue_a = "00000000-0000-7000-8000-000000000145"
-        issue_b = "00000000-0000-7000-8000-000000000146"
-        issues = [{"id": issue_a, "identifier": "HOME-145", "title": "Exporter", "updatedAt": "2026-08-01T00:00:00Z", "team": {"key": "HOME"}}]
-        if self.variant == "blocked":
-            issues.append({"id": issue_b, "identifier": "HOME-145", "title": "Duplicate", "updatedAt": "2026-08-01T00:00:00Z", "team": {"key": "HOME"}})
-        values: dict[str, list[dict[str, object]]] = {
-            "teams": [{"id": "team-home", "key": "HOME", "name": "Home", "updatedAt": "2026-08-01T00:00:00Z"}],
-            "initiatives": [],
-            "projects": [],
-            "projectUpdates": [],
-            "projectMilestones": [],
-            "issues": issues,
-            "workflowStates": [],
-            "issueLabels": [],
-            "initiativeToProjects": [],
-            "issueRelations": [],
-            "comments": [],
-            "attachments": (
-                [{"id": "attachment-1", "title": "Unavailable", "updatedAt": "2026-08-01T00:00:00Z", "issue": {"id": issue_a, "identifier": "HOME-145", "team": {"key": "HOME"}}}]
-                if self.variant == "quarantined"
-                else []
-            ),
-        }
-        return values[operation]
 
 
 def test_bootstrap_migrates_pinned_postgres(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -319,56 +267,6 @@ def test_bootstrap_migrates_pinned_postgres(config: OperationsConfig, monkeypatc
         assert restored.stat().st_mode & 0o777 == 0o600
         with pytest.raises(FileExistsError):
             encrypt_file(restored, encrypted, config.secret_path("gpg-passphrase"))
-
-        original_commit = exporter_module.ExportLedger.commit
-        fail_once = True
-
-        def interrupted_commit(self: exporter_module.ExportLedger, *args: object, **kwargs: object) -> None:
-            nonlocal fail_once
-            if fail_once:
-                fail_once = False
-                raise RuntimeError("simulated_database_failure")
-            original_commit(self, *args, **kwargs)
-
-        monkeypatch.setattr(exporter_module.ExportLedger, "commit", interrupted_commit)
-        crash_workspace = uuid4()
-        crash_fixture = _LinearFixture()
-        crash_exporter = LinearExporter(config, transport=httpx.MockTransport(crash_fixture.handler))
-        with pytest.raises(RuntimeError, match="simulated_database_failure"):
-            crash_exporter.full(crash_workspace)
-        monkeypatch.setattr(exporter_module.ExportLedger, "commit", original_commit)
-        crash_export_id = next(path.name for path in (config.data_dir / "linear-exports" / str(crash_workspace)).iterdir())
-        crash_root = config.data_dir / "linear-exports" / str(crash_workspace) / crash_export_id
-        first_page = next(crash_root.iterdir())
-        first_ciphertext = first_page.read_bytes()
-        resumed = crash_exporter.resume(UUID(crash_export_id))
-        assert first_page.read_bytes() == first_ciphertext
-        assert resumed.source_hashes.work_items["00000000-0000-7000-8000-000000000145"].key == "HOME-145"
-
-        cursor_workspace = uuid4()
-        cursor_fixture = _LinearFixture(interrupt_second_team_page=True)
-        cursor_exporter = LinearExporter(config, transport=httpx.MockTransport(cursor_fixture.handler))
-        with pytest.raises(RuntimeError, match="linear_transport_failed"):
-            cursor_exporter.full(cursor_workspace)
-        cursor_export_id = UUID(next(path.name for path in (config.data_dir / "linear-exports" / str(cursor_workspace)).iterdir()))
-        cursor_exporter.resume(cursor_export_id)
-        assert [after for operation, after in cursor_fixture.calls if operation == "teams"][:3] == [None, "saved-cursor", "saved-cursor"]
-
-        blocked = LinearExporter(config, transport=httpx.MockTransport(_LinearFixture("blocked").handler)).full(uuid4())
-        quarantined = LinearExporter(config, transport=httpx.MockTransport(_LinearFixture("quarantined").handler)).full(uuid4())
-        with psycopg.connect(**config.connection_kwargs("omp_work_importer")) as connection:
-            with connection.transaction(), connection.cursor() as cursor:
-                for manifest, state in ((blocked, "blocked"), (quarantined, "complete")):
-                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(manifest.workspace_id), str(actor_id)))
-                    cursor.execute("SELECT state FROM omp_integration.raw_exports WHERE export_id=%s", (manifest.export_id,))
-                    assert cursor.fetchone() == (state,)
-        assert any(anomaly.disposition == "blocking" for anomaly in blocked.anomalies)
-        assert quarantined.anomalies == (exporter_module.Anomaly(code="attachment_content_unavailable", disposition="quarantined"),)
-        for manifest in (resumed, blocked, quarantined):
-            root = config.data_dir / "linear-exports" / str(manifest.workspace_id) / str(manifest.export_id)
-            assert root.stat().st_mode & 0o777 == 0o700
-            assert all(path.suffix == ".gpg" and path.stat().st_mode & 0o777 == 0o400 for path in root.iterdir())
-            assert not (config.state_dir / "staging" / str(manifest.export_id)).exists()
 
         config.state_dir.mkdir(exist_ok=True)
         dump = config.state_dir / "backup-role.dump"

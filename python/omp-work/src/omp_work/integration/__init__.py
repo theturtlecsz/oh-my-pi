@@ -1,4 +1,11 @@
-from .exporter import ExportManifest, LinearExporter, load_manifest
-from .linear import LinearClient, LinearCredential, LinearStream
+from .importer import LinearImportMap, LinearImporter
+from .legacy_artifacts import ExportManifest, LinearStream, load_export, load_manifest
 
-__all__ = ["ExportManifest", "LinearClient", "LinearCredential", "LinearExporter", "LinearStream", "load_manifest"]
+__all__ = [
+    "ExportManifest",
+    "LinearImportMap",
+    "LinearImporter",
+    "LinearStream",
+    "load_export",
+    "load_manifest",
+]

@@ -1,10 +1,8 @@
 # Work Ledger — planning and work tracking
 
 The owner's work lives in the Work Ledger: WORLDS, SURFACE nouns with health,
-PROMISE sentences (owner verdict closes), work items. Exactly one workflow
-tool is installed — `linear` under the Linear backend, `work` under the
-Work Ledger backend: reads are free, writes always render an on-screen
-confirmation.
+PROMISE sentences (owner verdict closes), work items. The `work` tool is
+installed: reads are free, writes always render an on-screen confirmation.
 
 ## Uniform memory law (owner-ratified 2026-08-13, HOME-112)
 
@@ -58,7 +56,7 @@ Evidence comments never settle handoff/review debt. Reads and NOW selection neve
 imply execution. Closeout remains literal-command-only: never infer `/summary`
 or `/done` from completion, and a keep-open verdict blocks closeout.
 
-Enforcement lives in the workflow host (`linear-now` or `work-now` extension):
+Enforcement lives in the workflow host (`work-now` extension):
 the start bookend and tool description inject one canonical sequence, plan
 approval fails closed if the stamp cannot land, typed comments advance only
 their own stage, and the footer shows only `⚠` while a hidden checkpoint

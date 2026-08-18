@@ -11,8 +11,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .exporter import ExportManifest, SourceHashIndex, SourcePage, load_export
-from .linear import LinearStream
+from .legacy_artifacts import ExportManifest, LinearStream, SourceHashIndex, SourcePage, load_export
 from omp_work.operations.artifacts import write_json_artifact
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import _connect

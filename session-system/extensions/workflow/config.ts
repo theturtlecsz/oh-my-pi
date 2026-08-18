@@ -28,7 +28,7 @@ export function isLoopback(url: string): boolean {
 	}
 }
 
-/** Shared XDG-aware config root (client.json, pending ops, the Linear freeze marker). */
+/** Shared XDG-aware config root (client.json, pending ops). */
 export function ompWorkConfigDir(): string {
 	return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "omp-work");
 }

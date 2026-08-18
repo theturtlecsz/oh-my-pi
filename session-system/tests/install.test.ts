@@ -9,7 +9,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "ss-install-"));
 afterAll(() => fs.rmSync(home, { recursive: true, force: true }));
 
 const SHARED_LINKS: Array<[string, string]> = [
-	// workflow/ is shared support code: linear-now.ts and work-now.ts both import it
+	// workflow/ is support code: work-now.ts imports it
 	[".omp/agent/extensions/workflow", "extensions/workflow"],
 	[".omp/agent/extensions/model-bookends.ts", "extensions/model-bookends.ts"],
 	[".omp/agent/extensions/model-bookends-audit.md", "extensions/model-bookends-audit.md"],
@@ -38,36 +38,29 @@ function run(args: string[] = []) {
 const live = (p: string) => path.join(home, p);
 
 describe("install.sh", () => {
-	test("default backend links linear-now and removes the work entry", () => {
+	test("default installation links work-now and all shared links", () => {
 		expect(run().exitCode).toBe(0);
 		for (const [dst, src] of SHARED_LINKS) {
 			expect(fs.realpathSync(live(dst))).toBe(fs.realpathSync(path.join(ss, src)));
 		}
-		expect(fs.realpathSync(live(LINEAR_ENTRY))).toBe(fs.realpathSync(path.join(ss, "extensions/linear-now.ts")));
-		expect(fs.existsSync(live(WORK_ENTRY))).toBe(false);
+		expect(fs.realpathSync(live(WORK_ENTRY))).toBe(fs.realpathSync(path.join(ss, "extensions/work-now.ts")));
+		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(false);
 	});
-	test("re-run flips atomically: staged set is retired and exactly one backend entry is live", () => {
+	test("re-run is idempotent: staged set is retired and work-now is live", () => {
 		expect(run().exitCode).toBe(0);
 		expect(fs.lstatSync(live(".omp/agent/extensions")).isDirectory()).toBe(true);
 		// staged sets from every run (including crashed ones) are retired
 		const leftovers = fs.readdirSync(live(".omp/agent")).filter((n) => n.startsWith(".extensions-set.") || n.startsWith(".extensions-legacy."));
 		expect(leftovers).toHaveLength(0);
-		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(true);
-		expect(fs.existsSync(live(WORK_ENTRY))).toBe(false);
-	});
-	test("--backend work installs exactly one entry: work live, linear gone, workflow kept", () => {
-		expect(run(["--backend", "work"]).exitCode).toBe(0);
-		expect(fs.realpathSync(live(WORK_ENTRY))).toBe(fs.realpathSync(path.join(ss, "extensions/work-now.ts")));
+		expect(fs.existsSync(live(WORK_ENTRY))).toBe(true);
 		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(false);
-		// shared support code stays installed under both backends
-		expect(fs.existsSync(live(".omp/agent/extensions/workflow/host.ts"))).toBe(true);
-		// switching back removes the work entry — never two backends at once
-		expect(run(["--backend", "linear"]).exitCode).toBe(0);
-		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(true);
-		expect(fs.existsSync(live(WORK_ENTRY))).toBe(false);
-		expect(fs.existsSync(live(".omp/agent/extensions/workflow/host.ts"))).toBe(true);
 	});
-	test("preserves unmanaged extensions across backend and copy-mode flips", () => {
+	test("--expect-backend work verifies installed backend, non-work fails", () => {
+		expect(run(["--expect-backend", "work"]).exitCode).toBe(0);
+		expect(run(["--expect-backend", "linear"]).exitCode).not.toBe(0);
+		expect(run(["--expect-backend", "other"]).exitCode).not.toBe(0);
+	});
+	test("preserves unmanaged extensions across install runs and copy-mode flips, and removes stale linear-now.ts", () => {
 		const extensions = live(".omp/agent/extensions");
 		const regular = Buffer.from([0, 1, 2, 255]);
 		const hidden = Buffer.from("hidden\n");
@@ -78,27 +71,30 @@ describe("install.sh", () => {
 		fs.writeFileSync(path.join(extensions, "custom-dir/nested.bin"), nested);
 		fs.symlinkSync("custom.bin", path.join(extensions, "custom-link"));
 		fs.symlinkSync("missing-target", path.join(extensions, "broken-link"));
+		// Simulate a stale linear-now.ts left over in the live directory
+		fs.writeFileSync(path.join(extensions, "linear-now.ts"), "// stale\n");
 		const rootMode = 0o700;
 		const rootMtimeSeconds = 978307200;
 		fs.chmodSync(extensions, rootMode);
 		fs.utimesSync(extensions, rootMtimeSeconds, rootMtimeSeconds);
 
-		const assertPreserved = (backend: "linear" | "work") => {
+		const assertPreserved = () => {
 			expect(fs.readFileSync(path.join(extensions, "custom.bin"))).toEqual(regular);
 			expect(fs.readFileSync(path.join(extensions, ".custom-hidden"))).toEqual(hidden);
 			expect(fs.readFileSync(path.join(extensions, "custom-dir/nested.bin"))).toEqual(nested);
 			expect(fs.readlinkSync(path.join(extensions, "custom-link"))).toBe("custom.bin");
 			expect(fs.readlinkSync(path.join(extensions, "broken-link"))).toBe("missing-target");
-			expect([LINEAR_ENTRY, WORK_ENTRY].filter((entry) => fs.existsSync(live(entry)))).toEqual([backend === "linear" ? LINEAR_ENTRY : WORK_ENTRY]);
+			expect(fs.existsSync(live(WORK_ENTRY))).toBe(true);
+			expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(false);
 			const root = fs.statSync(extensions);
 			expect(root.mode & 0o777).toBe(rootMode);
 			expect(Math.floor(root.mtimeMs / 1000)).toBe(rootMtimeSeconds);
 		};
 
-		expect(run(["--backend", "work"]).exitCode).toBe(0);
-		assertPreserved("work");
-		expect(run(["--copy", "--backend", "linear"]).exitCode).toBe(0);
-		assertPreserved("linear");
+		expect(run().exitCode).toBe(0);
+		assertPreserved();
+		expect(run(["--copy"]).exitCode).toBe(0);
+		assertPreserved();
 	});
 	test("refuses an unreadable extension root before exchange", () => {
 		expect(run().exitCode).toBe(0);
@@ -109,7 +105,7 @@ describe("install.sh", () => {
 		const result = (() => {
 			fs.chmodSync(extensions, 0);
 			try {
-				return run(["--backend", "work"]);
+				return run();
 			} finally {
 				fs.chmodSync(extensions, mode);
 			}
@@ -118,11 +114,12 @@ describe("install.sh", () => {
 		expect(result.exitCode).not.toBe(0);
 		expect(result.stderr.toString()).toContain("extension root unreadable");
 		expect(fs.readFileSync(sentinel, "utf8")).toBe("keep");
-		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(true);
-		expect(fs.existsSync(live(WORK_ENTRY))).toBe(false);
+		expect(fs.existsSync(live(WORK_ENTRY))).toBe(true);
+		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(false);
 	});
-	test("rejects an unknown backend", () => {
-		const bad = run(["--backend", "notion"]);
-		expect(bad.exitCode).toBe(2);
+	test("rejects legacy --backend selector", () => {
+		expect(run(["--backend", "linear"]).exitCode).toBe(2);
+		expect(run(["--backend", "work"]).exitCode).toBe(2);
+		expect(run(["--backend", "notion"]).exitCode).toBe(2);
 	});
 });

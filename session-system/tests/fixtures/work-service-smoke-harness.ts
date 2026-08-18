@@ -75,6 +75,8 @@ runner.initialize(
 		},
 	} as never,
 );
+// Owner work present before this transcript must survive candidate freeze.
+fs.writeFileSync(path.join(probe, "owner.txt"), "owner setting\n");
 await runner.emit({ type: "session_start" } as never);
 const ctx = runner.createContext();
 

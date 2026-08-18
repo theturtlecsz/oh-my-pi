@@ -9,12 +9,10 @@ from uuid import UUID, uuid4
 from psycopg import sql
 
 from . import backup
-from .capabilities import _write_secret, provision_candidate_reader, provision_cutover, provision_owner
+from .capabilities import _write_secret, provision_candidate_reader, provision_owner
 from .config import OperationsConfig
 from .database import bootstrap, check, collect_health, migrate
-from omp_work.integration.exporter import LinearExporter
 from omp_work.integration.importer import LinearImporter
-from omp_work.integration.linear import oauth_login
 
 
 def _read_or_create_uuid(config: OperationsConfig, name: str) -> UUID:
@@ -80,8 +78,6 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     reader.add_argument("--workspace-id", required=True)
     reader.add_argument("--candidate-id", action="append", required=True)
     reader.add_argument("--name", default="candidate-reader")
-    cutover = capabilities.add_parser("cutover")
-    cutover.add_argument("--rotate", action="store_true")
     backup_parser = commands.add_parser("backup").add_subparsers(dest="backup_command", required=True)
     backup_parser.add_parser("provision-target")
     backup_parser.add_parser("verify-target")
@@ -91,28 +87,6 @@ def add_parser(parser: argparse.ArgumentParser) -> None:
     drill = restore.add_parser("drill")
     drill.add_argument("--source", choices=("latest",), default="latest")
     drill.add_argument("--reason", choices=("clean-instance", "monthly", "manual"), required=True)
-    linear_export = commands.add_parser("linear-export").add_subparsers(dest="linear_export_command", required=True)
-    oauth_login_parser = linear_export.add_parser("oauth-login")
-    oauth_login_parser.add_argument("--client-id", required=True)
-    oauth_login_parser.add_argument("--force", action="store_true")
-    for mode in ("full", "delta"):
-        export = linear_export.add_parser(mode)
-        export.add_argument("--workspace-id", required=True)
-    resume = linear_export.add_parser("resume")
-    resume.add_argument("--export-id", required=True)
-    cutover = commands.add_parser("cutover").add_subparsers(dest="cutover_command", required=True)
-    preflight = cutover.add_parser("preflight")
-    preflight.add_argument("--mapping-file", default="infra/work-ledger/linear-import-map.json")
-    rehearse = cutover.add_parser("rehearse")
-    rehearse.add_argument("--ordinal", type=int, required=True, choices=(1, 2))
-    rehearse.add_argument("--retain-candidate", action="store_true")
-    rehearse.add_argument("--mapping-file", default="infra/work-ledger/linear-import-map.json")
-    execute = cutover.add_parser("execute")
-    execute.add_argument("--mapping-file", default="infra/work-ledger/linear-import-map.json")
-    execute.add_argument("--plan-file", required=True, help="Approved plan markdown; hashed into the manifest and attested as the first Work mutation")
-    cutover.add_parser("finalize")
-    cutover.add_parser("rollback")
-    cutover.add_parser("status")
     linear_import = commands.add_parser("linear-import").add_subparsers(dest="linear_import_command", required=True)
     stage = linear_import.add_parser("stage")
     stage.add_argument("--workspace-id", required=True)
@@ -147,8 +121,6 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
     elif command == "capabilities":
         if args.capabilities_command == "init":
             path = provision_owner(config, workspace_id=UUID(args.workspace_id), owner_id=UUID(args.owner_id), base_url=args.base_url)
-        elif args.capabilities_command == "cutover":
-            path = provision_cutover(config, workspace_id=config.workspace_id(), actor_id=config.actor_id(), rotate=args.rotate)
         else:
             path = provision_candidate_reader(config, workspace_id=UUID(args.workspace_id), candidate_ids=tuple(UUID(value) for value in args.candidate_id), name=args.name)
         print(path)
@@ -161,36 +133,6 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
             print(backup.create(config))
         else:
             print(backup.upload_wal(config))
-    elif command == "linear-export":
-        if args.linear_export_command == "oauth-login":
-            credential = oauth_login(config.secret_path("linear-export.json"), client_id=args.client_id, force=args.force)
-            print(json.dumps({"expires_at": credential.expires_at.isoformat(), "scopes": sorted(credential.scopes)}, sort_keys=True))
-            return
-        exporter = LinearExporter(config)
-        if args.linear_export_command == "full":
-            manifest = exporter.full(UUID(args.workspace_id))
-        elif args.linear_export_command == "delta":
-            manifest = exporter.delta(UUID(args.workspace_id))
-        else:
-            manifest = exporter.resume(UUID(args.export_id))
-        blocking = any(anomaly.disposition == "blocking" for anomaly in manifest.anomalies)
-        print(json.dumps({
-            "anomaly_codes": sorted({anomaly.code for anomaly in manifest.anomalies}),
-            "attachment_dispositions": manifest.attachment_dispositions.model_dump(),
-            "base_export_id": str(manifest.base_export_id) if manifest.base_export_id else None,
-            "counts": manifest.dimension_counts.model_dump(),
-            "hashes": manifest.dimension_hashes.model_dump(),
-            "export_id": str(manifest.export_id),
-            "manifest_path": manifest.artifacts["manifest"].path,
-            "manifest_sha256": manifest.manifest_sha256,
-            "mode": manifest.mode,
-            "raw_export_sha256": manifest.raw_export_sha256,
-            "source_lower_bound": manifest.source_lower_bound.isoformat() if manifest.source_lower_bound else None,
-            "source_watermark": manifest.source_watermark.isoformat() if manifest.source_watermark else None,
-            "state": "blocked" if blocking else "complete",
-        }, sort_keys=True))
-        if blocking:
-            raise SystemExit(2)
     elif command == "linear-import":
         importer = LinearImporter(config)
         if args.linear_import_command == "stage":
@@ -216,24 +158,5 @@ def run(args: argparse.Namespace, config: OperationsConfig | None = None) -> Non
         print(json.dumps(output, sort_keys=True))
         if summary.state == "blocked":
             raise SystemExit(2)
-    elif command == "cutover":
-        from . import cutover as cutover_ops
-        mapping = Path(getattr(args, "mapping_file", os.environ.get("OMP_WORK_IMPORT_MAP", "infra/work-ledger/linear-import-map.json")))
-        try:
-            if args.cutover_command == "preflight":
-                print(json.dumps(cutover_ops.preflight(config, mapping_file=mapping), indent=2, sort_keys=True, default=str))
-            elif args.cutover_command == "rehearse":
-                print(json.dumps(cutover_ops.rehearse(config, ordinal=args.ordinal, retain_candidate=args.retain_candidate, mapping_file=mapping), indent=2, sort_keys=True, default=str))
-            elif args.cutover_command == "execute":
-                print(json.dumps(cutover_ops.execute(config, mapping_file=mapping, plan_file=Path(args.plan_file)), indent=2, sort_keys=True, default=str))
-            elif args.cutover_command == "finalize":
-                print(json.dumps(cutover_ops.finalize(config), indent=2, sort_keys=True, default=str))
-            elif args.cutover_command == "rollback":
-                print(json.dumps(cutover_ops.rollback(config), indent=2, sort_keys=True, default=str))
-            elif args.cutover_command == "status":
-                print(json.dumps(cutover_ops.status(config), indent=2, sort_keys=True, default=str))
-        except cutover_ops.CutoverBlocked as err:
-            print(json.dumps({"blocked": err.blockers}, indent=2, sort_keys=True))
-            raise SystemExit(2) from err
     else:
         print(backup.restore_drill(config, reason=args.reason))

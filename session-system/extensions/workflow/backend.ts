@@ -1,9 +1,8 @@
 /**
- * workflow/backend.ts — the WorkflowBackend contract shared by the Linear and
- * Work Ledger adapters, plus the workflow constants both backends and the
- * test-suite pin. The host (host.ts) owns all session state, obligations,
- * confirmations, footer, NOW window, and digest rendering; a backend supplies
- * storage I/O only.
+ * workflow/backend.ts — the WorkflowBackend contract for the Work Ledger adapter,
+ * plus the workflow constants and types. The host (host.ts) owns all session state,
+ * obligations, confirmations, footer, NOW window, and digest rendering; a backend
+ * supplies storage I/O only.
  */
 
 export const WORKFLOW_SEQUENCE =
@@ -88,13 +87,12 @@ export interface WorkflowCheckpoint {
 
 export interface PlanStamp {
 	hash: string;
-	body: string; // linear: the comment body; work: unused (payload built adapter-side)
+	body?: string;
 	title: string;
 	planFilePath: string;
 	approach: string[];
 	verification: string[];
 }
-
 export interface BatchEntry {
 	title: string;
 	description?: string;
@@ -122,10 +120,10 @@ export interface BatchOutcome {
 export type EvidenceKind = "handoff" | "verification" | "audit" | "closeout";
 
 export interface EvidenceMeta {
-	planHash?: string; // linear: the Plan SHA-256 line; work: bound via state
+	planHash?: string;
 	verdict?: "PASS" | "NEEDS_FIX" | "BLOCKED"; // work audit receipts (bridge-supplied only)
 	independent?: boolean;
-	candidateSha256?: string; // work: binds verification/audit/closeout to the final candidate
+	candidateSha256?: string; // binds verification/audit/closeout to the final candidate
 }
 
 /** Hooks the host hands a backend for interactive flows (freeze/push verdicts). */
@@ -135,6 +133,7 @@ export interface BackendHooks {
 		notify(msg: string, level?: "info" | "warning" | "error"): void;
 	};
 	cwd: string;
+	preExistingDirtyPaths: readonly string[];
 	notices: string[]; // backend pushes one-line notices; host flushes next turn
 }
 
@@ -166,21 +165,19 @@ export interface WorkStateCarrier {
 }
 
 export interface WorkflowBackend {
-	readonly name: "linear" | "work";
-	readonly serviceLabel: string; // "Linear" | "Work Ledger"
+	readonly name: "work";
+	readonly serviceLabel: string; // "Work Ledger"
 	readonly markerFile: string; // committed project-scope marker
 	readonly scopeFix: string; // one-line instructions for an unscoped repo
-	readonly cacheFile: string; // linear-now.json | work-now.json (basename under ~/.omp/agent)
-	readonly queueNoun: string; // "waiting-on-chris" | "TRIAGE" — for preview text
+	readonly cacheFile: string; // work-now.json (basename under ~/.omp/agent)
+	readonly queueNoun: string; // "TRIAGE" — for preview text
 	/** Kind that settles the review obligation — the typed session review. */
 	readonly reviewKind: "closeout";
-	/** Comment kinds this backend accepts — drives the tool schema enum.
-	 *  Both backends declare the full neutral set; the Linear adapter translates. */
+	/** Evidence kinds this backend accepts. */
 	readonly evidenceKinds: readonly EvidenceKind[];
-	readonly bookendTitle: string; // "── Linear bookend (linear.app/spec-kit) ──" etc.
+	readonly bookendTitle: string; // "── Work Ledger bookend (work.omp.dev/v1) ──"
 	/** Adapter-side mutable carrier: the host stores it opaquely in NowState.work. */
 	readCarrier(raw: unknown): WorkStateCarrier;
-
 	healthProbe(): Promise<void>; // throws on unreachable
 	projectScopeExists(project: string): Promise<boolean>;
 	mapData(nowKey?: string, projectFilter?: string): Promise<{ surfaces: MapSurface[]; capped: boolean }>;
@@ -208,18 +205,15 @@ export interface WorkflowBackend {
 	createBatch(input: CreateBatchInput): Promise<BatchOutcome>;
 	queueIssue(issue: NowRef): Promise<void>;
 	proposeClose(issue: NowRef, reason: string | undefined): Promise<void>;
-	/** Linear-only: hide without completing. Absent ⇒ the host refuses the action. */
-	archiveIssue?(issue: NowRef): Promise<void>;
 	reviseWork(issue: NowRef, fields: { title?: string; description?: string }): Promise<void>;
 	recordHealth(project: string, health: "onTrack" | "atRisk" | "offTrack", body: string): Promise<void>;
 
 	/** null = clear to close; string = the exact refusal the owner sees. */
 	closeBlocker(now: NowRef, carrier: WorkStateCarrier): Promise<string | null>;
-	/** Full close: linear = state change + verdict comment (host adds the commit step);
-	 *  work = push + push receipt + complete_work + clear focus. Returns the
+	/** Full close: push + push receipt + complete_work + clear focus. Returns the
 	 *  one-line result; throws on failure (state left recoverable). */
 	closeWithVerdict(now: NowRef, outcome: "done" | "canceled", reason: string | undefined, carrier: WorkStateCarrier, hooks: BackendHooks): Promise<string>;
-	/** Work backend only — durable pending-operation journal (plan §3):
+	/** Durable pending-operation journal:
 	 *  deliveredOps() lists operation ids whose results have been handed to the
 	 *  host since the last ack; the host passes them to ackOps() at
 	 *  before_provider_request (proof the results entered conversation history).
@@ -227,8 +221,8 @@ export interface WorkflowBackend {
 	deliveredOps?(): string[];
 	ackOps?(delivered: string[]): Promise<void>;
 
-	/** /summary authorization: linear = read workflow state; work = freeze the
-	 *  candidate and finalize it. planHash arms the review obligation. */
+	/** /summary authorization: freeze the candidate and finalize it.
+	 *  planHash arms the review obligation. */
 	summaryGate(now: NowRef, carrier: WorkStateCarrier, hooks: BackendHooks): Promise<SummaryGateOk | SummaryGateBlocked>;
 }
 

@@ -11,19 +11,39 @@ import socket
 from typing import Any
 from uuid import UUID, uuid4
 
-import httpx
 import pytest
 
+from collections import defaultdict
+from hashlib import sha256 as bytes_sha256
+import shutil
+
 import omp_work.integration.importer as importer_module
-from omp_work.integration.exporter import LinearExporter
+from omp_work.integration.legacy_artifacts import (
+    DIMENSIONS,
+    Anomaly,
+    ArtifactRecord,
+    AttachmentDisposition,
+    ExportManifest,
+    LinearStream,
+    PrivacyReport,
+    ReconciliationCounts,
+    ReconciliationHashes,
+    ScopeReport,
+    SourceHashEntry,
+    SourceHashIndex,
+    SourcePage,
+    StreamSummary,
+    load_export,
+)
 from omp_work.integration.importer import ImportBatchSummary, LinearImporter, parse_acceptance_criteria
 from omp_work.operations import cli as operations_cli
-from omp_work.operations.artifacts import decrypt_file, read_json_artifact, resolve_artifact_path
+from omp_work.operations.artifacts import decrypt_file, encrypt_file, read_json_artifact, resolve_artifact_path, write_json_artifact
 from omp_work.operations.config import OperationsConfig
 from pg_native import native_postgres, seed_authority
 from omp_work.operations.database import bootstrap, _connect
-from omp_work.v1.canonical import sha256
-
+from omp_work.v1.canonical import canonical_json, sha256
+from omp_work.v1.models import RelationEdge, RelationKind
+from omp_work.v1.semantics import would_create_cycle
 
 pytestmark = pytest.mark.skipif(os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1", reason="set OMP_WORK_POSTGRES_INTEGRATION=1")
 
@@ -183,26 +203,350 @@ def _sample_nodes(operation: str, variables: dict[str, object], call_index: int 
     }
     return values.get(operation, [])
 
-class Router:
-    def __init__(self, node_builder=_sample_nodes) -> None:
-        self.node_builder = node_builder
-        self.calls: list[tuple[str, dict[str, Any]]] = []
 
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        payload = json.loads(request.content)
-        query = payload["query"]
-        op_match = re.search(r"query\s+(\w+)", query)
-        operation = op_match.group(1) if op_match else "unknown"
-        variables = payload.get("variables", {})
-        self.calls.append((operation, variables))
+def _normalize_node(stream: LinearStream, node: dict[str, Any]) -> dict[str, Any]:
+    return dict(node)
 
-        nodes = self.node_builder(operation, variables, len(self.calls))
-        return httpx.Response(
-            200,
-            json={"data": {operation: {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}},
+def _synthesize_export(
+    config: OperationsConfig,
+    workspace_id: UUID,
+    node_builder: Any = _sample_nodes,
+    *,
+    mode: str = "full",
+    base_export_id: UUID | None = None,
+    export_id: UUID | None = None,
+    started: datetime | None = None,
+    boundary: datetime | None = None,
+) -> ExportManifest:
+    export_id = export_id or uuid4()
+    started = started or datetime(2026, 8, 1, 0, 0, tzinfo=timezone.utc)
+    boundary = boundary or (datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc) if mode == "full" else datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc))
+    root = config.data_dir / "linear-exports" / str(workspace_id) / str(export_id)
+    staging = config.state_dir / "staging" / str(export_id)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    staging.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    artifacts: dict[str, ArtifactRecord] = {}
+    summaries: dict[str, StreamSummary] = {}
+    records: dict[LinearStream, list[dict[str, Any]]] = defaultdict(list)
+    provenance: dict[tuple[LinearStream, str], str] = {}
+    phase = "baseline" if mode == "full" else "delta"
+
+    for stream in LinearStream:
+        stream_key = f"{phase}:{stream.value}"
+        raw_nodes = node_builder(stream.value, {}, 1) if callable(node_builder) else node_builder.get(stream.value, [])
+        norm_nodes = tuple(_normalize_node(stream, n) for n in raw_nodes)
+        records[stream].extend(norm_nodes)
+
+        page = SourcePage(export_id=export_id, stream=stream_key, page_index=0, has_next_page=False, nodes=norm_nodes)
+        payload = page.model_dump(mode="json")
+        plaintext_hash = sha256(payload)
+        encrypted = root / f"{phase}-{stream.value}-0-{plaintext_hash}.json.gpg"
+        plain = staging / encrypted.name.removesuffix(".gpg")
+        plain.write_text(canonical_json(payload), encoding="utf-8")
+        plain.chmod(0o600)
+        c_hash = encrypt_file(plain, encrypted, config.secret_path("gpg-passphrase"), mode=0o400)
+        plain.unlink(missing_ok=True)
+
+        rel_path = str(encrypted.relative_to(config.data_dir))
+        for n in norm_nodes:
+            if n.get("id"):
+                provenance[(stream, str(n["id"]))] = rel_path
+
+        artifact = ArtifactRecord(
+            path=rel_path,
+            plaintext_sha256=plaintext_hash,
+            ciphertext_sha256=c_hash,
+            variables_sha256=bytes_sha256(json.dumps({"first": 50, "after": None}, sort_keys=True).encode()).hexdigest(),
+            stream=stream_key,
+            page_index=0,
+            has_next_page=False,
         )
+        artifacts[f"{stream_key}:0"] = artifact
+        summaries[stream.value] = StreamSummary(scanned=len(norm_nodes), retained=len(norm_nodes), excluded=0)
+
+    # Build source hashes
+    mappings = {
+        LinearStream.initiatives: "worlds",
+        LinearStream.projects: "surfaces",
+        LinearStream.project_updates: "project_updates",
+        LinearStream.milestones: "promises",
+        LinearStream.issues: "work_items",
+        LinearStream.states: "states",
+        LinearStream.labels: "labels",
+        LinearStream.initiative_projects: "relations",
+        LinearStream.relations: "relations",
+        LinearStream.comments: "comments",
+        LinearStream.attachments: "attachments",
+    }
+    data: dict[str, dict[str, SourceHashEntry]] = {name: {} for name in (*DIMENSIONS, "project_updates")}
+    for stream, dim in mappings.items():
+        for node in records[stream]:
+            ident = str(node.get("id", ""))
+            if not ident: continue
+            dt_str = node.get("updatedAt")
+            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00")) if isinstance(dt_str, str) else None
+            s_hash = sha256(node)
+            owner = str((node.get("project") or {}).get("id")) if stream is LinearStream.project_updates and (node.get("project") or {}).get("id") else None
+            entry = SourceHashEntry(
+                id=ident,
+                key=node.get("identifier") if dim == "work_items" else None,
+                owner_id=owner,
+                updated_at=dt,
+                source_sha256=s_hash if dim == "surfaces" else None,
+                record_sha256=s_hash,
+                artifact_ref=provenance.get((stream, ident), ""),
+            )
+            data[dim][ident] = entry
+
+    for stream, fields in (
+        (LinearStream.projects, ("lead",)),
+        (LinearStream.project_updates, ("user",)),
+        (LinearStream.issues, ("assignee", "creator")),
+        (LinearStream.comments, ("user",)),
+        (LinearStream.attachments, ("creator",)),
+    ):
+        for node in records[stream]:
+            for field in fields:
+                p = node.get(field)
+                if isinstance(p, dict) and p.get("id"):
+                    p_id = str(p["id"])
+                    data["users"][p_id] = SourceHashEntry(
+                        id=p_id,
+                        record_sha256=sha256({k: p.get(k) for k in ("id", "name", "displayName", "active")}),
+                        artifact_ref=provenance.get((stream, str(node.get("id", ""))), ""),
+                    )
+
+    # Fold project updates
+    by_proj: dict[str, list[SourceHashEntry]] = defaultdict(list)
+    for up in data["project_updates"].values():
+        if up.owner_id: by_proj[up.owner_id].append(up)
+    for p_id, proj in tuple(data["surfaces"].items()):
+        s_hash = proj.source_sha256 or proj.record_sha256
+        ups = by_proj.get(p_id, [])
+        r_hash = s_hash if not ups else sha256({"project": s_hash, "updates": [{"id": e.id, "record_sha256": e.record_sha256} for e in sorted(ups, key=lambda x: x.id)]})
+        data["surfaces"][p_id] = proj.model_copy(update={"source_sha256": s_hash, "record_sha256": r_hash})
+
+    source_hashes = SourceHashIndex(**data)
+    base_records: dict[LinearStream, list[dict[str, Any]]] = defaultdict(list)
+    if base_export_id is not None:
+        base_manifest, base_hashes, base_pages = load_export(config, base_export_id)
+        for bp in base_pages:
+            st = LinearStream(bp.stream.split(":", 1)[1])
+            base_records[st].extend(bp.nodes)
+        merged_dims: dict[str, dict[str, SourceHashEntry]] = {}
+        for d in (*DIMENSIONS, "project_updates"):
+            vals = dict(getattr(base_hashes, d))
+            vals.update(getattr(source_hashes, d))
+            merged_dims[d] = vals
+        source_hashes = SourceHashIndex(**merged_dims)
+
+    # Merge record sets for validation
+    validation_records: dict[LinearStream, list[dict[str, Any]]] = defaultdict(list)
+    for st in LinearStream:
+        node_map = {}
+        for n in (*base_records[st], *records[st]):
+            ident = str(n.get("id", ""))
+            if ident:
+                node_map[ident] = n
+            else:
+                validation_records[st].append(n)
+        validation_records[st].extend(node_map.values())
+
+    # Write reports
+    def write_rep(name: str, payload_obj: object) -> ArtifactRecord:
+        rel, plain_h, cipher_h = write_json_artifact(root, staging, name, payload_obj, config.secret_path("gpg-passphrase"), config.data_dir, encrypt_fn=encrypt_file, decrypt_fn=decrypt_file)
+        rec = ArtifactRecord(path=rel, plaintext_sha256=plain_h, ciphertext_sha256=cipher_h)
+        artifacts[name] = rec
+        return rec
+
+    write_rep("source-hashes", source_hashes.model_dump(mode="json"))
+    scope = ScopeReport(streams=summaries)
+    write_rep("scope-report", scope.model_dump(mode="json"))
+    privacy = PrivacyReport(staging_cleanup=True, forbidden_fields_removed=True)
+    write_rep("privacy-report", privacy.model_dump(mode="json"))
+
+    # Anomalies
+    anomalies_list: list[Anomaly] = []
+    found_ids = {
+        "initiatives": set(source_hashes.worlds),
+        "projects": set(source_hashes.surfaces),
+        "milestones": set(source_hashes.promises),
+        "issues": set(source_hashes.work_items),
+        "states": set(source_hashes.states),
+        "labels": set(source_hashes.labels),
+        "comments": set(source_hashes.comments),
+        "users": set(source_hashes.users),
+    }
+    def missing(target: str, value: Any) -> None:
+        if isinstance(value, dict) and value.get("id") and str(value["id"]) not in found_ids[target]:
+            anomalies_list.append(Anomaly(code="missing_relation_endpoint", disposition="blocking"))
+
+    for link in validation_records[LinearStream.initiative_projects]:
+        missing("initiatives", link.get("initiative"))
+        missing("projects", link.get("project"))
+    for project in validation_records[LinearStream.projects]:
+        missing("users", project.get("lead"))
+    for update in validation_records[LinearStream.project_updates]:
+        missing("projects", update.get("project"))
+        missing("users", update.get("user"))
+    for milestone in validation_records[LinearStream.milestones]:
+        missing("projects", milestone.get("project"))
+    for issue in validation_records[LinearStream.issues]:
+        missing("issues", issue.get("parent"))
+        missing("projects", issue.get("project"))
+        missing("milestones", issue.get("projectMilestone"))
+        missing("states", issue.get("state"))
+        for label in (issue.get("labels") or {}).get("nodes", []):
+            missing("labels", label)
+        missing("users", issue.get("assignee"))
+        missing("users", issue.get("creator"))
+    for relation in validation_records[LinearStream.relations]:
+        missing("issues", relation.get("issue"))
+        missing("issues", relation.get("relatedIssue"))
+    for comment in validation_records[LinearStream.comments]:
+        missing("issues", comment.get("issue"))
+        missing("users", comment.get("user"))
+    for attachment in validation_records[LinearStream.attachments]:
+        missing("issues", attachment.get("issue"))
+        missing("users", attachment.get("creator"))
+
+    seen: dict[str, str] = {}
+    for issue in validation_records[LinearStream.issues]:
+        key = str(issue.get("identifier", ""))
+        ident = str(issue.get("id", ""))
+        if key and key in seen and seen[key] != ident:
+            anomalies_list.append(Anomaly(code="duplicate_uuid_key_mapping", disposition="blocking"))
+        if key: seen[key] = ident
+
+    for state in validation_records[LinearStream.states]:
+        if str(state.get("type", "")) not in ("started", "completed", "canceled", "triage", "backlog", "unstarted"):
+            anomalies_list.append(Anomaly(code="unsupported_non_workflow_object", disposition="blocking"))
+
+    edges: list[RelationEdge] = []
+    for relation in validation_records[LinearStream.relations]:
+        raw_kind = str(relation.get("type", "")).lower()
+        kind_map = {"blocks": RelationKind.BLOCKS, "duplicate": RelationKind.DUPLICATE_OF, "duplicate_of": RelationKind.DUPLICATE_OF, "related": RelationKind.RELATED}
+        kind = kind_map.get(raw_kind)
+        if kind is None:
+            anomalies_list.append(Anomaly(code="unsupported_non_workflow_object", disposition="quarantined"))
+            continue
+        try:
+            e = RelationEdge(workspace_id=UUID(int=0), source_work_id=UUID(str(relation["issue"]["id"])), target_work_id=UUID(str(relation["relatedIssue"]["id"])), kind=kind)
+            if would_create_cycle(tuple(edges), e):
+                anomalies_list.append(Anomaly(code="relation_cycle", disposition="blocking"))
+            else:
+                edges.append(e)
+        except Exception:
+            pass
+
+    for issue in validation_records[LinearStream.issues]:
+        if not isinstance(issue.get("parent"), dict): continue
+        try:
+            e = RelationEdge(workspace_id=UUID(int=0), source_work_id=UUID(str(issue["id"])), target_work_id=UUID(str(issue["parent"]["id"])), kind=RelationKind.PARENT)
+            if would_create_cycle(tuple(edges), e):
+                anomalies_list.append(Anomaly(code="relation_cycle", disposition="blocking"))
+            else:
+                edges.append(e)
+        except Exception:
+            pass
+
+    plans: dict[str, tuple[str, str]] = {}
+    for comment in sorted(validation_records[LinearStream.comments], key=lambda item: (str(item.get("createdAt", "")), str(item.get("id", "")))):
+        body = str(comment.get("body", ""))
+        created = str(comment.get("createdAt", ""))
+        issue_id = str((comment.get("issue") or {}).get("id", ""))
+        if not issue_id: continue
+        if body.startswith("**Plan approved**"):
+            match = re.search(r"SHA-256: `([a-f0-9]{64})`", body)
+            if match: plans[issue_id] = match.group(1), created
+            continue
+        plan = plans.get(issue_id)
+        if plan is None or created <= plan[1]: continue
+        if body.startswith("**Session review**"):
+            match = re.search(r"Plan SHA-256: `([a-f0-9]{64})`", body)
+            if match and match.group(1) != plan[0]:
+                anomalies_list.append(Anomaly(code="legacy_authority_claim", disposition="blocking"))
+
+    now_label_ids = {str(label["id"]) for label in validation_records[LinearStream.labels] if label.get("id") and str(label.get("name", "")).casefold() == "now"}
+    focused = [
+        issue for issue in validation_records[LinearStream.issues]
+        if not issue.get("archivedAt") and not issue.get("completedAt") and not issue.get("canceledAt")
+        and any(str(label.get("id")) in now_label_ids for label in (issue.get("labels") or {}).get("nodes", []))
+    ]
+    if len(focused) > 1:
+        anomalies_list.append(Anomaly(code="multiple_focus_slots", disposition="blocking"))
+
+    metadata_only = former_metadata = quarantined = 0
+    for attachment in validation_records[LinearStream.attachments]:
+        issue_id = str((attachment.get("issue") or {}).get("id", ""))
+        usable = bool(attachment.get("id") and issue_id in source_hashes.work_items and (attachment.get("url") or attachment.get("metadata")))
+        if not usable:
+            quarantined += 1
+            anomalies_list.append(Anomaly(code="attachment_content_unavailable", disposition="quarantined"))
+        elif attachment.get("archivedAt"):
+            former_metadata += 1
+        else:
+            metadata_only += 1
+
+    unique_anomalies = {(item.code, item.disposition): item for item in anomalies_list}
+    anomalies_tuple = tuple(unique_anomalies[k] for k in sorted(unique_anomalies))
+    write_rep("anomaly-report", [a.model_dump(mode="json") for a in anomalies_tuple])
+
+    counts = ReconciliationCounts(**{name: len(getattr(source_hashes, name)) for name in DIMENSIONS})
+    hashes = ReconciliationHashes(**{name: sha256([{"id": e.id, "record_sha256": e.record_sha256} for e in sorted(getattr(source_hashes, name).values(), key=lambda x: x.id)]) for name in DIMENSIONS})
+    raw_hash = sha256({"source_hashes": source_hashes.model_dump(mode="json"), "pages": [a.plaintext_sha256 for _, a in sorted(artifacts.items()) if not _ in ("source-hashes", "scope-report", "privacy-report", "anomaly-report")]})
+
+    manifest_draft = ExportManifest(
+        export_id=export_id,
+        workspace_id=workspace_id,
+        mode=mode,
+        base_export_id=base_export_id,
+        source_started_at=started,
+        source_lower_bound=started if mode == "delta" else None,
+        source_boundary=boundary,
+        source_hashes=source_hashes,
+        dimension_counts=counts,
+        dimension_hashes=hashes,
+        raw_export_sha256=raw_hash,
+        artifacts=artifacts,
+        scope_report=scope,
+        privacy_report=privacy,
+        attachment_dispositions=AttachmentDisposition(metadata_only=metadata_only, former_metadata=former_metadata, quarantined=quarantined),
+        anomalies=anomalies_tuple,
+    )
+    manifest_hash = sha256(manifest_draft.model_dump(mode="json", exclude={"manifest_sha256"}))
+    manifest = manifest_draft.model_copy(update={"manifest_sha256": manifest_hash})
+    man_art = write_rep(f"manifest-{manifest_hash}", manifest.model_dump(mode="json"))
+    final_manifest = manifest.model_copy(update={"artifacts": {**artifacts, "manifest": man_art}})
+
+    # Insert DB record
+    with _connect(config, "omp_work_importer") as conn, conn.transaction(), conn.cursor() as cur:
+        cur.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(config.actor_id())))
+        cur.execute(
+            "INSERT INTO omp_integration.raw_exports (export_id, workspace_id, team_key, mode, base_export_id, source_started_at, source_lower_bound, source_boundary, state, storage_root, raw_export_sha256, manifest_sha256, completed_at) VALUES (%s, %s, 'HOME', %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp()) ON CONFLICT (export_id, workspace_id) DO NOTHING",
+            (export_id, workspace_id, mode, base_export_id, started, started if mode == "delta" else None, boundary, "blocked" if any(a.disposition == "blocking" for a in anomalies_tuple) else "complete", str(root.relative_to(config.data_dir)), raw_hash, manifest_hash),
+        )
+    shutil.rmtree(staging, ignore_errors=True)
+    return final_manifest
 
 
+class StaticExportFixture:
+    def __init__(self, config: OperationsConfig, node_builder: Any = _sample_nodes):
+        self.config = config
+        self.node_builder = node_builder
+
+    def full(self, workspace_id: UUID) -> ExportManifest:
+        return _synthesize_export(self.config, workspace_id, self.node_builder, mode="full")
+
+    def delta(self, workspace_id: UUID) -> ExportManifest:
+        with _connect(self.config, "omp_work_importer") as conn, conn.cursor() as cur:
+            cur.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(self.config.actor_id())))
+            cur.execute("SELECT export_id, source_boundary FROM omp_integration.raw_exports WHERE workspace_id=%s AND state='complete' ORDER BY completed_at DESC LIMIT 1", (workspace_id,))
+            row = cur.fetchone()
+            base_id = row[0] if row else None
+            lower = row[1] if row else None
+        return _synthesize_export(self.config, workspace_id, self.node_builder, mode="delta", base_export_id=base_id, started=lower)
 def test_parse_acceptance_criteria() -> None:
     desc = """## Overview
 Some notes.
@@ -253,9 +597,8 @@ def test_full_export_stage_reconcile_promote_end_to_end(postgres_service: Operat
                 cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
                 cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
 
-    exporter = LinearExporter(config, transport=httpx.MockTransport(Router().handler))
+    exporter = StaticExportFixture(config)
     export_manifest = exporter.full(workspace_id)
-    print("MANIFEST ANOMALIES:", export_manifest.anomalies)
     mapping_file = _make_mapping_file(tmp_path)
     importer = LinearImporter(config)
     summary_staged = importer.stage(workspace_id, export_manifest.export_id, mapping_file)
@@ -324,7 +667,7 @@ def test_delta_import_and_revision_advancement(postgres_service: OperationsConfi
                 cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
                 cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
 
-    exporter = LinearExporter(config, transport=httpx.MockTransport(Router().handler))
+    exporter = StaticExportFixture(config)
     base_export = exporter.full(workspace_id)
 
     mapping_file = _make_mapping_file(tmp_path)
@@ -362,12 +705,11 @@ def test_delta_import_and_revision_advancement(postgres_service: OperationsConfi
             return _sample_nodes(operation, variables)
         return []
 
-    delta_exporter = LinearExporter(config, transport=httpx.MockTransport(Router(delta_nodes).handler))
+    delta_exporter = StaticExportFixture(config, delta_nodes)
     delta_export = delta_exporter.delta(workspace_id)
 
     delta_summary = importer.stage(workspace_id, delta_export.export_id, mapping_file)
     assert delta_summary.base_batch_id == summary_base.batch_id
-
     importer.reconcile(delta_summary.batch_id)
     promoted_delta = importer.promote(delta_summary.batch_id)
     assert promoted_delta.state == "promoted"
@@ -407,7 +749,7 @@ def test_source_local_conflict_blocks_and_preserves_local_row(postgres_service: 
                 cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(actor_id),))
                 cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
 
-    exporter = LinearExporter(config, transport=httpx.MockTransport(Router().handler))
+    exporter = StaticExportFixture(config)
     base_export = exporter.full(workspace_id)
 
     mapping_file = _make_mapping_file(tmp_path)
@@ -470,7 +812,7 @@ def test_source_local_conflict_blocks_and_preserves_local_row(postgres_service: 
             return _sample_nodes(operation, variables)
         return []
 
-    delta_exporter = LinearExporter(config, transport=httpx.MockTransport(Router(conflicting_delta_nodes).handler))
+    delta_exporter = StaticExportFixture(config, conflicting_delta_nodes)
     delta_export = delta_exporter.delta(workspace_id)
 
     delta_summary = importer.stage(workspace_id, delta_export.export_id, mapping_file)
@@ -512,7 +854,7 @@ def test_relation_cycle_detection_blocks_reconciliation(postgres_service: Operat
             ]
         return base
 
-    exporter = LinearExporter(config, transport=httpx.MockTransport(Router(cyclic_nodes).handler))
+    exporter = StaticExportFixture(config, cyclic_nodes)
     export_manifest = exporter.full(workspace_id)
 
     mapping_file = _make_mapping_file(tmp_path)
@@ -538,7 +880,7 @@ def test_unchanged_source_preserves_local_canonical_edits(postgres_service: Oper
                 cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
                 cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
 
-    exporter = LinearExporter(config, transport=httpx.MockTransport(Router().handler))
+    exporter = StaticExportFixture(config)
     first_export = exporter.full(workspace_id)
 
     mapping_file = _make_mapping_file(tmp_path)
@@ -586,7 +928,7 @@ def test_unchanged_source_preserves_local_canonical_edits(postgres_service: Oper
             )
             revision_count = cur.fetchone()[0]
 
-    second_exporter = LinearExporter(config, transport=httpx.MockTransport(Router().handler))
+    second_exporter = StaticExportFixture(config)
     second_export = second_exporter.full(workspace_id)
     second_batch = importer.stage(workspace_id, second_export.export_id, mapping_file)
     reconciled = importer.reconcile(second_batch.batch_id)
@@ -632,7 +974,7 @@ def test_source_label_removal_deactivates_imported_join(postgres_service: Operat
                 cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
                 cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
 
-    exporter = LinearExporter(config, transport=httpx.MockTransport(Router().handler))
+    exporter = StaticExportFixture(config)
     first_export = exporter.full(workspace_id)
 
     mapping_file = _make_mapping_file(tmp_path)
@@ -665,7 +1007,7 @@ def test_source_label_removal_deactivates_imported_join(postgres_service: Operat
             ]
         return base
 
-    second_exporter = LinearExporter(config, transport=httpx.MockTransport(Router(no_label_nodes).handler))
+    second_exporter = StaticExportFixture(config, no_label_nodes)
     second_export = second_exporter.full(workspace_id)
     second_batch = importer.stage(workspace_id, second_export.export_id, mapping_file)
     reconciled = importer.reconcile(second_batch.batch_id)
@@ -685,7 +1027,7 @@ def test_source_label_removal_deactivates_imported_join(postgres_service: Operat
             row = cur.fetchone()
             assert row == (False, "imported")
 
-    third_exporter = LinearExporter(config, transport=httpx.MockTransport(Router(no_label_nodes).handler))
+    third_exporter = StaticExportFixture(config, no_label_nodes)
     third_export = third_exporter.full(workspace_id)
     third_batch = importer.stage(workspace_id, third_export.export_id, mapping_file)
     importer.reconcile(third_batch.batch_id)
@@ -732,18 +1074,17 @@ def test_repeated_full_and_no_change_delta_parity(postgres_service: OperationsCo
     mapping_file = _make_mapping_file(tmp_path)
     importer = LinearImporter(config)
 
-    first_export = LinearExporter(config, transport=httpx.MockTransport(Router(static_nodes).handler)).full(workspace_id)
+    first_export = StaticExportFixture(config, static_nodes).full(workspace_id)
     first_batch = importer.stage(workspace_id, first_export.export_id, mapping_file)
     first_reconciled = importer.reconcile(first_batch.batch_id)
     importer.promote(first_batch.batch_id)
     snapshot_first = _canonical_snapshot()
 
-    second_export = LinearExporter(config, transport=httpx.MockTransport(Router(static_nodes).handler)).full(workspace_id)
+    second_export = StaticExportFixture(config, static_nodes).full(workspace_id)
     second_batch = importer.stage(workspace_id, second_export.export_id, mapping_file)
     second_reconciled = importer.reconcile(second_batch.batch_id)
     second_promoted = importer.promote(second_batch.batch_id)
     snapshot_second = _canonical_snapshot()
-
     assert second_reconciled.state == "reconciled"
     assert second_reconciled.anomaly_codes == []
     assert second_reconciled.parity_hashes == first_reconciled.parity_hashes
@@ -753,7 +1094,7 @@ def test_repeated_full_and_no_change_delta_parity(postgres_service: OperationsCo
     def empty_delta_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
         return []
 
-    delta_export = LinearExporter(config, transport=httpx.MockTransport(Router(empty_delta_nodes).handler)).delta(workspace_id)
+    delta_export = StaticExportFixture(config, empty_delta_nodes).delta(workspace_id)
     delta_batch = importer.stage(workspace_id, delta_export.export_id, mapping_file)
     assert delta_batch.base_batch_id == second_batch.batch_id
     delta_reconciled = importer.reconcile(delta_batch.batch_id)
@@ -812,7 +1153,7 @@ def test_duplicate_alias_mapping_blocks_import(postgres_service: OperationsConfi
     def static_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
         return _sample_nodes(operation, {}, 0)
 
-    exporter = LinearExporter(config, transport=httpx.MockTransport(Router(static_nodes).handler))
+    exporter = StaticExportFixture(config, static_nodes)
     export_manifest = exporter.full(workspace_id)
 
     mapping_file = _make_mapping_file(tmp_path)
@@ -845,7 +1186,7 @@ def _stage_with_nodes(postgres_service: OperationsConfig, tmp_path: Path, node_b
                 cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
                 cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
                 cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
-    exporter = LinearExporter(config, transport=httpx.MockTransport(Router(node_builder).handler))
+    exporter = StaticExportFixture(config, node_builder)
     export_manifest = exporter.full(workspace_id)
     importer = LinearImporter(config)
     staged = importer.stage(workspace_id, export_manifest.export_id, _make_mapping_file(tmp_path))
@@ -933,19 +1274,17 @@ def test_previous_identifier_only_change_imports_alias(postgres_service: Operati
     mapping_file = _make_mapping_file(tmp_path)
     importer = LinearImporter(config)
 
-    first_export = LinearExporter(config, transport=httpx.MockTransport(Router(static_nodes).handler)).full(workspace_id)
+    first_export = StaticExportFixture(config, static_nodes).full(workspace_id)
     first_batch = importer.stage(workspace_id, first_export.export_id, mapping_file)
     importer.reconcile(first_batch.batch_id)
     importer.promote(first_batch.batch_id)
-
     def aliased_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "issues":
             # Only previousIdentifiers changes: content hash and projections are identical.
             return [{**base[0], "previousIdentifiers": ["HOME-100"]}, base[1]]
         return base
-
-    second_export = LinearExporter(config, transport=httpx.MockTransport(Router(aliased_nodes).handler)).full(workspace_id)
+    second_export = StaticExportFixture(config, aliased_nodes).full(workspace_id)
     second_batch = importer.stage(workspace_id, second_export.export_id, mapping_file)
     reconciled = importer.reconcile(second_batch.batch_id)
     assert reconciled.state == "reconciled"
@@ -1040,7 +1379,7 @@ def test_same_owner_local_alias_stays_unchanged(postgres_service: OperationsConf
 
     dispositions: list[str] = []
     for _ in range(3):
-        export = LinearExporter(config, transport=httpx.MockTransport(Router(static_nodes).handler)).full(workspace_id)
+        export = StaticExportFixture(config, static_nodes).full(workspace_id)
         batch = importer.stage(workspace_id, export.export_id, mapping_file)
         importer.reconcile(batch.batch_id)
         importer.promote(batch.batch_id)
@@ -1149,10 +1488,9 @@ def test_delta_base_resolves_current_transformation_version(postgres_service: Op
     importer.reconcile(current_base.batch_id)
     importer.promote(current_base.batch_id)
 
-    delta_export = LinearExporter(config, transport=httpx.MockTransport(Router(lambda op, v, i: []).handler)).delta(workspace_id)
+    delta_export = StaticExportFixture(config, lambda op, v, i: []).delta(workspace_id)
     delta_batch = importer.stage(workspace_id, delta_export.export_id, _make_mapping_file(tmp_path))
     assert delta_batch.base_batch_id == current_base.batch_id
-
     reconciled = importer.reconcile(delta_batch.batch_id)
     assert reconciled.state == "reconciled"
     promoted = importer.promote(delta_batch.batch_id)
@@ -1250,7 +1588,7 @@ def test_relation_deactivation_after_reconcile_trips_drift(postgres_service: Ope
 
     second = importer.stage(
         workspace_id,
-        LinearExporter(config, transport=httpx.MockTransport(Router(_related_nodes).handler)).full(workspace_id).export_id,
+        StaticExportFixture(config, _related_nodes).full(workspace_id).export_id,
         _make_mapping_file(tmp_path),
     )
     reconciled = importer.reconcile(second.batch_id)
@@ -1449,7 +1787,7 @@ def test_reverse_edge_added_after_reconcile_blocks_promote(postgres_service: Ope
 
     second = importer.stage(
         workspace_id,
-        LinearExporter(config, transport=httpx.MockTransport(Router(with_blocks_nodes).handler)).full(workspace_id).export_id,
+        StaticExportFixture(config, with_blocks_nodes).full(workspace_id).export_id,
         _make_mapping_file(tmp_path),
     )
     reconciled = importer.reconcile(second.batch_id)
@@ -1630,7 +1968,7 @@ def test_cli_subcommands_redaction_and_exit_codes(postgres_service: OperationsCo
                 cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
                 cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
 
-    exporter = LinearExporter(config, transport=httpx.MockTransport(Router().handler))
+    exporter = StaticExportFixture(config)
     export_manifest = exporter.full(workspace_id)
 
     mapping_file = _make_mapping_file(tmp_path)
@@ -1675,7 +2013,7 @@ def test_cli_subcommands_redaction_and_exit_codes(postgres_service: OperationsCo
             return [*base, {"id": "state-weird", "name": "Weird", "type": "mystery", "position": 3, "updatedAt": "2026-08-01T00:00:00+00:00", "team": {"key": "HOME"}}]
         return base
 
-    blocked_export = LinearExporter(config, transport=httpx.MockTransport(Router(weird_state_nodes).handler)).full(workspace_id)
+    blocked_export = StaticExportFixture(config, weird_state_nodes).full(workspace_id)
     blocked_args = parser.parse_args(["linear-import", "stage", "--workspace-id", str(workspace_id), "--export-id", str(blocked_export.export_id), "--mapping-file", str(mapping_file)])
     with pytest.raises(SystemExit) as stage_exit:
         operations_cli.run(blocked_args, config)

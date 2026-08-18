@@ -1,6 +1,6 @@
 /** HOME-114/HOME-122 contract strings injected verbatim into agent context. */
 import { describe, expect, test } from "bun:test";
-import { CLOSEOUT_BOUNDARY, STOP_REMINDER_BOUNDARY, WORKFLOW_SEQUENCE } from "../extensions/linear-now";
+import { CLOSEOUT_BOUNDARY, STOP_REMINDER_BOUNDARY, WORKFLOW_SEQUENCE } from "../extensions/work-now";
 
 const injected = { CLOSEOUT_BOUNDARY, STOP_REMINDER_BOUNDARY, WORKFLOW_SEQUENCE };
 const BANNED = ["run /summary before new work", "Session closing → run /summary", "asks to close out a session"];

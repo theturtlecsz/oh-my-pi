@@ -1,8 +1,7 @@
 /**
  * workflow/git.ts — git internals for the workflow host.
  *
- * commitSessionWork: the Linear backend's one-step /done commit+push (HOME-118).
- * freezeCandidateCommit + pushCandidate: the Work Ledger split (HOME-147) —
+ * freezeCandidateCommit + pushCandidate: the Work Ledger split (HOME-147, HOME-149) —
  * /summary freezes the owner-approved path set into a local candidate commit,
  * /done pushes the recorded commit and verifies the remote ref.
  *
@@ -11,9 +10,6 @@
  * contracts/v1/candidate-hash.json and are pinned by commit-step.test.ts.
  */
 import { spawnSync } from "node:child_process";
-import { homedir } from "node:os";
-import { join } from "node:path";
-
 
 /** Run git in cwd; timeoutMs guards network ops (push). `raw` is untrimmed stdout —
  *  porcelain -z parsing needs the leading space of the first `XY path` entry. */
@@ -42,6 +38,14 @@ export function parsePorcelain(z: string): string[] {
 		if (entry[0] === "R" || entry[0] === "C") i++; // next token = original path; not stageable
 	}
 	return paths;
+}
+
+/** Dirty paths at this instant, relative to repository root. */
+export function dirtyPaths(cwd: string): string[] {
+	const top = runGit(cwd, ["rev-parse", "--show-toplevel"]);
+	if (!top.ok) return [];
+	const status = runGit(top.out, ["status", "--porcelain", "-z"]);
+	return status.ok ? parsePorcelain(status.raw) : [];
 }
 
 const SECRET_PATTERNS: [string, RegExp][] = [
@@ -85,7 +89,7 @@ export interface FreezeUi {
  *  bytes; each path is decoded with a fatal UTF-8 decoder — a non-UTF-8 path
  *  name refuses the candidate (decision 0004 item 6). */
 function committedPaths(root: string, commitSha: string): string[] {
-	const out = runGitRaw(root, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", commitSha]);
+	const out = runGitRaw(root, ["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-z", commitSha]);
 	if (!out.ok) throw new Error(`git diff-tree failed: ${out.err.split("\n")[0]}`);
 	const decoder = new TextDecoder("utf-8", { fatal: true });
 	const paths: string[] = [];
@@ -108,12 +112,18 @@ function committedPaths(root: string, commitSha: string): string[] {
  *  those paths are staged, added bytes are credential-scanned, one local
  *  candidate commit `session candidate: <key>` is created — carrying a
  *  `Work-Candidate: <planned candidate id>` trailer — and its canonical
- *  candidate hash computed. Returns null (with a notify) on any refusal/empty/
- *  failure — NEVER throws. Pre-existing dirty paths outside the approved set
- *  (and all of packages/, Chris's own lane) stay uncommitted. Retry reuse only
- *  accepts HEAD when the trailer names the CURRENT planned candidate, so a
- *  newer plan attempt never binds a stale commit. */
-export async function freezeCandidateCommit(ui: FreezeUi, cwd: string, key: string, candidateId: string): Promise<CandidateFreeze | null> {
+ *  candidate hash computed. When all dirty paths predate the session, the owner
+ *  may adopt current HEAD instead; its SHA binds the already-committed work.
+ *  Pre-existing dirty paths outside the approved set (and all of packages/,
+ *  Chris's own lane) stay uncommitted. Retry reuse only accepts a marker commit
+ *  whose trailer names the current planned candidate. */
+export async function freezeCandidateCommit(
+	ui: FreezeUi,
+	cwd: string,
+	key: string,
+	candidateId: string,
+	preExistingDirtyPaths: readonly string[] = [],
+): Promise<CandidateFreeze | null> {
 	try {
 		const top = runGit(cwd, ["rev-parse", "--show-toplevel"]);
 		if (!top.ok) {
@@ -123,15 +133,19 @@ export async function freezeCandidateCommit(ui: FreezeUi, cwd: string, key: stri
 		const root = top.out;
 		const status = runGit(root, ["status", "--porcelain", "-z"]);
 		const all = status.ok ? parsePorcelain(status.raw) : [];
-		const excluded = all.filter(p => p.startsWith("packages/")); // Chris's own lane — never staged (HOME-117/118)
-		const committable = all.filter(p => !p.startsWith("packages/"));
-		const leftAlone = excluded.length ? `left alone: ${excluded.length} file(s) under packages/ (yours)` : "";
+		const preExisting = new Set(preExistingDirtyPaths);
+		const excluded = all.filter(p => p.startsWith("packages/") || preExisting.has(p));
+		const committable = all.filter(p => !p.startsWith("packages/") && !preExisting.has(p));
+		const preservedCount = excluded.filter(p => preExisting.has(p)).length;
+		const packageCount = excluded.length - preservedCount;
+		const leftAloneDetails = [
+			preservedCount ? `${preservedCount} pre-session file(s)` : "",
+			packageCount ? `${packageCount} file(s) under packages/` : "",
+		].filter(Boolean).join(", ");
+		const leftAlone = leftAloneDetails ? `left alone: ${leftAloneDetails}` : "";
 		if (committable.length === 0) {
 			// Retry after a lost finalize response (HOME-147): the previous
-			// /summary may already have created this attempt's candidate commit
-			// before the outcome vanished. Reuse that exact commit — never
-			// amend, never duplicate (plan §recovery) — but only when the
-			// trailer binds it to the CURRENT planned candidate.
+			// /summary may already have created this attempt's candidate commit.
 			const head = runGit(root, ["log", "-1", "--format=%H%x00%B"]);
 			const sep = head.ok ? head.out.indexOf("\x00") : -1;
 			const headSha = sep > 0 ? head.out.slice(0, sep) : "";
@@ -145,8 +159,16 @@ export async function freezeCandidateCommit(ui: FreezeUi, cwd: string, key: stri
 				ui.notify(`reusing the existing candidate commit ${headSha.slice(0, 12)} for ${key}`, "info");
 				return { root, paths, commitSha: headSha, candidateSha256: candidateSha256(headSha, paths) };
 			}
-			ui.notify(`nothing to freeze${leftAlone ? ` — ${leftAlone}` : ""}`, "info");
-			return null;
+			if (!headSha) {
+				ui.notify(`nothing to freeze${leftAlone ? ` — ${leftAlone}` : ""}`, "info");
+				return null;
+			}
+			const paths = committedPaths(root, headSha);
+			const details = [`current HEAD: ${headSha.slice(0, 12)} ${headLines[0] ?? ""}`, leftAlone].filter(Boolean).join("\n\n");
+			const yes = await ui.confirm(`Use current HEAD as the candidate for ${key}?`, details);
+			if (!yes) return null;
+			ui.notify(`using current HEAD ${headSha.slice(0, 12)} as the candidate for ${key}`, "info");
+			return { root, paths, commitSha: headSha, candidateSha256: candidateSha256(headSha, paths) };
 		}
 		const listed = committable.slice(0, 20).join("\n") + (committable.length > 20 ? `\n+${committable.length - 20} more` : "");
 		const body = leftAlone ? `${listed}\n\n${leftAlone}` : listed;
@@ -224,61 +246,5 @@ export function pushCandidate(root: string, commitSha: string): PushOutcome {
 		};
 	} catch (e) {
 		return { status: "not_pushed", detail: String(e) };
-	}
-}
-
-/** Linear /done commit step (HOME-118): owner-confirmed exact-path staging,
- *  credential scan, commit `session close: <identifier>`, guarded push. Returns a
- *  one-line notice for pendingNotices, or null when nothing happened. NEVER throws. */
-export async function commitSessionWork(ui: FreezeUi, cwd: string, identifier: string): Promise<string | null> {
-	try {
-		const top = runGit(cwd, ["rev-parse", "--show-toplevel"]);
-		if (!top.ok) {
-			ui.notify("no git repo here — nothing to commit", "info");
-			return null;
-		}
-		const root = top.out;
-		const status = runGit(root, ["status", "--porcelain", "-z"]);
-		const all = status.ok ? parsePorcelain(status.raw) : [];
-		const excluded = all.filter(p => p.startsWith("packages/")); // Chris's own lane — never staged (HOME-117/118)
-		const commitable = all.filter(p => !p.startsWith("packages/"));
-		const leftAlone = excluded.length ? `left alone: ${excluded.length} file(s) under packages/ (yours)` : "";
-		if (commitable.length === 0) {
-			ui.notify(`nothing to commit${leftAlone ? ` — ${leftAlone}` : ""}`, "info");
-			return null;
-		}
-		const listed = commitable.slice(0, 20).join("\n") + (commitable.length > 20 ? `\n+${commitable.length - 20} more` : "");
-		const body = leftAlone ? `${listed}\n\n${leftAlone}` : listed;
-		const yes = await ui.confirm(`Commit session work? (${commitable.length} files → session close: ${identifier})`, body);
-		if (!yes) return null;
-		const add = runGit(root, ["add", "--", ...commitable]); // exact paths only — never `git add .`
-		if (!add.ok) {
-			ui.notify(`commit failed at staging: ${add.err.split("\n")[0]}`, "error");
-			return null;
-		}
-		const secrets = findSecrets(runGit(root, ["diff", "--cached"]).out);
-		if (secrets.length) {
-			runGit(root, ["reset", "-q", "--", ...commitable]);
-			ui.notify(`commit refused — possible secret in staged diff: ${secrets.join(", ")}. Commit manually if false alarm.`, "error");
-			return null;
-		}
-		const commit = runGit(root, ["commit", "-m", `session close: ${identifier}`]);
-		if (!commit.ok) {
-			runGit(root, ["reset", "-q", "--", ...commitable]);
-			ui.notify(`commit failed: ${commit.err.split("\n")[0] || commit.out.split("\n")[0]}`, "error");
-			return null;
-		}
-		const n = commitable.length;
-		if (root === join(homedir(), ".claude")) return `[linear] /done committed ${n} file(s) on ${identifier} (not pushed — ~/.claude)`;
-		if (!runGit(root, ["remote", "get-url", "origin"]).ok) return `[linear] /done committed ${n} file(s) on ${identifier} (not pushed — no remote)`;
-		const push = runGit(root, ["push"], 30_000);
-		if (!push.ok) {
-			ui.notify(`committed; push failed: ${push.err.split("\n")[0]}`, "warning");
-			return `[linear] /done committed ${n} file(s) on ${identifier} (not pushed — push failed)`;
-		}
-		return `[linear] /done committed and pushed ${n} file(s) for ${identifier}`;
-	} catch (e) {
-		ui.notify(`/done commit step failed: ${String(e)}`, "error");
-		return null;
 	}
 }

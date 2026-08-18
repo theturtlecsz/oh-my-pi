@@ -15,19 +15,31 @@ const mode = process.argv[3];
 const MODES = ["input", "skill", "done", "forged-subagent", "legacy-host"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 
-globalThis.fetch = (async () =>
-	new Response(
-		JSON.stringify({
-			data: { issue: { id: "id-1", identifier: "HOME-1", title: "t", comments: { nodes: [] } } },
-		}),
-		{ status: 200 },
-	)) as typeof fetch;
+globalThis.fetch = (async (url: unknown) => {
+	const u = String(url);
+	if (u.includes("/v1/work/")) {
+		return new Response(
+			JSON.stringify({
+				work_id: "00000000-0000-7000-8000-000000000001",
+				alias: { key: "HOME-1" },
+				revision: { title: "t", description: "", scope: "", acceptance_criteria: [] },
+				state: "IN_PROGRESS",
+				project_id: null,
+			}),
+			{ status: 200 },
+		);
+	}
+	if (u.includes("/v1/health/ready")) {
+		return new Response(JSON.stringify({ ready: true, alerts: [] }), { status: 200 });
+	}
+	return new Response(JSON.stringify({ ok: true }), { status: 200 });
+}) as typeof fetch;
 const repoRoot = path.resolve(import.meta.dir, "../../..");
-const extPath = path.join(repoRoot, "session-system/extensions/linear-now.ts");
+const extPath = path.join(repoRoot, "session-system/extensions/work-now.ts");
 const result = await loadExtensions([extPath], probe);
 if (result.errors.length > 0) throw new Error(result.errors.map(error => error.error).join("; "));
 const ext = result.extensions[0];
-if (!ext) throw new Error("linear-now extension did not load");
+if (!ext) throw new Error("work-now extension did not load");
 const tool = ext.tools.get("work");
 if (!tool) throw new Error("work tool missing");
 
@@ -77,7 +89,7 @@ if (mode === "legacy-host") {
 	// forged-subagent restores a NOW pointer so an unguarded /done would enter its select/confirm flow.
 	const branch =
 		mode === "forged-subagent"
-			? [{ type: "custom", customType: "linear-now", data: { team: "HOME", issueId: "id-1", identifier: "HOME-1", title: "t", setAt: Date.now() } }]
+			? [{ type: "custom", customType: "work-now", data: { backend: "work", issueId: "00000000-0000-7000-8000-000000000001", identifier: "HOME-1", title: "t", setAt: Date.now() } }]
 			: [];
 	const fakeSessionManager = { getCwd: () => probe, getBranch: () => branch };
 	const runner = new ExtensionRunner(

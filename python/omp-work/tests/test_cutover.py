@@ -14,10 +14,9 @@ import pytest
 
 from omp_work import CONTRACT_VERSION, contract_sha256
 from omp_work.integration.importer import TRANSFORMATION_VERSION
-from omp_work.operations import cutover
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import bootstrap, migration_set_sha256
-from omp_work.operations.capabilities import CUTOVER_SCOPES, OWNER_SCOPES
+from omp_work.operations.capabilities import OWNER_SCOPES
 from omp_work.operations.fingerprints import code_fingerprint, config_fingerprint, transform_sha256
 from omp_work.v1.models import (
     ActivateCutoverCommand,
@@ -90,52 +89,6 @@ def _manifest(config: OperationsConfig, workspace_id: UUID, batch_id: UUID, epoc
     }
     data.update(updates)
     return CutoverManifest.model_validate(data)
-
-def test_manifest_reads_parameterized_backup_receipts(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    workspace_id, export_id, batch_id, backup_id = uuid4(), uuid4(), uuid4(), uuid4()
-    parity = {
-        "dimension_counts": {dimension: 0 for dimension in ReconciliationCounts.model_fields},
-        "dimension_hashes": {dimension: "0" * 64 for dimension in ReconciliationHashes.model_fields},
-        "parity_groups": PARITY_GROUPS,
-    }
-
-    with native_postgres(tmp_path, config.port):
-        bootstrap(config)
-        with psycopg.connect(**config.connection_kwargs("postgres"), autocommit=True) as connection:
-            connection.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)", (workspace_id,))
-            connection.execute(
-                "INSERT INTO omp_integration.raw_exports(export_id,workspace_id,team_key,mode,source_started_at,source_boundary,source_watermark,state,storage_root,raw_export_sha256,manifest_sha256,completed_at) "
-                "VALUES (%s,%s,'HOME','full',%s,%s,%s,'complete','test/export',%s,%s,%s)",
-                (export_id, workspace_id, BOUNDARY, BOUNDARY, BOUNDARY, RAW_HASH, RAW_HASH, BOUNDARY),
-            )
-            connection.execute(
-                "INSERT INTO omp_integration.import_batches(batch_id,workspace_id,export_id,transformation_version,mapping_file_sha256,state,reconciliation_sha256,parity_hashes,artifact_root,promoted_at) "
-                "VALUES (%s,%s,%s,%s,%s,'promoted',%s,%s::jsonb,'test/import',%s)",
-                (batch_id, workspace_id, export_id, TRANSFORMATION_VERSION, RAW_HASH, RAW_HASH, json.dumps(parity), BOUNDARY),
-            )
-            for kind, receipt in (("backup", BACKUP_RECEIPT), ("restore_drill", RESTORE_RECEIPT)):
-                connection.execute(
-                    "INSERT INTO omp_control.operations_evidence(kind,started_at,contract_sha256,migration_set_sha256,backup_id,outcome,receipt_sha256) "
-                    "VALUES (%s,%s,%s,%s,%s,'passed:test',%s)",
-                    (kind, BOUNDARY, contract_sha256(), migration_set_sha256(), backup_id, receipt),
-                )
-
-        manifest = cutover._build_manifest(
-            config,
-            workspace_id=workspace_id,
-            batch_id=batch_id,
-            smoke_results=[cutover.CommandSmokeResult(command_type="create_work_batch", passed=True)],
-            freeze_at=BOUNDARY,
-            backup_id=str(backup_id),
-            credential_sha256=RAW_HASH,
-            plan={"name": "plan", "sha256": RAW_HASH, "work_id": str(uuid4())},
-            first_mutation_request_id=uuid4(),
-        )
-
-    assert manifest.backup_receipt_sha256 == BACKUP_RECEIPT
-    assert manifest.restore_receipt_sha256 == RESTORE_RECEIPT
-
 
 
 def _seed_candidate(config: OperationsConfig, workspace_id: UUID, batch_id: UUID, export_id: UUID, epoch_id: UUID) -> None:
@@ -238,7 +191,7 @@ def test_activation_applies_replays_once_and_stamps_first_mutation(tmp_path: Pat
         nominated = _envelope(workspace_id, attest).model_copy(update={"request_id": manifest.first_mutation_request_id})
         service = WorkService(store)
         owner = Principal(actor_id=actor_id, actor_kind="owner", workspaces=frozenset({workspace_id}), scopes=frozenset(OWNER_SCOPES))
-        operator = Principal(actor_id=actor_id, actor_kind="operator", workspaces=frozenset({workspace_id}), scopes=frozenset(CUTOVER_SCOPES))
+        operator = Principal(actor_id=actor_id, actor_kind="operator", workspaces=frozenset({workspace_id}), scopes=frozenset({"work.operate", "work.read"}))
         with pytest.raises(WorkError, match="forbidden") as denied:
             service.execute(owner, nominated)
         assert denied.value.status == 403

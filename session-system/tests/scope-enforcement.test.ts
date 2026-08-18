@@ -14,13 +14,20 @@ const home = path.join(tempRoot, "home");
 const probe = path.join(tempRoot, "repo");
 const harness = path.join(import.meta.dir, "fixtures/scope-enforcement-harness.ts");
 fs.mkdirSync(path.join(home, ".omp", "agent"), { recursive: true });
-fs.mkdirSync(path.join(home, ".config"), { recursive: true });
+fs.mkdirSync(path.join(home, ".config", "omp-work"), { recursive: true });
 fs.mkdirSync(probe, { recursive: true });
-fs.writeFileSync(path.join(home, ".config", "linear.env"), "LINEAR_API_KEY=fake\n");
 fs.writeFileSync(
-	path.join(home, ".omp", "agent", "linear-now.json"),
+	path.join(home, ".config", "omp-work", "client.json"),
 	JSON.stringify({
-		team: "HOME",
+		base_url: "http://127.0.0.1:54322",
+		workspace_id: "00000000-0000-7000-8000-000000000001",
+		owner_id: "00000000-0000-7000-8000-000000000002",
+	}),
+);
+fs.writeFileSync(
+	path.join(home, ".omp", "agent", "work-now.json"),
+	JSON.stringify({
+		backend: "work",
 		issueId: "old-now-id",
 		identifier: "HOME-1",
 		title: "Old global NOW",
@@ -36,7 +43,7 @@ describe("unscoped repo write enforcement", () => {
 	test("refuses restored global NOW project but accepts an explicit project", () => {
 		const child = Bun.spawnSync([process.execPath, harness, probe], {
 			cwd: probe,
-			env: { ...process.env, HOME: home },
+			env: { ...process.env, HOME: home, OMP_WORK_BEARER: "test-token" },
 		});
 		expect(child.exitCode, child.stderr.toString()).toBe(0);
 		const output = JSON.parse(child.stdout.toString()) as HarnessOutput;

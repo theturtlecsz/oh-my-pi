@@ -76,9 +76,8 @@ as these are, just run them:
   touched services/timers, relevant journal tails, DB or API spot-checks of
   the session's claims.
 - Work Ledger (owner page): one bounded read — in-flight projects with
-  health, the `now` holder, and the `waiting-on-chris` queue. Use the
-  workflow tool (`work` under the Work Ledger backend, `linear` under the
-  Linear adapter) with `tree`, `my_now`, `waiting`; never query a backend
+  health, the `now` holder, and the triage queue. Use the
+  workflow tool (`work`) with `tree`, `my_now`, `waiting`; never query a backend
   API directly. This is the record the close ritual updates.
 - TASKS.md / decision-queue state for anything parked.
 
@@ -252,7 +251,7 @@ out loud; (7) NOW was re-verified and remains the reviewed issue.
 ## Phase 5 — The close ritual
 
 The Work Ledger is the owner page. Perform these writes through the workflow
-tool (`work` or `linear`, whichever backend is installed) in order:
+tool (`work`) in order:
 
 1. **Project updates** — every touched project gets honest health plus one
    plain-language line via `record_health`. Include another project when this

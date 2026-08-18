@@ -245,9 +245,6 @@ export function createWorkBackend(
 			r => r.revision_id === view.item.revision.revision_id && r.candidate_id === candidate.candidate_id,
 		);
 		const kinds = new Set(fresh.map(r => r.kind));
-		if (!view.closeout.some(c => c.state === "pending" && c.candidate_id === candidate.candidate_id)) {
-			return "no closeout intent — run /done's close step again from a clean state";
-		}
 		if (!kinds.has("closeout")) return "the close ritual receipt is missing — /summary must complete its close review";
 		if (!kinds.has("plan")) return "no plan evidence on this candidate — run /plan first";
 		if (!kinds.has("verification")) return "no verification evidence on this candidate";
@@ -256,7 +253,10 @@ export function createWorkBackend(
 			.sort((a, b) => a.issued_at.localeCompare(b.issued_at) || a.receipt_id.localeCompare(b.receipt_id));
 		const latest = audits.at(-1);
 		if (!latest || !latest.independent || latest.verdict !== "PASS") {
-			return "the latest audit is not an independent PASS — run the fresh auditor again";
+			return "the latest audit is not an independent PASS — run /summary again after fixing its findings";
+		}
+		if (!view.closeout.some(c => c.state === "pending" && c.candidate_id === candidate.candidate_id)) {
+			return "no approved closeout request — complete /summary before /done";
 		}
 		return null;
 	}
@@ -264,8 +264,8 @@ export function createWorkBackend(
 	const backend: WorkflowBackend = {
 		name: "work",
 		serviceLabel: "Work Ledger",
-		markerFile: ".linear-project",
-		scopeFix: 'echo "<Exact Project Name>" > .linear-project at the repo root (project names are preserved by the Work Ledger import)',
+		markerFile: ".work-project",
+		scopeFix: 'echo "<Exact Project Name>" > .work-project at the repo root',
 		cacheFile: "work-now.json",
 		queueNoun: "TRIAGE",
 		reviewKind: "closeout",
@@ -383,7 +383,7 @@ export function createWorkBackend(
 					? "done"
 					: item.state === "TRIAGE"
 						? "onyou"
-						// NOW forces working even from Backlog — Linear parity (verdict 2, 2026-08-14).
+						// NOW forces working even from Backlog.
 						: item.state === "IN_PROGRESS" || item.work_id === now.id
 							? "working"
 							: "next";
@@ -704,7 +704,7 @@ export function createWorkBackend(
 			if (!planned) {
 				return { ok: true, issue: now, warning: "No plan is stamped on this work — review may run, but /done will refuse until /plan stamps one." };
 			}
-			const freeze = await freezeCandidateCommit(hooks.ui, hooks.cwd, now.key, current.candidate_id);
+			const freeze = await freezeCandidateCommit(hooks.ui, hooks.cwd, now.key, current.candidate_id, hooks.preExistingDirtyPaths);
 			if (!freeze) return { ok: false, reason: "candidate freeze refused — nothing frozen, /summary stays blocked" };
 			const candidateId = stableId("final-candidate", item.work_id, item.revision.revision_id, current.candidate_id, freeze.commitSha);
 			await run("finalize_candidate", {

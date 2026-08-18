@@ -1,12 +1,10 @@
 /**
- * workflow/host.ts — the backend-agnostic owner-workflow host (HOME-147).
+ * workflow/host.ts — the owner-workflow host (HOME-147, HOME-149).
  *
- * Everything the old linear-now.ts monolith owned that is NOT storage I/O lives
- * here: session state, the NOW pointer + footer, the NOW window, the in-card
+ * Session state, the NOW pointer + footer, the NOW window, the in-card
  * digest engine, the obligation/closeout locks, owner commands (/now /done
- * /capture /linear|/work), the bounded tool, transcript-bound confirmation
- * receipts, and the audit-receipt bridge consumer. A WorkflowBackend supplies
- * storage; exactly one backend is installed per agent dir.
+ * /capture /work), the bounded tool, transcript-bound confirmation receipts,
+ * and the audit-receipt bridge consumer. A WorkflowBackend supplies storage.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -39,6 +37,7 @@ import {
 } from "./backend";
 import { confirmWrite, resetConfirmations } from "./confirm";
 import { claimAuditReceipt, commitAuditReceipt, releaseAuditReceipt, reportSha256 } from "./audit-bridge";
+import { dirtyPaths } from "./git";
 
 /** Tool actions — ONE neutral set for every backend (plan §2). Both
  *  entrypoints register the same `work` tool with these names; the Linear
@@ -78,18 +77,15 @@ const KIND_DESCRIPTION = kindDescriptionText.trim();
 
 export interface HostConfig {
 	backend: WorkflowBackend;
-	/** "team HOME" | "the ledger" — scope/preview prose. */
+	/** "the ledger" — scope/preview prose. */
 	teamNoun: string;
-	/** Session custom-entry type ("linear-now" | "work-now"). */
+	/** Session custom-entry type ("work-now"). */
 	entryType: string;
 	/** Accept a persisted session entry as this backend's NOW state. */
 	acceptEntry(data: Record<string, unknown>): boolean;
-	/** Linear: commit + guarded push after the verdict close. Work: adapter-side. */
-	commitAfterClose?: (ui: ExtensionContext["ui"], cwd: string, key: string) => Promise<string | null>;
 	/** Stop-hook continuation hint for the closeout checkpoint (body guidance). */
 	reviewCheckpointHint: string;
 }
-
 interface HostNowState {
 	issueId?: string;
 	identifier?: string;
@@ -199,6 +195,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 	let intakeSelected = false;
 	let planTarget: NowRef | undefined;
 	let summaryAuthorized = false;
+	let summaryAttemptFinished = false;
+	let preExistingDirtyPaths: string[] = [];
 	let models: ExtensionModelQuery | undefined;
 
 	// HOME-114 mechanical lock: flips ONLY on host-observed owner entry of /summary
@@ -226,6 +224,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				notify: (msg: string, level?: "info" | "warning" | "error") => ctx.ui.notify(msg, level ?? "info"),
 			},
 			cwd: process.cwd(),
+			preExistingDirtyPaths,
 			notices: pendingNotices,
 		};
 	}
@@ -456,8 +455,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 	}
 
 	async function authorizeSummary(ctx: ExtensionContext): Promise<void> {
-		if (summaryAuthorized) return;
+		if (summaryAuthorized && !summaryAttemptFinished) return;
 		summaryAuthorized = true;
+		summaryAttemptFinished = false;
 		closeoutAuthorized = true;
 		const now = currentNowRef();
 		if (!now) {
@@ -821,8 +821,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 		piRef = pi;
 
 		pi.on("session_start", async (_e, ctx) => {
+			preExistingDirtyPaths = dirtyPaths(process.cwd());
 			closeoutAuthorized = false;
 			summaryAuthorized = false;
+			summaryAttemptFinished = false;
 			intakeActive = false;
 			intakeSelected = false;
 			planTarget = undefined;
@@ -902,8 +904,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 		});
 
 		pi.on("session_switch", async (event, ctx) => {
+			preExistingDirtyPaths = dirtyPaths(process.cwd());
 			closeoutAuthorized = false; // authorization never crosses transcripts
 			summaryAuthorized = false;
+			summaryAttemptFinished = false;
 			intakeActive = false;
 			intakeSelected = false;
 			planTarget = undefined;
@@ -968,6 +972,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				armExecution(res.issue, stamp.hash);
 				planTarget = undefined;
 				summaryAuthorized = false;
+				summaryAttemptFinished = false;
 				closeoutAuthorized = false;
 				await saveCache(); // armExecution's own save is fire-and-forget
 				// Receipt LAST: startup may ack the stamp claims from it.
@@ -1135,8 +1140,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 					);
 					if (!confirmed) return;
 					const line = await backend.closeWithVerdict(now, "done", undefined, carrier(), hooksFor(ctx));
-					// Remote NOW clear: work's adapter cleared focus inside closeWithVerdict
-					// (a second clear is a no-op); linear's label removal happens here.
 					try {
 						await backend.clearNowRemote(now.id);
 					} catch (e) {
@@ -1148,10 +1151,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 					recordDeliveredOutcome(`${now.key} closed (done) via /done: ${line}`);
 					ctx.ui.notify(line, "info");
 					pendingNotices.push(`[${TOOL_NAME}] Owner verdict via /done: ${now.key} closed (Done); NOW cleared.`);
-					if (cfg.commitAfterClose) {
-						const commitNotice = await cfg.commitAfterClose(ctx.ui, process.cwd(), now.key);
-						if (commitNotice) pendingNotices.push(commitNotice);
-					}
 				} catch (error) {
 					ctx.ui.notify(`/done failed: ${String(error)}`, "error");
 				}
@@ -1356,9 +1355,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 									await backend.appendEvidence(issue, "audit", receipt.report, { ...meta, verdict: receipt.verdict, independent: true });
 								} catch (error) {
 									releaseAuditReceipt(sha);
+									summaryAttemptFinished = true;
 									return deny(`${String(error)} on ${issue.key} — audit receipt released, forward stays retryable`);
 								}
 								commitAuditReceipt(sha);
+								summaryAttemptFinished = true;
 								// The audit receipt settles NOTHING: only the closeout review
 								// (reviewKind) settles the review obligation.
 								return okText(`audit receipt recorded on ${issue.key} (verdict ${receipt.verdict})`);
@@ -1500,17 +1501,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 						case "cancel_work": {
 							if (!params.work) return deny("work key required");
 							const issue = await backend.findIssue(params.work);
-							if (backend.archiveIssue) {
-								const gate = confirmWrite(
-									"cancel_work",
-									"Model wants to ARCHIVE this work",
-									`${issue.key} ${issue.title}\n\nArchive: hides it from views. Does NOT mark it completed. Reversible in-app.`,
-									params,
-								);
-								if (!gate.approved) return deny(gate.preview);
-								await backend.archiveIssue(issue);
-								return okText(`${issue.key} archived`);
-							}
 							// Work backend: cancel = owner-verdict canceled close (state + record).
 							const gate = confirmWrite(
 								"cancel_work",
@@ -1529,6 +1519,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 								localClear(ctx, false);
 							}
 							settleClosedIssue(issue, ctx);
+							await saveCache();
+							recordDeliveredOutcome(`${issue.key} canceled via cancel_work: ${line}`);
 							return okText(line);
 						}
 						case "record_health": {

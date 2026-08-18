@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config import OperationsConfig
 
-_TRANSFORM_MODULES = ("exporter.py", "importer.py", "linear.py")
+_TRANSFORM_MODULES = ("importer.py", "legacy_artifacts.py")
 
 
 def _sha256_json(payload: object) -> str:

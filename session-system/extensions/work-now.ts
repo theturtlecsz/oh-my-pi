@@ -1,11 +1,9 @@
 /**
- * work-now.ts — Work Ledger-backed owner workflow, HOME-147 entrypoint.
+ * work-now.ts — Work Ledger-backed owner workflow (HOME-147, HOME-149).
  *
- * Candidate backend: installed by install.sh --backend work. Never reads or
- * writes Linear; loopback-only per workflow/config.ts. Dormant (warning only)
- * when ~/.config/omp-work/client.json is absent or malformed. The model-facing
- * tool surface is identical to the Linear backend's (one name, one enum, one
- * action set — plan §2); only storage differs.
+ * Sole workflow backend: installed by install.sh. Never crosses the network
+ * boundary; loopback-only per workflow/config.ts. Dormant (warning only)
+ * when ~/.config/omp-work/client.json is absent or malformed.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { loadBearer, loadWorkConfig, type WorkClientConfig } from "./workflow/config";

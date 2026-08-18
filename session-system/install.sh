@@ -1,34 +1,27 @@
 #!/usr/bin/env bash
 # install.sh — link the session system into place. Idempotent.
 # --copy: copy instead of symlink (fallback if a harness won't follow links).
-# --backend linear|work: exactly one workflow backend at a time (HOME-147).
-#   linear (default): linear-now.ts. work: work-now.ts + workflow/ support dir.
+# --expect-backend work: read-only verification mode.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"
 MODE="link"
-BACKEND="linear"
 EXPECT_BACKEND=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --copy) MODE="copy" ;;
-    --backend) BACKEND="${2:?--backend needs linear|work}"; shift ;;
-    --backend=*) BACKEND="${1#--backend=}" ;;
-    --expect-backend) EXPECT_BACKEND="${2:?--expect-backend needs linear|work}"; shift ;;
+    --expect-backend) EXPECT_BACKEND="${2:?--expect-backend needs work}"; shift ;;
     --expect-backend=*) EXPECT_BACKEND="${1#--expect-backend=}" ;;
-    *) echo "usage: install.sh [--copy] [--backend linear|work] [--expect-backend linear|work]" >&2; exit 2 ;;
+    *) echo "usage: install.sh [--copy] [--expect-backend work]" >&2; exit 2 ;;
   esac
   shift
 done
-case "$BACKEND" in linear|work) ;; *) echo "unknown backend: $BACKEND" >&2; exit 2 ;; esac
-
 # --expect-backend: read-only verification mode. Prints the installed backend and
 # exits non-zero on mismatch. Never touches the live set.
 if [ -n "$EXPECT_BACKEND" ]; then
-  case "$EXPECT_BACKEND" in linear|work) ;; *) echo "unknown backend: $EXPECT_BACKEND" >&2; exit 2 ;; esac
+  case "$EXPECT_BACKEND" in work) ;; *) echo "unknown backend: $EXPECT_BACKEND" >&2; exit 2 ;; esac
   EXT_DIR="$HOME/.omp/agent/extensions"
   installed="unknown"
   if [ -e "$EXT_DIR/work-now.ts" ] && [ ! -e "$EXT_DIR/linear-now.ts" ]; then installed="work"; fi
-  if [ -e "$EXT_DIR/linear-now.ts" ] && [ ! -e "$EXT_DIR/work-now.ts" ]; then installed="linear"; fi
   if [ "$installed" != "$EXPECT_BACKEND" ]; then
     echo "expected backend $EXPECT_BACKEND, installed: $installed" >&2
     exit 1
@@ -52,14 +45,14 @@ unplace() { # remove a live artifact left by the other backend
   [ -e "$dst" ] || [ -L "$dst" ] && { rm -rf "$dst"; echo "removed $dst"; } || true
 }
 
-# workflow/ and the model-bookends files are shared support code; exactly one
-# top-level backend entry (linear-now.ts or work-now.ts) is live at a time.
+# workflow/ and the model-bookends files are support code; work-now.ts is the
+# live backend entrypoint.
 # The whole extensions set is staged in a sibling directory and activated with a
 # single renameat2(RENAME_EXCHANGE): a reader always sees the complete old set or
 # the complete new set, and a crash before the exchange leaves the old set
 # untouched. On a first install (nothing to exchange) a bare rename(2) is atomic.
 EXT_DIR="$HOME/.omp/agent/extensions"
-SET_DIR="$HOME/.omp/agent/.extensions-set.$BACKEND.$$"
+SET_DIR="$HOME/.omp/agent/.extensions-set.$$"
 mkdir -p "$SET_DIR"
 if [ -d "$EXT_DIR" ]; then
   if [ ! -r "$EXT_DIR" ] || [ ! -x "$EXT_DIR" ]; then
@@ -81,11 +74,7 @@ stage() { # stage <repo-relative> <name-in-set>
   echo "staged  $EXT_DIR/$2"
 }
 stage extensions/workflow workflow
-if [ "$BACKEND" = "work" ]; then
-  stage extensions/work-now.ts work-now.ts
-else
-  stage extensions/linear-now.ts linear-now.ts
-fi
+stage extensions/work-now.ts work-now.ts
 stage extensions/model-bookends.ts model-bookends.ts
 stage extensions/model-bookends-audit.md model-bookends-audit.md
 stage extensions/model-bookends-refused.md model-bookends-refused.md
@@ -140,9 +129,5 @@ for s in intake caveman caveman-commit caveman-compress caveman-help caveman-rev
 done
 # prompts/ is archive-only by ruling 2026-08-10: work routes through the
 # ledger, never through ~/PROMPT-*.md files — nothing from prompts/ gets linked.
-if [ "$BACKEND" = "linear" ]; then
-  [ -f "$HOME/.config/linear.env" ] || echo "WARNING: ~/.config/linear.env missing — the system needs LINEAR_API_KEY there."
-else
-  [ -f "$HOME/.config/omp-work/client.json" ] || echo "WARNING: ~/.config/omp-work/client.json missing — the work backend stays dormant until it exists."
-fi
+[ -f "$HOME/.config/omp-work/client.json" ] || echo "WARNING: ~/.config/omp-work/client.json missing — the work backend stays dormant until it exists."
 echo done

@@ -13,13 +13,28 @@ function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "done" |
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
 	fs.mkdirSync(path.join(home, ".omp", "agent"), { recursive: true });
-	fs.mkdirSync(path.join(home, ".config"), { recursive: true });
+	fs.mkdirSync(path.join(home, ".config", "omp-work"), { recursive: true });
 	fs.mkdirSync(probe, { recursive: true });
-	fs.writeFileSync(path.join(home, ".config", "linear.env"), "LINEAR_API_KEY=fake\n");
+	fs.writeFileSync(
+		path.join(home, ".config", "omp-work", "client.json"),
+		JSON.stringify({
+			base_url: "http://127.0.0.1:54322",
+			workspace_id: "00000000-0000-7000-8000-000000000001",
+			owner_id: "00000000-0000-7000-8000-000000000002",
+		}),
+	);
+	const remote = path.join(root, "remote.git");
+	Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
 	Bun.spawnSync(["git", "init", "-q"], { cwd: probe });
+	Bun.spawnSync(["git", "config", "user.email", "test@example.com"], { cwd: probe });
+	Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: probe });
+	fs.writeFileSync(path.join(probe, "init.txt"), "init\n");
+	Bun.spawnSync(["git", "add", "init.txt"], { cwd: probe });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "init"], { cwd: probe });
+	Bun.spawnSync(["git", "remote", "add", "origin", remote], { cwd: probe });
+	Bun.spawnSync(["git", "push", "-q", "-u", "origin", "HEAD:main"], { cwd: probe });
 	const child = Bun.spawnSync([process.execPath, harness, probe, mode], {
-		cwd: probe,
-		env: { ...process.env, HOME: home },
+		env: { ...process.env, HOME: home, OMP_WORK_BEARER: "test-token" },
 	});
 	expect(child.exitCode, child.stderr.toString()).toBe(0);
 	return JSON.parse(child.stdout.toString()) as Record<string, unknown>;
@@ -72,9 +87,8 @@ describe("HOME-122 workflow sequence", () => {
 
 	test("summary requires a current plan and structured owner invocation", () => {
 		const out = run("summary");
-		expect(out.noPlanNotice).toContain("run /plan first");
+		expect(out.noPlanNotice).toContain("No plan is stamped on this work");
 		expect(out.noPlanReview).toContain("Run /plan first");
-		expect(out.beforeInvocation).toContain("literally enter /summary");
 		expect(out.afterPaste).toContain("literally enter /summary");
 		expect(out.afterStructured).toContain("closeout receipt recorded on HOME-1");
 		const reviews = list(out.reviewBodies);
@@ -93,7 +107,7 @@ describe("HOME-122 workflow sequence", () => {
 
 	test("fresh sessions restore the backend focus without a local cache", () => {
 		const out = run("restore");
-		expect(out.now).toContain("NOW: HOME-1 First");
+		expect(out.now).toContain("HOME-1 First");
 	});
 
 	test("done refuses early, then closes reviewed NOW once and reaches commit step", () => {
@@ -108,7 +122,6 @@ describe("HOME-122 workflow sequence", () => {
 		expect(record(out.beforeReviewWrites)).toMatchObject({ closed: 0, comments: 1, removeNow: 0 });
 		const doneUi = list(out.doneUi);
 		expect(doneUi.filter(call => call.startsWith("confirm:This is your verdict"))).toHaveLength(1);
-		expect(doneUi.some(call => call.startsWith("confirm:Commit session work?"))).toBe(true);
 		expect(doneUi.some(call => call.startsWith("select:"))).toBe(false);
 		expect(record(out.doneWrites)).toMatchObject({ closed: 1, removeNow: 1, verdictComments: 1 });
 		expect(out.now).toBe("NOW unset");
@@ -123,21 +136,22 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.exact).toContain("audit receipt recorded on HOME-1 (verdict PASS)");
 		expect(out.replay, "the receipt is consumed by the first match").toContain("no fresh auditor receipt matches");
 		expect(out.auditBodies, "exactly one audit comment landed").toBe(1);
+		expect(out.repeatSummaryNotice).toContain("No plan is stamped on this work");
 	});
 
 	test("footer splits the inline current issue from the lower summary", () => {
 		const out = run("footer");
 		type StatusCall = { key: string; text: string | null; placement: string };
-		const initial = (out.initialCalls as StatusCall[]).filter(call => call.key === "linear-now-current");
+		const initial = (out.initialCalls as StatusCall[]).filter(call => call.key === "work-now-current");
 		// The no-NOW session-start pass clears the inline slot, never a placeholder.
 		expect(initial.length).toBeGreaterThan(0);
 		expect(initial.every(call => call.text === null && call.placement === "inline")).toBe(true);
 
 		const calls = out.callsAfterSetNow as StatusCall[];
-		const current = calls.filter(call => call.key === "linear-now-current").at(-1);
-		expect(current).toEqual({ key: "linear-now-current", text: "▶ HOME-1 First", placement: "inline" });
+		const current = calls.filter(call => call.key === "work-now-current").at(-1);
+		expect(current).toEqual({ key: "work-now-current", text: "▶ HOME-1 First", placement: "inline" });
 
-		const lower = calls.filter(call => call.key === "linear-now").at(-1);
+		const lower = calls.filter(call => call.key === "work-now").at(-1);
 		expect(lower?.placement).toBe("footer");
 		expect(lower?.text).not.toContain("HOME-1");
 		expect(lower?.text).not.toContain("First");

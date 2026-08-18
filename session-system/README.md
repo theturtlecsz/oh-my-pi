@@ -1,29 +1,23 @@
 # session-system
 
-Chris's ADHD session-management system: Linear (team HOME) is the owner page,
-omp is the only CLI surface (ruling 2026-08-10). The canonical home is
-`session-system/` inside the oh-my-pi fork (`theturtlecsz/oh-my-pi`,
-checkout `/home/thetu/oh-my-pi`), merged with full history 2026-08-13;
-`zimmermanc/session-system` is the frozen pre-merge archive. The live
-locations are symlinks created by `install.sh`.
+Chris's ADHD session-management system: the Work Ledger (`work.omp.dev/v1`) is the
+owner authority, omp is the CLI surface. The canonical home is `session-system/`
+inside the oh-my-pi fork (`theturtlecsz/oh-my-pi`, checkout `/home/thetu/oh-my-pi`),
+merged with full history 2026-08-13; `zimmermanc/session-system` is the frozen
+pre-merge archive. The live locations are symlinks created by `install.sh`.
 
-## Work Ledger backend (candidate)
+## Work Ledger backend
 
-`python/omp-work/` owns the ratified `work.omp.dev/v1` contract and the
-PostgreSQL Work Ledger service. HOME-147 ships it as a candidate workflow
-backend: `install.sh --backend work` installs `work-now.ts` (loopback-only,
-never reads or writes Linear, never falls back to it); `--backend linear`
-(the default) installs `linear-now.ts`. Exactly one backend is installed at a
-time. Linear remains the authority until the controlled cutover activates the
-service.
-
+`python/omp-work/` owns the ratified `work.omp.dev/v1` contract and the PostgreSQL
+Work Ledger service. `install.sh` installs `work-now.ts` (loopback-only, never crosses
+the network boundary). The service is the sole workflow authority; Linear history is
+retained offline as static export archives and provenance records.
 ## Layout → live location
 
 | Repo path | Symlinked from | What it is |
 |---|---|---|
-| `extensions/linear-now.ts` | `~/.omp/agent/extensions/linear-now.ts` | Linear backend entry (default): thin wiring onto workflow/host.ts + workflow/linear.ts |
-| `extensions/work-now.ts` | `~/.omp/agent/extensions/work-now.ts` | Work Ledger backend entry (`--backend work`): thin wiring onto workflow/host.ts + workflow/work.ts |
-| `extensions/workflow/` | `~/.omp/agent/extensions/workflow/` | Shared workflow host + backend adapters: NOW footer, start digest, /now //done //capture, unified `work` tool (two-phase owner-gated typed writes), transcript-bound receipts |
+| `extensions/work-now.ts` | `~/.omp/agent/extensions/work-now.ts` | Work Ledger backend entry: thin wiring onto workflow/host.ts + workflow/work.ts |
+| `extensions/workflow/` | `~/.omp/agent/extensions/workflow/` | Shared workflow host + backend adapter: NOW footer, start digest, /now /done /capture, unified `work` tool (two-phase owner-gated typed writes), transcript-bound receipts |
 | `extensions/model-bookends.ts` | `~/.omp/agent/extensions/model-bookends.ts` | HOME-131 bookends: /intake auto-routes to the intake role (Fable-high) and forwards to the skill; /summary arms a fail-closed audit gate (one fresh auditor, five required input sections, verbatim report into the typed review) |
 | `extensions/model-bookends-audit.md` | `~/.omp/agent/extensions/model-bookends-audit.md` | Static audit contract the extension injects when /summary arms |
 | `extensions/model-bookends-stop-no-audit.md` | `~/.omp/agent/extensions/model-bookends-stop-no-audit.md` | Settlement notice when no usable independent audit has run |
@@ -43,12 +37,8 @@ service.
 
 ## Not in this repo
 
-- `~/.config/linear.env` — the Linear API key (Linear backend only). Never
-  commit it. Back it up separately.
-- `~/.config/omp-work/client.json` — Work Ledger bearer + endpoint (work
-  backend only; without it the backend stays dormant with a warning).
-- `~/.omp/agent/linear-now.json` / `work-now.json` — runtime caches,
-  regenerate themselves.
+- `~/.config/omp-work/client.json` — Work Ledger bearer + endpoint (without it the backend stays dormant with a warning).
+- `~/.omp/agent/work-now.json` — runtime cache, regenerates itself.
 
 ## Dev loop
 
@@ -75,19 +65,15 @@ source), then pushes origin. Restart omp afterward.
 ## New project (day 1)
 
 Everything native loads from this repo no matter the directory — extension,
-AGENTS files, and skills. To scope a brand-new project into the Linear
+AGENTS files, and skills. To scope a brand-new project into the Work Ledger
 workflow:
 
-1. Create the project in the Linear UI first (the `linear` tool deliberately
-   cannot create projects; `create_issue` refuses to file into a project
-   that doesn't exist rather than silently dropping it into the team).
-2. `git init` if it isn't a repo yet — markers resolve from the git root.
-3. `echo "Exact Linear Project Name" > .linear-project` at the repo root.
+1. `git init` if it isn't a repo yet — markers resolve from the git root.
+2. `echo "Exact Project Name" > .work-project` at the repo root.
    From then on `/now` filters to that project and capture/create file into
-   it. (`.linear-team` only if the team isn't HOME.) The extension validates
-   the exact marker on session start and bare `/now`; a stale or misspelled
-   marker is an on-screen error, not an "empty project."
-4. Work as usual — digest, NOW footer, `/now`, `/done`, `/capture`, intake.
+   it. The extension validates the exact marker on session start and bare `/now`;
+   a stale or misspelled marker is an on-screen error, not an "empty project."
+3. Work as usual — digest, NOW footer, `/now`, `/done`, `/capture`, intake.
 
 Without a marker in a git repo, `/now` still works (unfiltered map) but
 `/capture` and `create_issue` are refused until the repo is scoped or a

@@ -252,94 +252,7 @@ def test_client_config_lands_on_the_shared_ts_client_path(tmp_path: Path, monkey
         write_client_config(config, workspace_id=WORK, owner_id=REVISION, base_url="https://work.example.com", bearer_file=bearer)
 
 
-def test_oauth_refresh_rotates_pair_atomically_and_preserves_when_omitted(tmp_path: Path) -> None:
-    from omp_work.integration.linear import load_credential, refresh_credential
-
-    path = tmp_path / "linear-export.json"
-    path.write_text(json.dumps({"kind": "oauth", "access_token": "old-access", "refresh_token": "old-refresh", "client_id": "client-1", "scopes": ["read"], "expires_at": "2020-01-01T00:00:00Z"}))
-    path.chmod(0o600)
-
-    def rotating(request: httpx.Request) -> httpx.Response:
-        body = dict(__import__("urllib.parse", fromlist=["parse_qsl"]).parse_qsl(request.content.decode()))
-        assert body == {"grant_type": "refresh_token", "refresh_token": "old-refresh", "client_id": "client-1"}
-        return httpx.Response(200, json={"access_token": "new-access", "token_type": "Bearer", "expires_in": 86399, "scope": "read", "refresh_token": "new-refresh"})
-
-    updated = refresh_credential(path, transport=httpx.MockTransport(rotating))
-    assert updated.access_token.get_secret_value() == "new-access"
-    persisted = load_credential(path)
-    assert persisted.access_token.get_secret_value() == "new-access" and persisted.refresh_token.get_secret_value() == "new-refresh"
-    assert path.stat().st_mode & 0o777 == 0o600
-
-    expired = json.loads(path.read_text()) | {"expires_at": "2020-01-01T00:00:00Z"}
-    path.write_text(json.dumps(expired))
-
-    def omitting(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"access_token": "second-access", "expires_in": 86399})
-
-    refreshed = refresh_credential(path, transport=httpx.MockTransport(omitting))
-    assert refreshed.refresh_token.get_secret_value() == "new-refresh"
-
-    fresh = refresh_credential(path, transport=httpx.MockTransport(lambda _: httpx.Response(500)))
-    assert fresh.access_token.get_secret_value() == "second-access"  # fresh token skips the network entirely
-
-
-def test_oauth_refresh_never_overwrites_on_failure_or_wider_scope(tmp_path: Path) -> None:
-    from omp_work.integration.linear import load_credential, refresh_credential
-
-    path = tmp_path / "linear-export.json"
-    original = {"kind": "oauth", "access_token": "old-access", "refresh_token": "old-refresh", "client_id": "client-1", "scopes": ["read"], "expires_at": "2020-01-01T00:00:00Z"}
-    path.write_text(json.dumps(original))
-    path.chmod(0o600)
-
-    with pytest.raises(RuntimeError, match="^oauth_reauthorization_required$"):
-        refresh_credential(path, transport=httpx.MockTransport(lambda _: httpx.Response(400, json={"error": "invalid_grant"})))
-    with pytest.raises(RuntimeError, match="^oauth_transient_failure$"):
-        refresh_credential(path, transport=httpx.MockTransport(lambda _: httpx.Response(503)))
-    with pytest.raises(RuntimeError, match="^linear_credential_scope_invalid$"):
-        refresh_credential(path, transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"access_token": "wide", "expires_in": 86399, "scope": "read write"})))
-    with pytest.raises(RuntimeError, match="^oauth_response_invalid$"):
-        refresh_credential(path, transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"access_token": "bad", "expires_in": True})))
-    assert load_credential(path).access_token.get_secret_value() == "old-access"
-
-
-def test_oauth_login_validates_state_and_refuses_overwrite(tmp_path: Path) -> None:
-    import threading
-    import urllib.request
-
-    from omp_work.integration.linear import CALLBACK_PATH, CALLBACK_PORT, oauth_login
-
-    path = tmp_path / "linear-export.json"
-    urls: list[str] = []
-
-    def token_exchange(request: httpx.Request) -> httpx.Response:
-        body = dict(__import__("urllib.parse", fromlist=["parse_qsl"]).parse_qsl(request.content.decode()))
-        assert body["grant_type"] == "authorization_code" and body["code"] == "the-code" and body["code_verifier"]
-        return httpx.Response(200, json={"access_token": "login-access", "token_type": "Bearer", "expires_in": 86399, "scope": "read", "refresh_token": "login-refresh"})
-
-    def drive() -> None:
-        import time as clock
-        clock.sleep(0.3)
-        base = f"http://127.0.0.1:{CALLBACK_PORT}"
-        with pytest.raises(urllib.error.HTTPError) as favicon:
-            urllib.request.urlopen(f"{base}/favicon.ico", timeout=5)
-        assert favicon.value.code == 404
-        with pytest.raises(urllib.error.HTTPError) as captured:
-            urllib.request.urlopen(f"{base}{CALLBACK_PATH}?state=wrong&code=the-code", timeout=5)
-        assert captured.value.code == 400
-        state = urls[0].split("state=")[1].split("&")[0]
-        page = urllib.request.urlopen(f"{base}{CALLBACK_PATH}?state={state}&code=the-code", timeout=5).read().decode()
-        assert "close this window" in page
-
-    threading.Thread(target=drive, daemon=True).start()
-    credential = oauth_login(path, client_id="client-1", transport=httpx.MockTransport(token_exchange), announce=urls.append)
-    assert credential.access_token.get_secret_value() == "login-access"
-    assert path.stat().st_mode & 0o777 == 0o600
-    with pytest.raises(ValueError, match="^linear_export_credential_exists$"):
-        oauth_login(path, client_id="client-1")
-
-
-def test_credentials_init_is_idempotent_and_cutover_capability_is_guarded(tmp_path: Path) -> None:
-    from omp_work.operations.capabilities import provision_cutover
+def test_credentials_init_is_idempotent(tmp_path: Path) -> None:
     from omp_work.operations.cli import credentials_init
     from omp_work.operations.config import OperationsConfig
 
@@ -348,11 +261,3 @@ def test_credentials_init_is_idempotent_and_cutover_capability_is_guarded(tmp_pa
     assert credentials_init(config) == first
     workspace_id, actor_id = first
     assert config.workspace_id() == workspace_id and config.actor_id() == actor_id
-
-    path = provision_cutover(config, workspace_id=workspace_id, actor_id=actor_id)
-    data = json.loads(path.read_text())
-    assert data["actor_id"] == str(actor_id) and data["scopes"] == ["work.operate", "work.read"] and data["workspaces"] == [str(workspace_id)]
-    with pytest.raises(ValueError, match="rotate"):
-        provision_cutover(config, workspace_id=workspace_id, actor_id=actor_id)
-    rotated = provision_cutover(config, workspace_id=workspace_id, actor_id=actor_id, rotate=True)
-    assert json.loads(rotated.read_text())["token"] != data["token"]

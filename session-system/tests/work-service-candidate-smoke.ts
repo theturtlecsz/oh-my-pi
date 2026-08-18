@@ -135,8 +135,8 @@ try {
 	git(probe, ["init", "-q", "-b", "main"]);
 	git(probe, ["config", "user.email", "smoke@example.com"]);
 	git(probe, ["config", "user.name", "Smoke"]);
-	fs.writeFileSync(path.join(probe, ".linear-project"), `${PROJECT_NAME}\n`);
-	git(probe, ["add", ".linear-project"]);
+	fs.writeFileSync(path.join(probe, ".work-project"), `${PROJECT_NAME}\n`);
+	git(probe, ["add", ".work-project"]);
 	git(probe, ["commit", "-q", "-m", "init"]);
 	git(probe, ["remote", "add", "origin", remote]);
 	git(probe, ["push", "-q", "-u", "origin", "main"]);
@@ -188,6 +188,8 @@ try {
 	const headSha = git(probe, ["rev-parse", "HEAD"]);
 	assert.notEqual(headSha, initialSha, "freeze created a new commit");
 	assert.equal(git(probe, ["show", "HEAD:smoke.txt"]), "candidate payload", "candidate commit carries the work");
+	assert.equal(fs.readFileSync(path.join(probe, "owner.txt"), "utf8"), "owner setting\n", "pre-session owner file survives");
+	assert.equal(git(probe, ["status", "--porcelain"]), "?? owner.txt", "pre-session owner file stays outside candidate");
 
 	// the bare remote carries the exact candidate commit
 	const remoteSha = git(probe, ["ls-remote", "origin", "refs/heads/main"]).split(/\s+/)[0];

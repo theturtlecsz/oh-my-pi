@@ -1,19 +1,17 @@
 # AGENTS.md — home-directory sessions (all CLIs)
 
-## Linear bookends — session protocol (owner-ratified 2026-08-10; omp-only hooks since 2026-08-10)
+## Work Ledger bookends — session protocol (owner-ratified 2026-08-10, updated 2026-08-18)
 
-Live work state lives in Linear: workspace linear.app/spec-kit, team HOME.
-Design record: `~/.omc/specs/deep-interview-linear-big-blocks.md`.
+Live work state lives in the Work Ledger (`work.omp.dev/v1`).
 
 1. **START**: OMP injects the current completion tree and canonical workflow
-   sequence. Other CLIs read Linear only when session state is needed.
+   sequence.
 2. **SEQUENCE (OMP)**: `/intake` publishes and selects → `/plan` approves,
    stamps, and executes → execution handoff → `/summary` reviews → `/done`
-   closes. Chris never moves Linear state or re-identifies the issue between
-   stages.
-3. **MID-SESSION**: capture, don't chase — stray ideas become Linear issues in
-   their surface. Evidence comments never advance the sequence; only typed
-   handoff/review comments do.
+   closes. Chris never moves state or re-identifies the issue between stages.
+3. **MID-SESSION**: capture, don't chase — stray ideas become work items in
+   their surface. Evidence receipts never advance the sequence; only typed
+   handoff/review receipts do.
 4. **SUMMARY (explicit-command only, HOME-114)**: run the health updates,
    capture triage, asynchronous close proposals, and one typed session
    review/handoff ONLY when Chris enters `/summary`. Leave NOW unchanged and

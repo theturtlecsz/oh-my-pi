@@ -25,8 +25,8 @@ stress-test or grill, a deep interview, a spec re-baseline — route to the
 `/intake` skill (`~/.claude/skills/intake`). The "deep interview" and
 "ralplan" keyword triggers in the managed block above no longer own intake;
 plugin ambiguity skills (deep-interview, deep-dive, ralplan, /plan-as-intake)
-are bypassed for this lane. Intake ends at a published Linear issue —
-execution lanes pull from Linear.
+are bypassed for this lane. Intake ends at a published Work Ledger item —
+execution lanes pull from the ledger.
 
 ## Plain language (owner directive, 2026-08-11; redefined by HOME-109, 2026-08-13)
 
@@ -36,13 +36,13 @@ stuck and why, in household terms. No commit hashes, file paths, protocol
 terms, or tool narration unless Chris asks. Technical detail is tucked away,
 reachable: it lives in issue comments and comes out the moment he asks for it
 — it never leads. Status questions ("where does X stand") are answered with
-the completion tree (linear tool, action my_now) plus one plain explanation
-line. Code, commits, and Linear comments keep full technical precision — this
+the completion tree (`work` tool, action my_now) plus one plain explanation
+line. Code, commits, and Work Ledger evidence keep full technical precision — this
 governs what Chris SEES, not what is recorded.
 
 ## Issue tracking law (owner ruling, 2026-08-13 — non-negotiable, global)
 
-Every item is tracked as a Linear issue: findings, fixes (including ones
+Every item is tracked as a Work Ledger item: findings, fixes (including ones
 found and fixed in the same session), watch-items, parked ideas, follow-ups,
 decisions needed, and new standing rules. Chat, handoff comments, local
 files, and todo lists are NOT tracking — they evaporate or go unread. If

@@ -22,9 +22,16 @@ const home = path.join(tempRoot, "home");
 const probe = path.join(tempRoot, "repo");
 const harness = path.join(import.meta.dir, "fixtures/closeout-lock-harness.ts");
 fs.mkdirSync(path.join(home, ".omp", "agent"), { recursive: true });
-fs.mkdirSync(path.join(home, ".config"), { recursive: true });
+fs.mkdirSync(path.join(home, ".config", "omp-work"), { recursive: true });
 fs.mkdirSync(probe, { recursive: true });
-fs.writeFileSync(path.join(home, ".config", "linear.env"), "LINEAR_API_KEY=fake\n");
+fs.writeFileSync(
+	path.join(home, ".config", "omp-work", "client.json"),
+	JSON.stringify({
+		base_url: "http://127.0.0.1:54322",
+		workspace_id: "00000000-0000-7000-8000-000000000001",
+		owner_id: "00000000-0000-7000-8000-000000000002",
+	}),
+);
 Bun.spawnSync(["git", "init", "-q"], { cwd: probe });
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));

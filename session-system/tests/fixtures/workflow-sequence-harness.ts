@@ -15,80 +15,265 @@ interface Comment {
 	createdAt: string;
 }
 
+const WORKSPACE_ID = "00000000-0000-7000-8000-000000000001";
+const OWNER_ID = "00000000-0000-7000-8000-000000000002";
 const issue = { id: "id-1", identifier: "HOME-1", title: "First", project: undefined as { name: string } | undefined };
 const comments: Comment[] = [];
 const writes = { created: 0, addNow: 0, removeNow: 0, closed: 0 };
 let nowSelected = mode === "restore";
-let clock = 0;
+let nowId: string | null = mode === "restore" ? "id-1" : null;
+let slotVersion = 1;
+const receipts: Array<Record<string, unknown>> = [];
+const closeoutIntents: Array<{ state: string; candidate_id: string }> = [];
 
-function response(data: unknown): Response {
-	return new Response(JSON.stringify({ data }), { status: 200 });
+interface MockWorkItem {
+	work_id: string;
+	workspace_id: string;
+	alias: { key: string };
+	revision: { revision_id: string; title: string; description: string; scope: string; acceptance_criteria: string[] };
+	state: string;
+	project_id: string | null;
+	candidate: { candidate_id: string; candidate_sha256: string } | null;
 }
 
-globalThis.fetch = (async (_url: unknown, init: { body?: string }) => {
-	const parsed = JSON.parse(init.body ?? "{}") as { query?: string; variables?: Record<string, unknown> };
-	const query = parsed.query ?? "";
-	const variables = parsed.variables ?? {};
-	if (query.includes("issueLabelCreate")) return response({ issueLabelCreate: { issueLabel: { id: "label-now" } } });
-	if (query.includes("issueCreate")) {
-		writes.created++;
-		const input = variables.input as { title?: string } | undefined;
-		const created = {
-			id: `id-${writes.created}`,
-			identifier: `HOME-${writes.created}`,
-			title: input?.title ?? "created",
-		};
-		if (writes.created === 1) Object.assign(issue, created);
-		return response({ issueCreate: { success: true, issue: created } });
+const items = new Map<string, MockWorkItem>();
+const initialItem: MockWorkItem = {
+	work_id: "id-1",
+	workspace_id: WORKSPACE_ID,
+	alias: { key: "HOME-1" },
+	revision: { revision_id: "rev-1", title: "First", description: "", scope: "", acceptance_criteria: [] },
+	state: "IN_PROGRESS",
+	project_id: "proj-1",
+	candidate: null,
+};
+items.set("HOME-1", initialItem);
+items.set("id-1", initialItem);
+
+globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string }) => {
+	const u = String(url);
+	const method = init?.method ?? "GET";
+
+	if (u.includes("/v1/health/live") || u.includes("/v1/health/ready")) {
+		return new Response(JSON.stringify({ live: true, ready: true, alerts: [] }), { status: 200 });
 	}
-	if (query.includes("commentCreate")) {
-		const input = variables.input as { body?: string } | undefined;
-		clock++;
-		comments.push({ body: input?.body ?? "", createdAt: new Date(Date.UTC(2026, 7, 14, 0, 0, clock)).toISOString() });
-		return response({ commentCreate: { success: true } });
+	if (u.includes("/authority")) {
+		return new Response(JSON.stringify({ authority: "work", epoch_id: null, epoch_state: "sealed" }), { status: 200 });
 	}
-	if (query.includes("issueUpdate")) {
-		writes.closed++;
-		return response({ issueUpdate: { success: true } });
+	if (u.includes("/tree")) {
+		return new Response(
+			JSON.stringify({
+				projects: [{ project_id: "proj-1", workspace_id: WORKSPACE_ID, name: "The Bookends", health: "onTrack" }],
+				items: Array.from(new Set(items.values())),
+				relations: [],
+			}),
+			{ status: 200 },
+		);
 	}
-	if (query.includes("issueAddLabel")) {
-		writes.addNow++;
-		nowSelected = true;
-		return response({ issueAddLabel: { success: true } });
+	if (u.includes(`/focus/${OWNER_ID}`)) {
+		return new Response(
+			JSON.stringify({
+				workspace_id: WORKSPACE_ID,
+				owner_id: OWNER_ID,
+				work_id: nowSelected ? (nowId ?? "id-1") : null,
+				version: slotVersion,
+			}),
+			{ status: 200 },
+		);
 	}
-	if (query.includes("issueRemoveLabel")) {
-		writes.removeNow++;
-		nowSelected = false;
-		return response({ issueRemoveLabel: { success: true } });
+	if (u.endsWith("/workflow")) {
+		const key = u.split("/v1/work-items/")[1]?.split("/")[0] ?? "HOME-1";
+		const it = items.get(key) ?? initialItem;
+		const plan = receipts.filter(r => r.kind === "plan").at(-1) as Record<string, unknown> | undefined;
+		const handoff = receipts.filter(r => r.kind === "handoff").at(-1) as Record<string, unknown> | undefined;
+		const audit = receipts.filter(r => r.kind === "audit").at(-1) as Record<string, unknown> | undefined;
+		const closeout = receipts.filter(r => r.kind === "closeout").at(-1) as Record<string, unknown> | undefined;
+		const review = closeout ?? audit;
+		return new Response(
+			JSON.stringify({
+				item: it,
+				project: { project_id: "proj-1", workspace_id: WORKSPACE_ID, name: "The Bookends", health: "onTrack" },
+				plan: plan ? { plan_name: "work-plan.md", plan_sha256: ((plan.payload as Record<string, unknown>)?.plan_sha256 as string) ?? "", at: plan.issued_at } : null,
+				handoff: handoff ? { at: handoff.issued_at } : null,
+				review: review ? { hash: String((review.payload_sha256 as string) ?? "").slice(0, 12), at: review.issued_at } : null,
+				closeout: closeoutIntents,
+				relations: [],
+				receipts,
+				current_candidate: it.candidate,
+			}),
+			{ status: 200 },
+		);
 	}
-	if (query.includes("states(first:20)")) {
-		return response({ teams: { nodes: [{ states: { nodes: [{ id: "done", name: "Done", type: "completed" }, { id: "canceled", name: "Canceled", type: "canceled" }] } }] } });
+	if (u.includes("/v1/work-items/")) {
+		const key = decodeURIComponent(u.split("/v1/work-items/")[1] ?? "HOME-1");
+		const it = items.get(key) ?? initialItem;
+		return new Response(JSON.stringify(it), { status: 200 });
 	}
-	if (query.includes("teams(filter:")) return response({ teams: { nodes: [{ id: "team-1", key: "HOME" }] } });
-	if (query.includes("issueLabels(")) {
-		const name = variables.name;
-		return response({ issueLabels: { nodes: name === "now" ? [{ id: "label-now", name: "now" }] : [] } });
+	if (method === "POST" && u.endsWith("/v1/commands")) {
+		const env = JSON.parse(init?.body ?? "{}") as { command: { type: string; payload: Record<string, unknown> } };
+		const cmdType = env.command?.type;
+		const payload = env.command?.payload ?? {};
+		if (cmdType === "create_work_batch") {
+			const batchItems = (payload.items as Array<{ title: string; description?: string }>) ?? [];
+			const createdList: Array<{ client_ref: string; work_id: string; revision_id: string; key: string; state: string; row_version: number }> = [];
+			for (const b of batchItems) {
+				writes.created++;
+				const created: MockWorkItem = {
+					work_id: `id-${writes.created}`,
+					workspace_id: WORKSPACE_ID,
+					alias: { key: `HOME-${writes.created}` },
+					revision: { revision_id: `rev-${writes.created}`, title: b.title, description: b.description ?? "", scope: "", acceptance_criteria: [] },
+					state: "IN_PROGRESS",
+					project_id: "proj-1",
+					candidate: null,
+				};
+				items.set(created.alias.key, created);
+				items.set(created.work_id, created);
+				createdList.push({ client_ref: "p", work_id: created.work_id, revision_id: created.revision.revision_id, key: created.alias.key, state: created.state, row_version: 1 });
+				if (writes.created === 1) Object.assign(issue, { id: created.work_id, identifier: created.alias.key, title: created.revision.title });
+			}
+			return new Response(
+				JSON.stringify({
+					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000010" },
+					result: { type: "create_work_batch", items: createdList },
+				}),
+				{ status: 200 },
+			);
+		}
+		if (cmdType === "set_focus") {
+			writes.addNow++;
+			nowSelected = true;
+			nowId = ((payload.slot as Record<string, unknown>)?.work_id as string) ?? "id-1";
+			slotVersion++;
+			return new Response(
+				JSON.stringify({
+					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000011" },
+					result: { type: "set_focus", workspace_id: WORKSPACE_ID, owner_id: OWNER_ID, work_id: nowId, version: slotVersion },
+				}),
+				{ status: 200 },
+			);
+		}
+		if (cmdType === "clear_focus") {
+			writes.removeNow++;
+			nowSelected = false;
+			nowId = null;
+			slotVersion++;
+			return new Response(
+				JSON.stringify({
+					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000012" },
+					result: { type: "clear_focus", workspace_id: WORKSPACE_ID, owner_id: OWNER_ID, work_id: null, version: slotVersion },
+				}),
+				{ status: 200 },
+			);
+		}
+		if (cmdType === "append_evidence") {
+			const rec = payload.receipt as Record<string, unknown>;
+			const kind = rec.kind as string;
+			if (kind === "plan") {
+				const planPayload = (rec.payload as Record<string, unknown>) ?? {};
+				const appText = ((planPayload.approach as string[]) ?? []).map((s, i) => `${i + 1}. ${s}`).join("\n");
+				const verText = ((planPayload.verification as string[]) ?? []).map((s, i) => `${i + 1}. ${s}`).join("\n");
+				comments.push({
+					body: `**Plan approved**\n- SHA-256: \`${planPayload.plan_sha256}\`\n\n## Approach\n${appText}\n\n## Verification\n${verText}`,
+					createdAt: new Date().toISOString(),
+				});
+				const it = items.get(rec.work_id as string) ?? initialItem;
+				it.candidate = { candidate_id: rec.candidate_id as string, candidate_sha256: "0".repeat(64) };
+			} else if (kind === "closeout") {
+				comments.push({ body: `**Session review**\n- Plan SHA-256: \`${(rec.payload as Record<string, unknown>)?.plan_sha256 ?? (rec.payload as Record<string, unknown>)?.body ?? ""}\``, createdAt: new Date().toISOString() });
+			} else if (kind === "audit") {
+				comments.push({ body: String((rec.payload as Record<string, unknown>)?.report ?? "VERDICT: PASS"), createdAt: new Date().toISOString() });
+			}
+			receipts.push(rec);
+			return new Response(
+				JSON.stringify({
+					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000013" },
+					result: { type: "append_evidence", receipt: rec },
+				}),
+				{ status: 200 },
+			);
+		}
+		if (cmdType === "finalize_candidate") {
+			const it = items.get("HOME-1") ?? initialItem;
+			const finalCandId = (payload.candidate_id as string) ?? "cand-1";
+			const plannedCandId = (payload.planned_candidate_id as string) ?? it.candidate?.candidate_id;
+			const commitSha = (payload.commit_sha as string) ?? "commit-1";
+			const finalCand = {
+				candidate_id: finalCandId,
+				work_id: it.work_id,
+				revision_id: it.revision.revision_id,
+				candidate_sha256: "0".repeat(64),
+				commit_sha: commitSha,
+				kind: "final" as const,
+				allocated_at: new Date().toISOString(),
+			};
+			it.candidate = finalCand;
+			initialItem.candidate = finalCand;
+			for (const v of items.values()) v.candidate = finalCand;
+			const planRec = receipts.filter(r => r.kind === "plan" && r.candidate_id === plannedCandId).at(-1);
+			if (planRec) {
+				receipts.push({
+					...planRec,
+					receipt_id: `rec-plan-${finalCandId}`,
+					candidate_id: finalCandId,
+					issued_at: new Date().toISOString(),
+					candidate_sha256: finalCand.candidate_sha256,
+					candidate_commit: commitSha,
+				});
+			}
+			return new Response(
+				JSON.stringify({
+					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000014" },
+					result: { type: "finalize_candidate", candidate: finalCand },
+				}),
+				{ status: 200 },
+			);
+		}
+		if (cmdType === "request_closeout") {
+			const it = items.get("id-1") ?? initialItem;
+			const intent = { state: "pending", candidate_id: it.candidate?.candidate_id ?? "cand-1" };
+			closeoutIntents.push(intent);
+			return new Response(
+				JSON.stringify({
+					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000015" },
+					result: { type: "request_closeout", intent },
+				}),
+				{ status: 200 },
+			);
+		}
+		if (cmdType === "complete_work") {
+			writes.closed++;
+			const inp = payload.input as Record<string, unknown>;
+			const it = items.get((inp?.work_id as string) ?? "id-1") ?? initialItem;
+			it.state = "DONE";
+			comments.push({ body: "**Owner verdict in session: done**", createdAt: new Date().toISOString() });
+			return new Response(
+				JSON.stringify({
+					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000016" },
+					result: { type: "complete_work", work_id: it.work_id, state: "DONE", row_version: 2 },
+				}),
+				{ status: 200 },
+			);
+		}
+		return new Response(
+			JSON.stringify({
+				receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000017" },
+				result: { type: cmdType },
+			}),
+			{ status: 200 },
+		);
 	}
-	if (query.includes("issues(first:2") && query.includes("labels:")) {
-		return response({ issues: { nodes: nowSelected ? [{ ...issue, project: issue.project }] : [] } });
-	}
-	if (query.includes("projects(filter:")) return response({ projects: { nodes: [{ id: "project-1" }] } });
-	if (query.includes("comments(last:50)")) return response({ issue: { ...issue, comments: { nodes: comments } } });
-	if (query.includes("issue(id:")) return response({ issue });
-	throw new Error(`unhandled GraphQL: ${query}`);
+	return new Response(JSON.stringify({ error: { code: "not_found", diagnostics: [u] } }), { status: 404 });
 }) as typeof fetch;
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
-// audit mode loads model-bookends too: the receipt must cross from one
-// top-level extension's module graph into the other's (HOME-147 bridge).
 const EXTENSION_FILES =
 	mode === "audit"
-		? ["session-system/extensions/linear-now.ts", "session-system/extensions/model-bookends.ts"]
-		: ["session-system/extensions/linear-now.ts"];
+		? ["session-system/extensions/work-now.ts", "session-system/extensions/model-bookends.ts"]
+		: ["session-system/extensions/work-now.ts"];
 const loaded = await loadExtensions(EXTENSION_FILES.map(file => path.join(repoRoot, file)), probe);
 if (loaded.errors.length > 0) throw new Error(loaded.errors.map(error => error.error).join("; "));
 const extension = loaded.extensions[0];
-if (!extension) throw new Error("linear-now extension did not load");
+if (!extension) throw new Error("work-now extension did not load");
 const tool = extension.tools.get("work");
 if (!tool) throw new Error("work tool missing");
 
@@ -96,10 +281,9 @@ const uiCalls: string[] = [];
 const statuses: string[] = [];
 const statusCalls: { key: string; text: string | null; placement: string }[] = [];
 const depth = mode === "summary-subagent" ? 1 : 0;
-// A subagent inherits NOW from the session branch; it never performs the write.
 const inheritedNow =
 	mode === "summary-subagent"
-		? [{ type: "custom", customType: "linear-now", data: { team: "HOME", issueId: "id-1", identifier: "HOME-1", title: "First", setAt: Date.now() } }]
+		? [{ type: "custom", customType: "work-now", data: { backend: "work", issueId: "id-1", identifier: "HOME-1", title: "First", setAt: Date.now() } }]
 		: [];
 const fableModel = { id: "claude-fable-5", provider: "anthropic", name: "Claude Fable 5", api: "anthropic-messages" };
 const gptModel = { id: "gpt-5.2", provider: "openai", name: "GPT 5.2", api: "openai-responses" };
@@ -144,7 +328,7 @@ runner.initialize(
 		},
 		confirm: async (title: string) => {
 			uiCalls.push(`confirm:${title}`);
-			return title.startsWith("This is your verdict");
+			return true;
 		},
 	} as never,
 );
@@ -304,6 +488,12 @@ if (mode === "intake") {
 	out.exact = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT });
 	out.replay = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT });
 	out.auditBodies = comments.filter(comment => comment.body.includes("VERDICT: PASS")).length;
+	comments.length = 0;
+	receipts.length = 0;
+	for (const v of items.values()) v.candidate = null;
+	initialItem.candidate = null;
+	await runner.emit(summaryMessage as never);
+	out.repeatSummaryNotice = uiCalls.at(-1);
 } else {
 	await setNow();
 	fs.writeFileSync(path.join(probe, "dirty.txt"), "dirty\n");
@@ -317,7 +507,33 @@ if (mode === "intake") {
 	await done.handler("", runner.createCommandContext());
 	out.beforeReviewUi = [...uiCalls];
 	out.beforeReviewWrites = { ...writes, comments: comments.length };
+	await runner.emitInput("/summary", undefined, "interactive");
 	await runner.emit(summaryMessage as never);
+	const it = items.get("HOME-1") ?? initialItem;
+	const candId = it.candidate?.candidate_id ?? "cand-1";
+	receipts.push({
+		receipt_id: "rec-v",
+		work_id: it.work_id,
+		revision_id: "rev-1",
+		candidate_id: candId,
+		kind: "verification",
+		payload: { body: "tests pass" },
+		payload_sha256: "0".repeat(64),
+		issued_at: new Date().toISOString(),
+	});
+	receipts.push({
+		receipt_id: "rec-a",
+		work_id: it.work_id,
+		revision_id: "rev-1",
+		candidate_id: candId,
+		kind: "audit",
+		verdict: "PASS",
+		independent: true,
+		payload: { report: "VERDICT: PASS" },
+		payload_sha256: "0".repeat(64),
+		issued_at: new Date().toISOString(),
+	});
+	closeoutIntents.push({ state: "pending", candidate_id: candId });
 	out.review = await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "complete" });
 	const commentsBeforeDone = comments.length;
 	uiCalls.length = 0;

@@ -12,7 +12,6 @@ from uuid import UUID, uuid4
 from .config import OperationsConfig
 
 OWNER_SCOPES = ("work.read", "work.mutate", "work.approve", "work.close")
-CUTOVER_SCOPES = ("work.operate", "work.read")
 DEFAULT_BASE_URL = "http://127.0.0.1:54322"
 
 
@@ -91,12 +90,6 @@ def provision_owner(config: OperationsConfig, *, workspace_id: UUID, owner_id: U
     bearer = write_capability(config, "owner", actor_id=owner_id, actor_kind="owner", workspaces=(workspace_id,), scopes=OWNER_SCOPES)
     return write_client_config(config, workspace_id=workspace_id, owner_id=owner_id, base_url=base_url, bearer_file=bearer)
 
-
-def provision_cutover(config: OperationsConfig, *, workspace_id: UUID, actor_id: UUID, rotate: bool = False) -> Path:
-    path = capabilities_dir(config) / "cutover.json"
-    if path.exists() and not rotate:
-        raise ValueError("cutover capability exists; pass rotate=True to replace it")
-    return write_capability(config, "cutover", actor_id=actor_id, actor_kind="operator", workspaces=(workspace_id,), scopes=CUTOVER_SCOPES)
 
 
 def provision_candidate_reader(config: OperationsConfig, *, workspace_id: UUID, candidate_ids: tuple[UUID, ...], name: str = "candidate-reader") -> Path:
