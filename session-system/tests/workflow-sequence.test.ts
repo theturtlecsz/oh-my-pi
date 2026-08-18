@@ -8,7 +8,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "done" | "footer" | "audit"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "done" | "footer" | "audit" | "restore"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -89,6 +89,11 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.afterPaste).toContain("literally enter /summary");
 		expect(out.afterStructured).toContain("literally enter /summary");
 		expect(list(out.reviewBodies)).toHaveLength(0);
+	});
+
+	test("fresh sessions restore the backend focus without a local cache", () => {
+		const out = run("restore");
+		expect(out.now).toContain("NOW: HOME-1 First");
 	});
 
 	test("done refuses early, then closes reviewed NOW once and reaches commit step", () => {

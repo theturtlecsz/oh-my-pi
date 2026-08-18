@@ -168,7 +168,7 @@ export interface WorkStateCarrier {
 export interface WorkflowBackend {
 	readonly name: "linear" | "work";
 	readonly serviceLabel: string; // "Linear" | "Work Ledger"
-	readonly markerFile: string; // ".linear-project" | ".work-project"
+	readonly markerFile: string; // committed project-scope marker
 	readonly scopeFix: string; // one-line instructions for an unscoped repo
 	readonly cacheFile: string; // linear-now.json | work-now.json (basename under ~/.omp/agent)
 	readonly queueNoun: string; // "waiting-on-chris" | "TRIAGE" — for preview text

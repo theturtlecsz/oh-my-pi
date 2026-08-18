@@ -264,8 +264,8 @@ export function createWorkBackend(
 	const backend: WorkflowBackend = {
 		name: "work",
 		serviceLabel: "Work Ledger",
-		markerFile: ".work-project",
-		scopeFix: 'echo "<Exact Project Name>" > .work-project at the repo root (projects are provisioned by the Work Ledger import)',
+		markerFile: ".linear-project",
+		scopeFix: 'echo "<Exact Project Name>" > .linear-project at the repo root (project names are preserved by the Work Ledger import)',
 		cacheFile: "work-now.json",
 		queueNoun: "TRIAGE",
 		reviewKind: "closeout",

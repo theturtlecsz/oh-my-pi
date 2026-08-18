@@ -7,7 +7,7 @@ import { confirmRoundTrip } from "./two-phase";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "summary", "summary-subagent", "done", "footer", "audit"];
+const MODES = ["intake", "plan", "summary", "summary-subagent", "done", "footer", "audit", "restore"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 
 interface Comment {
@@ -18,7 +18,7 @@ interface Comment {
 const issue = { id: "id-1", identifier: "HOME-1", title: "First", project: undefined as { name: string } | undefined };
 const comments: Comment[] = [];
 const writes = { created: 0, addNow: 0, removeNow: 0, closed: 0 };
-let nowSelected = false;
+let nowSelected = mode === "restore";
 let clock = 0;
 
 function response(data: unknown): Response {
@@ -238,6 +238,8 @@ if (mode === "intake") {
 	out.afterStructured = await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "review body" });
 	out.reviewBodies = comments.filter(comment => comment.body.startsWith("**Session review**")).map(comment => comment.body);
 	out.uiCalls = uiCalls;
+} else if (mode === "restore") {
+	out.now = await execute({ action: "my_now" });
 } else if (mode === "footer") {
 	out.initialCalls = [...statusCalls];
 	await setNow();

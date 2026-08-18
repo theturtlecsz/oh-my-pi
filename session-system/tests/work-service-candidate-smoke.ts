@@ -135,8 +135,8 @@ try {
 	git(probe, ["init", "-q", "-b", "main"]);
 	git(probe, ["config", "user.email", "smoke@example.com"]);
 	git(probe, ["config", "user.name", "Smoke"]);
-	fs.writeFileSync(path.join(probe, ".work-project"), `${PROJECT_NAME}\n`);
-	git(probe, ["add", ".work-project"]);
+	fs.writeFileSync(path.join(probe, ".linear-project"), `${PROJECT_NAME}\n`);
+	git(probe, ["add", ".linear-project"]);
 	git(probe, ["commit", "-q", "-m", "init"]);
 	git(probe, ["remote", "add", "origin", remote]);
 	git(probe, ["push", "-q", "-u", "origin", "main"]);

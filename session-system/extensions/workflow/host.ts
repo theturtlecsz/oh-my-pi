@@ -841,6 +841,32 @@ export function createWorkflowHost(cfg: HostConfig) {
 			} catch {
 				/* fresh session */
 			}
+			// The backend focus is authoritative. A fresh process may have no local
+			// cache (or a stale cache from another session), so reconcile before the
+			// first tool read instead of reporting a false "NOW unset".
+			try {
+				const remoteNow = await backend.currentNow();
+				if (state.issueId !== remoteNow?.id) {
+					state.carrier = undefined;
+					state.executingIssue = undefined;
+					state.approvedPlan = undefined;
+					state.obligationHandoff = undefined;
+					state.obligationReview = undefined;
+					state.treeCounts = undefined;
+					state.setAt = remoteNow ? Date.now() : undefined;
+				}
+				state.issueId = remoteNow?.id;
+				state.identifier = remoteNow?.key;
+				state.title = remoteNow?.title;
+				state.project = remoteNow?.project;
+				await saveCache();
+			} catch (error) {
+				try {
+					ctx.ui.notify(`Could not refresh ${backend.serviceLabel} NOW (${String(error)}) — using the last local pointer`, "warning");
+				} catch {
+					/* headless */
+				}
+			}
 			// Disk-loaded branch only (the session manager was built from the
 			// session file before this event): released claims are proven delivered,
 			// and recovered outcomes re-enter the transcript as notices.
