@@ -6,7 +6,7 @@ import stat
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -89,6 +89,14 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
     @app.get("/v1/workspaces/{workspace_id}/authority")
     def authority(request: Request, workspace_id: UUID) -> JSONResponse:
         return read_route(request, workspace_id, "authority", "")
+
+    @app.get("/v1/workspaces/{workspace_id}/activity")
+    def activity(request: Request, workspace_id: UUID, project_id: UUID | None = None, limit: int = Query(8, ge=1, le=20)) -> JSONResponse:
+        try:
+            principal = _principal(request, capabilities_dir)
+            return JSONResponse(jsonable_encoder(service.activity(principal, workspace_id, project_id=project_id, limit=limit)))
+        except WorkError as error:
+            return JSONResponse({"error": {"code": error.code, "request_id": None, "correlation_id": None, "diagnostics": list(error.diagnostics[:8])}}, status_code=error.status)
 
     @app.get("/v1/operations/{operation_id}")
     def operation(request: Request, operation_id: UUID, x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID")) -> JSONResponse:

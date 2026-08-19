@@ -29,7 +29,7 @@ describe("work-now extension vs current omp source", () => {
 				expect(result.errors).toEqual([]);
 				expect(result.extensions).toHaveLength(1);
 				const ext = result.extensions[0]!;
-				for (const cmd of ["now", "done", "capture", "work"]) {
+				for (const cmd of ["now", "done", "capture", "work", "center"]) {
 					expect(ext.commands.has(cmd)).toBe(true);
 				}
 				expect(ext.tools.has("work")).toBe(true);

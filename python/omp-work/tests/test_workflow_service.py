@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -360,3 +361,65 @@ def test_handoff_and_hash_mismatch_never_satisfy_blockers(service) -> None:
     mismatched["payload_sha256"] = secrets.token_hex(32)
     status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": mismatched}})
     assert status == 400 and body["error"]["code"] == "invalid_request"
+
+
+def test_recent_activity_projection(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    # Item A carries the full closeout flow inside a project; item B is a bare
+    # plan outside it, appended last so newest-first ordering is observable.
+    item = _create(service, workspace_id, "activity target")
+    project_id = uuid4()
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as connection:
+        connection.execute(
+            "INSERT INTO omp_work.projects(project_id, workspace_id, name, kind) VALUES(%s, %s, 'Activity Project', 'surface')",
+            (project_id, workspace_id),
+        )
+        connection.execute("UPDATE omp_work.work_items SET project_id=%s WHERE workspace_id=%s AND work_id=%s", (project_id, workspace_id, item["work_id"]))
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    binding = {"candidate_sha256": final["candidate_sha256"], "candidate_commit": final["commit_sha"]}
+    for kind, extra in (("verification", {}), ("audit", {"independent": True, "verdict": "PASS"}), ("closeout", {}), ("push", {"remote_ref": "refs/heads/main", "remote_commit": final["commit_sha"]})):
+        receipt = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], kind, **binding, **extra)
+        status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": receipt}})
+        assert status == 200, body
+    status, _ = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"]}})
+    assert status == 200
+    workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    completion = {"work_id": item["work_id"], "current_revision_id": item["revision_id"], "candidate": workflow["item"]["candidate"], "receipts": [receipt for receipt in workflow["receipts"] if receipt["candidate_id"] == final["candidate_id"]], "closeout_requested": True}
+    status, body = _command(service, workspace_id, {"type": "complete_work", "payload": {"input": completion}})
+    assert status == 200, body
+    other = _create(service, workspace_id, "outside project")
+    _plan(service, workspace_id, other)
+
+    # Newest-first, normalized kinds, metadata-only rows, honest total.
+    response = service.client.get(f"/v1/workspaces/{workspace_id}/activity", headers=_owner_headers(workspace_id))
+    assert response.status_code == 200, response.text
+    view = response.json()
+    assert view["total"] == 8 and len(view["events"]) == 8
+    assert view["events"][0]["kind"] == "plan" and view["events"][0]["key"] == "OMP-2"
+    assert [event["kind"] for event in view["events"][1:]] == ["completed", "close_proposed", "push", "closeout", "audit", "verification", "plan"]
+    assert set(view["events"][0].keys()) == {"kind", "work_id", "key", "title", "project_id", "occurred_at"}
+    assert view["events"][0]["project_id"] is None and view["events"][1]["project_id"] == str(project_id)
+
+    # Bounded limit: rows shrink, the total stays honest.
+    limited = service.client.get(f"/v1/workspaces/{workspace_id}/activity?limit=2", headers=_owner_headers(workspace_id)).json()
+    assert limited["total"] == 8 and len(limited["events"]) == 2
+
+    # Project filter: only the project's own events.
+    scoped = service.client.get(f"/v1/workspaces/{workspace_id}/activity?project_id={project_id}", headers=_owner_headers(workspace_id)).json()
+    assert scoped["total"] == 7 and all(event["key"] == "OMP-1" for event in scoped["events"])
+
+    # Limit validation, 1 through 20.
+    for bad in (0, 21):
+        invalid = service.client.get(f"/v1/workspaces/{workspace_id}/activity?limit={bad}", headers=_owner_headers(workspace_id))
+        assert invalid.status_code == 400 and invalid.json()["error"]["code"] == "invalid_request"
+
+    # Candidate-bounded readers hold no workspace-wide activity view.
+    reader = service.capabilities / "activity-reader.json"
+    reader.write_text(json.dumps({"token": "activity-reader-token", "actor_id": str(uuid4()), "actor_kind": "task-agent", "workspaces": [str(workspace_id)], "scopes": ["work.candidate.read"], "candidate_ids": [final["candidate_id"]]}))
+    reader.chmod(0o600)
+    denied = service.client.get(f"/v1/workspaces/{workspace_id}/activity", headers={"Authorization": "Bearer activity-reader-token", "X-OMP-Workspace-ID": str(workspace_id)})
+    assert denied.status_code == 403

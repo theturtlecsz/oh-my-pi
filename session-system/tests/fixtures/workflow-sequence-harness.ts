@@ -7,8 +7,12 @@ import { confirmRoundTrip } from "./two-phase";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "summary", "summary-subagent", "done", "footer", "audit", "restore"];
+const MODES = ["intake", "plan", "summary", "summary-subagent", "done", "footer", "audit", "restore", "center", "center-scoped", "center-stale"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
+// OMP-25 scoped centering: the marker must exist before the extension loads.
+if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
+// OMP-25 stale marker: names a project the ledger does not have — /center must refuse.
+if (mode === "center-stale") fs.writeFileSync(path.join(probe, ".work-project"), "No Such Project\n");
 
 interface Comment {
 	body: string;
@@ -48,6 +52,38 @@ const initialItem: MockWorkItem = {
 };
 items.set("HOME-1", initialItem);
 items.set("id-1", initialItem);
+if (mode === "center" || mode === "center-scoped") {
+	// A second project's item proves the .work-project filter (scoped mode) and
+	// pads the unscoped READY list.
+	const elsewhere: MockWorkItem = {
+		work_id: "id-x",
+		workspace_id: WORKSPACE_ID,
+		alias: { key: "HOME-99" },
+		revision: { revision_id: "rev-x", title: "Elsewhere item", description: "", scope: "", acceptance_criteria: [] },
+		state: "BACKLOG",
+		project_id: "proj-2",
+		candidate: null,
+	};
+	items.set("HOME-99", elsewhere);
+	items.set("id-x", elsewhere);
+	const parked: MockWorkItem = {
+		work_id: "id-t",
+		workspace_id: WORKSPACE_ID,
+		alias: { key: "HOME-50" },
+		revision: { revision_id: "rev-t", title: "Parked decision", description: "", scope: "", acceptance_criteria: [] },
+		state: "TRIAGE",
+		project_id: "proj-1",
+		candidate: null,
+	};
+	items.set("HOME-50", parked);
+	items.set("id-t", parked);
+}
+let commandPosts = 0;
+const activityCalls: string[] = [];
+// The first four activity reads fail in unscoped center mode (the three
+// failure scenarios each take a snapshot before the real first run) — proves
+// the fourth section degrades honestly while the other three survive.
+let activityFailuresLeft = mode === "center" ? 4 : 0;
 
 globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string }) => {
 	const u = String(url);
@@ -62,7 +98,10 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 	if (u.includes("/tree")) {
 		return new Response(
 			JSON.stringify({
-				projects: [{ project_id: "proj-1", workspace_id: WORKSPACE_ID, name: "The Bookends", health: "onTrack" }],
+				projects: [
+					{ project_id: "proj-1", workspace_id: WORKSPACE_ID, name: "The Bookends", health: "onTrack" },
+					...(mode === "center" || mode === "center-scoped" ? [{ project_id: "proj-2", workspace_id: WORKSPACE_ID, name: "Elsewhere", health: "onTrack" }] : []),
+				],
 				items: Array.from(new Set(items.values())),
 				relations: [],
 			}),
@@ -79,6 +118,19 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			}),
 			{ status: 200 },
 		);
+	}
+	if (u.includes("/activity")) {
+		activityCalls.push(u);
+		if (activityFailuresLeft > 0) {
+			activityFailuresLeft--;
+			return new Response(JSON.stringify({ error: { code: "unavailable", request_id: null, correlation_id: null, diagnostics: [] } }), { status: 503 });
+		}
+		const scoped = u.includes("project_id=proj-1");
+		const events = [
+			{ kind: "handoff", work_id: "id-1", key: "HOME-1", title: "First", project_id: "proj-1", occurred_at: "2026-08-19T12:00:00+00:00" },
+			...(scoped ? [] : [{ kind: "completed", work_id: "id-x", key: "HOME-99", title: "Elsewhere item", project_id: "proj-2", occurred_at: "2026-08-19T11:00:00+00:00" }]),
+		];
+		return new Response(JSON.stringify({ workspace_id: WORKSPACE_ID, total: scoped ? 9 : events.length, events }), { status: 200 });
 	}
 	if (u.endsWith("/workflow")) {
 		const key = u.split("/v1/work-items/")[1]?.split("/")[0] ?? "HOME-1";
@@ -109,6 +161,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 		return new Response(JSON.stringify(it), { status: 200 });
 	}
 	if (method === "POST" && u.endsWith("/v1/commands")) {
+		commandPosts++;
 		const env = JSON.parse(init?.body ?? "{}") as { command: { type: string; payload: Record<string, unknown> } };
 		const cmdType = env.command?.type;
 		const payload = env.command?.payload ?? {};
@@ -280,6 +333,11 @@ if (!tool) throw new Error("work tool missing");
 const uiCalls: string[] = [];
 const statuses: string[] = [];
 const statusCalls: { key: string; text: string | null; placement: string }[] = [];
+let activeTools = ["read", "bash", "work"];
+const sentUserMessages: string[] = [];
+let throwNextSend = false;
+let throwNextSetTools = false;
+let abortCalls = 0;
 const depth = mode === "summary-subagent" ? 1 : 0;
 const inheritedNow =
 	mode === "summary-subagent"
@@ -305,11 +363,28 @@ runner.initialize(
 		setModel: async () => true,
 		getThinkingLevel: () => "high",
 		setThinkingLevel: () => {},
+		sendUserMessage: (content: unknown) => {
+			if (throwNextSend) {
+				throwNextSend = false;
+				throw new Error("injection refused");
+			}
+			sentUserMessages.push(typeof content === "string" ? content : JSON.stringify(content));
+		},
+		getActiveTools: () => [...activeTools],
+		setActiveTools: async (names: string[]) => {
+			if (throwNextSetTools && names.length === 0) {
+				throwNextSetTools = false;
+				throw new Error("registry refused");
+			}
+			activeTools = [...names];
+		},
 	} as never,
 	{
 		getModel: () => fableModel,
 		isIdle: () => true,
-		abort: () => {},
+		abort: () => {
+			abortCalls++;
+		},
 		hasPendingMessages: () => false,
 		shutdown: () => {},
 		getSystemPrompt: () => [],
@@ -424,6 +499,77 @@ if (mode === "intake") {
 	out.uiCalls = uiCalls;
 } else if (mode === "restore") {
 	out.now = await execute({ action: "my_now" });
+} else if (mode === "center" || mode === "center-scoped") {
+	// OMP-25: fresh four-section prompts, no POSTs, tools flipped only inside
+	// the centering turn, write refusal, no stop continuation, exact restoration.
+	const center = extension.commands.get("center");
+	if (!center) throw new Error("center command missing");
+	const cmdCtx = runner.createCommandContext();
+	const stopHandler = extension.handlers.get("session_stop")?.[0];
+	const toolsBefore = [...activeTools];
+	if (mode === "center") {
+		// (a) Synchronous injection failure: tools untouched, /center recovers.
+		throwNextSend = true;
+		await center.handler("", cmdCtx);
+		out.syncFailNotice = uiCalls.at(-1);
+		out.toolsAfterSyncFail = [...activeTools];
+		// (b) Lost injection: the prompt was sent but its turn never starts. The
+		// next (unrelated) turn clears the pending flag; tools are never touched.
+		await center.handler("", cmdCtx);
+		out.lostPrompts = sentUserMessages.length;
+		await runner.emit({ type: "before_agent_start", prompt: "unrelated user prompt", systemPrompt: [] } as never);
+		out.toolsAfterLostInjection = [...activeTools];
+		sentUserMessages.length = 0;
+		// (c) Isolation failure: setActiveTools([]) refuses — the turn is
+		// aborted (fail closed), tools stay exactly as they were.
+		throwNextSetTools = true;
+		await center.handler("", cmdCtx);
+		await runner.emit({ type: "before_agent_start", prompt: sentUserMessages[0] ?? "", systemPrompt: [] } as never);
+		out.isolationFailNotice = uiCalls.at(-1);
+		out.abortsAfterIsolationFail = abortCalls;
+		out.toolsAfterIsolationFail = [...activeTools];
+		out.stopAfterIsolationFail = (await stopHandler?.({ type: "session_stop", stop_hook_active: false }, ctx)) ?? null;
+		sentUserMessages.length = 0;
+	}
+	const postsBefore = commandPosts;
+	await center.handler("", cmdCtx);
+	out.firstPrompt = sentUserMessages[0] ?? null;
+	out.toolsAfterCommand = [...activeTools]; // still untouched — the turn has not started
+	await runner.emit({ type: "before_agent_start", prompt: sentUserMessages[0] ?? "", systemPrompt: [] } as never);
+	out.toolsDuringTurn = [...activeTools];
+	out.writeRefusal = await execute({ action: "create_work", title: "must be refused mid-center" });
+	await center.handler("", cmdCtx); // overlap: must not start a second turn
+	out.promptsAfterOverlap = sentUserMessages.length;
+	out.overlapNotice = uiCalls.at(-1);
+	out.stopDuringCenter = (await stopHandler?.({ type: "session_stop", stop_hook_active: false }, ctx)) ?? null;
+	await runner.emit({ type: "agent_end", messages: [] } as never);
+	out.toolsAfterTurn = [...activeTools];
+	out.toolsBefore = toolsBefore;
+	out.postsDuringCenter = commandPosts - postsBefore;
+	if (mode === "center") {
+		// Second run: NOW set + an armed handoff obligation. The centering turn
+		// still suppresses the checkpoint continuation; a normal stop resumes it.
+		await setNow();
+		await approve(planA);
+		const promptsBefore = sentUserMessages.length;
+		await center.handler("", cmdCtx);
+		out.secondPrompt = sentUserMessages[promptsBefore] ?? null;
+		await runner.emit({ type: "before_agent_start", prompt: sentUserMessages[promptsBefore] ?? "", systemPrompt: [] } as never);
+		out.stopDuringSecondCenter = (await stopHandler?.({ type: "session_stop", stop_hook_active: false }, ctx)) ?? null;
+		await runner.emit({ type: "agent_end", messages: [] } as never);
+		out.stopAfterCenter = (await stopHandler?.({ type: "session_stop", stop_hook_active: false }, ctx)) ?? null;
+	} else {
+		out.activityCalls = activityCalls;
+	}
+} else if (mode === "center-stale") {
+	// OMP-25 fail closed: a marker naming a nonexistent project must refuse
+	// with one honest error — never widen to the whole workspace.
+	const center = extension.commands.get("center");
+	if (!center) throw new Error("center command missing");
+	await center.handler("", runner.createCommandContext());
+	out.staleNotice = uiCalls.filter(call => call.includes("/center failed")).at(-1) ?? null;
+	out.prompts = sentUserMessages.length;
+	out.tools = [...activeTools];
 } else if (mode === "footer") {
 	out.initialCalls = [...statusCalls];
 	await setNow();

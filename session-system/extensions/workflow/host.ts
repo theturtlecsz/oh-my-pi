@@ -15,6 +15,7 @@ import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
 import { discoverAuthStorage, getAgentDir, type ExtensionAPI, type ExtensionContext, type ExtensionModelQuery, type Theme } from "@oh-my-pi/pi-coding-agent";
 import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
+import centerPromptTemplate from "./center-prompt.md" with { type: "text" };
 import digestPromptTemplate from "./digest-prompt.md" with { type: "text" };
 import kindDescriptionText from "./kind-description.md" with { type: "text" };
 import lockRefusalText from "./lock-refusal.md" with { type: "text" };
@@ -25,6 +26,7 @@ import {
 	CLOSEOUT_BOUNDARY,
 	STOP_REMINDER_BOUNDARY,
 	type BackendIssue,
+	type CenterSnapshot,
 	type EvidenceKind,
 	type EvidenceMeta,
 	type GoalTree,
@@ -142,6 +144,36 @@ function sectionItems(content: string, heading: "Approach" | "Verification"): st
 	return items;
 }
 
+/** Deterministic /center prompt — verified snapshot facts + the four-section
+ *  contract. The agent writes the orientation; this never does. */
+export function renderCenterPrompt(snapshot: CenterSnapshot, scope: string, takenAt: string): string {
+	const activity = snapshot.activity;
+	return prompt.render(centerPromptTemplate, {
+		takenAt,
+		scope,
+		nowLine: snapshot.now ? `${snapshot.now.project ? `${snapshot.now.project} · ` : ""}${snapshot.now.key} ${snapshot.now.title}` : undefined,
+		progressLine: snapshot.progress ? `${snapshot.progress.done} of ${snapshot.progress.total} pieces done · ${snapshot.progress.onyou} waiting on Chris` : undefined,
+		readyRows: snapshot.ready.rows,
+		readyTotal: snapshot.ready.total,
+		readyMore: Math.max(0, snapshot.ready.total - snapshot.ready.rows.length) || undefined,
+		waitingRows: snapshot.waiting.rows,
+		waitingTotal: snapshot.waiting.total,
+		waitingMore: Math.max(0, snapshot.waiting.total - snapshot.waiting.rows.length) || undefined,
+		...("unavailable" in activity
+			? { activityUnavailable: activity.unavailable }
+			: {
+					activityRows: activity.rows,
+					activityTotal: activity.total,
+					activityMore: Math.max(0, activity.total - activity.rows.length) || undefined,
+				}),
+	});
+}
+
+/** Literal prefix of every rendered centering prompt — before_agent_start
+ *  recognizes the centering turn by it. Derived from the template so the
+ *  header and the renderer can never drift. */
+const CENTER_PROMPT_HEADER = centerPromptTemplate.slice(0, centerPromptTemplate.indexOf("{{"));
+
 const DIGEST_LABELS = new Set(["PROBLEM", "MAKEUP", "DECISIONS", "BLOCKERS", "ON-YOU", "EVIDENCE", "STATE", "NEXT", "SUGGEST"]);
 
 /** Reads are free at any depth; every other canonical action is a write. */
@@ -201,6 +233,29 @@ export function createWorkflowHost(cfg: HostConfig) {
 	// or /done. FAIL CLOSED on unknown depth: subagent sessions never unlock.
 	let closeoutAuthorized = false;
 	const ownerSession = (ctx: { taskDepth?: number } | undefined): boolean => ctx?.taskDepth === 0;
+
+	// OMP-25 /center: one read-only, tool-less orientation turn at a time.
+	// Tool isolation flips INSIDE the centering turn's before_agent_start —
+	// sendUserMessage is fire-and-forget (its async rejection never reaches the
+	// command), so a failed injection must never have touched the tool set.
+	let centerPending = false; // /center sent its prompt; the turn has not started yet
+	let centerActive = false; // the centering turn is running with tools disabled
+	let centerSavedTools: string[] | undefined;
+	/** Restores the exact pre-center tool set — every exit path (agent_end,
+	 *  session switch, shutdown) routes through here. */
+	async function restoreCenterTools(): Promise<void> {
+		centerPending = false;
+		if (!centerActive) return;
+		const saved = centerSavedTools;
+		centerActive = false;
+		centerSavedTools = undefined;
+		if (!saved) return;
+		try {
+			await piRef.setActiveTools(saved);
+		} catch (error) {
+			piRef.logger.warn(`${TOOL_NAME}-now: center tool restore failed`, { error: String(error) });
+		}
+	}
 
 	const pendingNotices: string[] = [];
 
@@ -821,6 +876,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 		pi.on("session_start", async (_e, ctx) => {
 			preExistingDirtyPaths = dirtyPaths(process.cwd());
 			closeoutAuthorized = false;
+			centerPending = false; // fresh session: no centering turn, tool set comes from init
+			centerActive = false;
+			centerSavedTools = undefined;
 			summaryAuthorized = false;
 			summaryAttemptFinished = false;
 			intakeActive = false;
@@ -910,6 +968,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			intakeSelected = false;
 			planTarget = undefined;
 			resetConfirmations();
+			await restoreCenterTools(); // a switch mid-center must not leak the empty tool set
 			if (event.reason === "resume" || event.reason === "new") {
 				digestPending = true;
 				digestInjectedThisSession = false;
@@ -941,7 +1000,38 @@ export function createWorkflowHost(cfg: HostConfig) {
 			}
 			if (m.details?.name === "summary") await authorizeSummary(ctx);
 		});
-		pi.on("before_agent_start", async () => {
+		pi.on("before_agent_start", async (event, ctx) => {
+			// OMP-25: the centering turn starts here — only NOW do tools flip, so a
+			// lost/failed injection never leaves the session tool-less. Any other
+			// prompt racing ahead clears the pending flag and keeps its tools.
+			if (centerPending || centerActive) {
+				const isCenterTurn = !centerActive && event.prompt.startsWith(CENTER_PROMPT_HEADER);
+				centerPending = false;
+				if (isCenterTurn) {
+					const saved = pi.getActiveTools();
+					try {
+						await pi.setActiveTools([]);
+						centerSavedTools = saved;
+						centerActive = true;
+					} catch (error) {
+						// FAIL CLOSED: mechanical read-only is the contract — a turn
+						// that cannot drop its tools never runs. Abort bails the
+						// pending prompt before it reaches the model.
+						try {
+							await pi.setActiveTools(saved);
+						} catch {
+							/* rollback already handled by the tool registry */
+						}
+						try {
+							ctx.abort();
+							ctx.ui.notify(`/center failed: tool isolation refused (${String(error)}) — turn aborted, nothing sent`, "error");
+						} catch {
+							/* headless */
+						}
+						return;
+					}
+				}
+			}
 			const notices = pendingNotices.splice(0).join("\n");
 			if (!digestPending || digestInjectedThisSession) {
 				return notices ? { message: { customType: `${TOOL_NAME}-notice`, content: notices } } : undefined;
@@ -992,6 +1082,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 		pi.on("session_stop", async event => {
 			try {
+				// OMP-25: the concise centering orientation is the final turn — no
+				// hidden checkpoint continuation rides on it.
+				if (centerActive) return;
 				if (event.stop_hook_active || !state.executingIssue) return;
 				const reviewOwed = state.obligationReview?.armed && !state.obligationReview.blockedOnce;
 				const handoffOwed = state.obligationHandoff?.armed && !state.obligationHandoff.blockedOnce;
@@ -1015,7 +1108,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 			}
 		});
 
+		pi.on("agent_end", async () => {
+			// OMP-25: the centering turn settled — restore the exact prior tool set.
+			await restoreCenterTools();
+		});
+
 		pi.on("session_shutdown", async () => {
+			await restoreCenterTools();
 			try {
 				if (state.obligationHandoff?.armed || state.obligationReview?.armed) await saveCache();
 			} catch {
@@ -1182,6 +1281,47 @@ export function createWorkflowHost(cfg: HostConfig) {
 			},
 		});
 
+		// OMP-25 /center: one fresh, read-only, tool-less orientation turn on demand.
+		// Never fires at launch, on a timer, or after another command.
+		pi.registerCommand("center", {
+			description: "Centering orientation: where you are, what's next, what's stuck, what just moved",
+			handler: async (args, ctx) => {
+				if (args.trim()) {
+					ctx.ui.notify("/center takes no arguments", "warning");
+					return;
+				}
+				if (centerPending || centerActive) {
+					ctx.ui.notify("A centering turn is already running — wait for it to finish", "warning");
+					return;
+				}
+				if (!ctx.isIdle()) {
+					ctx.ui.notify("The agent is mid-turn — run /center once it finishes", "warning");
+					return;
+				}
+				let snapshot: CenterSnapshot;
+				try {
+					snapshot = await backend.centerSnapshot(projectFilter ?? undefined);
+				} catch (e) {
+					// Tree/focus failure: one honest error beats a stale orientation.
+					ctx.ui.notify(`/center failed: ${String(e)} — no orientation produced`, "error");
+					return;
+				}
+				const scope = projectFilter
+					? `project "${projectFilter}" (${backend.markerFile})`
+					: `the whole workspace (no ${backend.markerFile} scope here)`;
+				// Tools are NOT touched here: the centering turn's own
+				// before_agent_start disables them, so a lost injection leaves the
+				// session exactly as it was.
+				centerPending = true;
+				try {
+					pi.sendUserMessage(renderCenterPrompt(snapshot, scope, `${new Date().toISOString().slice(0, 19)}Z`));
+				} catch (e) {
+					centerPending = false;
+					ctx.ui.notify(`/center failed: ${String(e)} — no orientation produced`, "error");
+				}
+			},
+		});
+
 		pi.registerCommand(ADMIN_COMMAND, {
 			description: `${TOOL_LABEL} weave admin: status | digest | help`,
 			getArgumentCompletions: prefix => {
@@ -1200,7 +1340,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					return;
 				}
 				if (sub === "help") {
-					ctx.ui.notify(`/now (window) · /now <issue>|clear · /done (reviewed close) · /capture <text> · /${ADMIN_COMMAND} status|digest`, "info");
+					ctx.ui.notify(`/now (window) · /now <issue>|clear · /center (orientation) · /done (reviewed close) · /capture <text> · /${ADMIN_COMMAND} status|digest`, "info");
 					return;
 				}
 				const lines = await backend.statusLines(currentNowRef() ?? null, { ...(projectFilter ? { projectFilter } : {}), digestInjected: digestInjectedThisSession });
@@ -1270,6 +1410,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 				const okText = (text: string, details: Record<string, unknown> = {}) =>
 					finalize({ content: [{ type: "text" as const, text }], details: { success: true, ...details } });
 				if (!(ACTIONS as readonly string[]).includes(params.action)) return deny(`unknown action "${params.action}"`);
+				// OMP-25: a centering turn is mechanically read-only — belt and braces
+				// beside the emptied tool set, in case a queued call slips through.
+				if (centerActive && !READ_ACTIONS.has(action)) {
+					return deny("REFUSED — /center is read-only: no Work Ledger writes during a centering turn.");
+				}
 				try {
 					// HOME-114: wrap-up writes remain host-locked; only /done closes.
 					// This refusal names the lock at any depth — checked first.

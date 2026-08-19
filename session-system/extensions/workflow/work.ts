@@ -29,6 +29,7 @@ import {
 import type {
 	BackendHooks,
 	BatchOutcome,
+	CenterSnapshot,
 	CreateBatchInput,
 	EvidenceKind,
 	EvidenceMeta,
@@ -51,6 +52,8 @@ import { bounded, healthWord, oneRecovery, redactSecrets } from "./status";
 
 const DRAIN_MAX_QUEUE = 8;
 const DRAIN_MAX_AGE_DAYS = 14;
+/** /center row bound — matches the existing queue digest bound (DRAIN_MAX_QUEUE). */
+const CENTER_MAX_ROWS = 8;
 const ISSUER = "session-system/work-now";
 const NO_SURFACE = "(no surface)";
 
@@ -473,6 +476,47 @@ export function createWorkBackend(
 				const open = items.filter(i => i.state !== "DONE" && i.state !== "CANCELED").length;
 				return `${p.name}${p.health ? ` (${healthWord(p.health)})` : ""} — ${open} open / ${items.length} total`;
 			});
+		},
+
+		async centerSnapshot(projectFilter?: string): Promise<CenterSnapshot> {
+			// ONE tree read serves focus context, progress, ready, and waiting;
+			// tree/focus failure throws — the host never shows a stale orientation.
+			const [tree, slot] = await Promise.all([client.tree(), client.focus(config.ownerId)]);
+			const names = projectNames(tree);
+			const nowItem = slot.work_id ? tree.items.find(i => i.work_id === slot.work_id) : undefined;
+			const now = nowItem ? toRef(nowItem, names) : null;
+			const scopeId = projectFilter ? tree.projects.find(p => p.name === projectFilter)?.project_id : undefined;
+			if (projectFilter && !scopeId) {
+				// FAIL CLOSED: a stale marker must never silently widen the
+				// orientation to the whole workspace under a project-scope banner.
+				throw new Error(`project "${projectFilter}" from ${backend.markerFile} does not exist in the Work Ledger — fix the marker or create the project`);
+			}
+			let progress: CenterSnapshot["progress"];
+			if (nowItem?.project_id) {
+				const goal = tree.items.filter(i => !i.archived && i.project_id === nowItem.project_id);
+				progress = {
+					done: goal.filter(i => i.state === "DONE" || i.state === "CANCELED").length,
+					total: goal.length,
+					onyou: goal.filter(i => i.state === "TRIAGE").length,
+				};
+			}
+			const open = tree.items.filter(i => !i.archived && i.state !== "DONE" && i.state !== "CANCELED" && (!scopeId || i.project_id === scopeId));
+			const readyItems = open.filter(i => i.state !== "TRIAGE" && i.work_id !== slot.work_id);
+			const waitingItems = open.filter(i => i.state === "TRIAGE");
+			const ready = { rows: readyItems.slice(0, CENTER_MAX_ROWS).map(i => `${i.alias.key} ${i.revision.title}`), total: readyItems.length };
+			const waiting = { rows: waitingItems.slice(0, CENTER_MAX_ROWS).map(i => `${i.alias.key} ${i.revision.title}`), total: waitingItems.length };
+			let activity: CenterSnapshot["activity"];
+			try {
+				const view = await client.activity({ ...(scopeId ? { projectId: scopeId } : {}), limit: CENTER_MAX_ROWS });
+				activity = {
+					rows: view.events.map(e => `${e.occurred_at.slice(0, 16)} ${e.kind} — ${e.key} ${e.title}`),
+					total: view.total,
+				};
+			} catch (error) {
+				// Only this section degrades — the other three stay fresh and honest.
+				activity = { unavailable: redactSecrets(String(error)) };
+			}
+			return { now, ...(progress ? { progress } : {}), ready, waiting, activity };
 		},
 
 		async setNowRemote(issue: NowRef): Promise<void> {

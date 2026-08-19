@@ -55,6 +55,16 @@ class WorkService:
             }
             raise WorkError(error.code, status=statuses.get(error.code, 409), diagnostics=error.diagnostics) from error
 
+    def activity(self, principal: Principal, workspace_id: UUID, *, project_id: UUID | None, limit: int) -> dict[str, object]:
+        # work.read only — candidate-bounded readers hold no workspace-wide view.
+        if workspace_id not in principal.workspaces or "work.read" not in principal.scopes:
+            raise WorkError("forbidden", status=403)
+        try:
+            return self._store.activity(workspace_id, principal.actor_id, project_id=project_id, limit=limit)
+        except WorkStoreError as error:
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(error.code, status=statuses.get(error.code, 409), diagnostics=error.diagnostics) from error
+
     def read(self, principal: Principal, workspace_id: UUID, kind: str, value: str) -> dict[str, object]:
         if workspace_id not in principal.workspaces:
             raise WorkError("forbidden", status=403)

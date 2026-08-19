@@ -8,7 +8,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "done" | "footer" | "audit" | "restore"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "done" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -156,5 +156,73 @@ describe("HOME-122 workflow sequence", () => {
 		expect(lower?.placement).toBe("footer");
 		expect(lower?.text).not.toContain("HOME-1");
 		expect(lower?.text).not.toContain("First");
+	});
+
+	test("center injects one fresh read-only four-section orientation turn", () => {
+		const out = run("center");
+		// Injection failure paths never touch the tool set.
+		expect(String(out.syncFailNotice)).toContain("/center failed");
+		expect(list(out.toolsAfterSyncFail)).toEqual(["read", "bash", "work"]);
+		expect(out.lostPrompts).toBe(1);
+		expect(list(out.toolsAfterLostInjection)).toEqual(["read", "bash", "work"]);
+		// Isolation failure fails closed: turn aborted, tools untouched, state clear.
+		expect(String(out.isolationFailNotice)).toContain("tool isolation refused");
+		expect(out.abortsAfterIsolationFail).toBe(1);
+		expect(list(out.toolsAfterIsolationFail)).toEqual(["read", "bash", "work"]);
+		expect(out.stopAfterIsolationFail).toBeNull();
+		// The prompt carries the snapshot header and all four mandatory sections.
+		const first = String(out.firstPrompt);
+		expect(first).toContain("── /center — centering snapshot @");
+		for (const heading of ["**Where I am**", "**What's next**", "**Stuck on you**", "**What just moved**"]) {
+			expect(first).toContain(heading);
+		}
+		// No focus: says so and points to /now without selecting anything.
+		expect(first).toContain("NOW: unset — no focus is selected");
+		expect(first).toContain("point Chris to /now");
+		// Bounded sections with honest totals; activity failure degrades only itself.
+		expect(first).toContain("HOME-99 Elsewhere item"); // unscoped covers the whole workspace
+		expect(first).toContain("STUCK ON CHRIS (1 total)");
+		expect(first).toContain("HOME-50 Parked decision");
+		expect(first).toContain("WHAT JUST MOVED: unavailable this run");
+		// Tools flip only inside the centering turn; writes are refused during it.
+		expect(list(out.toolsAfterCommand)).toEqual(["read", "bash", "work"]);
+		expect(list(out.toolsDuringTurn)).toEqual([]);
+		expect(String(out.writeRefusal)).toContain("REFUSED — /center is read-only");
+		// Overlap never starts a second turn; the run performs zero POSTs.
+		expect(out.promptsAfterOverlap).toBe(1);
+		expect(String(out.overlapNotice)).toContain("already running");
+		expect(out.postsDuringCenter).toBe(0);
+		expect(out.stopDuringCenter).toBeNull();
+		expect(list(out.toolsAfterTurn)).toEqual(list(out.toolsBefore));
+		// Second run: fresh snapshot names the global NOW; the armed handoff
+		// continuation stays suppressed during centering and resumes after.
+		const second = String(out.secondPrompt);
+		expect(second).toContain("NOW: The Bookends · HOME-1 First");
+		expect(second).toContain("WHAT JUST MOVED (");
+		expect(out.stopDuringSecondCenter).toBeNull();
+		expect(record(out.stopAfterCenter).continue).toBe(true);
+	});
+
+	test("center scopes queue, waiting, and activity by the .work-project marker", () => {
+		const out = run("center-scoped");
+		const first = String(out.firstPrompt);
+		expect(first).toContain('Scope: project "The Bookends" (.work-project)');
+		expect(first).toContain("HOME-1 First");
+		expect(first).not.toContain("HOME-99"); // the Elsewhere project is filtered out
+		expect(first).toContain("WHAT JUST MOVED (9 total)");
+		expect(first).toContain("… and 8 more");
+		expect(String(list(out.activityCalls)[0])).toContain("project_id=proj-1");
+		expect(String(list(out.activityCalls)[0])).toContain("limit=8");
+		expect(list(out.toolsDuringTurn)).toEqual([]);
+		expect(out.postsDuringCenter).toBe(0);
+		expect(list(out.toolsAfterTurn)).toEqual(list(out.toolsBefore));
+	});
+
+	test("center refuses a stale .work-project marker instead of widening scope", () => {
+		const out = run("center-stale");
+		expect(String(out.staleNotice)).toContain("/center failed");
+		expect(String(out.staleNotice)).toContain("does not exist in the Work Ledger");
+		expect(out.prompts).toBe(0);
+		expect(list(out.tools)).toEqual(["read", "bash", "work"]);
 	});
 });

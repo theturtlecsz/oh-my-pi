@@ -20,10 +20,16 @@ from .semantics import completion_blockers, validate_cutover_manifest, would_cre
 
 _RECEIPT_FIELDS = "receipt_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit"
 
+# /center recent-activity projection (OMP-25): applied domain events that mean
+# "something moved" — receipts, close proposals, completions. Metadata only.
+_ACTIVITY_EVENT_TYPES = ("append_evidence", "request_closeout", "complete_work")
+_ACTIVITY_EVENT_KINDS = {"request_closeout": "close_proposed", "complete_work": "completed"}
+
 
 class WorkStore(Protocol):
     def execute(self, envelope: CommandEnvelope, *, actor_id: UUID, actor_kind: str, required_scope: str) -> tuple[OperationReceipt, dict[str, object]]: ...
     def read(self, workspace_id: UUID, actor_id: UUID, kind: str, value: str, *, candidate_allowlist: frozenset[UUID] | None = None) -> dict[str, object]: ...
+    def activity(self, workspace_id: UUID, actor_id: UUID, *, project_id: UUID | None = None, limit: int = 8) -> dict[str, object]: ...
 
 class WorkStoreError(Exception):
     def __init__(self, code: str, diagnostics: tuple[str, ...] = ()) -> None:
@@ -514,3 +520,25 @@ class PostgresWorkStore:
                     return {"authority": "linear", "epoch_id": None, "epoch_state": None, "activated_at": None, "first_work_mutation_at": None}
                 return {"authority": "work", "epoch_id": str(row["epoch_id"]), "epoch_state": row["epoch_state"], "activated_at": row["activated_at"].isoformat(), "first_work_mutation_at": row["first_work_mutation_at"].isoformat() if row["first_work_mutation_at"] else None}
             raise WorkStoreError("invalid_request")
+
+    def activity(self, workspace_id: UUID, actor_id: UUID, *, project_id: UUID | None = None, limit: int = 8) -> dict[str, object]:
+        if not 1 <= limit <= 20:
+            raise WorkStoreError("invalid_request", ("limit must be between 1 and 20",))
+        with self._transaction(workspace_id, actor_id) as cur:
+            filters = "e.workspace_id=%s AND e.outcome='applied' AND e.event_type = ANY(%s)"
+            params: list[object] = [workspace_id, list(_ACTIVITY_EVENT_TYPES)]
+            if project_id is not None:
+                filters += " AND i.project_id=%s"
+                params.append(project_id)
+            base = f"FROM omp_audit.domain_events e JOIN omp_work.work_items i ON i.work_id=e.aggregate_id JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias JOIN omp_work.work_revisions r ON r.revision_id=i.current_revision_id WHERE {filters}"
+            cur.execute(f"SELECT count(*) AS total {base}", params)
+            total = int(cur.fetchone()["total"])
+            cur.execute(f"SELECT e.event_type,e.payload,e.occurred_at,i.work_id,i.project_id,a.key,r.title {base} ORDER BY e.sequence DESC LIMIT %s", [*params, limit])
+            events: list[dict[str, object]] = []
+            for row in cur.fetchall():
+                # Normalized metadata ONLY — receipt bodies and audit payloads never leave here.
+                payload = row["payload"] if isinstance(row["payload"], dict) else {}
+                receipt = payload.get("receipt") if isinstance(payload.get("receipt"), dict) else {}
+                kind = _ACTIVITY_EVENT_KINDS.get(row["event_type"]) or str(receipt.get("kind") or "evidence")
+                events.append({"kind": kind, "work_id": str(row["work_id"]), "key": row["key"], "title": row["title"], "project_id": str(row["project_id"]) if row["project_id"] else None, "occurred_at": row["occurred_at"].isoformat()})
+            return {"workspace_id": str(workspace_id), "total": total, "events": events}

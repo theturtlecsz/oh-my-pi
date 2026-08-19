@@ -78,6 +78,23 @@ export interface NowRef {
 	project?: string;
 }
 
+/** /center snapshot (OMP-25) — one fresh, bounded, read-only orientation.
+ *  Rows are preformatted owner-facing lines (key + title, no bodies); each
+ *  section carries its full count so truncation stays honest. */
+export interface CenterSnapshot {
+	/** Global focus — reported honestly even when it belongs to another project. */
+	now: NowRef | null;
+	/** NOW's own goal progress (counts over its project), when NOW has one. */
+	progress?: { done: number; total: number; onyou: number };
+	/** Open, non-queued work excluding NOW — scoped by projectFilter when given. */
+	ready: { rows: string[]; total: number };
+	/** Owner decision queue (TRIAGE) — scoped by projectFilter when given. */
+	waiting: { rows: string[]; total: number };
+	/** Newest applied receipt/close-proposal/completion metadata, or an honest
+	 *  unavailable reason — the other sections survive an activity failure. */
+	activity: { rows: string[]; total: number } | { unavailable: string };
+}
+
 export interface WorkflowCheckpoint {
 	issue: NowRef;
 	plan?: { hash: string; at: string };
@@ -193,6 +210,10 @@ export interface WorkflowBackend {
 	waitingLines(): Promise<string[]>;
 	/** The `tree` tool read (surface/milestone overview). */
 	projectTreeLines(): Promise<string[]>;
+	/** One fresh /center orientation read (OMP-25). Throws on tree/focus
+	 *  failure — the host shows one honest error instead of a stale
+	 *  orientation; only the activity section degrades internally. */
+	centerSnapshot(projectFilter?: string): Promise<CenterSnapshot>;
 
 	setNowRemote(issue: NowRef): Promise<void>;
 	clearNowRemote(issueId: string | undefined): Promise<void>; // throws → host warns, clears locally
