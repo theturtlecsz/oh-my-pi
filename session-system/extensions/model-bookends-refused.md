@@ -1,2 +1,2 @@
 AUDIT GATE — this auditor's report was REFUSED, not lost. Missing: {{reasons}}.
-The audit DID run; do not treat this as "no audit ran". Spawn ONE fresh `auditor` task with the same five inlined sections, and require it to return the canonical plain headed-text report: first line `VERDICT: PASS | NEEDS_FIX | BLOCKED`, then FINDINGS, ACCEPTANCE COVERAGE, OUT OF SCOPE, CHECKS RUN, REMAINING QUESTIONS — each on its own line with real content beneath. Never JSON; never pass outputSchema on the auditor task.
+The audit DID run; do not treat this as "no audit ran". {{retry}}

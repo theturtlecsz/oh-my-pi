@@ -10,9 +10,11 @@ import {
 	extractAuditReport,
 	missingAuditSections,
 	missingReportParts,
+	normalizeAuditReport,
 	parseAuditVerdict,
 	reportForwarded,
 } from "../extensions/model-bookends";
+import { claimAuditReceipt, releaseAuditReceipt, reportSha256 } from "../extensions/workflow/audit-bridge";
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const extPath = path.join(repoRoot, "session-system/extensions/model-bookends.ts");
 
@@ -29,6 +31,14 @@ const FULL_AUDIT_TASK = [
 	"```",
 	"Verification: bun test session-system/tests/install.test.ts → 2 pass, 0 fail.",
 ].join("\n");
+const MANIFEST = [
+	"Mode: git-range-sha256",
+	"Repository: /home/thetu/oh-my-pi",
+	`Start commit: ${"a".repeat(40)}`,
+	`Final commit: ${"b".repeat(40)}`,
+	`SHA-256: ${"c".repeat(64)}`,
+].join("\n");
+const manifestTask = (manifest: string) => FULL_AUDIT_TASK.replace(/Final diff:[\s\S]*?```\n/, `Final diff:\n${manifest}\n`);
 
 const report = (verdict: string, findings = "(none)") =>
 	[
@@ -147,6 +157,23 @@ const taskResult = (id: string, text: string, isError = false) =>
 		details: isError ? undefined : { results: [{ output: text }] },
 		isError,
 	}) as never;
+/** Mirrors the real task tool result for a user-interrupted auditor: the
+ *  envelope reports status="cancelled" and details carries aborted:true. */
+const abortedTaskResult = (id: string) =>
+	({
+		type: "tool_result",
+		toolName: "task",
+		toolCallId: id,
+		input: {},
+		content: [
+			{
+				type: "text",
+				text: `<task-result id="Aud" agent="auditor" status="cancelled" duration="8s">\n<abort-reason>user interrupt</abort-reason>\n</task-result>`,
+			},
+		],
+		details: { results: [{ output: "", aborted: true }] },
+		isError: true,
+	}) as never;
 const workResult = (id: string, body: string, success = true) =>
 	({
 		type: "tool_result",
@@ -201,15 +228,114 @@ describe("helpers", () => {
 			"Acceptance criteria",
 			"Starting state (commit + pre-existing dirty files)",
 			"Final diff",
-			"Verification results",
+			"Verification",
 		]);
 		const missing = missingAuditSections(
 			"Approved plan: rewrite the frobnicator config end to end.\nFinal diff: the full diff follows below verbatim.",
 		);
 		expect(missing).toContain("Acceptance criteria");
 		expect(missing).toContain("Starting state (commit + pre-existing dirty files)");
-		expect(missing).toContain("Verification results");
-		expect(missing).toHaveLength(3);
+		expect(missing).toContain("Verification");
+		// pointer-only Final diff carries no auditable bytes (OMP-11)
+		expect(missing.some(entry => entry.startsWith("Final diff (needs inline git-diff markers"))).toBe(true);
+		expect(missing).toHaveLength(4);
+	});
+
+	test("missingAuditSections accepts markdown-dressed labels (OMP-11)", () => {
+		const markdown = [
+			"# Approved plan",
+			"add three install links to install.sh and mirror them in install.test.ts LINKS.",
+			"## **Acceptance criteria:**",
+			"AC-1 installer places all three artifacts; AC-2 LINKS mirrors them.",
+			"3. **Starting state (commit + pre-existing dirty files)** — commit abc123; none dirty.",
+			"### Final diff:",
+			"```diff",
+			"--- a/session-system/install.sh",
+			"+++ b/session-system/install.sh",
+			"@@ -19,0 +20,3 @@",
+			"+place extensions/model-bookends.ts",
+			"```",
+			"**Verification**: bun test session-system/tests/install.test.ts → 2 pass, 0 fail.",
+		].join("\n");
+		expect(missingAuditSections(markdown)).toEqual([]);
+	});
+
+	test("indented label-lookalikes in diff context lines never open or terminate sections", () => {
+		// A unified-diff CONTEXT line (leading space) that looks like a label must not
+		// cut the Final diff body short — here the only @@ hunk sits AFTER it, so an
+		// early termination would falsely refuse the section as pointer-only.
+		const task = [
+			"Approved plan: add three install links to install.sh and mirror them in LINKS.",
+			"Acceptance criteria: AC-1 installer places all three artifacts; AC-2 LINKS mirrors them.",
+			"Starting state: commit abc123; pre-existing dirty files: none.",
+			"Final diff:",
+			"```diff",
+			"--- a/docs/runbook.md",
+			"+++ b/docs/runbook.md",
+			" Verification: run the smoke test before shipping.",
+			" ## Final diff:",
+			" 3. **Starting state (commit + pre-existing dirty files)** — notes.",
+			"@@ -19,0 +20,3 @@",
+			"+place extensions/model-bookends.ts",
+			"```",
+			"Verification: bun test session-system/tests/install.test.ts → 2 pass, 0 fail.",
+		].join("\n");
+		expect(missingAuditSections(task)).toEqual([]);
+	});
+
+
+	test("missingAuditSections accepts a complete git-range-sha256 manifest as the Final diff", () => {
+		expect(missingAuditSections(manifestTask(MANIFEST))).toEqual([]);
+	});
+
+	test("missingAuditSections rejects every incomplete or malformed manifest variant", () => {
+		const variants: Array<[string, string]> = [
+			["missing Mode", MANIFEST.replace(/^Mode:.*\n/, "")],
+			["missing Repository", MANIFEST.replace(/^Repository:.*\n/m, "")],
+			["missing Start commit", MANIFEST.replace(/^Start commit:.*\n/m, "")],
+			["missing Final commit", MANIFEST.replace(/^Final commit:.*\n/m, "")],
+			["missing SHA-256", MANIFEST.replace(/^SHA-256:.*$/m, "")],
+			["relative repository path", MANIFEST.replace("/home/thetu/oh-my-pi", "oh-my-pi")],
+			["short start commit", MANIFEST.replace("a".repeat(40), "a".repeat(12))],
+			["short final commit", MANIFEST.replace("b".repeat(40), "b".repeat(7))],
+			["short digest", MANIFEST.replace("c".repeat(64), "c".repeat(32))],
+			["wrong mode", MANIFEST.replace("git-range-sha256", "git-range-md5")],
+			["duplicate Start commit lines", `${MANIFEST}\nStart commit: ${"d".repeat(40)}`],
+			["duplicate SHA-256 lines", `${MANIFEST}\nSHA-256: ${"e".repeat(64)}`],
+			["two full manifests", `${MANIFEST}\n${MANIFEST}`],
+			["manifest plus smuggled Command line", `${MANIFEST}\nCommand: rm -rf /`],
+			["manifest plus trailing prose", `${MANIFEST}\nreconstruct it yourself as described.`],
+			["manifest fields out of order", MANIFEST.split("\n").reverse().join("\n")],
+		];
+		for (const [name, manifest] of variants) {
+			const missing = missingAuditSections(manifestTask(manifest));
+			expect(missing.some(entry => entry.startsWith("Final diff (needs inline git-diff markers")), name).toBe(true);
+		}
+	});
+
+	test("filename-only marker lines never pass; complete marker sets do", () => {
+		const pointerCases = [
+			// dressed-up filename pointer: header line with prose, no hunks, no metadata
+			"diff --git a/src/x.ts b/src/x.ts\nsee the branch for the actual change.",
+			// bare header pair without any hunk is filenames only
+			"--- a/src/x.ts\n+++ b/src/x.ts",
+			// partial rename metadata is filenames only
+			"diff --git a/old.txt b/new.txt\nrename from old.txt",
+		];
+		for (const body of pointerCases) {
+			expect(
+				missingAuditSections(manifestTask(body)).some(entry => entry.startsWith("Final diff (needs inline git-diff markers")),
+				body,
+			).toBe(true);
+		}
+		// a pure rename produces no hunks — its complete metadata set is the diff material
+		const rename = manifestTask(
+			"diff --git a/old.txt b/new.txt\nsimilarity index 100%\nrename from old.txt\nrename to new.txt",
+		);
+		expect(missingAuditSections(rename)).toEqual([]);
+		// a mode-only change likewise needs both mode lines
+		const mode = manifestTask("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755");
+		expect(missingAuditSections(mode)).toEqual([]);
 	});
 
 	test("missingAuditSections rejects labels with empty or token-thin bodies", () => {
@@ -246,12 +372,24 @@ describe("helpers", () => {
 		// advisory regression: a one-line section-name echo must NOT pass
 		const echo = "VERDICT: PASS\nfindings acceptance coverage out of scope checks run remaining questions";
 		expect(missingReportParts(echo)).not.toEqual([]);
-		expect(missingReportParts(PASS_REPORT.replace("FINDINGS", "FINDINGS (ordered by severity)"))).toContain("FINDINGS");
+		// annotated headings are harmless layout variance (OMP-11)
+		expect(missingReportParts(PASS_REPORT.replace("FINDINGS", "FINDINGS (ordered by severity)"))).toEqual([]);
+		expect(missingReportParts(PASS_REPORT.replace("CHECKS RUN", "CHECKS RUN:"))).toEqual([]);
 		expect(missingReportParts(report("NEEDS_FIX", "(none)"))).toContain("at least one finding under NEEDS_FIX");
 		expect(missingReportParts(report("NEEDS_FIX", "- none"))).toContain("at least one finding under NEEDS_FIX");
 		expect(missingReportParts(report("NEEDS_FIX", "- [P0] AC-1 src/x.ts:3 — evidence: failure"))).toContain(
 			"at least one finding under NEEDS_FIX",
 		);
+		// a multiline finding block (indented continuations) with all six signals passes
+		expect(
+			missingReportParts(
+				report(
+					"NEEDS_FIX",
+					"- [P0] AC-1 covers src/x.ts:3-9.\n  evidence: the test fails.\n  impact: broken settlement.\n  minimal fix: guard the branch.",
+				),
+			),
+		).toEqual([]);
+		// two separate incomplete bullets do not merge into one qualifying finding
 		expect(
 			missingReportParts(
 				report("NEEDS_FIX", "- [P0] AC-1 src/x.ts:3 — evidence: failure\n- impact: broken; minimal fix: guard"),
@@ -324,6 +462,24 @@ describe("helpers", () => {
 		expect(extractAuditReport({ results: [{ output: JSON.stringify(PASS_REPORT) }] }, "")).toBe(PASS_REPORT);
 		expect(missingReportParts(extractAuditReport({ results: [{ output: JSON.stringify(PASS_REPORT) }] }, ""))).toEqual([]);
 	});
+
+	test("normalizeAuditReport strips transport quoting and preamble byte-for-byte from VERDICT onward", () => {
+		// OMP-8/OMP-11 regression: JSON-quoted output with provider preamble before VERDICT.
+		const wrapped = JSON.stringify(`I inspected the work and here is my assessment.\n\n${PASS_REPORT}`);
+		expect(normalizeAuditReport(wrapped)).toBe(PASS_REPORT);
+		// idempotent: normalized text normalizes to itself
+		expect(normalizeAuditReport(normalizeAuditReport(wrapped))).toBe(PASS_REPORT);
+		expect(normalizeAuditReport(PASS_REPORT)).toBe(PASS_REPORT);
+		// structured JSON reports pass through untouched for separate validation
+		const jsonReport = '{"verdict": "PASS", "findings": []}';
+		expect(normalizeAuditReport(jsonReport)).toBe(jsonReport);
+		// no VERDICT anywhere: decoded text is returned trimmed, never invented
+		expect(normalizeAuditReport("  just some prose  ")).toBe("just some prose");
+		// preamble-wrapped reports validate and parse after normalization
+		expect(missingReportParts(wrapped)).toEqual([]);
+		expect(parseAuditVerdict(wrapped)).toBe("PASS");
+		expect(extractAuditReport({ results: [{ output: wrapped }] }, "")).toBe(PASS_REPORT);
+	});
 });
 
 describe("/intake routing", () => {
@@ -391,7 +547,7 @@ describe("audit gate", () => {
 		const res = await h.runner.emitToolCall(auditorCall("t1", "Approved plan: x. Final diff: y."));
 		expect(res?.block).toBe(true);
 		expect(res?.reason).toContain("Acceptance criteria");
-		expect(res?.reason).toContain("Verification results");
+		expect(res?.reason).toContain("Verification");
 	});
 
 	test("armed: leaves ordinary batches alone and accepts a singleton auditor batch", async () => {
@@ -402,13 +558,12 @@ describe("audit gate", () => {
 		expect((await h.runner.emitToolCall(auditorCall("t1")))?.block).toBeUndefined();
 	});
 
-	test("armed: refuses a same-family auditor before spawn (HOME-147 independence)", async () => {
+	test("armed: accepts a same-family configured auditor — independence is fresh context, not family inequality (OMP-11)", async () => {
 		const h = await makeHarness(0, { auditRole: "anthropic/claude-fable-5" });
 		await armSummary(h);
 		const res = await h.runner.emitToolCall(auditorCall("t1"));
-		expect(res?.block).toBe(true);
-		expect(res?.reason).toContain("same model family");
-		// the refused spawn must not consume the one-auditor slot
+		expect(res?.block).toBeUndefined();
+		// the accepted spawn consumes the one-auditor slot as usual
 		expect((await h.runner.emitToolCall(auditorCall("t2")))?.block).toBe(true);
 	});
 
@@ -471,6 +626,30 @@ describe("audit gate", () => {
 		expect(verbatim?.block).toBeUndefined();
 	});
 
+	test("manifest packet with preamble-wrapped JSON-quoted report: one spawn, byte-equal receipt, clean settlement (OMP-11)", async () => {
+		const h = await makeHarness();
+		await armSummary(h);
+		// complete git-range-sha256 manifest packet is accepted for spawn
+		const call = await h.runner.emitToolCall(auditorCall("aud-1", manifestTask(MANIFEST)));
+		expect(call?.block).toBeUndefined();
+		// auditor result arrives JSON-quoted with provider preamble before VERDICT
+		const refusal = await h.runner.emitToolResult(
+			taskResult("aud-1", JSON.stringify(`Reconstructed and verified the manifest diff.\n\n${PASS_REPORT}`)),
+		);
+		expect(refusal).toBeUndefined(); // accepted, not refused — no appended notice
+		// exactly one accepted spawn: the slot is consumed
+		expect((await h.runner.emitToolCall(auditorCall("aud-2")))?.block).toBe(true);
+		// the registered receipt binds the NORMALIZED report bytes exactly
+		const receipt = claimAuditReceipt(reportSha256(PASS_REPORT));
+		expect(receipt?.report).toBe(PASS_REPORT);
+		releaseAuditReceipt(reportSha256(PASS_REPORT));
+		// forward the normalized report verbatim; settlement is clean afterwards
+		const body = `Review\n\n${PASS_REPORT}`;
+		expect((await h.runner.emitToolCall(workForward("l1", body)))?.block).toBeUndefined();
+		await h.runner.emitToolResult(workResult("l1", body));
+		expect(await h.runner.emit(sessionStop())).toBeUndefined();
+	});
+
 	test("a refused report tells the session why, marks refusal state, and frees the slot", async () => {
 		const h = await makeHarness();
 		await armSummary(h);
@@ -499,28 +678,70 @@ describe("audit gate", () => {
 		expect(await h.runner.emit(sessionStop())).toBeUndefined();
 	});
 
-	test("failed, verdict-less, structurally incomplete, or interrupted auditor runs release the slot for a fresh retry", async () => {
+	test("an interrupted auditor run releases the slot without consuming the replacement (OMP-11)", async () => {
 		const h = await makeHarness();
 		await armSummary(h);
-		const first = await h.runner.emitToolCall(auditorCall("aud-1"));
-		expect(first?.block).toBeUndefined();
-		// The host can stop before it delivers any result; that stale reservation must not block a replacement.
+		expect((await h.runner.emitToolCall(auditorCall("aud-1")))?.block).toBeUndefined();
+		const released = (await h.runner.emitToolResult(abortedTaskResult("aud-1"))) as
+			| { content?: Array<{ type: string; text?: string }> }
+			| undefined;
+		const notice = released?.content?.map(part => part.text ?? "").join("\n") ?? "";
+		expect(notice).toContain("interrupted");
+		expect(notice).not.toContain("REFUSED");
+		// The interruption burned nothing: a full unusable-report + replacement cycle remains.
+		expect((await h.runner.emitToolCall(auditorCall("aud-2")))?.block).toBeUndefined();
+		const firstRefusal = (await h.runner.emitToolResult(taskResult("aud-2", "VERDICT: PASS\nno structure"))) as
+			| { content?: Array<{ type: string; text?: string }> }
+			| undefined;
+		const firstAppend = firstRefusal?.content?.map(part => part.text ?? "").join("\n") ?? "";
+		expect(firstAppend).toContain("ONE fresh replacement");
+		expect(firstAppend).not.toContain("exhausted");
+		// A fresh spawn is still available; an error result WITHOUT host abort signals
+		// (plain crash) must consume it — bounded accounting is not evadable by text.
+		expect((await h.runner.emitToolCall(auditorCall("aud-3")))?.block).toBeUndefined();
+		const secondRefusal = (await h.runner.emitToolResult(taskResult("aud-3", "the run was aborted midway", true))) as
+			| { content?: Array<{ type: string; text?: string }> }
+			| undefined;
+		const secondAppend = secondRefusal?.content?.map(part => part.text ?? "").join("\n") ?? "";
+		expect(secondAppend).toContain("exhausted");
+	});
+
+	test("bounded retries: one replacement after an unusable report, then exhaustion (OMP-11)", async () => {
+		const h = await makeHarness();
+		await armSummary(h);
+		// A host-interrupted spawn (no result) releases without burning the replacement.
+		expect((await h.runner.emitToolCall(auditorCall("aud-1")))?.block).toBeUndefined();
 		const interrupted = await h.runner.emit(sessionStop());
 		expect((interrupted as { continue?: boolean } | undefined)?.continue).toBe(true);
-		const retry = await h.runner.emitToolCall(auditorCall("aud-2"));
-		expect(retry?.block).toBeUndefined();
-		await h.runner.emitToolResult(taskResult("aud-2", "task crashed", true));
-		const retry2 = await h.runner.emitToolCall(auditorCall("aud-3"));
-		expect(retry2?.block).toBeUndefined();
-		// verdict token alone, without the required report sections, is also unusable
-		await h.runner.emitToolResult(taskResult("aud-3", "VERDICT: PASS\neverything seemed fine"));
-		const retry3 = await h.runner.emitToolCall(auditorCall("aud-4"));
-		expect(retry3?.block).toBeUndefined();
-		// while no usable report exists, the session must not settle
-		const stop = await h.runner.emit(sessionStop());
-		expect((stop as { continue?: boolean } | undefined)?.continue).toBe(true);
-		const retry4 = await h.runner.emitToolCall(auditorCall("aud-5"));
-		expect(retry4?.block).toBeUndefined();
+		// First unusable result (task crash) → exactly one replacement is allowed.
+		expect((await h.runner.emitToolCall(auditorCall("aud-2")))?.block).toBeUndefined();
+		const firstRefusal = (await h.runner.emitToolResult(taskResult("aud-2", "task crashed", true))) as
+			| { content?: Array<{ type: string; text?: string }> }
+			| undefined;
+		const firstAppend = firstRefusal?.content?.map(part => part.text ?? "").join("\n") ?? "";
+		expect(firstAppend).toContain("ONE fresh replacement");
+		expect(firstAppend).not.toContain("exhausted");
+		expect((await h.runner.emitToolCall(auditorCall("aud-3")))?.block).toBeUndefined();
+		// Second unusable result (verdict token without report structure) exhausts the attempt.
+		const secondRefusal = (await h.runner.emitToolResult(taskResult("aud-3", "VERDICT: PASS\neverything seemed fine"))) as
+			| { content?: Array<{ type: string; text?: string }> }
+			| undefined;
+		const secondAppend = secondRefusal?.content?.map(part => part.text ?? "").join("\n") ?? "";
+		expect(secondAppend).toContain("exhausted");
+		// Third spawn is refused outright.
+		const third = await h.runner.emitToolCall(auditorCall("aud-4"));
+		expect(third?.block).toBe(true);
+		expect(third?.reason).toContain("exhausted");
+		// The review stays blocked (no report exists) and names the exhaustion.
+		const blocked = await h.runner.emitToolCall(workForward("l1", "body"));
+		expect(blocked?.block).toBe(true);
+		expect(blocked?.reason).toContain("exhausted");
+		// session_stop ends this /summary honestly blocked — no forced continuation, no receipt.
+		expect(await h.runner.emit(sessionStop())).toBeUndefined();
+		expect(h.notifies.some(n => n.includes("auditor budget exhausted"))).toBe(true);
+		// A fresh owner-entered /summary resets the bounded attempt.
+		await armSummary(h);
+		expect((await h.runner.emitToolCall(auditorCall("aud-5")))?.block).toBeUndefined();
 	});
 
 	test("review comment is blocked before the audit and when the report is paraphrased", async () => {

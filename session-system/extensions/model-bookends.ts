@@ -29,13 +29,20 @@ import stopNotForwarded from "./model-bookends-stop-not-forwarded.md" with { typ
 /** Effort pinned by HOME-131: /intake always runs Fable at :high. */
 export const INTAKE_THINKING_LEVEL = ThinkingLevel.High;
 
+/** Optional markdown dressing before a canonical label: list number, heading marks, bold.
+ *  NO indent tolerance: unified-diff context lines start with one space, so an indented
+ *  label-lookalike inside an inlined diff must never open or terminate a section. */
+const LABEL_PREFIX = String.raw`(?:\d+[.)][ \t]+)?(?:#{1,6}[ \t]+)?\**`;
+/** Optional bold close, one optional parenthetical annotation, and an optional colon/dash suffix after a canonical label. */
+const LABEL_SUFFIX = String.raw`\**(?:[ \t]*\([^)\n]*\))?\**[ \t]*(?:$|[:—-])`;
+
 /** The five labeled sections every auditor task must inline (HOME-131 input contract). */
 export const AUDIT_INPUT_SECTIONS: ReadonlyArray<{ label: string; pattern: RegExp }> = [
-	{ label: "Approved plan", pattern: /^approved plan(?:$|:)/gim },
-	{ label: "Acceptance criteria", pattern: /^acceptance criteria(?:$|:)/gim },
-	{ label: "Starting state (commit + pre-existing dirty files)", pattern: /^starting (?:state|commit)(?:$|:)/gim },
-	{ label: "Final diff", pattern: /^final diff(?:$|:)/gim },
-	{ label: "Verification results", pattern: /^verification(?: results)?(?:$|:)/gim },
+	{ label: "Approved plan", pattern: new RegExp(`^${LABEL_PREFIX}approved plan${LABEL_SUFFIX}`, "gim") },
+	{ label: "Acceptance criteria", pattern: new RegExp(`^${LABEL_PREFIX}acceptance criteria${LABEL_SUFFIX}`, "gim") },
+	{ label: "Starting state (commit + pre-existing dirty files)", pattern: new RegExp(`^${LABEL_PREFIX}starting (?:state|commit)${LABEL_SUFFIX}`, "gim") },
+	{ label: "Final diff", pattern: new RegExp(`^${LABEL_PREFIX}final diff${LABEL_SUFFIX}`, "gim") },
+	{ label: "Verification", pattern: new RegExp(`^${LABEL_PREFIX}verification(?: results)?${LABEL_SUFFIX}`, "gim") },
 ];
 
 /** Body of a labeled section: text after the label up to the next section label or end. */
@@ -54,11 +61,49 @@ function auditSectionBody(task: string, section: { pattern: RegExp }): string | 
 	return task.slice(start, end).replace(/^[\s:—-]+/, "");
 }
 
+/** The manifest is EXACTLY these five lines, in order (blank and code-fence
+ *  lines around them are tolerated). Anything else beside them — extra fields,
+ *  duplicates, prose, a smuggled `Command:` line — fails: the auditor builds
+ *  its own fixed argv from these values and must never see competing text. */
+const MANIFEST_LINES: ReadonlyArray<RegExp> = [
+	/^Mode:[ \t]*git-range-sha256$/,
+	/^Repository:[ \t]*\/\S+$/,
+	/^Start commit:[ \t]*[0-9a-f]{40}$/,
+	/^Final commit:[ \t]*[0-9a-f]{40}$/,
+	/^SHA-256:[ \t]*[0-9a-f]{64}$/,
+];
+
+/** Inline diff material or one complete git-range-sha256 manifest. Filenames
+ *  and "attached below" pointers fail: the auditor audits only bytes it can
+ *  obtain and verify. Filename-bearing marker lines count only as COMPLETE
+ *  sets — a hunk header for text diffs, a binary marker, or the full metadata
+ *  set of a pure rename/copy/mode-change diff; a lone `diff --git` header, a
+ *  bare `---`/`+++` pair, or partial rename metadata is just filenames. */
+function hasValidFinalDiff(body: string): boolean {
+	const content =
+		/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m.test(body) ||
+		/^GIT binary patch$/m.test(body) ||
+		/^Binary files .* differ$/m.test(body);
+	const metadataOnly =
+		/^diff --git /m.test(body) &&
+		((/^similarity index /m.test(body) && /^rename from /m.test(body) && /^rename to /m.test(body)) ||
+			(/^similarity index /m.test(body) && /^copy from /m.test(body) && /^copy to /m.test(body)) ||
+			(/^old mode /m.test(body) && /^new mode /m.test(body)));
+	if (content || metadataOnly) return true;
+	// Manifest mode (HOME-131 large/binary candidates): exactly the five field
+	// lines, in order, nothing else.
+	const lines = body.split("\n").map(line => line.trim()).filter(line => line !== "" && !line.startsWith("```"));
+	return lines.length === MANIFEST_LINES.length && MANIFEST_LINES.every((field, index) => field.test(lines[index]));
+}
+
 /**
  * Sections absent OR empty in an auditor task body ([] = complete). The label
  * alone is not enough: each section must carry actual content — the plan text,
  * the criteria, the commit + dirty files, the diff, the results — because the
- * auditor audits only what it receives.
+ * auditor audits only what it receives. The Final diff section must carry real
+ * diff material: inline git-diff markers, or a complete hash-verified git
+ * manifest (Mode: git-range-sha256, absolute Repository, 40-hex Start/Final
+ * commits, 64-hex SHA-256).
  */
 export function missingAuditSections(task: string): string[] {
 	const missing: string[] = [];
@@ -68,18 +113,50 @@ export function missingAuditSections(task: string): string[] {
 			missing.push(section.label);
 		} else if (!/(?:\S\s*){8,}/.test(body)) {
 			missing.push(`${section.label} (label present but no content)`);
+		} else if (section.label === "Final diff" && !hasValidFinalDiff(body)) {
+			missing.push(
+				"Final diff (needs inline git-diff markers, or a complete git-range-sha256 manifest: Mode, absolute Repository, 40-hex Start commit, 40-hex Final commit, 64-hex SHA-256 — pointers like a bare filename or 'attached below' are not auditable)",
+			);
 		}
 	}
 	return missing;
 }
 
+/** True when the auditor task run was interrupted/aborted before yielding a
+ *  report: the host marks the result aborted (details.results[].aborted) or
+ *  renders its transport envelope — always at byte 0 of the content — with a
+ *  cancelled/aborted status. Host-authored signals ONLY: error text is never
+ *  consulted, so a failing auditor whose message mentions "aborted" still
+ *  consumes its bounded attempt. An interrupted run is not a refused report —
+ *  it releases the slot without consuming the bounded replacement (OMP-11). */
+export function auditorRunInterrupted(details: unknown, contentText: string): boolean {
+	const results = (details as { results?: Array<{ aborted?: boolean }> } | undefined)?.results;
+	if (Array.isArray(results) && results.some(result => result?.aborted === true)) return true;
+	return /^<task-result [^>]*status="(?:cancelled|aborted)"/.test(contentText);
+}
+
 export type AuditVerdict = "PASS" | "NEEDS_FIX" | "BLOCKED";
 
-const STRUCTURED_FINDING =
-	/^\s*-\s+\[[A-Z][A-Z0-9]*\]\s+AC-\S+\s+\S+:\d+\s+—\s+evidence:\s+\S[^\n]*?;\s+impact:\s+\S[^\n]*?;\s+minimal fix:\s+\S[^\n]*$/m;
+/** Semantic signals a NEEDS_FIX finding must carry (HOME-131). Layout is free —
+ *  a finding may span lines and use any punctuation — but every signal must be
+ *  present in the finding's bullet block: severity tag, AC id, file:line or
+ *  file:start-end, evidence, impact, minimal fix. */
+const FINDING_SIGNALS: ReadonlyArray<RegExp> = [
+	/\[[a-z][a-z0-9]*\]/i,
+	/\bAC-\S+/i,
+	/\S+:\d+(?:-\d+)?/,
+	/\bevidence\b/i,
+	/\bimpact\b/i,
+	/\bminimal fix\b/i,
+];
 
 function hasStructuredFinding(finding: unknown): boolean {
-	if (typeof finding === "string") return STRUCTURED_FINDING.test(finding);
+	if (typeof finding === "string") {
+		// Each top-level bullet is one finding block; indented lines continue it.
+		return finding
+			.split(/^(?=-\s)/m)
+			.some(block => /^\s*-\s/.test(block) && FINDING_SIGNALS.every(signal => signal.test(block)));
+	}
 	if (!finding || typeof finding !== "object" || Array.isArray(finding)) return false;
 	const record = finding as Record<string, unknown>;
 	return [record.severity, record.ac, record.location, record.evidence, record.impact, record.minimal_fix].every(
@@ -88,18 +165,20 @@ function hasStructuredFinding(finding: unknown): boolean {
 }
 
 /** Canonical headed-text sections (auditor.md report template). Case-sensitive and
- *  line-anchored so a one-line token echo cannot satisfy the structure check. */
+ *  line-anchored so a one-line token echo cannot satisfy the structure check; one
+ *  parenthetical annotation or colon/dash suffix after the label is tolerated. */
+const REPORT_HEADING_SUFFIX = String.raw`(?:[ \t]*\([^)\n]*\))?[ \t]*[:—-]?[ \t]*$`;
 export const REPORT_SECTIONS: ReadonlyArray<{ label: string; pattern: RegExp }> = [
-	{ label: "FINDINGS", pattern: /^\s*(?:#+\s*)?FINDINGS\s*$/m },
-	{ label: "ACCEPTANCE COVERAGE", pattern: /^\s*(?:#+\s*)?ACCEPTANCE COVERAGE\s*$/m },
-	{ label: "OUT OF SCOPE", pattern: /^\s*(?:#+\s*)?OUT OF SCOPE\s*$/m },
-	{ label: "CHECKS RUN", pattern: /^\s*(?:#+\s*)?CHECKS RUN\s*$/m },
-	{ label: "REMAINING QUESTIONS", pattern: /^\s*(?:#+\s*)?REMAINING QUESTIONS\s*$/m },
+	{ label: "FINDINGS", pattern: new RegExp(String.raw`^\s*(?:#+\s*)?FINDINGS${REPORT_HEADING_SUFFIX}`, "m") },
+	{ label: "ACCEPTANCE COVERAGE", pattern: new RegExp(String.raw`^\s*(?:#+\s*)?ACCEPTANCE COVERAGE${REPORT_HEADING_SUFFIX}`, "m") },
+	{ label: "OUT OF SCOPE", pattern: new RegExp(String.raw`^\s*(?:#+\s*)?OUT OF SCOPE${REPORT_HEADING_SUFFIX}`, "m") },
+	{ label: "CHECKS RUN", pattern: new RegExp(String.raw`^\s*(?:#+\s*)?CHECKS RUN${REPORT_HEADING_SUFFIX}`, "m") },
+	{ label: "REMAINING QUESTIONS", pattern: new RegExp(String.raw`^\s*(?:#+\s*)?REMAINING QUESTIONS${REPORT_HEADING_SUFFIX}`, "m") },
 ];
 
 /** First verdict token in a report, or undefined when the report is not verdict-structured. */
 export function parseAuditVerdict(text: string): AuditVerdict | undefined {
-	const match = /VERDICT["']?\s*:\s*["']?(PASS|NEEDS_FIX|BLOCKED)\b/i.exec(text);
+	const match = /VERDICT["']?\s*:\s*["']?(PASS|NEEDS_FIX|BLOCKED)\b/i.exec(normalizeAuditReport(text));
 	return (match?.[1]?.toUpperCase() as AuditVerdict) ?? undefined;
 }
 
@@ -144,7 +223,7 @@ function reportSectionBody(text: string, section: { label: string; pattern: RegE
 }
 
 export function missingReportParts(text: string): string[] {
-	const trimmed = text.trim();
+	const trimmed = normalizeAuditReport(text);
 	if (trimmed.startsWith("{")) {
 		try {
 			const parsed: unknown = JSON.parse(trimmed);
@@ -155,9 +234,9 @@ export function missingReportParts(text: string): string[] {
 			/* fall through to headed-text validation */
 		}
 	}
-	const verdict = parseAuditVerdict(text);
+	const verdict = parseAuditVerdict(trimmed);
 	const missing = REPORT_SECTIONS.flatMap(section => {
-		const body = reportSectionBody(text, section);
+		const body = reportSectionBody(trimmed, section);
 		if (body === undefined) return [section.label];
 		if (body.length === 0 && !(verdict === "PASS" && section.label === "FINDINGS")) {
 			return [`${section.label} (label present but no content)`];
@@ -169,7 +248,7 @@ export function missingReportParts(text: string): string[] {
 	} else if (!verdict) {
 		missing.unshift("VERDICT: PASS | NEEDS_FIX | BLOCKED");
 	}
-	const findings = reportSectionBody(text, REPORT_SECTIONS[0]);
+	const findings = reportSectionBody(trimmed, REPORT_SECTIONS[0]);
 	if (verdict === "NEEDS_FIX" && !hasStructuredFinding(findings ?? "")) {
 		missing.push("at least one finding under NEEDS_FIX");
 	}
@@ -207,6 +286,20 @@ export function decodeJsonQuoted(text: string): string {
 	}
 	return trimmed;
 }
+
+/**
+ * Canonical report bytes from any transport shape (HOME-137/OMP-8): first undo
+ * JSON transport quoting, then — for plain headed text — slice from the first
+ * line-anchored `VERDICT:` so provider/tool preamble never reaches validation
+ * or the receipt. Structured JSON reports pass through for missingReportParts
+ * to validate separately. Idempotent: normalized text normalizes to itself.
+ */
+export function normalizeAuditReport(text: string): string {
+	const decoded = decodeJsonQuoted(text);
+	if (decoded.startsWith("{")) return decoded;
+	const verdict = /^[ \t]*VERDICT\s*:\s*(?:PASS|NEEDS_FIX|BLOCKED)\b/im.exec(decoded);
+	return verdict ? decoded.slice(verdict.index).trim() : decoded;
+}
 /**
  * Bare auditor report from a task tool result. The task tool wraps subagent
  * output in `<task-result ...><output>...</output></task-result>` transport
@@ -216,19 +309,31 @@ export function decodeJsonQuoted(text: string): string {
  */
 export function extractAuditReport(details: unknown, contentText: string): string {
 	const detailOutput = (details as { results?: Array<{ output?: unknown }> } | undefined)?.results?.[0]?.output;
-	if (typeof detailOutput === "string" && detailOutput.trim()) return decodeJsonQuoted(detailOutput);
+	if (typeof detailOutput === "string" && detailOutput.trim()) return normalizeAuditReport(detailOutput);
 	const wrapped = /<output>\n?([\s\S]*?)\n?<\/output>/.exec(contentText);
-	if (wrapped?.[1]?.trim()) return decodeJsonQuoted(wrapped[1]);
-	return decodeJsonQuoted(contentText);
+	if (wrapped?.[1]?.trim()) return normalizeAuditReport(wrapped[1]);
+	return normalizeAuditReport(contentText);
 }
 
 export const AUDIT_CONTRACT = auditContract.trim();
+
+/** Retry guidance rendered into the refusal prompts ({{retry}}): one bounded
+ *  replacement per /summary attempt, then honest exhaustion. */
+const RETRY_ALLOWED =
+	"Spawn ONE fresh replacement `auditor` task with the same five inlined sections, requiring the canonical plain headed-text report: first line `VERDICT: PASS | NEEDS_FIX | BLOCKED`, then FINDINGS, ACCEPTANCE COVERAGE, OUT OF SCOPE, CHECKS RUN, REMAINING QUESTIONS. Never JSON; never pass outputSchema. Exactly ONE replacement is allowed per /summary attempt.";
+const RETRY_EXHAUSTED =
+	"The auditor budget for this /summary attempt is exhausted (the one replacement was already used) — do NOT spawn another auditor. This /summary ends blocked without an audit receipt; the next owner-entered /summary starts a fresh bounded attempt.";
 
 interface AuditGate {
 	armed: boolean;
 	contractInjected: boolean;
 	/** Tool-call id of the accepted auditor spawn (undefined = none yet). */
 	auditorCallId?: string;
+	/** Accepted auditor spawns this attempt (a host-interrupted spawn that never
+	 *  produced a result is released and does not count). */
+	auditorAttempts: number;
+	/** Two structurally unusable reports — no further auditor spawns this attempt. */
+	exhausted: boolean;
 	/** Verdict-structured report text, once received. */
 	report?: string;
 	verdict?: AuditVerdict;
@@ -237,7 +342,7 @@ interface AuditGate {
 	forwarded: boolean;
 }
 
-const freshGate = (): AuditGate => ({ armed: false, contractInjected: false, forwarded: false });
+const freshGate = (): AuditGate => ({ armed: false, contractInjected: false, forwarded: false, auditorAttempts: 0, exhausted: false });
 
 export default function modelBookends(pi: ExtensionAPI) {
 	// Owner session only; fail closed on hosts predating ctx.taskDepth (same rule as work-now).
@@ -316,6 +421,9 @@ export default function modelBookends(pi: ExtensionAPI) {
 			if (auditor.outputSchema !== undefined && auditor.outputSchema !== null) {
 				return { block: true, reason: schemaRefused.trim() };
 			}
+			if (gate.exhausted) {
+				return { block: true, reason: `Audit gate: ${RETRY_EXHAUSTED}` };
+			}
 			if (gate.auditorCallId !== undefined) {
 				return {
 					block: true,
@@ -330,22 +438,13 @@ export default function modelBookends(pi: ExtensionAPI) {
 					reason: `Audit gate: auditor task is missing required sections: ${missing.join("; ")}. Inline all five labeled sections in the task text.`,
 				};
 			}
-			// HOME-147: the auditor must be independent — a different model family
-			// than the armed session model. Unresolved @audit fails closed.
-			const auditModel = ctx.models.resolve("@audit");
-			const sessionModel = ctx.models.current();
-			if (!auditModel) {
-				return { block: true, reason: "Audit gate: could not resolve @audit — fix modelRoles.audit and retry; the auditor must run on a different model family than the session." };
+			// Fail closed on an unresolvable audit role: the auditor's independence is
+			// its fresh blocking context plus the call-bound receipt — any configured
+			// @audit model (same family included) is acceptable.
+			if (!ctx.models.resolve("@audit")) {
+				return { block: true, reason: "Audit gate: could not resolve @audit — fix modelRoles.audit and retry." };
 			}
-			if (!sessionModel) {
-				return { block: true, reason: "Audit gate: no session model is set — cannot prove auditor independence; refusing the spawn." };
-			}
-			if (ctx.models.family(auditModel) === ctx.models.family(sessionModel)) {
-				return {
-					block: true,
-					reason: "Audit gate: @audit resolves to the same model family as the session model — an auditor grades cold, never its own family. Point modelRoles.audit at another family.",
-				};
-			}
+			gate.auditorAttempts += 1;
 			gate.auditorCallId = event.toolCallId;
 			return undefined;
 		}
@@ -359,7 +458,7 @@ export default function modelBookends(pi: ExtensionAPI) {
 				return {
 					block: true,
 					reason: gate.lastRefusal
-						? prompt.render(refusedNotice, { reasons: gate.lastRefusal })
+						? prompt.render(refusedNotice, { reasons: gate.lastRefusal, retry: gate.exhausted ? RETRY_EXHAUSTED : RETRY_ALLOWED })
 						: "Audit gate: run the auditor before posting the review — the review must carry its verbatim report.",
 				};
 			}
@@ -381,16 +480,40 @@ export default function modelBookends(pi: ExtensionAPI) {
 				.map(part => (part.type === "text" ? part.text : ""))
 				.join("\n")
 				.trim();
+			if (auditorRunInterrupted(event.details, contentText)) {
+				// Interrupted run, not a refused report: release the reservation without
+				// consuming the bounded replacement (mirrors the session_stop stale-
+				// reservation path) and tell the session plainly.
+				gate.auditorCallId = undefined;
+				gate.auditorAttempts = Math.max(0, gate.auditorAttempts - 1);
+				return {
+					content: [
+						...event.content,
+						{
+							type: "text",
+							text: "Audit gate: the auditor run was interrupted before it reported — nothing was refused and no replacement was consumed. Spawn a fresh auditor task when ready.",
+						},
+					],
+				};
+			}
 			const text = extractAuditReport(event.details, contentText);
 			const missingParts = event.isError ? ["(auditor task failed)"] : missingReportParts(text);
 			if (missingParts.length > 0) {
-				// Failed or structurally incomplete run: release the slot so a FRESH auditor
-				// can be spawned, and tell the SESSION why (HOME-137) — a side-channel-only
-				// warning left the model believing no audit ran, looping paid retries.
+				// Failed or structurally incomplete run: tell the SESSION why (HOME-137) — a
+				// side-channel-only warning left the model believing no audit ran, looping
+				// paid retries. The first unusable report frees the slot for ONE replacement;
+				// the second exhausts the attempt (OMP-11 bounded retries).
 				gate.auditorCallId = undefined;
 				gate.lastRefusal = missingParts.join("; ");
+				if (gate.auditorAttempts >= 2) gate.exhausted = true;
 				return {
-					content: [...event.content, { type: "text", text: prompt.render(refusedNotice, { reasons: gate.lastRefusal }) }],
+					content: [
+						...event.content,
+						{
+							type: "text",
+							text: prompt.render(refusedNotice, { reasons: gate.lastRefusal, retry: gate.exhausted ? RETRY_EXHAUSTED : RETRY_ALLOWED }),
+						},
+					],
 				};
 			}
 			const verdict = parseAuditVerdict(text);
@@ -420,17 +543,29 @@ export default function modelBookends(pi: ExtensionAPI) {
 	});
 
 	// Fail-closed settlement gate: while armed, the session may not settle until the
-	// report exists AND has been copied verbatim into the typed review. A stop with a
-	// reserved call but no result means the host interrupted it; release that stale
-	// reservation so the stop guidance can be followed.
+	// report exists AND has been copied verbatim into the typed review — unless the
+	// bounded auditor budget is exhausted, in which case this /summary ends honestly
+	// blocked with no audit receipt. A stop with a reserved call but no result means
+	// the host interrupted it; release that stale reservation (without burning the
+	// bounded replacement) so the stop guidance can be followed.
 	pi.on("session_stop", async (_event, ctx) => {
 		if (!ownerSession(ctx) || !gate.armed) return undefined;
 		if (!gate.report) {
-			gate.auditorCallId = undefined;
+			if (gate.exhausted) {
+				ctx.ui.notify(
+					"model-bookends: auditor budget exhausted — this /summary ends blocked without an audit receipt; the next owner-entered /summary starts a fresh attempt",
+					"warning",
+				);
+				return undefined;
+			}
+			if (gate.auditorCallId !== undefined) {
+				gate.auditorCallId = undefined;
+				gate.auditorAttempts = Math.max(0, gate.auditorAttempts - 1);
+			}
 			return {
 				continue: true,
 				additionalContext: gate.lastRefusal
-					? prompt.render(stopRefused, { reasons: gate.lastRefusal }).trim()
+					? prompt.render(stopRefused, { reasons: gate.lastRefusal, retry: RETRY_ALLOWED }).trim()
 					: stopNoAudit.trim(),
 			};
 		}

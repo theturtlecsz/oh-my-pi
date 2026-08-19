@@ -444,6 +444,9 @@ if (mode === "intake") {
 		"```diff",
 		"--- a/x",
 		"+++ b/x",
+		"@@ -1,1 +1,1 @@",
+		"-old shared path",
+		"+new shared path",
 		"```",
 		"Verification: bun test → pass.",
 	].join("\n");
