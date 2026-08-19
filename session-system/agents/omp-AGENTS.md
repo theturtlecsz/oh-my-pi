@@ -46,10 +46,39 @@ Every item is tracked as a Work Ledger item: findings, fixes (including ones
 found and fixed in the same session), watch-items, parked ideas, follow-ups,
 decisions needed, and new standing rules. Chat, handoff comments, local
 files, and todo lists are NOT tracking — they evaporate or go unread. If
-work is done or discovered and no issue exists, create one (owner-confirmed
-two-phase write) before the session ends. A finding that lives only in a
+work is done or discovered and no issue exists, create one (two-phase
+ledger write; see routine self-confirmation below) before the session ends. A finding that lives only in a
 comment is unfiled, and unfiled = lost. This law is global: it applies in
 every repo and every session, whatever the project.
+
+## Routine ledger self-confirmation (OMP-23, owner ruling 2026-08-19)
+
+Routine Work Ledger bookkeeping never interrupts Chris with a confirmation
+prompt. The transcript-bound preview→confirm handshake stays intact — the
+agent completes it itself, in the same turn:
+
+1. Call the write once without `confirm`.
+2. Inspect the returned preview and `confirmation_id`; the preview MUST
+   match the intended payload exactly.
+3. Immediately repeat the identical payload with `confirm:true` and that
+   `confirmation_id`.
+4. Verify `success:true`. Do not show the preview or ask Chris.
+
+Routine means exactly these operations: `create_work` when filing a stray
+finding/capture, `revise_work` when recording an already-decided
+bookkeeping correction, `record_health`, and `request_closeout`.
+`request_closeout` records a proposal only and still requires the existing
+owner-entered `/summary` or `/done` host authorization.
+
+Everything else stays visibly owner-confirmed: formal `/intake`
+publication, `queue_work`, `set_now`, `cancel_work`, the `/summary`
+candidate-freeze dialog, and the `/done` close verdict. If a proposed
+create or revision would make a new product or scope decision, it is not
+routine — it stays owner-gated.
+
+Failure semantics: an expired, unknown, refused, or payload-mismatched
+receipt is never authorization to alter the payload or bypass the gate.
+Obtain a fresh preview and reassess under the same action classification.
 
 
 ## Task Observer (installed 2026-07-18, owner-approved activation)

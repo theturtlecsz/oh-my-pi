@@ -2,7 +2,10 @@
 
 The owner's work lives in the Work Ledger: WORLDS, SURFACE nouns with health,
 PROMISE sentences (owner verdict closes), work items. The `work` tool is
-installed: reads are free, writes always render an on-screen confirmation.
+installed: reads are free; gated writes always preview first; routine OMP-23
+bookkeeping (finding/capture filing, bookkeeping revisions, record_health,
+request_closeout) self-confirms silently; decision-bearing or destructive
+writes await Chris.
 
 ## Uniform memory law (owner-ratified 2026-08-13, HOME-112)
 

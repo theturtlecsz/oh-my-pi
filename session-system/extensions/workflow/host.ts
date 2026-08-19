@@ -1244,7 +1244,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					)
 					.optional()
 					.describe("create_issue: publish these child issues under the parent (title/description) with native parent links and blocks relations, behind ONE preview — one confirm writes the whole set"),
-				confirm: z.boolean().optional().describe("Two-phase write approval: pass true ONLY with the confirmation_id from the preview after the owner said yes"),
+				confirm: z.boolean().optional().describe("Two-phase write continuation: pass true only with the preview's confirmation_id, following the action policy in this tool description"),
 				confirmation_id: z.string().optional().describe("The receipt id from this transcript's preview — binds the confirm to the exact shown payload"),
 			}),
 			// Signature contract is (toolCallId, params, signal, onUpdate, ctx) — the
