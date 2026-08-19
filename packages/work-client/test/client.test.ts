@@ -85,6 +85,40 @@ test("health probes never require a bearer", async () => {
 	expect(sawAuth).toBeNull();
 });
 
+test("activity encodes query parameters, sends auth, and decodes the projection", async () => {
+	let request: Request | undefined;
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			request = new Request(String(input), init);
+			return Response.json({
+				workspace_id: ENV.workspace_id,
+				total: 12,
+				events: [
+					{
+						kind: "closeout",
+						work_id: "00000000-0000-0000-0000-0000000000d1",
+						key: "OMP-7",
+						title: "Recent move",
+						project_id: null,
+						occurred_at: "2026-08-19T12:00:00+00:00",
+					},
+				],
+			});
+		},
+	);
+	const view = await client.activity({ projectId: "00000000-0000-0000-0000-0000000000f1", limit: 8 });
+	expect(request?.url).toBe(
+		`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/activity?project_id=00000000-0000-0000-0000-0000000000f1&limit=8`,
+	);
+	expect(request?.headers.get("authorization")).toBe("Bearer token");
+	expect(view.total).toBe(12);
+	expect(view.events[0]?.kind).toBe("closeout");
+	expect(view.events[0]?.key).toBe("OMP-7");
+});
+
 test("payloadHash matches canonical_json semantics (sorted keys, tight separators, no ascii escaping)", () => {
 	// canonical.py: json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 	expect(payloadHash({ b: 1, a: [2, { d: "ü", c: null }] })).toBe(payloadHash({ a: [2, { c: null, d: "ü" }], b: 1 }));

@@ -313,6 +313,19 @@ export type StoredOperation = {
 };
 export type HealthView = { live: boolean; ready: boolean; alerts: string[] };
 
+/** /center recent-activity projection (OMP-25) — normalized event metadata
+ *  only; receipt bodies and audit payloads never cross this read. */
+export type ActivityKind = EvidenceKind | "close_proposed" | "completed" | "evidence";
+export type ActivityEvent = {
+	kind: ActivityKind;
+	work_id: UUID;
+	key: string;
+	title: string;
+	project_id: UUID | null;
+	occurred_at: string;
+};
+export type ActivityView = { workspace_id: UUID; total: number; events: ActivityEvent[] };
+
 export type CommandEnvelope = {
 	api_version: "work.omp.dev/v1";
 	workspace_id: UUID;
@@ -425,6 +438,15 @@ export class WorkClient {
 
 	authority(): Promise<AuthorityView> {
 		return this.request("GET", `/v1/workspaces/${this.workspaceId}/authority`) as Promise<AuthorityView>;
+	}
+
+	/** Bounded recent-activity read (OMP-25 /center) — newest-first, work.read only. */
+	activity(options: { projectId?: UUID; limit?: number } = {}): Promise<ActivityView> {
+		const params = new URLSearchParams();
+		if (options.projectId !== undefined) params.set("project_id", options.projectId);
+		if (options.limit !== undefined) params.set("limit", String(options.limit));
+		const query = params.size > 0 ? `?${params}` : "";
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/activity${query}`) as Promise<ActivityView>;
 	}
 
 	/** Liveness/readiness probes — unauthenticated by design, so a missing or
