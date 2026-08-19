@@ -128,8 +128,10 @@ const AUDIT_TASK = [
 	"Starting state: clean probe repo; dirty file smoke.txt.",
 	"Final diff:",
 	"```diff",
-	"--- a/smoke.txt",
+	"--- /dev/null",
 	"+++ b/smoke.txt",
+	"@@ -0,0 +1 @@",
+	"+candidate payload",
 	"```",
 	"Verification: this smoke's assertions.",
 ].join("\n");
