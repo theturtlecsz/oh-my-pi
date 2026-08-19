@@ -142,6 +142,7 @@
     "stats:audit": "bun scripts/session-stats/audit.ts",
     "test:py": "PYTHONPATH=python/omp-work/src python3 -m pytest -x python/omp-work/tests && python3 -m pytest -x python/omp-rpc/tests && python3 -m pytest -x python/robomp/tests",
     "test:py:work-ledger:integration": "OMP_WORK_POSTGRES_INTEGRATION=1 uv run --project python/omp-work --directory python/omp-work pytest tests/test_postgres_operations.py tests/test_work_service.py",
+    "test:session:smoke": "OMP_WORK_POSTGRES_INTEGRATION=1 bun run session-system/tests/work-service-candidate-smoke.ts",
     "robomp:install": "pip install -e 'python/robomp[dev]'",
     "robomp:serve": "python3 -m robomp serve",
     "robomp:test:integration": "ROBOMP_INTEGRATION=1 python3 -m pytest -x python/robomp/tests/test_worker_smoke.py",
