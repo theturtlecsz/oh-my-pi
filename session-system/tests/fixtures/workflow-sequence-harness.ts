@@ -80,10 +80,13 @@ if (mode === "center" || mode === "center-scoped") {
 }
 let commandPosts = 0;
 const activityCalls: string[] = [];
-// The first four activity reads fail in unscoped center mode (the three
-// failure scenarios each take a snapshot before the real first run) — proves
-// the fourth section degrades honestly while the other three survive.
-let activityFailuresLeft = mode === "center" ? 4 : 0;
+// The first six activity reads fail in unscoped center mode (the failure
+// scenarios each take a snapshot before the real first run) — proves the
+// fourth section degrades honestly while the other three survive.
+let activityFailuresLeft = mode === "center" ? 6 : 0;
+let idle = true;
+// One-shot: the agent "goes busy" during the snapshot's activity read.
+let busyDuringSnapshot = false;
 
 globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string }) => {
 	const u = String(url);
@@ -121,6 +124,10 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 	}
 	if (u.includes("/activity")) {
 		activityCalls.push(u);
+		if (busyDuringSnapshot) {
+			busyDuringSnapshot = false;
+			idle = false;
+		}
 		if (activityFailuresLeft > 0) {
 			activityFailuresLeft--;
 			return new Response(JSON.stringify({ error: { code: "unavailable", request_id: null, correlation_id: null, diagnostics: [] } }), { status: 503 });
@@ -381,7 +388,7 @@ runner.initialize(
 	} as never,
 	{
 		getModel: () => fableModel,
-		isIdle: () => true,
+		isIdle: () => idle,
 		abort: () => {
 			abortCalls++;
 		},
@@ -513,13 +520,30 @@ if (mode === "intake") {
 		await center.handler("", cmdCtx);
 		out.syncFailNotice = uiCalls.at(-1);
 		out.toolsAfterSyncFail = [...activeTools];
-		// (b) Lost injection: the prompt was sent but its turn never starts. The
-		// next (unrelated) turn clears the pending flag; tools are never touched.
+		// (b) Lost injection: the prompt was sent but its turn never starts.
+		// While pending, /center refuses; fresh owner input clears the wedge and
+		// the next /center recovers WITHOUT any intervening turn (audit LOW fix).
 		await center.handler("", cmdCtx);
 		out.lostPrompts = sentUserMessages.length;
-		await runner.emit({ type: "before_agent_start", prompt: "unrelated user prompt", systemPrompt: [] } as never);
+		await center.handler("", cmdCtx);
+		out.wedgedRefusal = uiCalls.at(-1);
+		out.promptsWhileWedged = sentUserMessages.length;
+		await runner.emitInput("unrelated owner input", undefined, "interactive");
+		await center.handler("", cmdCtx);
+		out.promptsAfterRecovery = sentUserMessages.length;
 		out.toolsAfterLostInjection = [...activeTools];
+		// Drop the recovery run's pending injection the same proven way, then
+		// also prove the unrelated-turn path still clears it.
+		await runner.emitInput("second owner input", undefined, "interactive");
+		await runner.emit({ type: "before_agent_start", prompt: "unrelated user prompt", systemPrompt: [] } as never);
 		sentUserMessages.length = 0;
+		// (d) Steer race: the agent goes busy during the snapshot reads — the
+		// post-read idle re-check refuses and nothing is sent.
+		busyDuringSnapshot = true;
+		await center.handler("", cmdCtx);
+		out.steerRaceNotice = uiCalls.at(-1);
+		out.steerRacePrompts = sentUserMessages.length;
+		idle = true;
 		// (c) Isolation failure: setActiveTools([]) refuses — the turn is
 		// aborted (fail closed), tools stay exactly as they were.
 		throwNextSetTools = true;

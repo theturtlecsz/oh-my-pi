@@ -163,8 +163,16 @@ describe("HOME-122 workflow sequence", () => {
 		// Injection failure paths never touch the tool set.
 		expect(String(out.syncFailNotice)).toContain("/center failed");
 		expect(list(out.toolsAfterSyncFail)).toEqual(["read", "bash", "work"]);
+		// Lost injection: wedged /center refuses, fresh owner input clears it,
+		// and the next /center recovers without any intervening turn.
 		expect(out.lostPrompts).toBe(1);
+		expect(String(out.wedgedRefusal)).toContain("already running");
+		expect(out.promptsWhileWedged).toBe(1);
+		expect(out.promptsAfterRecovery).toBe(2);
 		expect(list(out.toolsAfterLostInjection)).toEqual(["read", "bash", "work"]);
+		// Steer race: agent went busy during the snapshot reads — refused, nothing sent.
+		expect(String(out.steerRaceNotice)).toContain("run /center again");
+		expect(out.steerRacePrompts).toBe(0);
 		// Isolation failure fails closed: turn aborted, tools untouched, state clear.
 		expect(String(out.isolationFailNotice)).toContain("tool isolation refused");
 		expect(out.abortsAfterIsolationFail).toBe(1);

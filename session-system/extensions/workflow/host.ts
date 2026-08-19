@@ -978,6 +978,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 		pi.on("input", async (event, ctx) => {
 			if (!ownerSession(ctx) || event.source === "extension") return undefined;
+			// OMP-25 audit LOW: a lost centering injection must not wedge /center.
+			// Fresh owner input proves no centering turn ever started — drop the
+			// stale pending flag so the next /center runs instead of refusing.
+			if (centerPending && !centerActive) centerPending = false;
 			if (/^\s*\/plan\b/.test(event.text)) {
 				const now = currentNowRef();
 				if (!now) {
@@ -1304,6 +1308,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 				} catch (e) {
 					// Tree/focus failure: one honest error beats a stale orientation.
 					ctx.ui.notify(`/center failed: ${String(e)} — no orientation produced`, "error");
+					return;
+				}
+				// Steer-race guard: the snapshot await spans network reads — a user
+				// message submitted meanwhile starts a normal tooled turn, and the
+				// centering prompt would steer into it un-isolated. Refuse instead.
+				if (!ctx.isIdle()) {
+					ctx.ui.notify("A turn started while /center was reading the ledger — run /center again once it finishes", "warning");
 					return;
 				}
 				const scope = projectFilter
