@@ -1,6 +1,6 @@
 /**
  * HOME-114 mechanical enforcement (WEB-2 sequence + advisor findings): the
- * linear-now extension refuses wrap-up writes (update_health, propose_close,
+ * work-now extension refuses wrap-up writes (update_health, propose_close,
  * archive_issue) unless the HOST observed the owner literally entering
  * /summary or /done. Contracts proven here, each through a REAL
  * ExtensionRunner (real createContext → ctx.taskDepth wiring):

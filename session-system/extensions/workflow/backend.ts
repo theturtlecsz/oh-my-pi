@@ -111,12 +111,10 @@ export interface BatchOutcome {
 	text: string; // result line for the tool response
 }
 
-/** Model-facing evidence kinds — ONE typed set for every backend (plan §2);
- *  every kind exists in work.omp.dev/v1, and the Linear adapter translates
- *  each into its typed comment. There is deliberately no generic "evidence"
- *  default: the ledger records typed receipts only. The session review is
- *  `closeout`; the fresh auditor's report is a separate exact-body `audit`
- *  write bound through the receipt bridge. */
+/** Model-facing evidence kinds — every kind exists in work.omp.dev/v1.
+ *  There is deliberately no generic "evidence" default: the ledger records
+ *  typed receipts only. The session review is `closeout`; the fresh auditor's
+ *  report is a separate exact-body `audit` write bound through the receipt bridge. */
 export type EvidenceKind = "handoff" | "verification" | "audit" | "closeout";
 
 export interface EvidenceMeta {
@@ -188,7 +186,7 @@ export interface WorkflowBackend {
 	/** Backend-only digest lines after the tree: IN FLIGHT / NEEDS CHRIS / DRAIN RULE.
 	 *  Throws on failure — the host degrades to one honest line, never blocks. */
 	digestExtras(): Promise<string[]>;
-	/** Bounded /work|/linear status rows (service probe, focus holder, drift). */
+	/** Bounded /work status rows (service probe, focus holder, drift). */
 	statusLines(now: NowRef | null, ctx: { projectFilter?: string; digestInjected: boolean }): Promise<string[]>;
 	workflowState(key: string): Promise<WorkflowCheckpoint>;
 	/** The `waiting` tool read (owner decision queue). */

@@ -75,27 +75,26 @@ export function missingAuditSections(task: string): string[] {
 
 export type AuditVerdict = "PASS" | "NEEDS_FIX" | "BLOCKED";
 
-function hasSubstantiveFinding(finding: unknown): boolean {
-	if (typeof finding === "string") {
-		const text = finding.trim().replace(/^[-*]\s+/, "");
-		return text.length > 0 && !/^(?:\(?none\)?|n\/a|no findings?)[.!]?$/i.test(text);
-	}
+const STRUCTURED_FINDING =
+	/^\s*-\s+\[[A-Z][A-Z0-9]*\]\s+AC-\S+\s+\S+:\d+\s+—\s+evidence:\s+\S[^\n]*?;\s+impact:\s+\S[^\n]*?;\s+minimal fix:\s+\S[^\n]*$/m;
+
+function hasStructuredFinding(finding: unknown): boolean {
+	if (typeof finding === "string") return STRUCTURED_FINDING.test(finding);
 	if (!finding || typeof finding !== "object" || Array.isArray(finding)) return false;
 	const record = finding as Record<string, unknown>;
-	return ["evidence", "impact", "minimal_fix", "description", "finding", "message", "problem", "details"].some(key => {
-		const value = record[key];
-		return typeof value === "string" && hasSubstantiveFinding(value);
-	});
+	return [record.severity, record.ac, record.location, record.evidence, record.impact, record.minimal_fix].every(
+		value => typeof value === "string" && value.trim().length > 0,
+	);
 }
 
 /** Canonical headed-text sections (auditor.md report template). Case-sensitive and
  *  line-anchored so a one-line token echo cannot satisfy the structure check. */
 export const REPORT_SECTIONS: ReadonlyArray<{ label: string; pattern: RegExp }> = [
-	{ label: "FINDINGS", pattern: /^\s*(?:#+\s*)?FINDINGS(?:\s*(?:\([^)\n]*\)|:\s*[^\n]*))?\s*$/m },
-	{ label: "ACCEPTANCE COVERAGE", pattern: /^\s*(?:#+\s*)?ACCEPTANCE COVERAGE(?:\s*(?:\([^)\n]*\)|:\s*[^\n]*))?\s*$/m },
-	{ label: "OUT OF SCOPE", pattern: /^\s*(?:#+\s*)?OUT OF SCOPE(?:\s*(?:\([^)\n]*\)|:\s*[^\n]*))?\s*$/m },
-	{ label: "CHECKS RUN", pattern: /^\s*(?:#+\s*)?CHECKS RUN(?:\s*(?:\([^)\n]*\)|:\s*[^\n]*))?\s*$/m },
-	{ label: "REMAINING QUESTIONS", pattern: /^\s*(?:#+\s*)?REMAINING QUESTIONS(?:\s*(?:\([^)\n]*\)|:\s*[^\n]*))?\s*$/m },
+	{ label: "FINDINGS", pattern: /^\s*(?:#+\s*)?FINDINGS\s*$/m },
+	{ label: "ACCEPTANCE COVERAGE", pattern: /^\s*(?:#+\s*)?ACCEPTANCE COVERAGE\s*$/m },
+	{ label: "OUT OF SCOPE", pattern: /^\s*(?:#+\s*)?OUT OF SCOPE\s*$/m },
+	{ label: "CHECKS RUN", pattern: /^\s*(?:#+\s*)?CHECKS RUN\s*$/m },
+	{ label: "REMAINING QUESTIONS", pattern: /^\s*(?:#+\s*)?REMAINING QUESTIONS\s*$/m },
 ];
 
 /** First verdict token in a report, or undefined when the report is not verdict-structured. */
@@ -112,7 +111,7 @@ function missingJsonReportParts(obj: Record<string, unknown>): string[] {
 	const verdict = typeof obj.verdict === "string" ? parseAuditVerdict(`VERDICT: ${obj.verdict}`) : undefined;
 	if (!verdict) missing.push("verdict (PASS | NEEDS_FIX | BLOCKED)");
 	if (!Array.isArray(obj.findings)) missing.push("findings array");
-	else if (verdict === "NEEDS_FIX" && !obj.findings.some(hasSubstantiveFinding)) {
+	else if (verdict === "NEEDS_FIX" && !obj.findings.some(hasStructuredFinding)) {
 		missing.push("at least one finding under NEEDS_FIX");
 	}
 	if (!Array.isArray(obj.acceptance_coverage) || obj.acceptance_coverage.length === 0) missing.push("acceptance_coverage entries");
@@ -136,7 +135,7 @@ function reportSectionBody(text: string, section: { label: string; pattern: RegE
 	const bodyStart = text.indexOf("\n", labelEnd);
 	if (bodyStart < 0) return "";
 	const nextHeader = new RegExp(
-		`^\\s*(?:#+\\s*)?(?:${REPORT_SECTIONS.map(candidate => candidate.label).join("|")})(?:\\s*(?:\\([^\\n)]*\\)|:\\s*[^\\n]*))?\\s*$`,
+		`^\\s*(?:#+\\s*)?(?:${REPORT_SECTIONS.map(candidate => candidate.label).join("|")})\\b`,
 		"m",
 	);
 	const body = text.slice(bodyStart + 1);
@@ -144,21 +143,11 @@ function reportSectionBody(text: string, section: { label: string; pattern: RegE
 	return (nextHeaderIndex < 0 ? body : body.slice(0, nextHeaderIndex)).trim();
 }
 
-/** Strip transport chatter before the first real verdict line, preserving the
- * report segment itself for verbatim forwarding. Direct JSON reports stay whole. */
-function auditReportText(text: string): string {
-	const decoded = decodeJsonQuoted(text);
-	const trimmed = decoded.trim();
-	if (trimmed.startsWith("{")) return trimmed;
-	const verdict = /^\s*VERDICT\s*:\s*(?:PASS|NEEDS_FIX|BLOCKED)\b/im.exec(decoded);
-	return (verdict ? decoded.slice(verdict.index) : decoded).trim();
-}
-
 export function missingReportParts(text: string): string[] {
-	const report = auditReportText(text);
-	if (report.startsWith("{")) {
+	const trimmed = text.trim();
+	if (trimmed.startsWith("{")) {
 		try {
-			const parsed: unknown = JSON.parse(report);
+			const parsed: unknown = JSON.parse(trimmed);
 			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
 				return missingJsonReportParts(parsed as Record<string, unknown>);
 			}
@@ -166,20 +155,22 @@ export function missingReportParts(text: string): string[] {
 			/* fall through to headed-text validation */
 		}
 	}
-	const verdict = parseAuditVerdict(report);
+	const verdict = parseAuditVerdict(text);
 	const missing = REPORT_SECTIONS.flatMap(section => {
-		const body = reportSectionBody(report, section);
+		const body = reportSectionBody(text, section);
 		if (body === undefined) return [section.label];
 		if (body.length === 0 && !(verdict === "PASS" && section.label === "FINDINGS")) {
 			return [`${section.label} (label present but no content)`];
 		}
 		return [];
 	});
-	if (!/^\s*VERDICT\s*:\s*(?:PASS|NEEDS_FIX|BLOCKED)\b/.test(report)) {
+	if (!/^\s*VERDICT\s*:\s*(?:PASS|NEEDS_FIX|BLOCKED)\b/.test(trimmed)) {
+		missing.unshift("VERDICT: PASS | NEEDS_FIX | BLOCKED (must be first)");
+	} else if (!verdict) {
 		missing.unshift("VERDICT: PASS | NEEDS_FIX | BLOCKED");
 	}
-	const findings = reportSectionBody(report, REPORT_SECTIONS[0]);
-	if (verdict === "NEEDS_FIX" && !hasSubstantiveFinding(findings ?? "")) {
+	const findings = reportSectionBody(text, REPORT_SECTIONS[0]);
+	if (verdict === "NEEDS_FIX" && !hasStructuredFinding(findings ?? "")) {
 		missing.push("at least one finding under NEEDS_FIX");
 	}
 	return missing;
@@ -225,10 +216,10 @@ export function decodeJsonQuoted(text: string): string {
  */
 export function extractAuditReport(details: unknown, contentText: string): string {
 	const detailOutput = (details as { results?: Array<{ output?: unknown }> } | undefined)?.results?.[0]?.output;
-	if (typeof detailOutput === "string" && detailOutput.trim()) return auditReportText(detailOutput);
+	if (typeof detailOutput === "string" && detailOutput.trim()) return decodeJsonQuoted(detailOutput);
 	const wrapped = /<output>\n?([\s\S]*?)\n?<\/output>/.exec(contentText);
-	if (wrapped?.[1]?.trim()) return auditReportText(wrapped[1]);
-	return auditReportText(contentText);
+	if (wrapped?.[1]?.trim()) return decodeJsonQuoted(wrapped[1]);
+	return decodeJsonQuoted(contentText);
 }
 
 export const AUDIT_CONTRACT = auditContract.trim();
@@ -249,8 +240,9 @@ interface AuditGate {
 const freshGate = (): AuditGate => ({ armed: false, contractInjected: false, forwarded: false });
 
 export default function modelBookends(pi: ExtensionAPI) {
-	// Owner session only; fail closed on hosts predating ctx.taskDepth.
+	// Owner session only; fail closed on hosts predating ctx.taskDepth (same rule as work-now).
 	const ownerSession = (ctx: { taskDepth?: number } | undefined): boolean => ctx?.taskDepth === 0;
+
 	let gate = freshGate();
 
 	/** Switch to the intake role at pinned effort; false = switch impossible (fail closed). */
@@ -291,7 +283,7 @@ export default function modelBookends(pi: ExtensionAPI) {
 
 	// Structured skill invocation (host-composed /skill:summary) also arms the gate.
 	pi.on("message_start", async (event, ctx) => {
-		if (!ownerSession(ctx)) return;
+		if (!ownerSession(ctx) || gate.armed) return;
 		const m = event.message as { role?: string; customType?: string; attribution?: string; details?: { name?: string } };
 		if (m.role === "custom" && m.customType === "skill-prompt" && m.attribution === "user" && m.details?.name === "summary") {
 			gate = { ...freshGate(), armed: true };
@@ -422,11 +414,6 @@ export default function modelBookends(pi: ExtensionAPI) {
 			if (success && isForward && reportForwarded(typeof input.body === "string" ? input.body : "", gate.report)) {
 				gate.forwarded = true;
 				gate.armed = false; // attempt complete — PASS or NEEDS_FIX alike; verdict consequences live in the review
-			} else if (!success && isForward) {
-				const refusal = event.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
-				if (/candidate is not finalized|run \/plan first/i.test(refusal)) {
-					gate.armed = false; // terminal workflow precondition — owner must start a new review attempt
-				}
 			}
 		}
 		return undefined;

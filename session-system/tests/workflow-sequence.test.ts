@@ -25,15 +25,16 @@ function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "done" |
 	);
 	const remote = path.join(root, "remote.git");
 	Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
-	Bun.spawnSync(["git", "init", "-q"], { cwd: probe });
+	Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: probe });
 	Bun.spawnSync(["git", "config", "user.email", "test@example.com"], { cwd: probe });
 	Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: probe });
 	fs.writeFileSync(path.join(probe, "init.txt"), "init\n");
 	Bun.spawnSync(["git", "add", "init.txt"], { cwd: probe });
 	Bun.spawnSync(["git", "commit", "-q", "-m", "init"], { cwd: probe });
 	Bun.spawnSync(["git", "remote", "add", "origin", remote], { cwd: probe });
-	Bun.spawnSync(["git", "push", "-q", "-u", "origin", "HEAD:main"], { cwd: probe });
+	Bun.spawnSync(["git", "push", "-q", "-u", "origin", "main"], { cwd: probe });
 	const child = Bun.spawnSync([process.execPath, harness, probe, mode], {
+		cwd: probe,
 		env: { ...process.env, HOME: home, OMP_WORK_BEARER: "test-token" },
 	});
 	expect(child.exitCode, child.stderr.toString()).toBe(0);

@@ -28,7 +28,7 @@ retained offline as static export archives and provenance records.
 | `skills/summary` | `~/.agents/skills/summary` | /summary close ritual (cross-harness: pi + Claude Code) |
 | `skills/questionyourself` | `~/.agents/skills/questionyourself` | Confidence audit, invoked by summary |
 | `skills/whatsmissing` | `~/.agents/skills/whatsmissing` | Blind-spot audit, invoked by summary |
-| `prompts/archive/` | (nothing — archive only) | Retired session charters. Ruling 2026-08-10: work routes through Linear (issues, NOW, comments), never prompt files |
+| `prompts/archive/` | (nothing — archive only) | Retired session charters. Ruling 2026-08-10: work routes through the ledger, never prompt files |
 | `tests/` | (nothing — fork-persistence tests) | Extension loads against current omp source; installer integrity + idempotency |
 | `update.sh` | (nothing — run by hand) | The update loop: fetch upstream → merge → `bun install` → native refresh → fork tests → push origin |
 | `refresh-natives.sh` | (nothing — run by update.sh) | Keeps the drop-in native addon matched to the current omp version |

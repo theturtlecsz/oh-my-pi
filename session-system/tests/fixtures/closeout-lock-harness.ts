@@ -150,7 +150,7 @@ if (mode === "legacy-host") {
 		// "done" (depth 0, no NOW) and "forged-subagent" (depth 1, NOW restored) drive the
 		// registered /done command through the runner's real command context. Depth 0: the
 		// owner gate passes, authorization flips, then the handler bails on the unset NOW.
-		// Depth 1: the owner gate refuses BEFORE any NOW/select/confirm/Linear logic —
+		// Depth 1: the owner gate refuses BEFORE any NOW/select/confirm/WorkService logic —
 		// uiCalls must show only the refusal notify.
 		const done = ext.commands.get("done");
 		if (!done) throw new Error("done command missing");

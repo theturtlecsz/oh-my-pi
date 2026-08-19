@@ -39,9 +39,7 @@ import { confirmWrite, resetConfirmations } from "./confirm";
 import { claimAuditReceipt, commitAuditReceipt, releaseAuditReceipt, reportSha256 } from "./audit-bridge";
 import { dirtyPaths } from "./git";
 
-/** Tool actions — ONE neutral set for every backend (plan §2). Both
- *  entrypoints register the same `work` tool with these names; the Linear
- *  adapter translates internally. */
+/** Tool actions — the canonical action set for the `work` tool. */
 export type CanonicalAction =
 	| "get_work"
 	| "tree"

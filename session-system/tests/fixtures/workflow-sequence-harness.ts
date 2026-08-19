@@ -1,5 +1,5 @@
-// HOME-122 harness: drive the real linear-now extension through its public
-// events, command, and tool with a deterministic in-memory Linear API.
+// HOME-122 harness: drive the real work-now extension through its public
+// events, command, and tool with a deterministic in-memory WorkService REST API.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ExtensionRunner, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
