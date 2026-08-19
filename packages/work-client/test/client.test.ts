@@ -109,6 +109,9 @@ test("activity encodes query parameters, sends auth, and decodes the projection"
 			});
 		},
 	);
+	await client.activity();
+	expect(request?.url).toBe(`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/activity`);
+	expect(request?.headers.get("authorization")).toBe("Bearer token");
 	const view = await client.activity({ projectId: "00000000-0000-0000-0000-0000000000f1", limit: 8 });
 	expect(request?.url).toBe(
 		`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/activity?project_id=00000000-0000-0000-0000-0000000000f1&limit=8`,
