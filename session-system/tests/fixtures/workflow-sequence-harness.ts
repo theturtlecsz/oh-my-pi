@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ExtensionRunner, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { confirmRoundTrip } from "./two-phase";
+import { currentAuditBinding, currentBindingGeneration, registerAuditBinding } from "../../extensions/workflow/audit-bridge";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
@@ -421,7 +422,17 @@ runner.initialize(
 		},
 	} as never,
 );
+// OMP-43: lifecycle events clear the shared audit bridge ONLY at task depth 0 —
+// a subagent's session_start/switch (the auditor itself) must leave the owner's
+// in-flight binding intact. Seed a binding before the start event and observe.
+const seedLifecycle = mode === "summary" || mode === "summary-subagent";
+const seedBinding = { candidateId: "cand-seed", candidateSha256: "0".repeat(64), commitSha: "f".repeat(40), planReceiptSha256: "1".repeat(64) };
+if (seedLifecycle) registerAuditBinding(seedBinding);
+const generationBeforeStart = currentBindingGeneration();
 await runner.emit({ type: "session_start" } as never);
+const lifecycleAfterStart = seedLifecycle
+	? { generationChanged: currentBindingGeneration() !== generationBeforeStart, bindingPresent: currentAuditBinding() !== null }
+	: undefined;
 const ctx = runner.createContext();
 
 async function execute(params: Record<string, unknown>): Promise<string> {
@@ -497,6 +508,16 @@ if (mode === "intake") {
 	out.statusAfterHandoff = statuses.at(-1);
 	out.stopAfterHandoff = (await stopHandler?.({ type: "session_stop", stop_hook_active: false }, ctx)) ?? null;
 } else if (mode === "summary" || mode === "summary-subagent") {
+	out.lifecycleAfterStart = lifecycleAfterStart;
+	if (mode === "summary-subagent") {
+		// OMP-43: a subagent session_switch must also leave the shared bridge alone.
+		const generationBeforeSwitch = currentBindingGeneration();
+		await runner.emit({ type: "session_switch", reason: "resume" } as never);
+		out.lifecycleAfterSwitch = {
+			generationChanged: currentBindingGeneration() !== generationBeforeSwitch,
+			bindingPresent: currentAuditBinding() !== null,
+		};
+	}
 	if (mode === "summary") await setNow(); // subagent mode inherits NOW from the branch
 	if (mode === "summary") {
 		await runner.emit(summaryMessage as never);
@@ -510,6 +531,16 @@ if (mode === "intake") {
 	await runner.emit(summaryMessage as never);
 	out.afterStructured = await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "review body" });
 	out.reviewBodies = comments.filter(comment => comment.body.startsWith("**Session review**")).map(comment => comment.body);
+	if (mode === "summary") {
+		// OMP-43 depth-0 control: an OWNER session_switch still clears the bridge.
+		registerAuditBinding(seedBinding);
+		const generationBeforeSwitch = currentBindingGeneration();
+		await runner.emit({ type: "session_switch", reason: "resume" } as never);
+		out.ownerSwitchLifecycle = {
+			generationChanged: currentBindingGeneration() !== generationBeforeSwitch,
+			bindingPresent: currentAuditBinding() !== null,
+		};
+	}
 	out.uiCalls = uiCalls;
 } else if (mode === "restore") {
 	out.now = await execute({ action: "my_now" });
@@ -668,6 +699,29 @@ if (mode === "intake") {
 		"```",
 		"Verification: bun test → pass.",
 	].join("\n");
+	// OMP-43/OMP-38 TOCTOU: an owner-side rebind while the auditor runs — even
+	// re-registering the IDENTICAL binding (A→A) — refuses the late report and
+	// releases the slot without consuming the bounded replacement.
+	const spawn0 = await runner.emitToolCall({
+		type: "tool_call",
+		toolName: "task",
+		toolCallId: "aud-0",
+		input: { context: "audit the completed work", tasks: [{ agent: "auditor", task: AUDIT_TASK }] },
+	} as never);
+	out.spawn0Blocked = spawn0 && typeof spawn0 === "object" && "block" in spawn0 ? Boolean(spawn0.block) : false;
+	const liveBinding = currentAuditBinding();
+	if (!liveBinding) throw new Error("no audit binding after /summary gate");
+	registerAuditBinding(liveBinding);
+	const stale = (await runner.emitToolResult({
+		type: "tool_result",
+		toolName: "task",
+		toolCallId: "aud-0",
+		input: {},
+		content: [{ type: "text", text: REPORT }],
+		details: { results: [{ output: REPORT }] },
+		isError: false,
+	} as never)) as { content?: Array<{ type: string; text?: string }> } | undefined;
+	out.staleRefusal = (stale?.content ?? []).map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
 	const spawn = await runner.emitToolCall({
 		type: "tool_call",
 		toolName: "task",

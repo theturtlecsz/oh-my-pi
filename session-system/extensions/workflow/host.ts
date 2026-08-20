@@ -928,7 +928,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 			intakeActive = false;
 			intakeSelected = false;
 			planTarget = undefined;
-			resetConfirmations(); // receipts + audit bridge never cross transcripts
+			// OMP-43: only an OWNER lifecycle clears the process-global audit bridge
+			// (binding, receipts, transcript ref) — a subagent's session_start (the
+			// auditor itself) runs its own module copy and must leave the owner's
+			// in-flight binding intact. Local flags above are per-copy and stay reset.
+			resetConfirmations({ resetShared: ownerSession(ctx) });
 			await loadCache();
 			models = ctx.models;
 			// session entry wins over cache for NOW restore (survives cache loss)
@@ -1011,7 +1015,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			intakeActive = false;
 			intakeSelected = false;
 			planTarget = undefined;
-			resetConfirmations();
+			resetConfirmations({ resetShared: ownerSession(ctx) }); // OMP-43: owner transcripts only — see session_start
 			await restoreCenterTools(); // a switch mid-center must not leak the empty tool set
 			if (event.reason === "resume" || event.reason === "new") {
 				digestPending = true;

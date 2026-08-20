@@ -98,6 +98,9 @@ describe("HOME-122 workflow sequence", () => {
 		expect(reviews).toHaveLength(1);
 		expect(reviews[0]).toContain("**Session review**");
 		expect(reviews[0]).toContain("Plan SHA-256:");
+		// OMP-43 depth-0 controls: owner lifecycle still clears the shared bridge.
+		expect(record(out.lifecycleAfterStart)).toEqual({ generationChanged: true, bindingPresent: false });
+		expect(record(out.ownerSwitchLifecycle)).toEqual({ generationChanged: true, bindingPresent: false });
 	});
 
 	test("subagent summary provenance cannot authorize the review", () => {
@@ -106,6 +109,10 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.afterPaste).toContain("literally enter /summary");
 		expect(out.afterStructured).toContain("literally enter /summary");
 		expect(list(out.reviewBodies)).toHaveLength(0);
+		// OMP-43: the subagent's own lifecycle events (the auditor's session_start,
+		// any switch) must leave the owner's in-flight audit binding untouched.
+		expect(record(out.lifecycleAfterStart)).toEqual({ generationChanged: false, bindingPresent: true });
+		expect(record(out.lifecycleAfterSwitch)).toEqual({ generationChanged: false, bindingPresent: true });
 	});
 
 	test("fresh sessions restore the backend focus without a local cache", () => {
@@ -144,6 +151,11 @@ describe("HOME-122 workflow sequence", () => {
 		expect(String(out.packetCommit)).toMatch(/^[0-9a-f]{40}$/);
 		expect(String(out.packetReceiptSha)).toMatch(/^[0-9a-f]{64}$/);
 		expect(out.spawnBlocked, "the auditor spawn clears the gate").toBe(false);
+		// OMP-43/OMP-38 TOCTOU: an A→A rebind mid-run refuses the late report,
+		// releases the slot (the second spawn above succeeded), and consumes no
+		// replacement.
+		expect(out.spawn0Blocked, "the first auditor spawn clears the gate").toBe(false);
+		expect(String(out.staleRefusal)).toContain("changed while the auditor ran");
 		expect(out.unauthorized, "audit is a close-ritual kind").toContain("literally enter /summary");
 		expect(out.edited, "edited bytes never match the receipt").toContain("no fresh auditor receipt matches");
 		expect(out.exact).toContain("audit receipt recorded on HOME-1 (verdict PASS)");

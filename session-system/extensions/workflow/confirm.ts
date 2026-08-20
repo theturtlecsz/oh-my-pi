@@ -27,9 +27,12 @@ const RECEIPT_TTL_MS = 10 * 60_000;
 const pending = new Map<string, ConfirmationReceipt>();
 
 /** Confirmation receipts share the audit bridge's transcript tag — a session
- *  start/switch invalidates every unconsumed receipt of both kinds at once. */
-export function resetConfirmations(): void {
-	resetTranscriptRef();
+ *  start/switch invalidates every unconsumed receipt of both kinds at once.
+ *  OMP-43: the transcript/binding store is process-GLOBAL while `pending` is
+ *  per module copy — a subagent lifecycle (resetShared:false) clears only its
+ *  own local receipts and must never touch the owner's shared bridge. */
+export function resetConfirmations(options: { resetShared?: boolean } = {}): void {
+	if (options.resetShared !== false) resetTranscriptRef();
 	pending.clear();
 }
 
