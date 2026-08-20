@@ -6,6 +6,8 @@ import { describe, expect, test } from "bun:test";
 import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
 import {
 	AUDIT_CONTRACT,
+	auditTaskFinalCommits,
+	auditTaskPlanReceipts,
 	decodeJsonQuoted,
 	extractAuditReport,
 	missingAuditSections,
@@ -14,15 +16,35 @@ import {
 	parseAuditVerdict,
 	reportForwarded,
 } from "../extensions/model-bookends";
-import { claimAuditReceipt, releaseAuditReceipt, reportSha256 } from "../extensions/workflow/audit-bridge";
+import {
+	type AuditBinding,
+	claimAuditReceipt,
+	clearAuditBinding,
+	registerAuditBinding,
+	releaseAuditReceipt,
+	reportSha256,
+} from "../extensions/workflow/audit-bridge";
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const extPath = path.join(repoRoot, "session-system/extensions/model-bookends.ts");
 
+/** The candidate binding a real /summary would register (OMP-38). The commit
+ *  doubles as the manifest's Final commit so both diff forms bind cleanly. */
+const BOUND_COMMIT = "b".repeat(40);
+const PLAN_RECEIPT_SHA = "d".repeat(64);
+const DEFAULT_BINDING: AuditBinding = {
+	candidateId: "candidate-1",
+	candidateSha256: "e".repeat(64),
+	commitSha: BOUND_COMMIT,
+	planReceiptSha256: PLAN_RECEIPT_SHA,
+};
+
 const FULL_AUDIT_TASK = [
 	"Approved plan: add three install links to install.sh and mirror them in install.test.ts LINKS.",
+	`Plan receipt SHA-256: ${PLAN_RECEIPT_SHA}`,
 	"Acceptance criteria: AC-1 installer places all three artifacts; AC-2 LINKS mirrors them; AC-3 installer stays idempotent.",
 	"Starting state: commit abc123; pre-existing dirty files: none.",
 	"Final diff:",
+	`Final commit: ${BOUND_COMMIT}`,
 	"```diff",
 	"--- a/session-system/install.sh",
 	"+++ b/session-system/install.sh",
@@ -186,7 +208,12 @@ const workResult = (id: string, body: string, success = true) =>
 	}) as never;
 const sessionStop = () => ({ type: "session_stop", messages: [], turn_id: 1 }) as never;
 
-async function armSummary(h: Harness): Promise<void> {
+/** Arm the gate the way a real /summary does: register the candidate binding
+ *  (the host's job after a successful summary gate), then the owner input.
+ *  `binding: null` arms WITHOUT a binding — the missing-binding refusal path. */
+async function armSummary(h: Harness, binding: AuditBinding | null = DEFAULT_BINDING): Promise<void> {
+	if (binding) registerAuditBinding(binding);
+	else clearAuditBinding();
 	await h.runner.emitInput("/summary", undefined, "interactive");
 }
 
@@ -463,6 +490,29 @@ describe("helpers", () => {
 		expect(missingReportParts(extractAuditReport({ results: [{ output: JSON.stringify(PASS_REPORT) }] }, ""))).toEqual([]);
 	});
 
+	test("decodeJsonQuoted unwraps exact single-key text/report envelopes and nothing else (OMP-22)", () => {
+		// OMP-22 regression: a live auditor emitting {"text": report} was refused and
+		// burned a bounded attempt while {"report": report} was accepted (2026-08-19).
+		expect(decodeJsonQuoted(JSON.stringify({ text: PASS_REPORT }))).toBe(PASS_REPORT);
+		expect(missingReportParts(extractAuditReport({ results: [{ output: JSON.stringify({ text: PASS_REPORT }) }] }, ""))).toEqual([]);
+		// Security review conditions: only the exact single-key envelope shape unwraps,
+		// and every ambiguous shape is REFUSED end-to-end by gate validation — not
+		// merely left undecoded.
+		const extraKeys = JSON.stringify({ text: PASS_REPORT, status: "error" });
+		expect(decodeJsonQuoted(extraKeys)).toBe(extraKeys);
+		expect(missingReportParts(extractAuditReport({ results: [{ output: extraKeys }] }, "")).length).toBeGreaterThan(0);
+		const bothKeys = JSON.stringify({ report: PASS_REPORT, text: "other" });
+		expect(decodeJsonQuoted(bothKeys)).toBe(bothKeys);
+		expect(missingReportParts(extractAuditReport({ results: [{ output: bothKeys }] }, "")).length).toBeGreaterThan(0);
+		const nonString = JSON.stringify({ text: 42 });
+		expect(decodeJsonQuoted(nonString)).toBe(nonString);
+		expect(missingReportParts(extractAuditReport({ results: [{ output: nonString }] }, "")).length).toBeGreaterThan(0);
+		// A structured report carrying an incidental text field is never collapsed to it.
+		const structured = JSON.stringify({ verdict: "PASS", findings: [], text: "incidental" });
+		expect(decodeJsonQuoted(structured)).toBe(structured);
+		expect(normalizeAuditReport(structured)).toBe(structured);
+	});
+
 	test("normalizeAuditReport strips transport quoting and preamble byte-for-byte from VERDICT onward", () => {
 		// OMP-8/OMP-11 regression: JSON-quoted output with provider preamble before VERDICT.
 		const wrapped = JSON.stringify(`I inspected the work and here is my assessment.\n\n${PASS_REPORT}`);
@@ -479,6 +529,76 @@ describe("helpers", () => {
 		expect(missingReportParts(wrapped)).toEqual([]);
 		expect(parseAuditVerdict(wrapped)).toBe("PASS");
 		expect(extractAuditReport({ results: [{ output: wrapped }] }, "")).toBe(PASS_REPORT);
+	});
+
+	test("auditTaskFinalCommits reads Final commit lines from the Final diff section only (OMP-38)", () => {
+		expect(auditTaskFinalCommits(FULL_AUDIT_TASK)).toEqual([BOUND_COMMIT]);
+		expect(auditTaskFinalCommits(manifestTask(MANIFEST))).toEqual([BOUND_COMMIT]);
+		// a Final commit line OUTSIDE the Final diff section does not bind
+		const outside = `Final commit: ${"9".repeat(40)}\n${FULL_AUDIT_TASK.replace(`Final commit: ${BOUND_COMMIT}\n`, "")}`;
+		expect(auditTaskFinalCommits(outside)).toEqual([]);
+		// conflicting values surface both — the gate requires exactly one
+		const conflicted = FULL_AUDIT_TASK.replace("```diff", `Final commit: ${"9".repeat(40)}\n\`\`\`diff`);
+		expect(auditTaskFinalCommits(conflicted)).toEqual([BOUND_COMMIT, "9".repeat(40)]);
+		// duplicate-identical lines are NOT deduped — the gate requires exactly one
+		const duplicated = FULL_AUDIT_TASK.replace(`Final commit: ${BOUND_COMMIT}`, `Final commit: ${BOUND_COMMIT}\nFinal commit: ${BOUND_COMMIT}`);
+		expect(auditTaskFinalCommits(duplicated)).toEqual([BOUND_COMMIT, BOUND_COMMIT]);
+		// uppercase hex is not the canonical byte-exact form
+		expect(auditTaskFinalCommits(FULL_AUDIT_TASK.replace(BOUND_COMMIT, BOUND_COMMIT.toUpperCase()))).toEqual([]);
+	});
+
+	test("auditTaskPlanReceipts requires the canonical line inside Approved plan (OMP-38)", () => {
+		expect(auditTaskPlanReceipts(FULL_AUDIT_TASK)).toEqual([PLAN_RECEIPT_SHA]);
+		// the hash placed only inside the Final diff section is not a citation
+		const buried = FULL_AUDIT_TASK.replace(`Plan receipt SHA-256: ${PLAN_RECEIPT_SHA}\n`, "").replace(
+			`Final commit: ${BOUND_COMMIT}`,
+			`Final commit: ${BOUND_COMMIT}\nPlan receipt SHA-256: ${PLAN_RECEIPT_SHA}`,
+		);
+		expect(auditTaskPlanReceipts(buried)).toEqual([]);
+	});
+
+	test("a stored plan body embedded in Approved plan cannot satisfy or truncate later sections (OMP-38)", () => {
+		// Real stamp bodies carry their own ## Approach / ## Verification headings.
+		const stampBody =
+			"**Plan approved**\n\n# Work\n- Plan: `local://work-plan.md`\n\n## Approach\n1. Change the shared path\n\n## Verification\n1. Run the focused check";
+		const embedded = FULL_AUDIT_TASK.replace(
+			"Approved plan: add three install links to install.sh and mirror them in install.test.ts LINKS.",
+			`Approved plan:\n${stampBody}`,
+		);
+		expect(missingAuditSections(embedded)).toEqual([]);
+		expect(auditTaskFinalCommits(embedded)).toEqual([BOUND_COMMIT]);
+		// dropping the OUTER Verification section must still be caught — the plan
+		// body's own `## Verification` heading satisfies nothing
+		const withoutOuter = embedded.replace(/\nVerification: bun test.*$/, "");
+		expect(missingAuditSections(withoutOuter)).toEqual(["Verification"]);
+	});
+
+	test("multiline and star-bullet findings pass after whitespace flattening (OMP-38)", () => {
+		// signal split across lines: "minimal\n  fix" must still count
+		expect(
+			missingReportParts(
+				report(
+					"NEEDS_FIX",
+					"- [P0] AC-1 covers src/x.ts:3-9.\n  evidence: the test fails.\n  impact: broken settlement.\n  minimal\n  fix: guard the branch.",
+				),
+			),
+		).toEqual([]);
+		// star bullets with indented sub-bullet continuations form one finding block
+		expect(
+			missingReportParts(
+				report(
+					"NEEDS_FIX",
+					"* [P1] AC-2 src/y.ts:12\n  - evidence: observed drift\n  - impact: stale receipt\n  - minimal fix: rebind",
+				),
+			),
+		).toEqual([]);
+	});
+
+	test("plain provider chatter before VERDICT is sliced off unquoted reports (OMP-18)", () => {
+		const chatty = `⚠ provider warning: approaching tool budget\nOkay — auditing now.\n\n${PASS_REPORT}`;
+		expect(normalizeAuditReport(chatty)).toBe(PASS_REPORT);
+		expect(missingReportParts(chatty)).toEqual([]);
+		expect(parseAuditVerdict(chatty)).toBe("PASS");
 	});
 });
 
@@ -808,5 +928,73 @@ describe("audit gate", () => {
 		await armSummary(h);
 		const stop = await h.runner.emit(sessionStop());
 		expect(stop).toBeUndefined();
+	});
+
+	test("no candidate binding: spawn blocked with /plan + /summary guidance, slot not consumed (OMP-38)", async () => {
+		const h = await makeHarness();
+		await armSummary(h, null);
+		const blocked = await h.runner.emitToolCall(auditorCall("t1"));
+		expect(blocked?.block).toBe(true);
+		expect(blocked?.reason).toContain("no finalized candidate");
+		expect(blocked?.reason).toContain("/summary");
+		// the refusal did not reserve the slot: binding arrives, same spawn succeeds
+		registerAuditBinding(DEFAULT_BINDING);
+		expect((await h.runner.emitToolCall(auditorCall("t2")))?.block).toBeUndefined();
+	});
+
+	test("capped plan packet refuses the spawn (OMP-38)", async () => {
+		const h = await makeHarness();
+		await armSummary(h, { ...DEFAULT_BINDING, capped: true });
+		const blocked = await h.runner.emitToolCall(auditorCall("t1"));
+		expect(blocked?.block).toBe(true);
+		expect(blocked?.reason).toContain("byte ceiling");
+	});
+
+	test("Final commit mismatch and missing plan-receipt citation block without consuming the slot (OMP-38)", async () => {
+		const h = await makeHarness();
+		await armSummary(h, { ...DEFAULT_BINDING, commitSha: "9".repeat(40) });
+		const mismatch = await h.runner.emitToolCall(auditorCall("t1"));
+		expect(mismatch?.block).toBe(true);
+		expect(mismatch?.reason).toContain("Final commit");
+		expect(mismatch?.reason).toContain("9".repeat(40));
+		// rebind to the task's commit, but drop the plan-receipt citation
+		registerAuditBinding(DEFAULT_BINDING);
+		const uncited = await h.runner.emitToolCall(
+			auditorCall("t2", FULL_AUDIT_TASK.replace(`Plan receipt SHA-256: ${PLAN_RECEIPT_SHA}\n`, "")),
+		);
+		expect(uncited?.block).toBe(true);
+		expect(uncited?.reason).toContain("Plan receipt SHA-256");
+		// nothing was consumed: the matching task spawns and completes cleanly
+		await runAuditor(h, "t3");
+		const body = `Review\n\n${PASS_REPORT}`;
+		expect((await h.runner.emitToolCall(workForward("l1", body)))?.block).toBeUndefined();
+	});
+
+	test("a rebind after capture permanently invalidates the receipt — A→B→A included (OMP-38)", async () => {
+		const h = await makeHarness();
+		await armSummary(h);
+		await runAuditor(h);
+		const sha = reportSha256(PASS_REPORT);
+		registerAuditBinding({ ...DEFAULT_BINDING, candidateId: "candidate-2", commitSha: "9".repeat(40) });
+		expect(claimAuditReceipt(sha)).toBeNull();
+		// restoring identical fields is still a binding change: the old report stays dead
+		registerAuditBinding(DEFAULT_BINDING);
+		expect(claimAuditReceipt(sha)).toBeNull();
+	});
+
+	test("a rebind while the auditor runs refuses its late report without consuming the replacement (OMP-38)", async () => {
+		const h = await makeHarness();
+		await armSummary(h);
+		expect((await h.runner.emitToolCall(auditorCall("aud-1")))?.block).toBeUndefined();
+		// /summary reruns mid-flight: fresh freeze, fresh binding
+		registerAuditBinding({ ...DEFAULT_BINDING, candidateId: "candidate-2" });
+		const refused = (await h.runner.emitToolResult(taskResult("aud-1", PASS_REPORT))) as
+			| { content?: Array<{ type: string; text?: string }> }
+			| undefined;
+		const notice = refused?.content?.map(part => part.text ?? "").join("\n") ?? "";
+		expect(notice).toContain("binding changed");
+		// nothing registered, nothing consumed: a fresh matching auditor still runs
+		expect(claimAuditReceipt(reportSha256(PASS_REPORT))).toBeNull();
+		await runAuditor(h, "aud-2");
 	});
 });

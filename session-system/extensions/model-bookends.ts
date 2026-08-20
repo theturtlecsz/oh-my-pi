@@ -16,7 +16,7 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { registerAuditReceipt } from "./workflow/audit-bridge";
+import { currentAuditBinding, currentBindingGeneration, registerAuditReceipt } from "./workflow/audit-bridge";
 // Static audit instructions (HOME-131) — installed alongside this extension so the
 // relative import resolves in both link and copy modes.
 import auditContract from "./model-bookends-audit.md" with { type: "text" };
@@ -45,20 +45,30 @@ export const AUDIT_INPUT_SECTIONS: ReadonlyArray<{ label: string; pattern: RegEx
 	{ label: "Verification", pattern: new RegExp(`^${LABEL_PREFIX}verification(?: results)?${LABEL_SUFFIX}`, "gim") },
 ];
 
-/** Body of a labeled section: text after the label up to the next section label or end. */
-function auditSectionBody(task: string, section: { pattern: RegExp }): string | undefined {
-	section.pattern.lastIndex = 0;
-	const match = section.pattern.exec(task);
-	if (!match) return undefined;
-	const start = match.index + match[0].length;
-	let end = task.length;
-	for (const other of AUDIT_INPUT_SECTIONS) {
-		if (other.pattern === section.pattern) continue;
-		other.pattern.lastIndex = start;
-		const next = other.pattern.exec(task);
-		if (next && next.index < end) end = next.index;
+/** Bodies of the five sections, position-aligned with AUDIT_INPUT_SECTIONS.
+ *  Parsed in CANONICAL ORDER: each label is searched only after the previous
+ *  found label, and a body runs to the next found label (or end). A lookalike
+ *  heading embedded in an earlier body — e.g. a stored plan's own
+ *  `## Verification` — can neither terminate a section early nor satisfy a
+ *  later one (OMP-38). Out-of-order sections read as missing: fail closed. */
+function auditSectionBodies(task: string): Array<string | undefined> {
+	const found: Array<{ index: number; end: number } | undefined> = [];
+	let cursor = 0;
+	for (const section of AUDIT_INPUT_SECTIONS) {
+		section.pattern.lastIndex = cursor;
+		const match = section.pattern.exec(task);
+		if (match) {
+			found.push({ index: match.index, end: match.index + match[0].length });
+			cursor = match.index + match[0].length;
+		} else {
+			found.push(undefined);
+		}
 	}
-	return task.slice(start, end).replace(/^[\s:—-]+/, "");
+	return found.map((hit, i) => {
+		if (!hit) return undefined;
+		const next = found.slice(i + 1).find(later => later !== undefined);
+		return task.slice(hit.end, next ? next.index : task.length).replace(/^[\s:—-]+/, "");
+	});
 }
 
 /** The manifest is EXACTLY these five lines, in order (blank and code-fence
@@ -107,8 +117,9 @@ function hasValidFinalDiff(body: string): boolean {
  */
 export function missingAuditSections(task: string): string[] {
 	const missing: string[] = [];
-	for (const section of AUDIT_INPUT_SECTIONS) {
-		const body = auditSectionBody(task, section);
+	const bodies = auditSectionBodies(task);
+	for (const [i, section] of AUDIT_INPUT_SECTIONS.entries()) {
+		const body = bodies[i];
 		if (body === undefined) {
 			missing.push(section.label);
 		} else if (!/(?:\S\s*){8,}/.test(body)) {
@@ -120,6 +131,27 @@ export function missingAuditSections(task: string): string[] {
 		}
 	}
 	return missing;
+}
+
+/** Every `Final commit:` line in the task's Final diff section, byte-exact and
+ *  in order — no case folding, no dedupe: duplicate-identical or uppercase
+ *  lines read as invalid. Exactly one, byte-equal to the bound candidate
+ *  commit, is required before the auditor slot is reserved (OMP-38). The
+ *  manifest form carries the line natively; the inline-diff form adds it
+ *  beside the diff. */
+export function auditTaskFinalCommits(task: string): string[] {
+	const body = auditSectionBodies(task)[AUDIT_INPUT_SECTIONS.findIndex(section => section.label === "Final diff")];
+	if (body === undefined) return [];
+	return [...body.matchAll(/^Final commit:[ \t]*([0-9a-f]{40})\b/gm)].map(match => match[1]);
+}
+
+/** Every `Plan receipt SHA-256:` line in the task's Approved plan section,
+ *  byte-exact. Exactly one, byte-equal to the bound plan receipt hash, is
+ *  required — a hash buried in diff bytes or prose is not a citation. */
+export function auditTaskPlanReceipts(task: string): string[] {
+	const body = auditSectionBodies(task)[AUDIT_INPUT_SECTIONS.findIndex(section => section.label === "Approved plan")];
+	if (body === undefined) return [];
+	return [...body.matchAll(/^Plan receipt SHA-256:[ \t]*([0-9a-f]{64})\b/gm)].map(match => match[1]);
 }
 
 /** True when the auditor task run was interrupted/aborted before yielding a
@@ -152,10 +184,18 @@ const FINDING_SIGNALS: ReadonlyArray<RegExp> = [
 
 function hasStructuredFinding(finding: unknown): boolean {
 	if (typeof finding === "string") {
-		// Each top-level bullet is one finding block; indented lines continue it.
+		// Each column-0 Markdown bullet (- or *) opens one finding block; indented
+		// lines — prose continuations and sub-bullets alike — extend it. Each block
+		// is whitespace-flattened before the signal checks so a signal split across
+		// lines ("minimal\n  fix") still counts (OMP-38).
 		return finding
-			.split(/^(?=-\s)/m)
-			.some(block => /^\s*-\s/.test(block) && FINDING_SIGNALS.every(signal => signal.test(block)));
+			.trim()
+			.split(/^(?=[-*]\s)/m)
+			.some(block => {
+				if (!/^[-*]\s/.test(block)) return false;
+				const flat = block.replace(/\s+/g, " ");
+				return FINDING_SIGNALS.every(signal => signal.test(flat));
+			});
 	}
 	if (!finding || typeof finding !== "object" || Array.isArray(finding)) return false;
 	const record = finding as Record<string, unknown>;
@@ -267,9 +307,14 @@ export function reportForwarded(body: string, report: string): boolean {
 
 
 /**
- * Undo task-result transport wrappers (HOME-137): reports can arrive as a JSON
- * string literal or as the agent host's `{"report":"..."}` object. Preserve
- * direct JSON audit reports for missingReportParts to validate separately.
+ * Undo task-result transport wrappers (HOME-137/OMP-22): reports can arrive as
+ * a JSON string literal or as the agent host's `{"report":"..."}` or
+ * `{"text":"..."}` envelope — both keys observed live, and the gate must not
+ * accept one while refusing the other. Per the OMP-22 security review, only the
+ * EXACT single-key envelope shape unwraps (one own key, `report` or `text`,
+ * string value); anything else — extra keys, both keys, non-string values,
+ * structured reports — stays on the structured-JSON path and fails closed in
+ * missingReportParts rather than being recovered as prose.
  */
 export function decodeJsonQuoted(text: string): string {
 	const trimmed = text.trim();
@@ -277,9 +322,12 @@ export function decodeJsonQuoted(text: string): string {
 	try {
 		const parsed: unknown = JSON.parse(trimmed);
 		if (typeof parsed === "string") return parsed.trim();
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && "report" in parsed) {
-			const report = parsed.report;
-			if (typeof report === "string") return report.trim();
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+			const keys = Object.keys(parsed);
+			if (keys.length === 1 && (keys[0] === "report" || keys[0] === "text")) {
+				const inner = (parsed as Record<string, unknown>)[keys[0]];
+				if (typeof inner === "string") return inner.trim();
+			}
 		}
 	} catch {
 		/* not a transport wrapper — use as-is */
@@ -329,6 +377,9 @@ interface AuditGate {
 	contractInjected: boolean;
 	/** Tool-call id of the accepted auditor spawn (undefined = none yet). */
 	auditorCallId?: string;
+	/** Bridge binding generation snapshotted when the spawn was accepted — a
+	 *  rebind while the auditor runs refuses its late report (OMP-38 TOCTOU). */
+	auditorBindingGeneration?: number;
 	/** Accepted auditor spawns this attempt (a host-interrupted spawn that never
 	 *  produced a result is released and does not count). */
 	auditorAttempts: number;
@@ -438,6 +489,38 @@ export default function modelBookends(pi: ExtensionAPI) {
 					reason: `Audit gate: auditor task is missing required sections: ${missing.join("; ")}. Inline all five labeled sections in the task text.`,
 				};
 			}
+			// OMP-38: the auditor audits ONE bound finalized candidate. No binding, a
+			// capped packet, a wrong Final commit, or a missing plan-receipt citation
+			// refuses the spawn WITHOUT reserving the bounded slot.
+			const binding = currentAuditBinding();
+			if (!binding) {
+				return {
+					block: true,
+					reason:
+						"Audit gate: BLOCKED — no finalized candidate is bound to this /summary attempt. Run /plan to stamp the plan, rerun /summary to freeze + finalize the candidate, then rebuild the auditor task from work get_work's PLAN PACKET.",
+				};
+			}
+			if (binding.capped) {
+				return {
+					block: true,
+					reason:
+						"Audit gate: BLOCKED — the ledger plan packet exceeds its byte ceiling, so the audit task cannot be reconstructed from bounded ledger data. Restamp a smaller plan with /plan, rerun /summary, then audit.",
+				};
+			}
+			const taskCommits = auditTaskFinalCommits(auditor.task);
+			if (taskCommits.length !== 1 || taskCommits[0] !== binding.commitSha) {
+				return {
+					block: true,
+					reason: `Audit gate: BLOCKED — the Final diff section must carry exactly one "Final commit: <sha>" line naming the finalized candidate commit ${binding.commitSha} byte-for-byte (found ${taskCommits.length ? taskCommits.join(", ") : "none"}). Rebuild the task from work get_work's PLAN PACKET; if the candidate moved, rerun /plan and /summary.`,
+				};
+			}
+			const taskReceipts = auditTaskPlanReceipts(auditor.task);
+			if (taskReceipts.length !== 1 || taskReceipts[0] !== binding.planReceiptSha256) {
+				return {
+					block: true,
+					reason: `Audit gate: BLOCKED — the Approved plan section must carry exactly one "Plan receipt SHA-256: <hex>" line naming the bound plan receipt ${binding.planReceiptSha256} (the PLAN PACKET's "plan receipt sha256" value — a hash buried elsewhere is not a citation). Rebuild the task from work get_work; if the plan changed, rerun /plan and /summary.`,
+				};
+			}
 			// Fail closed on an unresolvable audit role: the auditor's independence is
 			// its fresh blocking context plus the call-bound receipt — any configured
 			// @audit model (same family included) is acceptable.
@@ -446,6 +529,7 @@ export default function modelBookends(pi: ExtensionAPI) {
 			}
 			gate.auditorAttempts += 1;
 			gate.auditorCallId = event.toolCallId;
+			gate.auditorBindingGeneration = currentBindingGeneration();
 			return undefined;
 		}
 
@@ -492,6 +576,22 @@ export default function modelBookends(pi: ExtensionAPI) {
 						{
 							type: "text",
 							text: "Audit gate: the auditor run was interrupted before it reported — nothing was refused and no replacement was consumed. Spawn a fresh auditor task when ready.",
+						},
+					],
+				};
+			}
+			if (gate.auditorBindingGeneration !== currentBindingGeneration()) {
+				// OMP-38 TOCTOU: the candidate binding changed while the auditor ran —
+				// its report audits a stale candidate. Release the reservation without
+				// consuming the bounded replacement; a fresh /summary spawns fresh.
+				gate.auditorCallId = undefined;
+				gate.auditorAttempts = Math.max(0, gate.auditorAttempts - 1);
+				return {
+					content: [
+						...event.content,
+						{
+							type: "text",
+							text: "Audit gate: the candidate binding changed while the auditor ran — its report audits a stale candidate and was NOT accepted (no replacement consumed). Rerun /summary and spawn a fresh auditor from the new PLAN PACKET.",
 						},
 					],
 				};
