@@ -26,24 +26,27 @@ import {
 	type WorkspaceTree,
 } from "@oh-my-pi/pi-work-client";
 
-import type {
-	BackendHooks,
-	BatchOutcome,
-	CenterSnapshot,
-	CreateBatchInput,
-	EvidenceKind,
-	EvidenceMeta,
-	GoalTree,
-	IssueDetail,
-	MapSurface,
-	NowRef,
-	PlanStamp,
-	SummaryGateBlocked,
-	SummaryGateOk,
-	TreeItem,
-	WorkStateCarrier,
-	WorkflowBackend,
-	WorkflowCheckpoint,
+import {
+	type BackendHooks,
+	type BatchOutcome,
+	CandidateDriftError,
+	type CenterSnapshot,
+	type CreateBatchInput,
+	type EvidenceKind,
+	type EvidenceMeta,
+	type GoalTree,
+	type IssueDetail,
+	type MapSurface,
+	type NowRef,
+	PLAN_PACKET_MAX_BYTES,
+	type PlanPacket,
+	type PlanStamp,
+	type SummaryGateBlocked,
+	type SummaryGateOk,
+	type TreeItem,
+	type WorkStateCarrier,
+	type WorkflowBackend,
+	type WorkflowCheckpoint,
 } from "./backend";
 import { pendingOpsDir, type WorkClientConfig } from "./config";
 import { freezeCandidateCommit, pushCandidate } from "./git";
@@ -106,6 +109,66 @@ function scrubVolatile(type: Command["type"], payload: unknown): unknown {
 		return { ...p, revision };
 	}
 	return payload;
+}
+
+/** Fallback AC source for imported/thin revisions: bullet/numbered items of
+ *  the `## Acceptance criteria` section only — nothing else in the description. */
+export function acceptanceFromDescription(description: string): string[] {
+	const lines = description.split("\n");
+	const start = lines.findIndex(line => /^##\s+Acceptance criteria\b/i.test(line));
+	if (start < 0) return [];
+	const criteria: string[] = [];
+	for (const line of lines.slice(start + 1)) {
+		if (/^#{1,6}\s/.test(line)) break;
+		const item = /^\s*(?:[-*]|\d+[.)])\s+(.*\S)/.exec(line);
+		if (item?.[1]) criteria.push(item[1]);
+	}
+	return criteria;
+}
+
+/** The approved-plan identity lives in the payload (stamp.hash), not the
+ *  receipt hash; imported/pre-147 receipts fall back to the payload hash. */
+export function planHash(receiptRow: EvidenceReceipt): string {
+	const stamped = receiptRow.payload.plan_sha256;
+	return typeof stamped === "string" && /^[0-9a-f]{64}$/.test(stamped) ? stamped : receiptRow.payload_sha256;
+}
+
+/** Render cost of one packet line as get_work emits it ("- " + text + "\n") —
+ *  the cap sizes what the owner-facing render actually costs, so a flood of
+ *  tiny/empty criteria cannot slip under a bytes-only sum. */
+const CRITERION_RENDER_OVERHEAD = 3;
+
+/** OMP-38 bounded audit-reconstruction packet: NEWEST plan receipt on the
+ *  CURRENT candidate — deterministically newest by issued_at then receipt_id,
+ *  independent of service row order — or undefined when no candidate/plan
+ *  receipt exists. Over the byte ceiling the packet says so and withholds the
+ *  body — bytes are never silently truncated. */
+export function buildPlanPacket(view: WorkflowView): PlanPacket | undefined {
+	const candidate = view.item.candidate;
+	if (!candidate) return undefined;
+	const plan = view.receipts
+		.filter(r => r.kind === "plan" && r.candidate_id === candidate.candidate_id)
+		.sort((a, b) => a.issued_at.localeCompare(b.issued_at) || a.receipt_id.localeCompare(b.receipt_id))
+		.at(-1);
+	if (!plan) return undefined;
+	const body = typeof plan.payload.body === "string" ? plan.payload.body : "";
+	const revision = view.item.revision;
+	const criteria =
+		revision.acceptance_criteria.length > 0 ? revision.acceptance_criteria : acceptanceFromDescription(revision.description);
+	const bytes =
+		Buffer.byteLength(body, "utf8") +
+		criteria.reduce((total, criterion) => total + Buffer.byteLength(criterion, "utf8") + CRITERION_RENDER_OVERHEAD, 0);
+	const base = {
+		candidateId: candidate.candidate_id,
+		candidateSha256: candidate.candidate_sha256,
+		...(candidate.commit_sha ? { commitSha: candidate.commit_sha } : {}),
+		planReceiptSha256: plan.payload_sha256,
+		planSha256: planHash(plan),
+	};
+	if (bytes > PLAN_PACKET_MAX_BYTES) {
+		return { ...base, acceptanceCriteria: [], capped: { bytes, max: PLAN_PACKET_MAX_BYTES } };
+	}
+	return { ...base, planBody: body, acceptanceCriteria: criteria };
 }
 
 export function createWorkBackend(
@@ -191,6 +254,20 @@ export function createWorkBackend(
 		if ((kind === "verification" || kind === "audit") && !candidate.commit_sha) {
 			throw new Error(`${item.alias.key}'s candidate is not finalized — run /summary first`);
 		}
+		if (kind === "audit" && meta?.expectedCandidate) {
+			// OMP-38 second check: the receipt was captured under one bound candidate;
+			// the LIVE candidate must still be it at append time.
+			const expected = meta.expectedCandidate;
+			if (
+				candidate.candidate_id !== expected.id ||
+				candidate.candidate_sha256 !== expected.sha256 ||
+				candidate.commit_sha !== expected.commit
+			) {
+				throw new CandidateDriftError(
+					`audit receipt is bound to candidate ${expected.id.slice(0, 8)}…/${expected.commit.slice(0, 12)} but ${item.alias.key}'s live candidate is ${candidate.candidate_id.slice(0, 8)}…/${candidate.commit_sha?.slice(0, 12) ?? "unfinalized"} — run /summary again to freeze and audit the current candidate`,
+				);
+			}
+		}
 		const payload: Record<string, unknown> = { body };
 		const payloadSha = payloadHash(payload);
 		const base = {
@@ -229,11 +306,21 @@ export function createWorkBackend(
 			.join("\n");
 	}
 
-	/** The approved-plan identity lives in the payload (stamp.hash), not the
-	 *  receipt hash; imported/pre-147 receipts fall back to the payload hash. */
-	function planHashOf(receiptRow: EvidenceReceipt): string {
-		const stamped = receiptRow.payload.plan_sha256;
-		return typeof stamped === "string" && /^[0-9a-f]{64}$/.test(stamped) ? stamped : receiptRow.payload_sha256;
+	/** The audit-bridge binding for a view's finalized candidate: identity plus
+	 *  the plan receipt the auditor task must cite. Undefined until a finalized
+	 *  candidate with a plan receipt exists. */
+	function bindingFor(view: WorkflowView): SummaryGateOk["binding"] {
+		const candidate = view.item.candidate;
+		if (!candidate?.commit_sha) return undefined;
+		const packet = buildPlanPacket(view);
+		if (!packet) return undefined;
+		return {
+			candidateId: candidate.candidate_id,
+			candidateSha256: candidate.candidate_sha256,
+			commitSha: candidate.commit_sha,
+			planReceiptSha256: packet.planReceiptSha256,
+			...(packet.capped ? { capped: true } : {}),
+		};
 	}
 
 	/** Preflight mirror of semantics.completion_blockers, minus push_unverified —
@@ -345,6 +432,7 @@ export function createWorkBackend(
 				view.relations
 					.filter(e => e.active && e.kind === kind && (mine === "source" ? e.source_work_id : e.target_work_id) === view.item.work_id)
 					.map(e => keyOf.get(mine === "source" ? e.target_work_id : e.source_work_id) ?? "?");
+			const packet = buildPlanPacket(view);
 			return {
 				title: view.item.revision.title,
 				state: view.item.state,
@@ -358,6 +446,7 @@ export function createWorkBackend(
 				commentsTotal: view.receipts.length,
 				commentsLast7d: view.receipts.filter(r => Date.now() - Date.parse(r.issued_at) < 7 * 86_400_000).length,
 				digestPacket: linesOf(view) || "no receipts yet",
+				...(packet ? { planPacket: packet } : {}),
 			};
 		},
 
@@ -456,7 +545,7 @@ export function createWorkBackend(
 			const audit = latest("audit");
 			return {
 				issue,
-				...(plan ? { plan: { hash: planHashOf(plan), at: plan.issued_at } } : {}),
+				...(plan ? { plan: { hash: planHash(plan), at: plan.issued_at } } : {}),
 				...(handoff ? { handoff: { at: handoff.issued_at } } : {}),
 				...(audit ? { review: { hash: audit.payload_sha256.slice(0, 12), at: audit.issued_at } } : {}),
 			};
@@ -727,12 +816,17 @@ export function createWorkBackend(
 			const current = item.candidate;
 			if (current?.kind === "final" && current.commit_sha) {
 				const view = await client.workflow(now.key);
-				const plan = view.receipts.filter(r => r.kind === "plan" && r.candidate_id === current.candidate_id).at(-1);
+				// One source of truth (OMP-38): the sorted packet supplies both the
+				// armed plan hash and the audit binding — they can never disagree.
+				const packet = buildPlanPacket(view);
+				const binding = bindingFor(view);
 				return {
 					ok: true,
 					issue: now,
-					...(plan ? { planHash: planHashOf(plan) } : {}),
-					warning: plan ? undefined : "no plan evidence on this candidate — /done will refuse",
+					...(packet ? { planHash: packet.planSha256 } : {}),
+					warning: packet ? undefined : "no plan evidence on this candidate — /done will refuse",
+					carrier: { candidateId: current.candidate_id, candidateSha: current.candidate_sha256, commitSha: current.commit_sha },
+					...(binding ? { binding } : {}),
 				};
 			}
 			// The item's CURRENT planned candidate is authoritative — the local
@@ -751,17 +845,25 @@ export function createWorkBackend(
 			const freeze = await freezeCandidateCommit(hooks.ui, hooks.cwd, now.key, current.candidate_id, hooks.preExistingDirtyPaths);
 			if (!freeze) return { ok: false, reason: "candidate freeze refused — nothing frozen, /summary stays blocked" };
 			const candidateId = stableId("final-candidate", item.work_id, item.revision.revision_id, current.candidate_id, freeze.commitSha);
+			const frozenSha = candidateSha256(freeze.commitSha, freeze.paths);
 			await run("finalize_candidate", {
 				work_id: item.work_id,
 				revision_id: item.revision.revision_id,
 				planned_candidate_id: current.candidate_id,
 				candidate_id: candidateId,
-				candidate_sha256: candidateSha256(freeze.commitSha, freeze.paths),
+				candidate_sha256: frozenSha,
 				commit_sha: freeze.commitSha,
 			});
 			const view = await client.workflow(now.key);
-			const plan = view.receipts.filter(r => r.kind === "plan" && r.candidate_id === candidateId).at(-1);
-			return { ok: true, issue: now, ...(plan ? { planHash: planHashOf(plan) } : {}) };
+			const packet = buildPlanPacket(view);
+			const binding = bindingFor(view);
+			return {
+				ok: true,
+				issue: now,
+				...(packet ? { planHash: packet.planSha256 } : {}),
+				carrier: { candidateId, candidateSha: frozenSha, commitSha: freeze.commitSha },
+				...(binding ? { binding } : {}),
+			};
 		},
 		deliveredOps(): UUID[] {
 			return [...deliveredOps];

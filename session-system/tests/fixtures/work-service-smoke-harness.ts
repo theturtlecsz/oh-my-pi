@@ -23,10 +23,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 	return realFetch(input, init);
 }) as typeof fetch;
 
-const loaded = await loadExtensions(
-	["session-system/extensions/work-now.ts", "session-system/extensions/model-bookends.ts"].map(file => path.join(repoRoot, file)),
-	probe,
-);
+// OMP-38 step-6 smoke: OMP_WORK_SMOKE_EXT_DIR points at the INSTALLED
+// extension set (~/.omp/agent/extensions) to prove the linked/installed
+// artifacts load and gate identically; default is the repo source.
+const extDir = process.env.OMP_WORK_SMOKE_EXT_DIR ?? path.join(repoRoot, "session-system/extensions");
+const loaded = await loadExtensions(["work-now.ts", "model-bookends.ts"].map(file => path.join(extDir, file)), probe);
 if (loaded.errors.length > 0) throw new Error(loaded.errors.map(error => error.error).join("; "));
 const extension = loaded.extensions[0];
 if (!extension) throw new Error("work-now extension did not load");
@@ -35,15 +36,16 @@ if (!tool) throw new Error("work tool missing");
 
 const uiCalls: string[] = [];
 const fableModel = { id: "claude-fable-5", provider: "anthropic", name: "Claude Fable 5", api: "anthropic-messages" };
-const gptModel = { id: "gpt-5.2", provider: "openai", name: "GPT 5.2", api: "openai-responses" };
 const runner = new ExtensionRunner(
 	loaded.extensions,
 	loaded.runtime,
 	probe,
 	{ getCwd: () => probe, getBranch: () => [] } as never,
-	{ getAvailable: () => [fableModel, gptModel], hasProvider: () => true } as never,
+	{ getAvailable: () => [fableModel], hasProvider: () => true } as never,
 	undefined,
-	{ getModelRole: (role: string) => (role === "audit" ? "openai/gpt-5.2" : undefined), get: () => undefined, getStorage: () => undefined } as never,
+	// AC-4 (OMP-38): @audit resolves to the SESSION'S OWN family — the gate must
+	// accept a same-family auditor; independence is fresh context, not family.
+	{ getModelRole: (role: string) => (role === "audit" ? "anthropic/claude-fable-5" : undefined), get: () => undefined, getStorage: () => undefined } as never,
 	undefined,
 	undefined,
 	0,
@@ -108,6 +110,13 @@ if (!nowCommand) throw new Error("now command missing");
 await nowCommand.handler(key, cmdCtx);
 out.nowAfterSelect = await execute({ action: "my_now" });
 
+// 1b. real acceptance criteria via the description fallback (OMP-38): the
+// packet parses only the `## Acceptance criteria` section of the revision.
+await confirmRoundTrip(execute, {
+	action: "revise_work",
+	work: key,
+	description: "Smoke item.\n\n## Acceptance criteria\n- AC-1 the item closes done with a pushed candidate",
+});
 // 2. plan stamp (approved plan event).
 const plan = "# Smoke\n\n## Approach\n1. Freeze and push the candidate\n\n## Verification\n1. The smoke asserts the closed state\n";
 const planResult = await runner.emit({ type: "plan_approved", planFilePath: "local://work-plan.md", planContent: plan, title: "Smoke" } as never);
@@ -121,12 +130,35 @@ fs.writeFileSync(path.join(probe, "smoke.txt"), "candidate payload\n");
 await runner.emitInput("/summary", undefined, "interactive");
 await runner.emit(summaryMessage as never);
 
-// 5. fresh auditor through model-bookends → bridge receipt.
+// 5. OMP-38: rebuild the auditor task from the ledger's PLAN PACKET — no
+// transcript reads. get_work supplies the bound Final commit and plan receipt.
+const getWork = await execute({ action: "get_work", work: key });
+out.getWork = getWork;
+const packetCommit = /^final commit: ([0-9a-f]{40})$/m.exec(getWork)?.[1] ?? "";
+const packetReceiptSha = /^plan receipt sha256: ([0-9a-f]{64})$/m.exec(getWork)?.[1] ?? "";
+const packetPlanBody = (getWork.split("plan body (exact stored bytes):\n")[1] ?? "").trim();
+const packetCriteria = (/^acceptance criteria:\n([\s\S]*?)^plan body /m.exec(getWork)?.[1] ?? "")
+	.trim()
+	.split("\n")
+	.map(line => line.replace(/^- /, ""))
+	.filter(line => line && line !== "(none recorded)");
+out.packetCommit = packetCommit;
+out.packetReceiptSha = packetReceiptSha;
+out.packetPlanBody = packetPlanBody;
+out.packetCriteria = packetCriteria;
+
+// 6. fresh auditor through model-bookends → bridge receipt. The Approved plan
+// section is the packet's EXACT stored plan body (it embeds ## Approach and
+// ## Verification headings — the ordered section parse must tolerate them).
 const AUDIT_TASK = [
-	"Approved plan: freeze and push the candidate.",
-	"Acceptance criteria: AC-1 the item closes done with a pushed candidate.",
+	"Approved plan:",
+	`Plan receipt SHA-256: ${packetReceiptSha}`,
+	packetPlanBody,
+	"Acceptance criteria:",
+	...packetCriteria.map(criterion => `- ${criterion}`),
 	"Starting state: clean probe repo; dirty file smoke.txt.",
 	"Final diff:",
+	`Final commit: ${packetCommit}`,
 	"```diff",
 	"--- /dev/null",
 	"+++ b/smoke.txt",
@@ -170,12 +202,12 @@ await runner.emitToolResult({
 	isError: false,
 } as never);
 
-// 6. typed receipts in close-ritual order.
+// 7. typed receipts in close-ritual order.
 out.verification = await execute({ action: "append_evidence", work: key, kind: "verification", body: "the smoke asserts the end state" });
 out.audit = await execute({ action: "append_evidence", work: key, kind: "audit", body: REPORT });
 out.closeout = await execute({ action: "append_evidence", work: key, kind: "closeout", body: "session review: candidate smoke completed" });
 
-// 7. owner close request, then /done (preflight → verdict → push → complete).
+// 8. owner close request, then /done (preflight → verdict → push → complete).
 const close = await confirmRoundTrip(execute, { action: "request_closeout", work: key, body: "smoke complete" });
 out.requestCloseout = close.confirmed;
 const done = extension.commands.get("done");

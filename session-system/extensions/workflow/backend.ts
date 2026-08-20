@@ -5,6 +5,8 @@
  * supplies storage I/O only.
  */
 
+import type { AuditBinding } from "./audit-bridge";
+
 export const WORKFLOW_SEQUENCE =
 	"WORKFLOW SEQUENCE: /intake creates and selects → /plan approves, stamps, and executes → execution handoff → /summary reviews → /done closes. The ledger tracks every stage; Chris never moves state, re-identifies the work, or answers bookkeeping prompts.";
 
@@ -18,6 +20,36 @@ export const EXECUTION_HANDOFF_PREFIX = "**Execution handoff**";
 export const SESSION_REVIEW_PREFIX = "**Session review**";
 export const CLOSEOUT_LOCK_REFUSAL =
 	"REFUSED — closeout lock (HOME-114): no owner-entered /summary or /done this session. record_health, request_closeout, and cancel_work are wrap-up writes; they unlock only when Chris literally enters /summary or /done. If he wants this write, he must enter one of those commands himself — do not retry on your own.";
+
+/** One explicit ceiling on the get_work PLAN PACKET (plan body + acceptance
+ *  criteria bytes). Over it, the packet says so and audit spawn is refused —
+ *  bytes are never silently omitted (OMP-38). */
+export const PLAN_PACKET_MAX_BYTES = 32 * 1024;
+
+/** Thrown by appendEvidence when an audit receipt's expected candidate no
+ *  longer matches the ledger's LIVE candidate (OMP-38). The host reacts by
+ *  invalidating the receipt and clearing the binding — only a fresh /summary
+ *  freeze + audit can retry. */
+export class CandidateDriftError extends Error {}
+
+/** Bounded audit-reconstruction packet (OMP-38): everything the /summary
+ *  auditor task needs, read from the ledger's newest plan receipt on the
+ *  current candidate — never from transcript archaeology. */
+export interface PlanPacket {
+	candidateId: string;
+	candidateSha256: string;
+	/** Absent until /summary finalizes the candidate. */
+	commitSha?: string;
+	/** payload_sha256 of the plan receipt — the value the auditor task must cite. */
+	planReceiptSha256: string;
+	/** SHA-256 of the approved plan document (stamp hash). */
+	planSha256: string;
+	/** Exact stored plan body; absent when capped. */
+	planBody?: string;
+	acceptanceCriteria: string[];
+	/** Present ⇒ body + criteria exceeded the ceiling and were withheld. */
+	capped?: { bytes: number; max: number };
+}
 
 export interface BackendIssue {
 	id: string;
@@ -53,6 +85,8 @@ export interface IssueDetail {
 	commentsTotal: number;
 	commentsLast7d: number;
 	digestPacket: string;
+	/** OMP-38: bounded ledger packet for audit reconstruction (work backend). */
+	planPacket?: PlanPacket;
 }
 
 export interface TreeItem {
@@ -139,6 +173,9 @@ export interface EvidenceMeta {
 	verdict?: "PASS" | "NEEDS_FIX" | "BLOCKED"; // work audit receipts (bridge-supplied only)
 	independent?: boolean;
 	candidateSha256?: string; // binds verification/audit/closeout to the final candidate
+	/** OMP-38: the candidate identity the audit receipt was captured under —
+	 *  the backend refuses the append when the LIVE candidate differs. */
+	expectedCandidate?: { id: string; sha256: string; commit: string };
 }
 
 /** Hooks the host hands a backend for interactive flows (freeze/push verdicts). */
@@ -163,6 +200,10 @@ export interface SummaryGateOk {
 	/** Work backend: candidate ids allocated during the gate (freeze/finalize) —
 	 *  the host merges them into the opaque carrier it persists. */
 	carrier?: WorkStateCarrier;
+	/** Work backend (OMP-38): the finalized candidate this /summary attempt is
+	 *  bound to — present whenever a finalized candidate with a plan receipt
+	 *  exists; the host registers it on the audit bridge. */
+	binding?: AuditBinding;
 }
 
 export interface SummaryGateBlocked {

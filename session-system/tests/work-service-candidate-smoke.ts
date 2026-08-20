@@ -175,6 +175,10 @@ try {
 	assert.ok(String(out.nowAfterSelect).includes(key), "/now selected the item");
 	assert.equal(out.plan, "stamped", "plan stamp landed");
 	assert.equal(out.spawnBlocked, false, "auditor spawn not blocked");
+	assert.ok(String(out.getWork).includes("PLAN PACKET"), "get_work renders the plan packet");
+	assert.ok(String(out.packetPlanBody).includes("## Verification"), "packet carries the exact stored plan body");
+	assert.match(String(out.packetReceiptSha), /^[0-9a-f]{64}$/, "packet cites the plan receipt sha256");
+	assert.deepEqual(out.packetCriteria, ["AC-1 the item closes done with a pushed candidate"], "description-fallback criteria flow into the packet");
 	assert.ok(String(out.verification).includes("verification receipt recorded"), "verification receipt");
 	assert.ok(String(out.audit).includes("audit receipt recorded"), "audit receipt");
 	assert.ok(String(out.closeout).includes("closeout receipt recorded"), "closeout receipt");
@@ -187,6 +191,7 @@ try {
 	// the freeze actually committed the dirty file as a new candidate commit
 	const headSha = git(probe, ["rev-parse", "HEAD"]);
 	assert.notEqual(headSha, initialSha, "freeze created a new commit");
+	assert.equal(out.packetCommit, headSha, "PLAN PACKET commit is the frozen candidate commit");
 	assert.equal(git(probe, ["show", "HEAD:smoke.txt"]), "candidate payload", "candidate commit carries the work");
 	assert.equal(fs.readFileSync(path.join(probe, "owner.txt"), "utf8"), "owner setting\n", "pre-session owner file survives");
 	assert.equal(git(probe, ["status", "--porcelain"]), "?? owner.txt", "pre-session owner file stays outside candidate");
@@ -205,7 +210,7 @@ try {
 	const headers = { authorization: `Bearer ${token}`, "X-OMP-Workspace-ID": WORKSPACE };
 	const view = (await (await fetch(`${baseUrl}/v1/work-items/${key}/workflow`, { headers })).json()) as {
 		item: { state: string; candidate: { kind: string; commit_sha: string; candidate_id: string } | null };
-		receipts: { kind: string; candidate_id: string; remote_commit: string | null }[];
+		receipts: { kind: string; candidate_id: string; remote_commit: string | null; candidate_commit: string | null }[];
 	};
 	assert.equal(view.item.state, "DONE", "item state");
 	assert.equal(view.item.candidate?.kind, "final", "final candidate");
@@ -216,6 +221,7 @@ try {
 	const bound = view.receipts.filter(r => r.candidate_id === finalCandidateId);
 	assert.deepEqual(bound.map(r => r.kind).sort(), ["audit", "closeout", "plan", "push", "verification"], "receipt set bound to final candidate");
 	assert.equal(bound.find(r => r.kind === "push")?.remote_commit, headSha, "push receipt binds the remote commit");
+	assert.equal(bound.find(r => r.kind === "audit")?.candidate_commit, headSha, "audit receipt binds the exact candidate commit");
 
 	// HOME-148: machine-readable results for the cutover coordinator. Each entry
 	// is recomputed from the real harness output — never a literal — so a softened
@@ -228,9 +234,11 @@ try {
 			{ command_type: "now_select", passed: String(out.nowAfterSelect).includes(key) },
 			{ command_type: "plan_stamp", passed: out.plan === "stamped" },
 			{ command_type: "summary_freeze", passed: headSha !== initialSha && git(probe, ["show", "HEAD:smoke.txt"]) === "candidate payload" },
+			{ command_type: "plan_packet", passed: String(out.getWork).includes("PLAN PACKET") && out.packetCommit === headSha && /^[0-9a-f]{64}$/.test(String(out.packetReceiptSha)) },
 			{ command_type: "auditor_spawn", passed: out.spawnBlocked === false },
 			{ command_type: "verification", passed: String(out.verification).includes("verification receipt recorded") },
 			{ command_type: "audit", passed: String(out.audit).includes("audit receipt recorded") },
+			{ command_type: "audit_binding", passed: bound.find(r => r.kind === "audit")?.candidate_commit === headSha },
 			{ command_type: "closeout", passed: String(out.closeout).includes("closeout receipt recorded") },
 			{ command_type: "request_closeout", passed: String(out.requestCloseout).includes("close") },
 			{ command_type: "done_push", passed: notices.includes("pushed") && notices.includes("done") && remoteSha === headSha },

@@ -261,7 +261,18 @@ tool (`work`) in order:
    ledgers are not destinations.
 3. **Request closes** — finished items get `request_closeout`; the owner verdict
    still closes them.
-4. **Verification + session review** — on the current NOW/executing item, post
+4. **Independent audit (OMP-38)** — call the workflow tool with
+   `action:"get_work"` on the reviewed item and read its PLAN PACKET: the
+   exact approved plan body, the acceptance criteria, the plan receipt
+   SHA-256, and the finalized candidate's Final commit. Build the auditor
+   task's Approved plan and Acceptance criteria sections from that packet —
+   never from transcript scrollback — cite the packet's plan receipt SHA-256
+   on a `Plan receipt SHA-256:` line inside the Approved plan section, and
+   put the packet's Final commit on a `Final commit:` line inside the Final
+   diff section. Spawn exactly ONE `auditor` task and forward its report
+   verbatim as `kind:"audit"` evidence; the injected audit contract governs
+   the details and refusals.
+5. **Verification + session review** — on the current NOW/executing item, post
    `action:"append_evidence"`, `kind:"verification"` with the concrete check
    evidence (what ran, what passed, what remains unverified). Then call the
    workflow tool exactly once with `action:"append_evidence"`, `kind:"closeout"`,

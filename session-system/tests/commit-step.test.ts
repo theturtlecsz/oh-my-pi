@@ -86,6 +86,23 @@ describe("candidate freeze and push", () => {
 		expect(ui.confirms[0].body).toContain("left alone: 1 pre-session file(s)");
 	});
 
+	test("packages/ paths stay out of the candidate; lookalike prefixes do not (OMP-38 re-probe)", async () => {
+		const repo = makeRepo();
+		fs.mkdirSync(path.join(repo, "packages/sub"), { recursive: true });
+		fs.writeFileSync(path.join(repo, "packages/sub/lib.ts"), "chris lane\n");
+		fs.writeFileSync(path.join(repo, "packages-extra.txt"), "session work\n");
+		fs.writeFileSync(path.join(repo, "session.txt"), "session work\n");
+		const ui = makeUi(true);
+
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
+
+		// prefix match is path-segment exact: packages/ excluded, packages-extra.txt committed
+		expect(frozen?.paths).toEqual(["packages-extra.txt", "session.txt"]);
+		expect(git(repo, "show", "--name-only", "--format=", "HEAD").split("\n").sort()).toEqual(["packages-extra.txt", "session.txt"]);
+		expect(git(repo, "status", "--porcelain")).toBe("?? packages/");
+		expect(ui.confirms[0].body).toContain("file(s) under packages/");
+	});
+
 	test("candidate freeze adopts current HEAD when only pre-session files are dirty", async () => {
 		const repo = makeRepo();
 		fs.writeFileSync(path.join(repo, "session.txt"), "committed work\n");

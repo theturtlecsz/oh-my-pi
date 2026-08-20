@@ -23,6 +23,7 @@ import sequenceText from "./sequence.md" with { type: "text" };
 import toolDescriptionTemplate from "./tool-description.md" with { type: "text" };
 import {
 	BatchPartialError,
+	CandidateDriftError,
 	CLOSEOUT_BOUNDARY,
 	STOP_REMINDER_BOUNDARY,
 	type BackendIssue,
@@ -33,12 +34,21 @@ import {
 	type IssueDetail,
 	type MapSurface,
 	type NowRef,
+	type PlanPacket,
 	type TreeItem,
 	type WorkflowBackend,
 	type WorkStateCarrier,
 } from "./backend";
 import { confirmWrite, resetConfirmations } from "./confirm";
-import { claimAuditReceipt, commitAuditReceipt, releaseAuditReceipt, reportSha256 } from "./audit-bridge";
+import {
+	claimAuditReceipt,
+	clearAuditBinding,
+	commitAuditReceipt,
+	invalidateAuditReceipt,
+	registerAuditBinding,
+	releaseAuditReceipt,
+	reportSha256,
+} from "./audit-bridge";
 import { dirtyPaths } from "./git";
 
 /** Tool actions — the canonical action set for the `work` tool. */
@@ -129,6 +139,33 @@ export function renderGoalTree(t: GoalTree): string[] {
 	if (queued) parts.push(`${queued} queued next.`);
 	lines.push(parts.join(" "));
 	return lines;
+}
+
+/** OMP-38 get_work tail: the bounded audit-reconstruction packet. Deterministic
+ *  render; capped packets say so and never leak partial bytes. */
+export function renderPlanPacket(packet: PlanPacket | undefined): string[] {
+	if (!packet) return ["PLAN PACKET: none — no plan receipt on a current candidate; run /plan (then /summary to finalize)"];
+	const head = [
+		"PLAN PACKET (build the auditor task from these exact ledger values — no transcript reads)",
+		`candidate: ${packet.candidateId}`,
+		`candidate sha256: ${packet.candidateSha256}`,
+		`final commit: ${packet.commitSha ?? "unfinalized — run /summary"}`,
+		`plan receipt sha256: ${packet.planReceiptSha256}`,
+		`approved plan sha256: ${packet.planSha256}`,
+	];
+	if (packet.capped) {
+		return [
+			...head,
+			`PLAN PACKET CAPPED: plan body + acceptance criteria total ${packet.capped.bytes} bytes, over the ${packet.capped.max}-byte ceiling — audit spawn is refused; restamp a smaller plan with /plan.`,
+		];
+	}
+	return [
+		...head,
+		"acceptance criteria:",
+		...(packet.acceptanceCriteria.length ? packet.acceptanceCriteria.map(criterion => `- ${criterion}`) : ["(none recorded)"]),
+		"plan body (exact stored bytes):",
+		packet.planBody ?? "(no stored plan body)",
+	];
 }
 
 function sectionItems(content: string, heading: "Approach" | "Verification"): string[] {
@@ -514,16 +551,22 @@ export function createWorkflowHost(cfg: HostConfig) {
 		closeoutAuthorized = true;
 		const now = currentNowRef();
 		if (!now) {
+			clearAuditBinding();
 			ctx.ui.notify("No NOW is selected. Review can run, but /done stays blocked; run /intake first.", "warning");
 			return;
 		}
 		try {
 			const gate = await backend.summaryGate(now, carrier(), hooksFor(ctx));
 			if (!gate.ok) {
+				clearAuditBinding();
 				ctx.ui.notify(gate.reason, "warning");
 				return;
 			}
 			mergeCarrier(gate.carrier);
+			// OMP-38: bind this /summary attempt to the finalized candidate. No
+			// binding (no finalized candidate / no plan receipt) clears any stale one.
+			if (gate.binding) registerAuditBinding(gate.binding);
+			else clearAuditBinding();
 			if (gate.warning) {
 				ctx.ui.notify(gate.warning, "warning");
 				persistSession();
@@ -543,6 +586,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			recordDeliveredOutcome(`summary gate passed for ${now.key} — candidate finalized, awaiting verdict`);
 			footer(ctx);
 		} catch (error) {
+			clearAuditBinding();
 			ctx.ui.notify(`Could not load ${now.key} workflow state (${String(error)}). Review can run, but /done stays blocked.`, "warning");
 		}
 	}
@@ -1476,6 +1520,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 									`${params.work} ${i.title}`,
 									`state: ${i.state} · project: ${i.project ?? "none"} · labels: ${i.labels.join(",") || "none"}`,
 									(i.description ?? "").slice(0, 1200),
+									...renderPlanPacket(i.planPacket),
 								].join("\n"),
 							);
 						}
@@ -1506,10 +1551,25 @@ export function createWorkflowHost(cfg: HostConfig) {
 									);
 								}
 								try {
-									await backend.appendEvidence(issue, "audit", receipt.report, { ...meta, verdict: receipt.verdict, independent: true });
+									await backend.appendEvidence(issue, "audit", receipt.report, {
+										...meta,
+										verdict: receipt.verdict,
+										independent: true,
+										// OMP-38: the backend refuses the append when the LIVE candidate
+										// no longer matches the identity the report was captured under.
+										...(receipt.binding
+											? { expectedCandidate: { id: receipt.binding.candidateId, sha256: receipt.binding.candidateSha256, commit: receipt.binding.commitSha } }
+											: {}),
+									});
 								} catch (error) {
-									releaseAuditReceipt(sha);
 									summaryAttemptFinished = true;
+									if (error instanceof CandidateDriftError) {
+										// The bound candidate is gone: the receipt can never land — kill it
+										// (and the stale binding) so only a fresh /summary + audit can retry.
+										invalidateAuditReceipt(sha);
+										return deny(`${error.message} on ${issue.key} — audit receipt invalidated; rerun /summary to freeze and audit the current candidate`);
+									}
+									releaseAuditReceipt(sha);
 									return deny(`${String(error)} on ${issue.key} — audit receipt released, forward stays retryable`);
 								}
 								commitAuditReceipt(sha);

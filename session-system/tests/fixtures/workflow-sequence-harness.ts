@@ -45,7 +45,14 @@ const initialItem: MockWorkItem = {
 	work_id: "id-1",
 	workspace_id: WORKSPACE_ID,
 	alias: { key: "HOME-1" },
-	revision: { revision_id: "rev-1", title: "First", description: "", scope: "", acceptance_criteria: [] },
+	revision: {
+		revision_id: "rev-1",
+		title: "First",
+		description: "",
+		scope: "",
+		// OMP-38 audit mode: real structured criteria the PLAN PACKET must carry.
+		acceptance_criteria: mode === "audit" ? ["AC-1 the focused check passes"] : [],
+	},
 	state: "IN_PROGRESS",
 	project_id: "proj-1",
 	candidate: null,
@@ -606,25 +613,7 @@ if (mode === "intake") {
 	// verbatim bytes.
 	await setNow();
 	await approve(planA);
-	const AUDIT_TASK = [
-		"Approved plan: change the shared path.",
-		"Acceptance criteria: AC-1 the focused check passes.",
-		"Starting state: commit abc123; pre-existing dirty files: none.",
-		"Final diff:",
-		"```diff",
-		"--- a/x",
-		"+++ b/x",
-		"@@ -1,1 +1,1 @@",
-		"-old shared path",
-		"+new shared path",
-		"```",
-		"Verification: bun test → pass.",
-	].join("\n");
-	const REPORT = [
-		"VERDICT: PASS",
-		"",
-		"FINDINGS",
-		"(none)",
+	const REPORT_SECTIONS_TAIL = [
 		"",
 		"ACCEPTANCE COVERAGE",
 		"| AC-1 | met | tests |",
@@ -637,10 +626,48 @@ if (mode === "intake") {
 		"",
 		"REMAINING QUESTIONS",
 		"none",
-	].join("\n");
+	];
+	const REPORT = ["VERDICT: PASS", "", "FINDINGS", "(none)", ...REPORT_SECTIONS_TAIL].join("\n");
 	out.unauthorized = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT });
 	await runner.emitInput("/summary", undefined, "interactive");
 	await runner.emit(summaryMessage as never);
+	// OMP-38: the auditor task is reconstructed from the ledger's PLAN PACKET —
+	// get_work supplies the bound Final commit and plan receipt SHA-256.
+	const getWork = await execute({ action: "get_work", work: "HOME-1" });
+	out.getWork = getWork;
+	const packetCommit = /^final commit: ([0-9a-f]{40})$/m.exec(getWork)?.[1] ?? "";
+	const packetReceiptSha = /^plan receipt sha256: ([0-9a-f]{64})$/m.exec(getWork)?.[1] ?? "";
+	const packetPlanBody = (getWork.split("plan body (exact stored bytes):\n")[1] ?? "").trim();
+	const packetCriteria = (/^acceptance criteria:\n([\s\S]*?)^plan body /m.exec(getWork)?.[1] ?? "")
+		.trim()
+		.split("\n")
+		.map(line => line.replace(/^- /, ""))
+		.filter(line => line && line !== "(none recorded)");
+	out.packetCommit = packetCommit;
+	out.packetReceiptSha = packetReceiptSha;
+	out.packetPlanBody = packetPlanBody;
+	out.packetCriteria = packetCriteria;
+	// The Approved plan section carries the packet's EXACT stored plan body —
+	// which itself contains `## Approach`/`## Verification` headings; the gate's
+	// ordered section parse must not let those satisfy or truncate outer sections.
+	const AUDIT_TASK = [
+		"Approved plan:",
+		`Plan receipt SHA-256: ${packetReceiptSha}`,
+		packetPlanBody,
+		"Acceptance criteria:",
+		...packetCriteria.map(criterion => `- ${criterion}`),
+		"Starting state: commit abc123; pre-existing dirty files: none.",
+		"Final diff:",
+		`Final commit: ${packetCommit}`,
+		"```diff",
+		"--- a/x",
+		"+++ b/x",
+		"@@ -1,1 +1,1 @@",
+		"-old shared path",
+		"+new shared path",
+		"```",
+		"Verification: bun test → pass.",
+	].join("\n");
 	const spawn = await runner.emitToolCall({
 		type: "tool_call",
 		toolName: "task",
@@ -661,6 +688,7 @@ if (mode === "intake") {
 	out.exact = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT });
 	out.replay = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT });
 	out.auditBodies = comments.filter(comment => comment.body.includes("VERDICT: PASS")).length;
+	out.auditReceiptCommit = (receipts.filter(r => r.kind === "audit").at(-1)?.candidate_commit as string | undefined) ?? null;
 	comments.length = 0;
 	receipts.length = 0;
 	for (const v of items.values()) v.candidate = null;

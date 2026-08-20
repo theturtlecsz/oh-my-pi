@@ -1,3 +1,5 @@
+import type { EvidenceReceipt, WorkflowView } from "@oh-my-pi/pi-work-client";
+import { acceptanceFromDescription, buildPlanPacket } from "../extensions/workflow/work";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -131,12 +133,24 @@ describe("HOME-122 workflow sequence", () => {
 
 	test("the audit bridge binds verbatim bytes to exactly one recorded receipt", () => {
 		const out = run("audit");
+		// OMP-38: get_work carries the complete PLAN PACKET the auditor task is built from
+		expect(out.getWork).toContain("PLAN PACKET");
+		expect(out.getWork).toContain("plan body (exact stored bytes):");
+		// the stored body embeds its own ## Verification heading — the ordered
+		// section parse must tolerate it inside the Approved plan section
+		expect(String(out.packetPlanBody)).toContain("## Verification");
+		// structured revision criteria flow into the packet verbatim
+		expect(out.packetCriteria).toEqual(["AC-1 the focused check passes"]);
+		expect(String(out.packetCommit)).toMatch(/^[0-9a-f]{40}$/);
+		expect(String(out.packetReceiptSha)).toMatch(/^[0-9a-f]{64}$/);
 		expect(out.spawnBlocked, "the auditor spawn clears the gate").toBe(false);
 		expect(out.unauthorized, "audit is a close-ritual kind").toContain("literally enter /summary");
 		expect(out.edited, "edited bytes never match the receipt").toContain("no fresh auditor receipt matches");
 		expect(out.exact).toContain("audit receipt recorded on HOME-1 (verdict PASS)");
 		expect(out.replay, "the receipt is consumed by the first match").toContain("no fresh auditor receipt matches");
 		expect(out.auditBodies, "exactly one audit comment landed").toBe(1);
+		// OMP-38: the persisted audit receipt names the exact bound candidate commit
+		expect(out.auditReceiptCommit).toBe(out.packetCommit);
 		expect(out.repeatSummaryNotice).toContain("No plan is stamped on this work");
 	});
 
@@ -232,5 +246,66 @@ describe("HOME-122 workflow sequence", () => {
 		expect(String(out.staleNotice)).toContain("does not exist in the Work Ledger");
 		expect(out.prompts).toBe(0);
 		expect(list(out.tools)).toEqual(["read", "bash", "work"]);
+	});
+});
+
+describe("OMP-38 plan packet", () => {
+	const planReceipt = (id: string, issuedAt: string, sha: string): EvidenceReceipt =>
+		({
+			receipt_id: id,
+			work_id: "w1",
+			revision_id: "rev-1",
+			candidate_id: "cand-1",
+			kind: "plan",
+			payload: { body: "# Plan", plan_sha256: "a".repeat(64) },
+			payload_sha256: sha,
+			issuer: "test",
+			issued_at: issuedAt,
+			independent: false,
+		}) as EvidenceReceipt;
+	// partial mock shaped for buildPlanPacket's reads only
+	const view = (receipts: EvidenceReceipt[], criteria: string[] = [], description = ""): WorkflowView =>
+		({
+			item: {
+				work_id: "w1",
+				revision: { revision_id: "rev-1", title: "t", description, scope: "", acceptance_criteria: criteria },
+				candidate: {
+					candidate_id: "cand-1",
+					candidate_sha256: "c".repeat(64),
+					commit_sha: "b".repeat(40),
+					kind: "final",
+				},
+			},
+			receipts,
+			relations: [],
+			closeout: [],
+		}) as unknown as WorkflowView;
+
+	test("newest plan receipt wins deterministically regardless of row order", () => {
+		const older = planReceipt("r-1", "2026-08-19T10:00:00Z", "1".repeat(64));
+		const newer = planReceipt("r-2", "2026-08-20T10:00:00Z", "2".repeat(64));
+		expect(buildPlanPacket(view([newer, older]))?.planReceiptSha256).toBe("2".repeat(64));
+		expect(buildPlanPacket(view([older, newer]))?.planReceiptSha256).toBe("2".repeat(64));
+		// issued_at tie breaks on receipt_id
+		const tieA = planReceipt("r-a", "2026-08-20T10:00:00Z", "3".repeat(64));
+		const tieB = planReceipt("r-b", "2026-08-20T10:00:00Z", "4".repeat(64));
+		expect(buildPlanPacket(view([tieB, tieA]))?.planReceiptSha256).toBe("4".repeat(64));
+	});
+
+	test("the cap prices the render, so floods of tiny criteria cannot slip under it", () => {
+		const flood = Array.from({ length: 20_000 }, () => "");
+		const packet = buildPlanPacket(view([planReceipt("r-1", "2026-08-20T10:00:00Z", "1".repeat(64))], flood));
+		expect(packet?.capped).toBeDefined();
+		expect(packet?.planBody).toBeUndefined();
+		expect(packet?.acceptanceCriteria).toEqual([]);
+	});
+
+	test("structured criteria win; the description fallback parses only its own section", () => {
+		const description = "Intro.\n\n## Acceptance criteria\n- AC-1 first\n- AC-2 second\n\n## Verification\n- not a criterion";
+		const structured = buildPlanPacket(view([planReceipt("r-1", "2026-08-20T10:00:00Z", "1".repeat(64))], ["AC-9 structured"], description));
+		expect(structured?.acceptanceCriteria).toEqual(["AC-9 structured"]);
+		const fallback = buildPlanPacket(view([planReceipt("r-1", "2026-08-20T10:00:00Z", "1".repeat(64))], [], description));
+		expect(fallback?.acceptanceCriteria).toEqual(["AC-1 first", "AC-2 second"]);
+		expect(acceptanceFromDescription("no section here")).toEqual([]);
 	});
 });
