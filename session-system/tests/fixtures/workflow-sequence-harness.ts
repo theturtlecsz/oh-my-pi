@@ -738,8 +738,8 @@ if (mode === "intake") {
 		details: { results: [{ output: REPORT }] },
 		isError: false,
 	} as never);
-	out.edited = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: `${REPORT} ` });
-	out.exact = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT });
+	out.edited = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT.replace("(none)", "(edited)") });
+	out.exact = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: `${REPORT}\n` });
 	out.replay = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT });
 	out.auditBodies = comments.filter(comment => comment.body.includes("VERDICT: PASS")).length;
 	out.auditReceiptCommit = (receipts.filter(r => r.kind === "audit").at(-1)?.candidate_commit as string | undefined) ?? null;

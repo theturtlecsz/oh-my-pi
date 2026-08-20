@@ -770,6 +770,14 @@ describe("audit gate", () => {
 		expect(await h.runner.emit(sessionStop())).toBeUndefined();
 	});
 
+	test("reportSha256 canonicalizes outer whitespace and CRLF, never interior bytes (OMP-38 AC-3)", () => {
+		// Live regression 2026-08-20: forwarding the exact report with a trailing
+		// newline was refused as "no fresh auditor receipt matches those bytes".
+		expect(reportSha256(`${PASS_REPORT}\n`)).toBe(reportSha256(PASS_REPORT));
+		expect(reportSha256(`\r\n${PASS_REPORT.replace(/\n/g, "\r\n")} `)).toBe(reportSha256(PASS_REPORT));
+		expect(reportSha256(PASS_REPORT.replace("PASS", "FAIL"))).not.toBe(reportSha256(PASS_REPORT));
+	});
+
 	test("a refused report tells the session why, marks refusal state, and frees the slot", async () => {
 		const h = await makeHarness();
 		await armSummary(h);

@@ -115,8 +115,14 @@ export function currentBindingGeneration(): number {
 	return store.bindingGeneration;
 }
 
+/** Hash of the canonical report bytes: CRLF-normalized, outer whitespace
+ *  trimmed. Registration (model-bookends passes already-normalized bytes) and
+ *  the host's forward-body lookup canonicalize identically, so an honest
+ *  forward differing only by outer whitespace still matches its receipt while
+ *  any interior edit never does (OMP-38 AC-3: no trim mismatch — live refusal
+ *  of a trailing-newline forward observed 2026-08-20). */
 export function reportSha256(report: string): string {
-	return createHash("sha256").update(report, "utf8").digest("hex");
+	return createHash("sha256").update(report.replace(/\r\n/g, "\n").trim(), "utf8").digest("hex");
 }
 
 /** Called by model-bookends when a real auditor tool_result yields a parseable

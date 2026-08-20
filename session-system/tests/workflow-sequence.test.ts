@@ -157,7 +157,9 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.spawn0Blocked, "the first auditor spawn clears the gate").toBe(false);
 		expect(String(out.staleRefusal)).toContain("changed while the auditor ran");
 		expect(out.unauthorized, "audit is a close-ritual kind").toContain("literally enter /summary");
-		expect(out.edited, "edited bytes never match the receipt").toContain("no fresh auditor receipt matches");
+		expect(out.edited, "interior edits never match the receipt").toContain("no fresh auditor receipt matches");
+		// OMP-38 AC-3 live regression 2026-08-20: an honest forward carrying only
+		// outer whitespace (trailing newline) must still match its receipt.
 		expect(out.exact).toContain("audit receipt recorded on HOME-1 (verdict PASS)");
 		expect(out.replay, "the receipt is consumed by the first match").toContain("no fresh auditor receipt matches");
 		expect(out.auditBodies, "exactly one audit comment landed").toBe(1);
