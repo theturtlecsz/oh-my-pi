@@ -5540,8 +5540,17 @@ export class AgentSession {
 			// session-ledger note) join this prompt instead of slipping to the
 			// following turn. Order: active user message, queued nextTurn messages
 			// in queue order, then messages returned by before_agent_start.
-			messages.splice(nextTurnInsertIndex, 0, ...this.#pendingNextTurnMessages);
+			const drainedNextTurn = this.#pendingNextTurnMessages;
+			messages.splice(nextTurnInsertIndex, 0, ...drainedNextTurn);
 			this.#pendingNextTurnMessages = [];
+			// Transactional drain: any generation bail below hands the drained
+			// batch back to the queue (ahead of anything queued since), so it
+			// survives for the next prompt instead of dying with this array.
+			const restoreDrainedNextTurn = () => {
+				if (drainedNextTurn.length > 0) {
+					this.#pendingNextTurnMessages = [...drainedNextTurn, ...this.#pendingNextTurnMessages];
+				}
+			};
 			if (this.#extensionRunner) {
 				if (result?.messages) {
 					const promptAttribution: "user" | "agent" | undefined =
@@ -5583,6 +5592,7 @@ export class AgentSession {
 
 			// Bail out if a newer abort/prompt cycle has started since we began setup
 			if (this.#promptGeneration !== generation) {
+				restoreDrainedNextTurn();
 				return;
 			}
 
@@ -5593,6 +5603,7 @@ export class AgentSession {
 			if (this.isAutoThinking && message.role === "user") {
 				await this.#models.applyAutoThinkingLevel(expandedText, generation);
 				if (this.#promptGeneration !== generation) {
+					restoreDrainedNextTurn();
 					return;
 				}
 			}
@@ -5605,6 +5616,7 @@ export class AgentSession {
 
 			await this.#maintenance.runPrePromptCompactionIfNeeded(messages);
 			if (this.#promptGeneration !== generation) {
+				restoreDrainedNextTurn();
 				return;
 			}
 
