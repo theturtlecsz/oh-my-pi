@@ -8,7 +8,7 @@ import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "done", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "ledger"];
+const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "done", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "ledger"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -46,6 +46,7 @@ interface MockAttempt {
 	authorization_kind: string;
 	authorization_ref: string;
 	launch_count: number;
+	cancelled_launch_count: number;
 	accepted_report_count: number;
 	in_flight_launch_id: string | null;
 	state: string;
@@ -63,6 +64,7 @@ const deliveries: Array<Record<string, unknown>> = [];
 let eventSeq = 0;
 const beginCalls: Array<Record<string, unknown>> = [];
 const settleCalls: Array<Record<string, unknown>> = [];
+const cancelCalls: Array<Record<string, unknown>> = [];
 const attestCalls: Array<Record<string, unknown>> = [];
 function mockEvent(workId: string, attemptId: string | null, eventType: string, reasonCode: string, requiresDelivery: boolean): Record<string, unknown> {
 	eventSeq += 1;
@@ -390,6 +392,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 				authorization_kind: "summary",
 				authorization_ref: payload.authorization_ref as string,
 				launch_count: 0,
+				cancelled_launch_count: 0,
 				accepted_report_count: 0,
 				in_flight_launch_id: null,
 				state: "active",
@@ -468,6 +471,17 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_reserved", "auditor_launch_reserved", false);
 			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-res-${eventSeq}` }, result: { type: "reserve_auditor_launch", status: "applied", attempt, launch, event } }), { status: 200 });
 		}
+		if (cmdType === "cancel_auditor_launch") {
+			cancelCalls.push(payload);
+			const attempt = attempts.find(a => a.attempt_id === payload.attempt_id);
+			if (!attempt || attempt.state !== "auditor_in_flight" || attempt.in_flight_launch_id !== payload.launch_id) throw new Error("cancel without in-flight launch");
+			attempt.cancelled_launch_count += 1;
+			attempt.in_flight_launch_id = null;
+			attempt.state = "audit_ready";
+			const launch = launches.find(row => row.launch_id === payload.launch_id);
+			const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_cancelled", "host_launch_failed", true);
+			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-cancel-${eventSeq}` }, result: { type: "cancel_auditor_launch", status: "applied", attempt, launch, event } }), { status: 200 });
+		}
 		if (cmdType === "settle_auditor_launch") {
 			settleCalls.push(payload);
 			const attempt = attempts.find(a => a.attempt_id === payload.attempt_id);
@@ -477,7 +491,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			const text = typeof transport === "string" ? transport : typeof (transport as Record<string, unknown>)?.report === "string" ? String((transport as Record<string, unknown>).report) : "";
 			const verdictMatch = /^VERDICT\s*:\s*(PASS|NEEDS_FIX|BLOCKED)\b/.exec(text.trim());
 			if (payload.transport_failed === true || !verdictMatch) {
-				attempt.state = attempt.launch_count >= 3 ? "budget_exhausted" : "audit_ready";
+				attempt.state = attempt.launch_count - attempt.cancelled_launch_count >= 3 ? "budget_exhausted" : "audit_ready";
 				if (attempt.state === "budget_exhausted") attempt.terminal_reason = "auditor_budget_exhausted";
 				const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_settled", payload.transport_failed === true ? "transport_failed" : "verdict_missing", true);
 				return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-set-${eventSeq}` }, result: { type: "settle_auditor_launch", status: "refused", attempt, event } }), { status: 200 });
@@ -917,6 +931,36 @@ if (mode === "intake") {
 		input: { context: "audit", tasks: [{ agent: "auditor", task: sealedBody, outputSchema: { type: "object" } }] },
 	} as never);
 	out.schemaBlocked = schema && typeof schema === "object" && "block" in schema ? Boolean(schema.block) : false;
+	// A task result with no started spawn cancels its reservation without budget.
+	await runner.emitToolCall({
+		type: "tool_call",
+		toolName: "task",
+		toolCallId: "aud-cancel",
+		input: { context: "audit", tasks: [{ agent: "auditor", task: sealedBody }] },
+	} as never);
+	const cancelled = await runner.emitToolResult({
+		type: "tool_result",
+		toolName: "task",
+		toolCallId: "aud-cancel",
+		input: {},
+		content: [{ type: "text", text: "Task execution failed before start" }],
+		details: { results: [], totalDurationMs: 0 },
+		isError: false,
+	} as never);
+	out.cancelCalls = cancelCalls.length;
+	out.cancelledLaunchCount = attempts.at(-1)?.cancelled_launch_count ?? -1;
+	out.effectiveLaunchesAfterCancel = (attempts.at(-1)?.launch_count ?? 0) - (attempts.at(-1)?.cancelled_launch_count ?? 0);
+	out.cancelAppended = JSON.stringify(cancelled).includes("reservation cancelled");
+	// A later beforeToolCall block has no tool_result; tool_execution_end fallback cancels.
+	await runner.emitToolCall({
+		type: "tool_call",
+		toolName: "task",
+		toolCallId: "aud-blocked",
+		input: { context: "audit", tasks: [{ agent: "auditor", task: sealedBody }] },
+	} as never);
+	await runner.emit({ type: "tool_execution_end", toolName: "task", toolCallId: "aud-blocked", result: { content: [{ type: "text", text: "blocked" }] }, isError: true } as never);
+	out.cancelCallsAfterBlocked = cancelCalls.length;
+	out.effectiveLaunchesAfterBlocked = (attempts.at(-1)?.launch_count ?? 0) - (attempts.at(-1)?.cancelled_launch_count ?? 0);
 	// Exact bytes: reserved, spawn proceeds.
 	const exact = await runner.emitToolCall({
 		type: "tool_call",
@@ -945,6 +989,28 @@ if (mode === "intake") {
 	out.attestCalls = attestCalls.length;
 	// The settle outcome event was delivered and attested through the shared path.
 	out.attestStatus = attestCalls[0]?.status ?? null;
+} else if (mode === "summary-push-fail") {
+	await setNow();
+	await approve(planA);
+	fs.writeFileSync(path.join(probe, "work.txt"), "candidate work\n");
+	const origin = Bun.spawnSync(["git", "remote", "get-url", "origin"], { cwd: probe }).stdout.toString().trim();
+	Bun.spawnSync(["git", "remote", "remove", "origin"], { cwd: probe });
+	await runner.emit(summaryMessage as never);
+	const frozen = (items.get("HOME-1") ?? initialItem).candidate;
+	out.beginAfterPushFailure = beginCalls.length;
+	out.frozenAfterPushFailure = frozen?.kind ?? null;
+	out.pushReceiptsAfterFailure = receipts.filter(receipt => receipt.kind === "push").length;
+	out.failureNotice = uiCalls.at(-1) ?? null;
+
+	Bun.spawnSync(["git", "remote", "add", "origin", origin], { cwd: probe });
+	await runner.emit(summaryMessage as never);
+	const recovered = (items.get("HOME-1") ?? initialItem).candidate;
+	const branch = Bun.spawnSync(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	const remoteCommit = Bun.spawnSync(["git", "ls-remote", "origin", `refs/heads/${branch}`], { cwd: probe }).stdout.toString().trim().split(/\s+/)[0];
+	out.beginAfterPushRetry = beginCalls.length;
+	out.pushReceiptsAfterRetry = receipts.filter(receipt => receipt.kind === "push").length;
+	out.candidateCommit = recovered?.commit_sha ?? null;
+	out.remoteCommit = remoteCommit || null;
 } else if (mode === "summary-reauth") {
 	await setNow();
 	await approve(planA);
@@ -1007,6 +1073,7 @@ if (mode === "intake") {
 	out.beforeReviewUi = [...uiCalls];
 	out.beforeReviewWrites = { ...writes, comments: comments.length };
 	await runner.emit(summaryMessage as never);
+	out.pushReceiptsAfterSummary = receipts.filter(receipt => receipt.kind === "push").length;
 	// Verification append (seals the manifest server-side).
 	out.verify = await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "tests pass" });
 	// Simulate the accepted PASS settle the service would perform.
@@ -1036,6 +1103,7 @@ if (mode === "intake") {
 	const commentsBeforeDone = comments.length;
 	uiCalls.length = 0;
 	await done.handler("", runner.createCommandContext());
+	out.pushReceiptsAfterDone = receipts.filter(receipt => receipt.kind === "push").length;
 	out.doneUi = [...uiCalls];
 	out.doneWrites = { ...writes, verdictComments: comments.length - commentsBeforeDone };
 	out.doneAuthorization = attempts.at(-1)?.completion_authorization_ref ?? null;

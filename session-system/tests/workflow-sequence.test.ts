@@ -10,7 +10,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "done" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "done" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -132,10 +132,12 @@ describe("HOME-122 workflow sequence", () => {
 		expect(beforeReviewUi.some(call => call.startsWith("confirm:") || call.startsWith("select:"))).toBe(false);
 		expect(record(out.beforeReviewWrites)).toMatchObject({ closed: 0, comments: 1, removeNow: 0 });
 		expect(out.verify, "verification append seals the audit manifest").toContain("audit manifest sealed");
+		expect(out.pushReceiptsAfterSummary, "summary records the first verified push").toBe(1);
 		const doneUi = list(out.doneUi);
 		expect(doneUi.filter(call => call.startsWith("confirm:This is your verdict"))).toHaveLength(1);
 		expect(doneUi.some(call => call.startsWith("select:"))).toBe(false);
 		expect(record(out.doneWrites)).toMatchObject({ closed: 1, removeNow: 1, verdictComments: 1 });
+		expect(out.pushReceiptsAfterDone, "done re-verifies remote state without duplicating the receipt").toBe(1);
 		expect(String(out.doneAuthorization), "the literal /done mints a fresh single-use authorization").toStartWith("done:");
 		expect(out.now).toBe("NOW unset");
 		expect(record(out.afterSecondDone)).toMatchObject({ closed: 1, removeNow: 1 });
@@ -152,6 +154,17 @@ describe("HOME-122 workflow sequence", () => {
 		// The raw channel also re-authorizes; the service supersedes to keep
 		// exactly one live attempt.
 		expect(out.beginAfterRaw, "raw /summary re-authorizes").toBe(2);
+	});
+
+	test("summary pushes the frozen candidate before beginning and retries a recoverable failure", () => {
+		const out = run("summary-push-fail");
+		expect(out.frozenAfterPushFailure).toBe("final");
+		expect(out.beginAfterPushFailure, "a failed push begins no close attempt").toBe(0);
+		expect(out.pushReceiptsAfterFailure).toBe(0);
+		expect(out.failureNotice).toContain("push unverified");
+		expect(out.beginAfterPushRetry, "the frozen candidate retries without another freeze").toBe(1);
+		expect(out.pushReceiptsAfterRetry).toBe(1);
+		expect(out.remoteCommit).toBe(out.candidateCommit);
 	});
 
 	test("the ledger-sealed audit task drives one exact-byte bounded launch", () => {
@@ -171,9 +184,16 @@ describe("HOME-122 workflow sequence", () => {
 		expect(String(out.wrongReason)).toContain("manifest_task_mismatch");
 		expect(out.launchCountAfterWrong).toBe(0);
 		expect(out.schemaBlocked).toBe(true);
-		// Exact bytes reserve one launch and the spawn proceeds.
+		// A pre-start Task failure cancels its reservation and preserves budget.
+		expect(out.cancelCalls).toBe(1);
+		expect(out.cancelledLaunchCount).toBe(1);
+		expect(out.effectiveLaunchesAfterCancel).toBe(0);
+		expect(out.cancelAppended).toBe(true);
+		expect(out.cancelCallsAfterBlocked).toBe(2);
+		expect(out.effectiveLaunchesAfterBlocked).toBe(0);
+		// Exact bytes reserve the next physical launch and the spawn proceeds.
 		expect(out.exactBlocked).toBe(false);
-		expect(out.launchCountAfterExact).toBe(1);
+		expect(out.launchCountAfterExact).toBe(3);
 		// The tool result settled with the UNTOUCHED transport payload; the
 		// service minted the audit receipt itself and the outcome reached the
 		// model in-band plus the owner as an attested checkpoint.
@@ -282,14 +302,19 @@ describe("HOME-122 workflow sequence", () => {
 });
 
 describe("OMP-38 plan packet", () => {
-	const planReceipt = (id: string, issuedAt: string, sha: string): EvidenceReceipt =>
+	const planReceipt = (id: string, issuedAt: string, sha: string, baseCommit?: string, baseDirtyPaths?: string[]): EvidenceReceipt =>
 		({
 			receipt_id: id,
 			work_id: "w1",
 			revision_id: "rev-1",
 			candidate_id: "cand-1",
 			kind: "plan",
-			payload: { body: "# Plan", plan_sha256: "a".repeat(64) },
+			payload: {
+				body: "# Plan",
+				plan_sha256: "a".repeat(64),
+				...(baseCommit ? { base_commit: baseCommit } : {}),
+				...(baseDirtyPaths ? { base_dirty_paths: baseDirtyPaths } : {}),
+			},
 			payload_sha256: sha,
 			issuer: "test",
 			issued_at: issuedAt,
@@ -322,6 +347,14 @@ describe("OMP-38 plan packet", () => {
 		const tieA = planReceipt("r-a", "2026-08-20T10:00:00Z", "3".repeat(64));
 		const tieB = planReceipt("r-b", "2026-08-20T10:00:00Z", "4".repeat(64));
 		expect(buildPlanPacket(view([tieB, tieA]))?.planReceiptSha256).toBe("4".repeat(64));
+	});
+
+	test("plan packet preserves a valid persisted audit base and dirty snapshot", () => {
+		const base = "d".repeat(40);
+		const packet = buildPlanPacket(view([planReceipt("r-1", "2026-08-20T10:00:00Z", "1".repeat(64), base, ["before.txt"])]));
+		expect(packet?.baseCommit).toBe(base);
+		expect(packet?.baseDirtyPaths).toEqual(["before.txt"]);
+		expect(buildPlanPacket(view([planReceipt("r-2", "2026-08-20T10:00:00Z", "2".repeat(64), "not-a-commit")]))?.baseCommit).toBeUndefined();
 	});
 
 	test("the cap prices the render, so floods of tiny criteria cannot slip under it", () => {

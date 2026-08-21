@@ -25,8 +25,11 @@ gate booleans, the process-global audit bridge, the stop-hook reminder, and
    work item across `active`, `audit_ready`, `auditor_in_flight`, `audited`,
    and `closeout_requested`.
 3. **States.** Non-terminal: active → audit_ready → auditor_in_flight →
-   audited → closeout_requested (with auditor_in_flight → audit_ready on a
-   burned launch). Terminal: remediation_required, blocked, budget_exhausted,
+   audited → closeout_requested. A completed invocation with no accepted
+   report burns its launch and returns auditor_in_flight → audit_ready. A host
+   failure before the auditor starts uses `cancel_auditor_launch`, returns to
+   audit_ready, increments the explicit cancellation counter, and consumes no
+   launch budget. Terminal: remediation_required, blocked, budget_exhausted,
    superseded, completed. `blocked` only ever records an accepted
    `VERDICT: BLOCKED` report.
 4. **Sealed audit manifest.** `seal_audit_manifest(attempt_id,
@@ -38,13 +41,17 @@ gate booleans, the process-global audit bridge, the stop-hook reminder, and
    the exact body.
 5. **Bounded launches.** Reservation (`reserve_auditor_launch`) requires the
    sealed task hash byte-for-byte and consumes one of three launches; a task
-   mismatch consumes nothing. Settlement (`settle_auditor_launch`) owns
-   transport normalization — raw canonical text, one direct
-   `{"report"}`/`{"text"}` object, or one bare `<output>` wrapper; VERDICT at
-   canonical byte 0 — and accepts at most two reports. Accepted reports mint
-   the only legal `audit` evidence receipts (`independent=true`, issuer
-   `work-service/auditor-settle`); external `append_evidence kind="audit"` is
-   refused. Drift at settle supersedes the attempt and inserts no receipt.
+   mismatch or explicit pre-start cancellation consumes nothing. Immutable
+   launch rows retain reservation history while `cancelled_launch_count`
+   separates physical reservations from budget-consuming launches.
+   Settlement (`settle_auditor_launch`) owns transport normalization — raw
+   canonical text, one direct `{"report"}`/`{"text"}` object, one JSON string
+   encoding that direct object, or one bare `<output>` wrapper; nested wrappers
+   remain refused. VERDICT starts at canonical byte 0, and each attempt accepts
+   at most two reports. Accepted reports mint the only legal `audit` evidence
+   receipts (`independent=true`, issuer `work-service/auditor-settle`);
+   external `append_evidence kind="audit"` is refused. Drift at settle
+   supersedes the attempt and inserts no receipt.
 6. **Typed refusals.** Every expected gate failure returns
    `status="refused"` plus an immutable `close_attempt_events` row carrying a
    stable reason code, legal next actions, remaining budgets, fresh-

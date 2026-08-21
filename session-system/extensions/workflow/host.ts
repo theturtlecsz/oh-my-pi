@@ -43,7 +43,7 @@ import {
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
-import { dirtyPaths, headCommit, rangeDiffSha256 } from "./git";
+import { dirtyPaths, headCommit, parentCommit, rangeDiffSha256 } from "./git";
 import { registerSessionLedger } from "./session-ledger";
 
 /** Tool actions — the canonical action set for the `work` tool. */
@@ -560,16 +560,22 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 	/** OMP-47: bind this literal /summary to a ledger-owned close attempt. Every
 	 *  identity field is host-computed; the service refuses with a typed event. */
-	async function beginAttempt(now: NowRef, ctx: ExtensionContext): Promise<void> {
+	async function beginAttempt(now: NowRef, ctx: ExtensionContext, auditBaseCommit?: string, auditBaseDirtyPaths?: readonly string[]): Promise<void> {
 		const commitSha = carrier().commitSha;
 		if (!commitSha) return; // nothing finalized — begin waits for the next /summary after /plan
-		if (!sessionStartCommit) {
-			ctx.ui.notify("close attempt not begun — no session start commit (outside a git repo?); /done will refuse", "warning");
+		const legacyPlan = auditBaseCommit === undefined;
+		const startCommit = auditBaseCommit ?? parentCommit(process.cwd(), commitSha);
+		if (!startCommit) {
+			ctx.ui.notify("close attempt not begun — no audit base commit (outside a git repo?); /done will refuse", "warning");
 			return;
 		}
-		const diffSha256 = rangeDiffSha256(process.cwd(), sessionStartCommit, commitSha);
+		if (auditBaseDirtyPaths === undefined && !legacyPlan) {
+			ctx.ui.notify("close attempt not begun — no audit-base dirty-path snapshot; restamp with /plan", "warning");
+			return;
+		}
+		const diffSha256 = rangeDiffSha256(process.cwd(), startCommit, commitSha);
 		if (!diffSha256) {
-			ctx.ui.notify(`close attempt not begun — could not hash the ${sessionStartCommit.slice(0, 12)}..${commitSha.slice(0, 12)} diff; /done will refuse`, "warning");
+			ctx.ui.notify(`close attempt not begun — could not hash the ${startCommit.slice(0, 12)}..${commitSha.slice(0, 12)} diff; /done will refuse`, "warning");
 			return;
 		}
 		summaryAuthorizationRef ??= `summary:${randomUUID()}`;
@@ -577,10 +583,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 			authorizationRef: summaryAuthorizationRef,
 			sessionId: piRef.getSessionId(),
 			startedAt: sessionStartedAt,
-			startCommit: sessionStartCommit,
+			startCommit,
 			repository: process.cwd(),
 			diffSha256,
-			dirtyPaths: [...preExistingDirtyPaths],
+			dirtyPaths: [...(auditBaseDirtyPaths ?? [])],
 		};
 		const outcome = await backend.beginCloseAttempt(now, session);
 		if (outcome.status === "refused") {
@@ -613,7 +619,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				return;
 			}
 			mergeCarrier(gate.carrier);
-			await beginAttempt(now, ctx);
+			await beginAttempt(now, ctx, gate.auditBaseCommit, gate.auditBaseDirtyPaths);
 			if (gate.warning) {
 				ctx.ui.notify(gate.warning, "warning");
 				persistSession();
@@ -1184,7 +1190,15 @@ export function createWorkflowHost(cfg: HostConfig) {
 			const stamp = preparePlanStamp(event);
 			if ("reason" in stamp) return { cancel: true, reason: stamp.reason };
 			try {
-				const res = await backend.stampPlan(target, { ...stamp, title: target.title, planFilePath: event.planFilePath, approach: sectionItems(event.planContent, "Approach"), verification: sectionItems(event.planContent, "Verification") });
+				const res = await backend.stampPlan(target, {
+					...stamp,
+					title: target.title,
+					planFilePath: event.planFilePath,
+					approach: sectionItems(event.planContent, "Approach"),
+					verification: sectionItems(event.planContent, "Verification"),
+					baseCommit: headCommit(process.cwd()) ?? undefined,
+					baseDirtyPaths: dirtyPaths(process.cwd()),
+				});
 				mergeCarrier(res.plannedCandidateId ? { plannedCandidateId: res.plannedCandidateId } : undefined);
 				armExecution(res.issue, stamp.hash);
 				planTarget = undefined;

@@ -169,17 +169,28 @@ export default function modelBookends(pi: ExtensionAPI) {
 		}
 	});
 
+
 	pi.on("tool_result", async (event, ctx) => {
 		if (!ownerSession(ctx) || !gate.inflight || event.toolCallId !== gate.inflight.toolCallId) return undefined;
 		const { key, launchId } = gate.inflight;
-		gate.inflight = undefined;
-		const contentText = event.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
-		// Fail closed: a host-reported error result NEVER reaches normalization —
-		// error text must not be parseable as a report. It burns a typed
-		// transport_failed launch instead (bounded budget, OMP-47).
-		const payload = event.isError ? undefined : transportPayload(event.details, contentText);
 		const svc = service();
 		if (!svc) return undefined; // reservation existed, so this is unreachable in practice
+		const details = event.details as { results?: unknown[]; progress?: unknown[]; async?: unknown } | undefined;
+		const started = Boolean(details?.async) || Boolean(details?.results?.length) || Boolean(details?.progress?.length);
+		if (!started) {
+			try {
+				const outcome = await svc.cancelAuditorLaunch(key, launchId);
+				gate.inflight = undefined;
+				if (outcome.event.requiresDelivery) await deliverCheckpoint(pi, svc, outcome.event);
+				return { content: [...event.content, { type: "text", text: `Audit gate — launch never started; reservation cancelled by the ledger:\n${outcome.event.renderedText}` }] };
+			} catch (error) {
+				return { content: [...event.content, { type: "text", text: `Audit gate: failed to cancel the unstarted launch (${String(error)}). Call work get_work and follow the attempt's state.` }] };
+			}
+		}
+		gate.inflight = undefined;
+		const contentText = event.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+		// Fail closed: a host-reported error after start NEVER reaches normalization.
+		const payload = event.isError ? undefined : transportPayload(event.details, contentText);
 		try {
 			const outcome = await svc.settleAuditorLaunch(key, launchId, payload === undefined ? { failed: true } : { payload });
 			if (outcome.event.requiresDelivery) {
@@ -198,6 +209,23 @@ export default function modelBookends(pi: ExtensionAPI) {
 					{ type: "text", text: `Audit gate: settle failed (${String(error)}). The launch is still reserved server-side; call work get_work and follow the attempt's state.` },
 				],
 			};
+		}
+	});
+
+	// Fallback for a later beforeToolCall hook blocking after this extension
+	// reserved: no tool_result exists, but tool_execution_end still does.
+	pi.on("tool_execution_end", async event => {
+		if (event.toolName !== "task" || !gate.inflight || event.toolCallId !== gate.inflight.toolCallId) return;
+		const { key, launchId } = gate.inflight;
+		const svc = service();
+		if (!svc) return;
+		try {
+			const outcome = await svc.cancelAuditorLaunch(key, launchId);
+			if (outcome.status !== "applied") return;
+			gate.inflight = undefined;
+			if (outcome.event.requiresDelivery) await deliverCheckpoint(pi, svc, outcome.event);
+		} catch (error) {
+			pi.logger.warn("audit gate: failed to cancel an unstarted auditor launch", { error: String(error) });
 		}
 	});
 }

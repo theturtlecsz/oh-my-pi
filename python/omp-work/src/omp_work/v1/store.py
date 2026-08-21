@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator, Protocol
@@ -19,13 +20,13 @@ from .models import Candidate, CloseAttemptState, CommandEnvelope, CompletionInp
 from .semantics import completion_blockers, normalize_auditor_report, validate_cutover_manifest, would_create_cycle
 
 _RECEIPT_FIELDS = "receipt_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit"
-_ATTEMPT_FIELDS = "attempt_id,work_id,revision_id,candidate_id,plan_receipt_id,candidate_sha256,candidate_commit,owner_session_id,owner_session_started_at,owner_session_start_commit,repository,diff_sha256,starting_dirty_paths,authorization_kind,authorization_ref,launch_count,accepted_report_count,in_flight_launch_id,state,terminal_reason,requested_at,closeout_requested_at,completed_at,completion_authorization_ref"
+_ATTEMPT_FIELDS = "attempt_id,work_id,revision_id,candidate_id,plan_receipt_id,candidate_sha256,candidate_commit,owner_session_id,owner_session_started_at,owner_session_start_commit,repository,diff_sha256,starting_dirty_paths,authorization_kind,authorization_ref,launch_count,cancelled_launch_count,accepted_report_count,in_flight_launch_id,state,terminal_reason,requested_at,closeout_requested_at,completed_at,completion_authorization_ref"
 _MANIFEST_FIELDS = "manifest_id,work_id,attempt_id,manifest_version,plan_receipt_id,verification_receipt_id,candidate_id,candidate_sha256,candidate_commit,task_body,task_sha256,section_hashes,created_at"
 _LAUNCH_FIELDS = "launch_id,attempt_id,manifest_id,launch_number,task_sha256,tool_call_id,reserved_at"
 _EVENT_FIELDS = "event_id,sequence,work_id,attempt_id,launch_id,event_type,reason_code,reason,legal_next_actions,remaining_launches,remaining_reports,requires_fresh_authorization,rendered_text,rendered_sha256,requires_delivery,created_at"
 _DELIVERY_FIELDS = "delivery_id,event_id,delivery_sequence,owner_session_id,rendered_sha256,status,authorization_ref,created_at"
 _LIVE_STATES = tuple(sorted(state.value for state in LIVE_CLOSE_ATTEMPT_STATES))
-_CLOSE_COMMANDS = {"begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery"}
+_CLOSE_COMMANDS = {"begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "cancel_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery"}
 
 
 def _row_json(row: dict[str, object] | None) -> dict[str, object] | None:
@@ -62,6 +63,22 @@ def _compose_audit_task(*, plan_receipt_sha256: str, plan_body: str, criteria: l
     }
     task = "\n\n".join(f"{label}\n{body}" for label, body in sections.items())
     return task, {label: text_sha256(body) for label, body in sections.items()}
+
+def _acceptance_from_markdown(text: str) -> list[str]:
+    """Bullet/numbered items from one Acceptance criteria section."""
+    lines = text.splitlines()
+    start = next((index for index, line in enumerate(lines) if line.lstrip().lower().startswith("## acceptance criteria")), None)
+    if start is None:
+        return []
+    criteria: list[str] = []
+    for line in lines[start + 1:]:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            break
+        match = re.match(r"(?:[-*]|\d+[.)])\s+(.*\S)", stripped)
+        if match:
+            criteria.append(match.group(1))
+    return criteria
 
 # /center recent-activity projection (OMP-25): applied domain events that mean
 # "something moved" — receipts, close proposals, completions. Metadata only.
@@ -158,6 +175,8 @@ class PostgresWorkStore:
                     result = self._seal_audit_manifest(cur, envelope)
                 elif command.type == "reserve_auditor_launch":
                     result = self._reserve_auditor_launch(cur, envelope)
+                elif command.type == "cancel_auditor_launch":
+                    result = self._cancel_auditor_launch(cur, envelope)
                 elif command.type == "settle_auditor_launch":
                     result = self._settle_auditor_launch(cur, envelope)
                 elif command.type == "attest_checkpoint_delivery":
@@ -470,7 +489,7 @@ class PostgresWorkStore:
 
     @staticmethod
     def _budget(attempt: dict[str, object]) -> tuple[int, int]:
-        return MAX_AUDITOR_LAUNCHES - int(attempt["launch_count"]), MAX_ACCEPTED_REPORTS - int(attempt["accepted_report_count"])
+        return MAX_AUDITOR_LAUNCHES - (int(attempt["launch_count"]) - int(attempt["cancelled_launch_count"])), MAX_ACCEPTED_REPORTS - int(attempt["accepted_report_count"])
 
     # ---- OMP-47 close attempts: commands ----
 
@@ -550,6 +569,11 @@ class PostgresWorkStore:
             return refused("verification_body_missing", "the verification receipt carries no stored body", ("append fresh verification evidence, then seal again",))
         cur.execute("SELECT criterion FROM omp_work.acceptance_criteria WHERE workspace_id=%s AND revision_id=%s ORDER BY position", (envelope.workspace_id, attempt["revision_id"]))
         criteria = [row["criterion"] for row in cur.fetchall()]
+        if not criteria:
+            cur.execute("SELECT description FROM omp_work.work_revisions WHERE workspace_id=%s AND revision_id=%s", (envelope.workspace_id, attempt["revision_id"]))
+            revision = cur.fetchone()
+            description = revision["description"] if revision and isinstance(revision["description"], str) else ""
+            criteria = _acceptance_from_markdown(description) or _acceptance_from_markdown(plan_body)
         task_body, section_hashes = _compose_audit_task(
             plan_receipt_sha256=plan["payload_sha256"], plan_body=plan_body, criteria=criteria,
             start_commit=attempt["owner_session_start_commit"], dirty_paths=list(attempt["starting_dirty_paths"] or []),
@@ -586,7 +610,7 @@ class PostgresWorkStore:
             return refused("manifest_task_mismatch", "the auditor task bytes differ from the sealed manifest — no launch slot was consumed", ("rebuild the task from work get_work's sealed body",))
         if self._attempt_drifted(item, attempt):
             return refused("candidate_drift", "the live candidate no longer matches the attempt's bound identity", ("rerun /summary to freeze and bind the current candidate",), requires_fresh=True)
-        if int(attempt["launch_count"]) >= MAX_AUDITOR_LAUNCHES or int(attempt["accepted_report_count"]) >= MAX_ACCEPTED_REPORTS:
+        if int(attempt["launch_count"]) - int(attempt["cancelled_launch_count"]) >= MAX_AUDITOR_LAUNCHES or int(attempt["accepted_report_count"]) >= MAX_ACCEPTED_REPORTS:
             exhausted = self._transition_attempt(cur, envelope.workspace_id, attempt["attempt_id"], "state='budget_exhausted', terminal_reason='auditor_budget_exhausted'")
             return refused("budget_exhausted", "the auditor budget for this attempt is exhausted", ("enter /summary again for a fresh bounded attempt",), requires_fresh=True, attempt_row=exhausted)
         launch_id = uuid4()
@@ -597,8 +621,21 @@ class PostgresWorkStore:
         launch = cur.fetchone()
         attempt = self._transition_attempt(cur, envelope.workspace_id, attempt["attempt_id"], "state='auditor_in_flight', launch_count=launch_count+1, in_flight_launch_id=%s", (launch_id,))
         launches, reports = self._budget(attempt)
-        event = self._close_event(cur, envelope, work_id=attempt["work_id"], attempt_id=attempt["attempt_id"], launch_id=launch_id, event_type="auditor_launch_reserved", reason_code="auditor_launch_reserved", reason=f"auditor launch {launch['launch_number']} of {MAX_AUDITOR_LAUNCHES} reserved against the sealed manifest", next_actions=("run the auditor task", "settle_auditor_launch with its untouched transport payload"), remaining_launches=launches, remaining_reports=reports)
+        event = self._close_event(cur, envelope, work_id=attempt["work_id"], attempt_id=attempt["attempt_id"], launch_id=launch_id, event_type="auditor_launch_reserved", reason_code="auditor_launch_reserved", reason=f"auditor launch slot {MAX_AUDITOR_LAUNCHES - launches} of {MAX_AUDITOR_LAUNCHES} reserved against the sealed manifest", next_actions=("run the auditor task", "settle_auditor_launch with its untouched transport payload"), remaining_launches=launches, remaining_reports=reports)
         return {"type": "reserve_auditor_launch", "status": "applied", "attempt": _row_json(attempt), "launch": _row_json(launch), "event": event}
+
+    def _cancel_auditor_launch(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
+        payload = envelope.command.payload
+        _, attempt = self._lock_attempt_chain(cur, envelope.workspace_id, payload.attempt_id)
+        cur.execute(f"SELECT {_LAUNCH_FIELDS} FROM omp_work.auditor_launches WHERE workspace_id=%s AND launch_id=%s", (envelope.workspace_id, payload.launch_id))
+        launch = cur.fetchone()
+        if attempt["state"] != "auditor_in_flight" or attempt["in_flight_launch_id"] != payload.launch_id or launch is None or launch["attempt_id"] != attempt["attempt_id"]:
+            event = self._close_event(cur, envelope, work_id=attempt["work_id"], attempt_id=attempt["attempt_id"], launch_id=payload.launch_id if launch else None, event_type="cancel_refused", reason_code="launch_not_in_flight", reason="this launch is not the attempt's in-flight launch", next_actions=("reserve a launch before cancelling",), remaining_launches=self._budget(attempt)[0], remaining_reports=self._budget(attempt)[1])
+            return {"type": "cancel_auditor_launch", "status": "refused", "attempt": _row_json(attempt), "event": event}
+        attempt = self._transition_attempt(cur, envelope.workspace_id, attempt["attempt_id"], "state='audit_ready', cancelled_launch_count=cancelled_launch_count+1, in_flight_launch_id=NULL")
+        launches, reports = self._budget(attempt)
+        event = self._close_event(cur, envelope, work_id=attempt["work_id"], attempt_id=attempt["attempt_id"], launch_id=payload.launch_id, event_type="auditor_launch_cancelled", reason_code="host_launch_failed", reason="the auditor task could not be started; its reservation was cancelled without consuming budget", next_actions=("retry the same sealed auditor task once the host is available",), remaining_launches=launches, remaining_reports=reports, requires_delivery=True)
+        return {"type": "cancel_auditor_launch", "status": "applied", "attempt": _row_json(attempt), "launch": _row_json(launch), "event": event}
 
     def _settle_auditor_launch(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
@@ -633,7 +670,7 @@ class PostgresWorkStore:
             report, verdict_or_code = normalize_auditor_report(payload.transport_payload)
             failure_code = verdict_or_code if report is None else ""
         if report is None:
-            exhausted = int(attempt["launch_count"]) >= MAX_AUDITOR_LAUNCHES or int(attempt["accepted_report_count"]) >= MAX_ACCEPTED_REPORTS
+            exhausted = int(attempt["launch_count"]) - int(attempt["cancelled_launch_count"]) >= MAX_AUDITOR_LAUNCHES or int(attempt["accepted_report_count"]) >= MAX_ACCEPTED_REPORTS
             if exhausted:
                 attempt = self._transition_attempt(cur, envelope.workspace_id, attempt["attempt_id"], "state='budget_exhausted', terminal_reason='auditor_budget_exhausted', in_flight_launch_id=NULL")
             else:

@@ -91,13 +91,7 @@ _OUTPUT_WRAPPER = re.compile(r"\A<output>\n?([\s\S]*?)\n?</output>\Z")
 
 
 def normalize_auditor_report(payload: object) -> tuple[str, Literal["PASS", "NEEDS_FIX", "BLOCKED"]] | tuple[None, str]:
-    """Service-owned transport normalization (OMP-47 replaces the TS bridge).
-    Accepts EXACTLY three forms: raw canonical report text, one direct
-    {"report": str} or {"text": str} object, or one bare <output>…</output>
-    wrapper. ONE unwrap layer; the canonical report must then start with the
-    VERDICT line (only outer whitespace tolerated). JSON-serialized wrappers,
-    quoted strings, nested wrappers, arrays, extra keys, and incomplete
-    reports refuse with stable reason codes."""
+    """Normalize one transport wrapper, then validate the canonical report."""
     text: str
     if isinstance(payload, dict):
         keys = list(payload.keys())
@@ -106,14 +100,26 @@ def normalize_auditor_report(payload: object) -> tuple[str, Literal["PASS", "NEE
         text = payload[keys[0]]
     elif isinstance(payload, str):
         text = payload.strip()
-        wrapped = _OUTPUT_WRAPPER.match(text)
-        if wrapped:
-            text = wrapped.group(1)
+        if text.startswith("{"):
+            try:
+                decoded = json.loads(text)
+            except json.JSONDecodeError:
+                return None, "report_wrapper_serialized"
+            if not isinstance(decoded, dict) or len(decoded) != 1:
+                return None, "report_wrapper_invalid"
+            key = next(iter(decoded))
+            if key not in ("report", "text") or not isinstance(decoded[key], str):
+                return None, "report_wrapper_invalid"
+            text = decoded[key]
+        else:
+            wrapped = _OUTPUT_WRAPPER.match(text)
+            if wrapped:
+                text = wrapped.group(1)
     else:
         return None, "report_not_text"
     text = text.strip()
     if text.startswith(("{", '"', "[")):
-        return None, "report_wrapper_serialized"
+        return None, "report_wrapper_nested"
     if text.startswith(("<output>", "<task-result")):
         return None, "report_wrapper_nested"
     if not _VERDICT_LINE.match(text):

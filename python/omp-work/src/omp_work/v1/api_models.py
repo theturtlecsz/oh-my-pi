@@ -26,9 +26,9 @@ class WorkItemView(StrictModel):
 
 
 class CloseAttemptResult(StrictModel):
-    """Shared typed result for the five close-ritual commands: expected gate
-    failures are refusals WITH an event, never generic exceptions (OMP-47)."""
-    type: Literal["begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery"]
+    """Shared typed result for close-ritual commands: expected gate failures
+    are refusals WITH an event, never generic exceptions (OMP-47)."""
+    type: Literal["begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "cancel_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery"]
     status: Literal["applied", "refused"]
     attempt: CloseAttempt | None = None
     manifest: AuditManifest | None = None

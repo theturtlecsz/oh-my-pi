@@ -80,6 +80,10 @@ export interface PlanPacket {
 	candidateSha256: string;
 	/** Absent until /summary finalizes the candidate. */
 	commitSha?: string;
+	/** Commit at plan approval; anchors the audited implementation range. */
+	baseCommit?: string;
+	/** Dirty paths present at plan approval; excluded from implementation claims. */
+	baseDirtyPaths?: string[];
 	/** payload_sha256 of the plan receipt — the value the auditor task must cite. */
 	planReceiptSha256: string;
 	/** SHA-256 of the approved plan document (stamp hash). */
@@ -185,6 +189,10 @@ export interface PlanStamp {
 	planFilePath: string;
 	approach: string[];
 	verification: string[];
+	/** Current HEAD at plan approval; absent outside git. */
+	baseCommit?: string;
+	/** Dirty paths present at plan approval. */
+	baseDirtyPaths?: string[];
 }
 export interface BatchEntry {
 	title: string;
@@ -238,6 +246,10 @@ export interface SummaryGateOk {
 	/** Work backend: candidate ids allocated during the gate (freeze/finalize) —
 	 *  the host merges them into the opaque carrier it persists. */
 	carrier?: WorkStateCarrier;
+	/** Commit anchoring the implementation range sealed for audit. */
+	auditBaseCommit?: string;
+	/** Dirty paths present at the audit base. */
+	auditBaseDirtyPaths?: string[];
 }
 
 export interface SummaryGateBlocked {
@@ -329,6 +341,8 @@ export interface WorkflowBackend {
 	sealedAuditTask(key: string): Promise<SealedAuditTask | null>;
 	/** Reserve one bounded auditor launch against the sealed task hash. */
 	reserveAuditorLaunch(key: string, taskSha256: string, toolCallId: string): Promise<CloseAttemptOutcome>;
+	/** Cancel a reservation when the host cannot start its auditor task. */
+	cancelAuditorLaunch(key: string, launchId: string): Promise<CloseAttemptOutcome>;
 	/** Settle the reserved launch with the UNTOUCHED transport payload. */
 	settleAuditorLaunch(key: string, launchId: string, transport: { payload?: unknown; failed?: boolean }): Promise<CloseAttemptOutcome>;
 	/** Unresolved requires_delivery events for this work item (any attempt). */

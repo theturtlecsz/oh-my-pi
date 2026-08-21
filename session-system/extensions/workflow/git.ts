@@ -58,6 +58,13 @@ export function headCommit(cwd: string): string | null {
 	return head.ok && /^[0-9a-f]{40,64}$/.test(head.out) ? head.out : null;
 }
 
+/** First commit before a candidate's implementation range. */
+export function parentCommit(cwd: string, commit: string): string | null {
+	const parent = runGit(cwd, ["rev-parse", `${commit}^`]);
+	return parent.ok && /^[0-9a-f]{40,64}$/.test(parent.out) ? parent.out : null;
+}
+
+
 /** SHA-256 of the exact `git diff <start>..<final>` bytes — the range-diff
  *  manifest hash sealed into the close attempt (OMP-47). Null when the range
  *  cannot be produced (unknown commits, no repo). */
@@ -70,7 +77,7 @@ export function rangeDiffSha256(cwd: string, startCommit: string, finalCommit: s
 }
 
 const SECRET_PATTERNS: [string, RegExp][] = [
-	["linear-key", /lin_api_[A-Za-z0-9]/],
+	["linear-key", /\blin_api_[A-Za-z0-9]{16,}\b/],
 	["secret-key", /\bsk-[A-Za-z0-9_-]{16,}/],
 	["aws-key", /\bAKIA[0-9A-Z]{16}\b/],
 	["github-token", /\bgh[pousr]_[A-Za-z0-9]{20,}/],
@@ -307,10 +314,10 @@ export interface PushOutcome {
 	detail?: string;
 }
 
-/** /done push (HOME-147): push, then verify the remote branch ref resolves to the
- *  exact candidate commit. push failed BUT the ref matches → "remote_commit"
- *  (output lost, commit landed) — completion may proceed; otherwise "not_pushed"
- *  and the closeout intent stays pending. NEVER throws. */
+/** Candidate push used at /summary freeze and repeated by /done: push the
+ *  exact frozen commit, then verify the remote branch ref resolves to it.
+ *  A failed command with a matching remote still returns "remote_commit";
+ *  every other outcome is "not_pushed". NEVER throws. */
 export function pushCandidate(root: string, commitSha: string): PushOutcome {
 	try {
 		const branch = runGit(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -325,7 +332,7 @@ export function pushCandidate(root: string, commitSha: string): PushOutcome {
 			if (!ls.ok || !ls.out) return undefined;
 			return ls.out.split(/\s+/)[0];
 		};
-		const push = runGit(root, ["push"], 30_000);
+		const push = runGit(root, ["push", "origin", `${commitSha}:${remoteRef}`], 30_000);
 		const remoteCommit = verify();
 		if (remoteCommit === commitSha) {
 			return {

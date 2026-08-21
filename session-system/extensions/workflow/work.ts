@@ -56,7 +56,7 @@ import {
 	type WorkflowCheckpoint,
 } from "./backend";
 import { pendingOpsDir, type WorkClientConfig } from "./config";
-import { freezeCandidateCommit, pushCandidate } from "./git";
+import { freezeCandidateCommit, headCommit, pushCandidate } from "./git";
 import { ackOps as ackClaimOps, claimPendingOp, dropPendingOp, intentFingerprint, resolvePendingOp } from "./pending-ops";
 import { bounded, healthWord, oneRecovery, redactSecrets } from "./status";
 
@@ -201,6 +201,14 @@ export function buildPlanPacket(view: WorkflowView): PlanPacket | undefined {
 		...(candidate.commit_sha ? { commitSha: candidate.commit_sha } : {}),
 		planReceiptSha256: plan.payload_sha256,
 		planSha256: planHash(plan),
+		baseCommit:
+			typeof plan.payload.base_commit === "string" && /^[0-9a-f]{40,64}$/.test(plan.payload.base_commit)
+				? plan.payload.base_commit
+				: undefined,
+		baseDirtyPaths:
+			Array.isArray(plan.payload.base_dirty_paths) && plan.payload.base_dirty_paths.every(path => typeof path === "string")
+				? [...plan.payload.base_dirty_paths]
+				: undefined,
 	};
 	if (bytes > PLAN_PACKET_MAX_BYTES) {
 		return { ...base, acceptanceCriteria: [], capped: { bytes, max: PLAN_PACKET_MAX_BYTES } };
@@ -361,6 +369,34 @@ export function createWorkBackend(
 		return base;
 	}
 
+	async function pushAndRecordCandidate(now: NowRef, commitSha: string, hooks: BackendHooks) {
+		const push = pushCandidate(hooks.cwd, commitSha);
+		if (push.status === "not_pushed") return push;
+		const view = await client.workflow(now.key);
+		const candidate = view.item.candidate;
+		const alreadyRecorded =
+			candidate?.kind === "final" &&
+			candidate.commit_sha === commitSha &&
+			view.receipts.some(
+				receipt =>
+					receipt.kind === "push" &&
+					receipt.revision_id === view.item.revision.revision_id &&
+					receipt.candidate_id === candidate.candidate_id &&
+					receipt.remote_ref === push.remoteRef &&
+					receipt.remote_commit === push.remoteCommit,
+			);
+		if (!alreadyRecorded) {
+			await run("append_evidence", {
+				receipt: {
+					...(await receipt("push", now, push.detail ?? `pushed ${push.remoteRef}`)),
+					...(push.remoteRef ? { remote_ref: push.remoteRef } : {}),
+					...(push.remoteCommit ? { remote_commit: push.remoteCommit } : {}),
+				},
+			});
+		}
+		return push;
+	}
+
 	function linesOf(view: WorkflowView): string {
 		return view.receipts
 			.map(r => `${r.kind} ${r.issued_at.slice(0, 19)} ${r.verdict ? `${r.verdict} ` : ""}${r.payload_sha256.slice(0, 12)}`)
@@ -368,9 +404,9 @@ export function createWorkBackend(
 	}
 
 
-	/** Preflight mirror of semantics.completion_blockers, minus push_unverified —
-	 *  closeWithVerdict creates the push receipt before complete_work. The service
-	 *  remains the authority; this only produces the owner-facing line early. */
+	/** Preflight mirror of semantics.completion_blockers. /summary records the
+	 *  first verified push; closeWithVerdict repeats it as an idempotent remote
+	 *  check before complete_work. The service remains the authority. */
 	function completionPreflight(view: WorkflowView): string | null {
 		const candidate = view.item.candidate;
 		if (!candidate || candidate.kind !== "final" || !candidate.commit_sha) {
@@ -689,6 +725,8 @@ export function createWorkBackend(
 				plan_sha256: stamp.hash,
 				approach: stamp.approach,
 				verification: stamp.verification,
+				...(stamp.baseCommit ? { base_commit: stamp.baseCommit } : {}),
+				...(stamp.baseDirtyPaths ? { base_dirty_paths: stamp.baseDirtyPaths } : {}),
 			};
 			const planReceipt: EvidenceReceipt = {
 				receipt_id: stableId("receipt", candidateId, "plan", payloadHash(payload)),
@@ -839,17 +877,10 @@ export function createWorkBackend(
 			if (!candidate || candidate.kind !== "final" || !commitSha) {
 				throw new Error("no finalized candidate — run /summary first");
 			}
-			const push = pushCandidate(hooks.cwd, commitSha);
+			const push = await pushAndRecordCandidate(now, commitSha, hooks);
 			if (push.status === "not_pushed") {
 				throw new Error(`push unverified — ${push.detail ?? "remote refused"}; the close attempt stays requested`);
 			}
-			await run("append_evidence", {
-				receipt: {
-					...(await receipt("push", now, push.detail ?? `pushed ${push.remoteRef}`)),
-					...(push.remoteRef ? { remote_ref: push.remoteRef } : {}),
-					...(push.remoteCommit ? { remote_commit: push.remoteCommit } : {}),
-				},
-			});
 			const refreshed = await client.workflow(now.key);
 			const receipts = refreshed.receipts.filter(
 				r => r.revision_id === refreshed.item.revision.revision_id && r.candidate_id === refreshed.item.candidate?.candidate_id,
@@ -896,12 +927,26 @@ export function createWorkBackend(
 			const item = await client.workItem(now.key);
 			const current = item.candidate;
 			if (current?.kind === "final" && current.commit_sha) {
+				const push = await pushAndRecordCandidate(now, current.commit_sha, hooks);
+				if (push.status === "not_pushed") {
+					return {
+						ok: false,
+						reason: `push unverified — ${push.detail ?? "remote refused"}; candidate remains frozen and no close attempt began. Fix the remote and re-enter /summary`,
+					};
+				}
 				const view = await client.workflow(now.key);
 				const packet = buildPlanPacket(view);
+				if (packet && (!packet.baseCommit || packet.baseDirtyPaths === undefined)) {
+					return { ok: false, reason: "The approved plan predates audit-range binding. Re-enter /plan to restamp it before /summary." };
+				}
+				const auditBaseCommit = packet?.baseCommit;
+				const auditBaseDirtyPaths = packet?.baseDirtyPaths;
 				return {
 					ok: true,
 					issue: now,
 					...(packet ? { planHash: packet.planSha256 } : {}),
+					...(auditBaseCommit ? { auditBaseCommit } : {}),
+					...(auditBaseDirtyPaths ? { auditBaseDirtyPaths } : {}),
 					warning: packet ? undefined : "no plan evidence on this candidate — /done will refuse",
 					carrier: { candidateId: current.candidate_id, candidateSha: current.candidate_sha256, commitSha: current.commit_sha },
 				};
@@ -919,7 +964,11 @@ export function createWorkBackend(
 			if (!planned) {
 				return { ok: true, issue: now, warning: "No plan is stamped on this work — review may run, but /done will refuse until /plan stamps one." };
 			}
-			const freeze = await freezeCandidateCommit(hooks.ui, hooks.cwd, now.key, current.candidate_id, hooks.preExistingDirtyPaths);
+			const plannedPacket = buildPlanPacket(gate);
+			if (!plannedPacket?.baseCommit || plannedPacket.baseDirtyPaths === undefined) {
+				return { ok: false, reason: "The approved plan predates audit-range binding. Re-enter /plan to restamp it before /summary." };
+			}
+			const freeze = await freezeCandidateCommit(hooks.ui, hooks.cwd, now.key, current.candidate_id, plannedPacket.baseDirtyPaths);
 			if ("refused" in freeze) return { ok: false, reason: freeze.reason };
 			const candidateId = stableId("final-candidate", item.work_id, item.revision.revision_id, current.candidate_id, freeze.commitSha);
 			const frozenSha = candidateSha256(freeze.commitSha, freeze.paths);
@@ -931,12 +980,23 @@ export function createWorkBackend(
 				candidate_sha256: frozenSha,
 				commit_sha: freeze.commitSha,
 			});
+			const push = await pushAndRecordCandidate(now, freeze.commitSha, hooks);
+			if (push.status === "not_pushed") {
+				return {
+					ok: false,
+					reason: `push unverified — ${push.detail ?? "remote refused"}; candidate remains frozen and no close attempt began. Fix the remote and re-enter /summary`,
+				};
+			}
 			const view = await client.workflow(now.key);
 			const packet = buildPlanPacket(view);
+			const auditBaseCommit = packet?.baseCommit;
+			const auditBaseDirtyPaths = packet?.baseDirtyPaths;
 			return {
 				ok: true,
 				issue: now,
 				...(packet ? { planHash: packet.planSha256 } : {}),
+				...(auditBaseCommit ? { auditBaseCommit } : {}),
+				...(auditBaseDirtyPaths ? { auditBaseDirtyPaths } : {}),
 				carrier: { candidateId, candidateSha: frozenSha, commitSha: freeze.commitSha },
 			};
 		},
@@ -984,6 +1044,14 @@ export function createWorkBackend(
 			if (!attempt) throw new Error(`${key} has no live close attempt — run /summary first`);
 			const result = await run("reserve_auditor_launch", { attempt_id: attempt.attempt_id, task_sha256: taskSha256, tool_call_id: toolCallId });
 			return outcomeOf(result);
+		},
+
+		async cancelAuditorLaunch(key: string, launchId: string): Promise<CloseAttemptOutcome> {
+			const view = await client.workflow(key);
+			const launch = view.auditor_launches.find(row => row.launch_id === launchId);
+			const attemptId = launch?.attempt_id ?? liveAttempt(view)?.attempt_id;
+			if (!attemptId) throw new Error(`${key} has no launch ${launchId.slice(0, 8)}… and no live close attempt — nothing to cancel`);
+			return outcomeOf(await run("cancel_auditor_launch", { attempt_id: attemptId, launch_id: launchId }));
 		},
 
 		async settleAuditorLaunch(key: string, launchId: string, transport: { payload?: unknown; failed?: boolean }): Promise<CloseAttemptOutcome> {

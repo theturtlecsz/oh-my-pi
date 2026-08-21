@@ -1733,7 +1733,6 @@
           "type": "string"
         },
         "launch_number": {
-          "maximum": 3,
           "minimum": 1,
           "title": "Launch Number",
           "type": "integer"
@@ -1939,6 +1938,69 @@
         "paths"
       ],
       "title": "BindingManifest",
+      "type": "object"
+    },
+    "CancelAuditorLaunchCommand": {
+      "$defs": {
+        "CancelAuditorLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "attempt_id",
+            "launch_id"
+          ],
+          "title": "CancelAuditorLaunchPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CancelAuditorLaunchPayload"
+        },
+        "type": {
+          "const": "cancel_auditor_launch",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "CancelAuditorLaunchCommand",
+      "type": "object"
+    },
+    "CancelAuditorLaunchPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "title": "Launch Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "launch_id"
+      ],
+      "title": "CancelAuditorLaunchPayload",
       "type": "object"
     },
     "Candidate": {
@@ -2188,6 +2250,12 @@
           "title": "Authorization Ref",
           "type": "string"
         },
+        "cancelled_launch_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cancelled Launch Count",
+          "type": "integer"
+        },
         "candidate_commit": {
           "anyOf": [
             {
@@ -2284,7 +2352,6 @@
           "title": "In Flight Launch Id"
         },
         "launch_count": {
-          "maximum": 3,
           "minimum": 0,
           "title": "Launch Count",
           "type": "integer"
@@ -2909,6 +2976,46 @@
             "diff_sha256"
           ],
           "title": "BeginCloseAttemptPayload",
+          "type": "object"
+        },
+        "CancelAuditorLaunchCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/CancelAuditorLaunchPayload"
+            },
+            "type": {
+              "const": "cancel_auditor_launch",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "CancelAuditorLaunchCommand",
+          "type": "object"
+        },
+        "CancelAuditorLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "attempt_id",
+            "launch_id"
+          ],
+          "title": "CancelAuditorLaunchPayload",
           "type": "object"
         },
         "Candidate": {
@@ -4459,6 +4566,7 @@
               "attest_checkpoint_delivery": "#/$defs/AttestCheckpointDeliveryCommand",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanCommand",
               "begin_close_attempt": "#/$defs/BeginCloseAttemptCommand",
+              "cancel_auditor_launch": "#/$defs/CancelAuditorLaunchCommand",
               "clear_focus": "#/$defs/ClearFocusCommand",
               "complete_work": "#/$defs/CompleteWorkCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
@@ -4514,6 +4622,9 @@
             },
             {
               "$ref": "#/$defs/ReserveAuditorLaunchCommand"
+            },
+            {
+              "$ref": "#/$defs/CancelAuditorLaunchCommand"
             },
             {
               "$ref": "#/$defs/SettleAuditorLaunchCommand"

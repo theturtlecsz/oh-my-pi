@@ -244,7 +244,6 @@
           "type": "string"
         },
         "launch_number": {
-          "maximum": 3,
           "minimum": 1,
           "title": "Launch Number",
           "type": "integer"
@@ -528,6 +527,12 @@
           "title": "Authorization Ref",
           "type": "string"
         },
+        "cancelled_launch_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cancelled Launch Count",
+          "type": "integer"
+        },
         "candidate_commit": {
           "anyOf": [
             {
@@ -624,7 +629,6 @@
           "title": "In Flight Launch Id"
         },
         "launch_count": {
-          "maximum": 3,
           "minimum": 0,
           "title": "Launch Count",
           "type": "integer"
@@ -982,7 +986,6 @@
               "type": "string"
             },
             "launch_number": {
-              "maximum": 3,
               "minimum": 1,
               "title": "Launch Number",
               "type": "integer"
@@ -1113,6 +1116,12 @@
               "title": "Authorization Ref",
               "type": "string"
             },
+            "cancelled_launch_count": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cancelled Launch Count",
+              "type": "integer"
+            },
             "candidate_commit": {
               "anyOf": [
                 {
@@ -1209,7 +1218,6 @@
               "title": "In Flight Launch Id"
             },
             "launch_count": {
-              "maximum": 3,
               "minimum": 0,
               "title": "Launch Count",
               "type": "integer"
@@ -1638,7 +1646,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Shared typed result for the five close-ritual commands: expected gate\nfailures are refusals WITH an event, never generic exceptions (OMP-47).",
+      "description": "Shared typed result for close-ritual commands: expected gate failures\nare refusals WITH an event, never generic exceptions (OMP-47).",
       "properties": {
         "attempt": {
           "anyOf": [
@@ -1711,6 +1719,7 @@
             "begin_close_attempt",
             "seal_audit_manifest",
             "reserve_auditor_launch",
+            "cancel_auditor_launch",
             "settle_auditor_launch",
             "attest_checkpoint_delivery"
           ],
@@ -1771,6 +1780,12 @@
               "minLength": 1,
               "title": "Authorization Ref",
               "type": "string"
+            },
+            "cancelled_launch_count": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cancelled Launch Count",
+              "type": "integer"
             },
             "candidate_commit": {
               "anyOf": [
@@ -1868,7 +1883,6 @@
               "title": "In Flight Launch Id"
             },
             "launch_count": {
-              "maximum": 3,
               "minimum": 0,
               "title": "Launch Count",
               "type": "integer"
@@ -2353,7 +2367,6 @@
               "type": "string"
             },
             "launch_number": {
-              "maximum": 3,
               "minimum": 1,
               "title": "Launch Number",
               "type": "integer"
@@ -2545,6 +2558,12 @@
               "title": "Authorization Ref",
               "type": "string"
             },
+            "cancelled_launch_count": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cancelled Launch Count",
+              "type": "integer"
+            },
             "candidate_commit": {
               "anyOf": [
                 {
@@ -2641,7 +2660,6 @@
               "title": "In Flight Launch Id"
             },
             "launch_count": {
-              "maximum": 3,
               "minimum": 0,
               "title": "Launch Count",
               "type": "integer"
@@ -2896,7 +2914,7 @@
         },
         "CloseAttemptResult": {
           "additionalProperties": false,
-          "description": "Shared typed result for the five close-ritual commands: expected gate\nfailures are refusals WITH an event, never generic exceptions (OMP-47).",
+          "description": "Shared typed result for close-ritual commands: expected gate failures\nare refusals WITH an event, never generic exceptions (OMP-47).",
           "properties": {
             "attempt": {
               "anyOf": [
@@ -2969,6 +2987,7 @@
                 "begin_close_attempt",
                 "seal_audit_manifest",
                 "reserve_auditor_launch",
+                "cancel_auditor_launch",
                 "settle_auditor_launch",
                 "attest_checkpoint_delivery"
               ],
@@ -3678,6 +3697,7 @@
               "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
               "begin_close_attempt": "#/$defs/CloseAttemptResult",
+              "cancel_auditor_launch": "#/$defs/CloseAttemptResult",
               "clear_focus": "#/$defs/FocusResult",
               "complete_work": "#/$defs/CompleteWorkResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
@@ -5242,7 +5262,6 @@
               "type": "string"
             },
             "launch_number": {
-              "maximum": 3,
               "minimum": 1,
               "title": "Launch Number",
               "type": "integer"
@@ -5434,6 +5453,12 @@
               "title": "Authorization Ref",
               "type": "string"
             },
+            "cancelled_launch_count": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cancelled Launch Count",
+              "type": "integer"
+            },
             "candidate_commit": {
               "anyOf": [
                 {
@@ -5530,7 +5555,6 @@
               "title": "In Flight Launch Id"
             },
             "launch_count": {
-              "maximum": 3,
               "minimum": 0,
               "title": "Launch Count",
               "type": "integer"
@@ -5785,7 +5809,7 @@
         },
         "CloseAttemptResult": {
           "additionalProperties": false,
-          "description": "Shared typed result for the five close-ritual commands: expected gate\nfailures are refusals WITH an event, never generic exceptions (OMP-47).",
+          "description": "Shared typed result for close-ritual commands: expected gate failures\nare refusals WITH an event, never generic exceptions (OMP-47).",
           "properties": {
             "attempt": {
               "anyOf": [
@@ -5858,6 +5882,7 @@
                 "begin_close_attempt",
                 "seal_audit_manifest",
                 "reserve_auditor_launch",
+                "cancel_auditor_launch",
                 "settle_auditor_launch",
                 "attest_checkpoint_delivery"
               ],
@@ -6583,6 +6608,7 @@
                   "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
                   "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
                   "begin_close_attempt": "#/$defs/CloseAttemptResult",
+                  "cancel_auditor_launch": "#/$defs/CloseAttemptResult",
                   "clear_focus": "#/$defs/FocusResult",
                   "complete_work": "#/$defs/CompleteWorkResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
@@ -7133,7 +7159,6 @@
               "type": "string"
             },
             "launch_number": {
-              "maximum": 3,
               "minimum": 1,
               "title": "Launch Number",
               "type": "integer"
@@ -7325,6 +7350,12 @@
               "title": "Authorization Ref",
               "type": "string"
             },
+            "cancelled_launch_count": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cancelled Launch Count",
+              "type": "integer"
+            },
             "candidate_commit": {
               "anyOf": [
                 {
@@ -7421,7 +7452,6 @@
               "title": "In Flight Launch Id"
             },
             "launch_count": {
-              "maximum": 3,
               "minimum": 0,
               "title": "Launch Count",
               "type": "integer"

@@ -1,7 +1,7 @@
 {
  "contract_version": "work.omp.dev/v1",
- "contract_sha256": "e38086283bb7f18b0180c10a35c8545db38f4f47c4ce25e3d73c7d40f3c8e68a",
+ "contract_sha256": "1a3f84e2c71fb356881a282972cf9c8cbdd803570789421c75d0c94c8b452847",
  "approved_by": "owner",
- "approved_at": "2026-08-20T00:00:00Z",
+ "approved_at": "2026-08-21T00:00:00Z",
  "issue": "OMP-47"
 }

@@ -161,6 +161,7 @@ export type CloseAttempt = {
 	authorization_kind: "summary" | "legacy";
 	authorization_ref: string;
 	launch_count: number;
+	cancelled_launch_count: number;
 	accepted_report_count: number;
 	in_flight_launch_id: UUID | null;
 	state: CloseAttemptState;
@@ -278,6 +279,7 @@ export type BeginCloseAttemptPayload = {
 };
 export type SealAuditManifestPayload = { attempt_id: UUID; verification_receipt_id: UUID };
 export type ReserveAuditorLaunchPayload = { attempt_id: UUID; task_sha256: string; tool_call_id: string };
+export type CancelAuditorLaunchPayload = { attempt_id: UUID; launch_id: UUID };
 export type SettleAuditorLaunchPayload = {
 	attempt_id: UUID;
 	launch_id: UUID;
@@ -349,6 +351,7 @@ export type Command =
 	| { type: "begin_close_attempt"; payload: BeginCloseAttemptPayload }
 	| { type: "seal_audit_manifest"; payload: SealAuditManifestPayload }
 	| { type: "reserve_auditor_launch"; payload: ReserveAuditorLaunchPayload }
+	| { type: "cancel_auditor_launch"; payload: CancelAuditorLaunchPayload }
 	| { type: "settle_auditor_launch"; payload: SettleAuditorLaunchPayload }
 	| { type: "attest_checkpoint_delivery"; payload: AttestCheckpointDeliveryPayload }
 	| { type: "request_closeout"; payload: RequestCloseoutPayload }
@@ -394,6 +397,7 @@ export type CommandResult =
 				| "begin_close_attempt"
 				| "seal_audit_manifest"
 				| "reserve_auditor_launch"
+				| "cancel_auditor_launch"
 				| "settle_auditor_launch"
 				| "attest_checkpoint_delivery";
 			status: "applied" | "refused";

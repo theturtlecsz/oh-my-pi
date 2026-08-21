@@ -157,6 +157,9 @@ def _verify_and_seal(service, workspace_id, item: dict, final: dict, attempt: di
 def _reserve(service, workspace_id, attempt_id: str, task_sha256: str) -> tuple[int, dict]:
     return _command(service, workspace_id, {"type": "reserve_auditor_launch", "payload": {"attempt_id": attempt_id, "task_sha256": task_sha256, "tool_call_id": f"tc-{uuid4()}"}})
 
+def _cancel(service, workspace_id, attempt_id: str, launch_id: str) -> tuple[int, dict]:
+    return _command(service, workspace_id, {"type": "cancel_auditor_launch", "payload": {"attempt_id": attempt_id, "launch_id": launch_id}})
+
 
 def _settle(service, workspace_id, attempt_id: str, launch_id: str, payload_value=None, *, failed: bool = False) -> tuple[int, dict]:
     payload: dict = {"attempt_id": attempt_id, "launch_id": launch_id}
@@ -212,7 +215,7 @@ def _audited_attempt(service, workspace_id, title: str = "close target") -> tupl
     status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
     assert status == 200 and body["result"]["status"] == "applied", body
     launch_id = body["result"]["launch"]["launch_id"]
-    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, PASS_REPORT)
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, json.dumps({"report": PASS_REPORT}))
     assert status == 200 and body["result"]["status"] == "applied" and body["result"]["verdict"] == "PASS", body
     return item, final, body["result"]["attempt"]
 
@@ -288,6 +291,59 @@ def test_begin_refuses_without_final_candidate_or_plan(service) -> None:
     attempt = body["result"]["attempt"]
     status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
     assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "attempt_not_audited"
+
+
+def test_manifest_falls_back_to_description_acceptance_criteria(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, description="Context\n\n## Acceptance criteria\n- preserves exact range\n2. reports every check\n\n## Verification\n- not acceptance")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200, body
+    seal = _verify_and_seal(service, workspace_id, item, final, body["result"]["attempt"])
+    task = seal["manifest"]["task_body"]
+    criteria = task.split("Acceptance criteria\n", 1)[1].split("\n\nStarting state", 1)[0]
+    assert criteria == "- AC-1: preserves exact range\n- AC-2: reports every check"
+    assert "not acceptance" not in criteria
+
+
+def test_cancelled_launch_preserves_budget_but_failed_settlement_burns(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id)
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200, body
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    task_sha = seal["manifest"]["task_sha256"]
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    first = body["result"]["launch"]
+    status, body = _cancel(service, workspace_id, attempt["attempt_id"], first["launch_id"])
+    assert status == 200 and body["result"]["status"] == "applied", body
+    cancelled = body["result"]
+    assert cancelled["attempt"]["state"] == "audit_ready"
+    assert cancelled["attempt"]["launch_count"] == 1
+    assert cancelled["attempt"]["cancelled_launch_count"] == 1
+    assert cancelled["event"]["remaining_launches"] == 3
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    second = body["result"]["launch"]
+    assert second["launch_number"] == 2
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], second["launch_id"], failed=True)
+    assert status == 200 and body["result"]["status"] == "refused", body
+    burned = body["result"]
+    assert burned["attempt"]["state"] == "audit_ready"
+    assert burned["attempt"]["launch_count"] == 2
+    assert burned["attempt"]["cancelled_launch_count"] == 1
+    assert burned["event"]["remaining_launches"] == 2
 
 
 def test_sealed_manifest_and_full_pass_flow_to_done(service) -> None:

@@ -161,7 +161,8 @@ class CloseAttempt(StrictModel):
     starting_dirty_paths: tuple[str, ...] | None = None
     authorization_kind: Literal["summary", "legacy"]
     authorization_ref: str = Field(min_length=1)
-    launch_count: int = Field(ge=0, le=3)
+    launch_count: int = Field(ge=0)
+    cancelled_launch_count: int = Field(default=0, ge=0)
     accepted_report_count: int = Field(ge=0, le=2)
     in_flight_launch_id: UUID | None = None
     state: CloseAttemptState
@@ -192,7 +193,7 @@ class AuditorLaunch(StrictModel):
     launch_id: UUID
     attempt_id: UUID
     manifest_id: UUID
-    launch_number: int = Field(ge=1, le=3)
+    launch_number: int = Field(ge=1)
     task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     tool_call_id: str = Field(min_length=1)
     reserved_at: datetime
@@ -489,6 +490,10 @@ class ReserveAuditorLaunchPayload(StrictModel):
     task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     tool_call_id: str = Field(min_length=1)
 
+class CancelAuditorLaunchPayload(StrictModel):
+    attempt_id: UUID
+    launch_id: UUID
+
 
 class SettleAuditorLaunchPayload(StrictModel):
     """transport_payload is deliberately untyped: canonical text, {"report"},
@@ -619,6 +624,10 @@ class ReserveAuditorLaunchCommand(StrictModel):
     type: Literal["reserve_auditor_launch"]
     payload: ReserveAuditorLaunchPayload
 
+class CancelAuditorLaunchCommand(StrictModel):
+    type: Literal["cancel_auditor_launch"]
+    payload: CancelAuditorLaunchPayload
+
 
 class SettleAuditorLaunchCommand(StrictModel):
     type: Literal["settle_auditor_launch"]
@@ -656,7 +665,7 @@ class AttestCutoverPlanCommand(StrictModel):
 
 
 Command = Annotated[
-    CreateWorkBatchCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | FinalizeCandidateCommand | BeginCloseAttemptCommand | SealAuditManifestCommand | ReserveAuditorLaunchCommand | SettleAuditorLaunchCommand | AttestCheckpointDeliveryCommand | RequestCloseoutCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand | AttestCutoverPlanCommand,
+    CreateWorkBatchCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | FinalizeCandidateCommand | BeginCloseAttemptCommand | SealAuditManifestCommand | ReserveAuditorLaunchCommand | CancelAuditorLaunchCommand | SettleAuditorLaunchCommand | AttestCheckpointDeliveryCommand | RequestCloseoutCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand | AttestCutoverPlanCommand,
     Field(discriminator="type"),
 ]
 

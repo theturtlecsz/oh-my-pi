@@ -13,7 +13,7 @@ import urllib.error
 import omp_work
 from omp_work.v1.models import Anomaly, Candidate, CloseAttempt, CommandEnvelope, CompletionInput, CutoverManifest, EvidenceKind, EvidenceReceipt, RelationEdge, RelationKind, WorkAlias
 from omp_work.v1.canonical import command_sha256
-from omp_work.v1.semantics import completion_blockers, replay_decision, revision_decision, validate_cutover_manifest, would_create_cycle
+from omp_work.v1.semantics import completion_blockers, normalize_auditor_report, replay_decision, revision_decision, validate_cutover_manifest, would_create_cycle
 
 
 NOW = datetime(2026, 8, 15, tzinfo=UTC)
@@ -165,6 +165,11 @@ def test_command_hash_ignores_attempt_identifiers() -> None:
     first = CommandEnvelope.model_validate({"api_version": "work.omp.dev/v1", "workspace_id": str(WORK), "operation_id": str(uuid4()), "request_id": str(uuid4()), "correlation_id": str(uuid4()), "command": command})
     retry = first.model_copy(update={"request_id": uuid4(), "correlation_id": uuid4()})
     assert command_sha256(first) == command_sha256(retry)
+
+def test_auditor_report_normalizes_one_serialized_report_wrapper() -> None:
+    report = "VERDICT: PASS\nFINDINGS\nnone\nACCEPTANCE COVERAGE\ncovered\nOUT OF SCOPE\nnone\nCHECKS RUN\npytest\nREMAINING QUESTIONS\nnone"
+    assert normalize_auditor_report(json.dumps({"report": report})) == (report, "PASS")
+    assert normalize_auditor_report(json.dumps({"report": json.dumps({"report": report})}))[1] == "report_wrapper_nested"
 
 
 def test_stale_evidence_blocks_completion_after_revision_changes() -> None:

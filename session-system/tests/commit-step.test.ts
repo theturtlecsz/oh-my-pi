@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
-import { dirtyPaths, findSecrets, freezeCandidateCommit, parsePorcelain, pushCandidate } from "../extensions/workflow/git";
+import { dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -67,9 +67,22 @@ describe("candidate freeze and push", () => {
 		expect(parsePorcelain(z)).toEqual(["a.txt", "b.txt", "new.txt"]);
 	});
 
-	test("findSecrets fires on added lines only", () => {
-		expect(findSecrets("+const k = 'lin_api_abc123';")).toEqual(["linear-key"]);
-		expect(findSecrets("-const k = 'lin_api_abc123';\n+const k = env.KEY;")).toEqual([]);
+	test("parentCommit anchors the full implementation range", () => {
+		const repo = makeRepo();
+		const first = git(repo, "rev-parse", "HEAD");
+		expect(parentCommit(repo, first)).toBeNull();
+		fs.writeFileSync(path.join(repo, "next.txt"), "next\n");
+		git(repo, "add", "--", "next.txt");
+		git(repo, "commit", "-m", "next");
+		const second = git(repo, "rev-parse", "HEAD");
+		expect(parentCommit(repo, second)).toBe(first);
+	});
+
+	test("findSecrets ignores its own short fixtures but catches credential-length added values", () => {
+		expect(findSecrets("+const pattern = /lin_api_[A-Za-z0-9]/;")).toEqual([]);
+		const linear = "lin_" + "api_0123456789abcdef";
+		expect(findSecrets(`+const k = '${linear}';`)).toEqual(["linear-key"]);
+		expect(findSecrets(`-const k = '${linear}';\n+const k = env.KEY;`)).toEqual([]);
 		expect(findSecrets("+++ b/file.ts\n+const x = 1;")).toEqual([]);
 	});
 	test("pre-session files stay uncommitted when the owner declines the inherited group", async () => {
@@ -157,7 +170,8 @@ describe("candidate freeze and push", () => {
 
 	test("secret in staged diff aborts freeze and restores the tree", async () => {
 		const repo = makeRepo();
-		fs.writeFileSync(path.join(repo, "config.ts"), "const key = 'lin_api_FAKE123';\n");
+		const linear = "lin_" + "api_FAKE0123456789ABCDEF";
+		fs.writeFileSync(path.join(repo, "config.ts"), `const key = '${linear}';\n`);
 		const ui = makeUi(true);
 		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
 		expect("refused" in frozen && frozen.refused).toBe("failed");
@@ -230,7 +244,8 @@ describe("candidate freeze and push", () => {
 		const hook = path.join(repo, ".git/hooks/pre-commit");
 		// Same path set, different bytes: re-stages secret content at the
 		// already-approved path — invisible to any path-set comparison.
-		fs.writeFileSync(hook, "#!/bin/sh\nprintf \"const key = 'lin_api_SNEAKED1';\\n\" > session.txt\ngit add -- session.txt\n");
+		const linear = "lin_" + "api_SNEAKED0123456789ABCDEF";
+		fs.writeFileSync(hook, `#!/bin/sh\nprintf "const key = '${linear}';\\n" > session.txt\ngit add -- session.txt\n`);
 		fs.chmodSync(hook, 0o755);
 		const ui = makeUi(true);
 
@@ -239,7 +254,7 @@ describe("candidate freeze and push", () => {
 		expect("refused" in frozen && frozen.refused).toBe("failed");
 		expect(ui.notices.some(n => n.includes("differs from the scanned tree"))).toBe(true);
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1"); // poisoned marker removed
-		expect(git(repo, "log", "--all", "-p", "--format=")).not.toContain("lin_api_SNEAKED1");
+		expect(git(repo, "log", "--all", "-p", "--format=")).not.toContain(linear);
 	});
 
 	test("oversized files in an opt-in group are flagged loudly in the confirm body", async () => {
@@ -267,6 +282,26 @@ describe("candidate freeze and push", () => {
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1");
 		expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
 		expect(ui.notices.some(n => n.startsWith("warning: freeze declined"))).toBe(true);
+	});
+
+	test("pushCandidate pushes the exact frozen commit and repeated checks stay idempotent", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		const branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD");
+		const frozen = git(repo, "rev-parse", "HEAD");
+		fs.writeFileSync(path.join(repo, "later.txt"), "later\n");
+		git(repo, "add", "--", "later.txt");
+		git(repo, "commit", "-q", "-m", "later");
+
+		const first = pushCandidate(repo, frozen);
+		expect(first).toMatchObject({ status: "pushed", remoteCommit: frozen });
+		expect(git(remote, "rev-parse", `refs/heads/${branch}`)).toBe(frozen);
+
+		const second = pushCandidate(repo, frozen);
+		expect(second.status).not.toBe("not_pushed");
+		expect(second.remoteCommit).toBe(frozen);
 	});
 
 	test("pushCandidate reports not_pushed when no remote", () => {
