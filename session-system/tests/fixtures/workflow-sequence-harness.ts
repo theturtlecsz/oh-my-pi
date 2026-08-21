@@ -8,7 +8,7 @@ import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "done", "footer", "audit", "restore", "center", "center-scoped", "center-stale"];
+const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "done", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "ledger"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -577,6 +577,7 @@ const statuses: string[] = [];
 const statusCalls: { key: string; text: string | null; placement: string }[] = [];
 let activeTools = ["read", "bash", "work"];
 const sentUserMessages: string[] = [];
+const sentMessages: Array<{ message: unknown; options: unknown }> = [];
 let throwNextSend = false;
 let throwNextSetTools = false;
 let abortCalls = 0;
@@ -607,6 +608,9 @@ runner.initialize(
 		setModel: async () => true,
 		getThinkingLevel: () => "high",
 		setThinkingLevel: () => {},
+		sendMessage: (message: unknown, options?: unknown) => {
+			sentMessages.push({ message, options });
+		},
 		sendUserMessage: (content: unknown) => {
 			if (throwNextSend) {
 				throwNextSend = false;
@@ -965,6 +969,30 @@ if (mode === "intake") {
 	// supersedes to keep exactly one live attempt.
 	await runner.emitInput("/summary", undefined, "interactive");
 	out.beginAfterRaw = beginCalls.length;
+} else if (mode === "ledger") {
+	// OMP-69 smoke: installed shape only — owner agent_start → terminal
+	// agent_end with real work yields exactly one displayed nextTurn message
+	// and zero Work Ledger mutations. No @advisor role is configured here, so
+	// the note fails open to the literal unavailable line.
+	await runner.emit({ type: "agent_start" } as never);
+	await runner.emit({
+		type: "agent_end",
+		messages: [
+			{ role: "user", content: "please fix the thing", timestamp: Date.now() },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "Fixed the thing." }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-fable-5",
+				usage: {},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+		],
+	} as never);
+	out.sent = sentMessages;
+	out.writes = { ...writes };
 } else {
 	await setNow();
 	fs.writeFileSync(path.join(probe, "dirty.txt"), "dirty\n");

@@ -44,6 +44,7 @@ import {
 import { deliverCheckpoint, deliverPendingCheckpoints } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
 import { dirtyPaths, headCommit, rangeDiffSha256 } from "./git";
+import { registerSessionLedger } from "./session-ledger";
 
 /** Tool actions — the canonical action set for the `work` tool. */
 export type CanonicalAction =
@@ -961,6 +962,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 	return function workflowHost(pi: ExtensionAPI) {
 		piRef = pi;
+		// OMP-69: the Session Ledger note — owner-turn reconstruction over the
+		// shared backend and the same credential path the digest engine uses.
+		registerSessionLedger(pi, { backend, getApiKey: digestApiKey });
 
 		pi.on("session_start", async (_e, ctx) => {
 			preExistingDirtyPaths = dirtyPaths(process.cwd());

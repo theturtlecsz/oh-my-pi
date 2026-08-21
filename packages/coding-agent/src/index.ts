@@ -38,6 +38,8 @@ export * from "./modes/components";
 export * from "./modes/theme/theme";
 // SDK for programmatic usage
 export * from "./sdk";
+// Secret obfuscation (shared redactor — extensions must not build a second one)
+export { buildSecretObfuscator, type SecretEntry, SecretObfuscator } from "./secrets";
 export * from "./session/agent-session";
 // Auth and model registry
 export * from "./session/auth-storage";

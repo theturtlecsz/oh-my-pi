@@ -162,4 +162,126 @@ describe("AgentSession before_agent_start attribution fallback", () => {
 		expect(llmInjected.attribution).toBe("agent");
 		expect(inferCopilotInitiator(llmMessages)).toBe("agent");
 	});
+
+	it("delivers a nextTurn custom message queued during before_agent_start into the same prompt", async () => {
+		const ledgerType = "ledger-note-during-hook";
+		const ledgerText = "ledger note queued while the pre-agent hook ran 7f3a";
+		const promptText = "hello from user";
+
+		// The hook queues a nextTurn message mid-flight, exactly like the session
+		// ledger barrier does — it must join THIS prompt, not the following turn.
+		const emitBeforeAgentStart = vi.fn().mockImplementation(async () => {
+			await session.sendCustomMessage(
+				{ customType: ledgerType, content: ledgerText, display: true },
+				{ deliverAs: "nextTurn", triggerTurn: false },
+			);
+			return undefined;
+		});
+		const extensionRunner = {
+			emitBeforeAgentStart,
+			emit: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const mockModel = createMockModel({ responses: [{ content: ["Done"] }] });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: mockModel.stream,
+			// Production wiring: custom messages must survive LLM conversion so the
+			// provider context reflects what the session actually persisted.
+			convertToLlm,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			extensionRunner,
+		});
+
+		await session.prompt(promptText);
+		expect(emitBeforeAgentStart).toHaveBeenCalledTimes(1);
+
+		// Session state: queued note present, after the active user message and
+		// before the assistant reply.
+		const state = session.messages;
+		const userIdx = state.findIndex(m => findPromptMessage([m], promptText) !== undefined);
+		const noteIdx = state.findIndex(m => m.role === "custom" && m.customType === ledgerType);
+		const assistantIdx = state.findIndex(m => m.role === "assistant");
+		expect(userIdx).toBeGreaterThanOrEqual(0);
+		expect(noteIdx).toBeGreaterThan(userIdx);
+		expect(assistantIdx).toBeGreaterThan(noteIdx);
+
+		// Provider context of that SAME single prompt: the note is included and
+		// ordered after the active user message. A second prompt is not needed.
+		expect(mockModel.calls).toHaveLength(1);
+		const llmMessages = mockModel.calls[0]?.context.messages ?? [];
+		const hasText = (m: Message, text: string) =>
+			m.role !== "assistant" &&
+			(typeof m.content === "string"
+				? m.content.includes(text)
+				: m.content.some(block => block.type === "text" && block.text.includes(text)));
+		const llmUserIdx = llmMessages.findIndex(m => m.role === "user" && hasText(m, promptText));
+		const llmNoteIdx = llmMessages.findIndex(m => hasText(m, ledgerText));
+		expect(llmUserIdx).toBeGreaterThanOrEqual(0);
+		expect(llmNoteIdx).toBeGreaterThan(llmUserIdx);
+	});
+
+	it("preserves a nextTurn message queued during before_agent_start when that prompt is aborted", async () => {
+		const ledgerType = "ledger-note-abort-survivor";
+		const ledgerText = "ledger note that must survive an aborted prompt 2c9d";
+		let firstHookRun = true;
+		// First hook invocation queues the note, then aborts the prompt it is
+		// preparing — the note must stay queued and join the NEXT prompt.
+		const emitBeforeAgentStart = vi.fn().mockImplementation(async () => {
+			if (!firstHookRun) return undefined;
+			firstHookRun = false;
+			await session.sendCustomMessage(
+				{ customType: ledgerType, content: ledgerText, display: true },
+				{ deliverAs: "nextTurn", triggerTurn: false },
+			);
+			await session.abort();
+			return undefined;
+		});
+		const extensionRunner = {
+			emitBeforeAgentStart,
+			emit: vi.fn().mockResolvedValue(undefined),
+		} as unknown as ExtensionRunner;
+
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const mockModel = createMockModel({ responses: [{ content: ["Done"] }, { content: ["Done"] }] });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: mockModel.stream,
+			convertToLlm,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			extensionRunner,
+		});
+
+		await session.prompt("first prompt, aborted during hook");
+		expect(mockModel.calls).toHaveLength(0); // aborted before any provider call
+
+		const successorText = "second prompt after the abort";
+		await session.prompt(successorText);
+		expect(mockModel.calls).toHaveLength(1);
+		const llmMessages = mockModel.calls[0]?.context.messages ?? [];
+		const hasText = (m: Message, text: string) =>
+			m.role !== "assistant" &&
+			(typeof m.content === "string"
+				? m.content.includes(text)
+				: m.content.some(block => block.type === "text" && block.text.includes(text)));
+		const llmUserIdx = llmMessages.findIndex(m => m.role === "user" && hasText(m, successorText));
+		const llmNoteIdx = llmMessages.findIndex(m => hasText(m, ledgerText));
+		expect(llmUserIdx).toBeGreaterThanOrEqual(0);
+		expect(llmNoteIdx).toBeGreaterThan(llmUserIdx);
+	});
 });

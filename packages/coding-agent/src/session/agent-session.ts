@@ -5495,11 +5495,9 @@ export class AgentSession {
 			// final provider prompt still carries the base xd:// catalog.
 			const xdevMountNoticeIndex = messages.length;
 			messages.push(message);
-			// Inject any pending "nextTurn" messages as context alongside the user message
-			for (const msg of this.#pendingNextTurnMessages) {
-				messages.push(msg);
-			}
-			this.#pendingNextTurnMessages = [];
+			// Queued nextTurn messages land directly after the active user message
+			// even though the drain itself runs after before_agent_start below.
+			const nextTurnInsertIndex = messages.length;
 
 			// Auto-read @filepath mentions
 			const fileMentions = extractFileMentions(expandedText);
@@ -5526,12 +5524,25 @@ export class AgentSession {
 
 			let baseXdevCatalogDelivered = true;
 			// Emit before_agent_start extension event
+			const result = this.#extensionRunner
+				? await this.#extensionRunner.emitBeforeAgentStart(expandedText, options?.images, beforeAgentStartSystemPrompt)
+				: undefined;
+			// A newer abort/prompt cycle started during the hook await: return
+			// BEFORE consuming queued nextTurn messages, so anything queued for
+			// this prompt (e.g. a barrier-delivered session-ledger note) survives
+			// for the next prompt instead of vanishing with the discarded array.
+			if (this.#promptGeneration !== generation) {
+				return;
+			}
+			// Inject any pending "nextTurn" messages as context directly after the
+			// user message. Drained AFTER the awaited before_agent_start hook so
+			// messages queued while that hook ran (e.g. a barrier-delivered
+			// session-ledger note) join this prompt instead of slipping to the
+			// following turn. Order: active user message, queued nextTurn messages
+			// in queue order, then messages returned by before_agent_start.
+			messages.splice(nextTurnInsertIndex, 0, ...this.#pendingNextTurnMessages);
+			this.#pendingNextTurnMessages = [];
 			if (this.#extensionRunner) {
-				const result = await this.#extensionRunner.emitBeforeAgentStart(
-					expandedText,
-					options?.images,
-					beforeAgentStartSystemPrompt,
-				);
 				if (result?.messages) {
 					const promptAttribution: "user" | "agent" | undefined =
 						"attribution" in message ? message.attribution : undefined;
