@@ -39,6 +39,7 @@ import type {
 	Extension,
 	ExtensionAPI,
 	ExtensionContext,
+	ExtensionDeliveryPayload,
 	ExtensionFactory,
 	ExtensionRuntime as IExtensionRuntime,
 	LoadExtensionsResult,
@@ -139,6 +140,14 @@ export class ExtensionRuntime implements IExtensionRuntime {
 	}
 
 	setSessionName(): Promise<void> {
+		throw new ExtensionRuntimeNotInitializedError();
+	}
+
+	getSessionId(): string {
+		throw new ExtensionRuntimeNotInitializedError();
+	}
+
+	deliverMessage(): Promise<void> {
 		throw new ExtensionRuntimeNotInitializedError();
 	}
 }
@@ -298,6 +307,14 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 
 	setSessionName(name: string): Promise<void> {
 		return this.runtime.setSessionName(name);
+	}
+
+	getSessionId(): string {
+		return this.runtime.getSessionId();
+	}
+
+	deliverMessage(message: ExtensionDeliveryPayload): Promise<void> {
+		return this.runtime.deliverMessage(message);
 	}
 
 	registerProvider(name: string, config: ProviderConfig): void {

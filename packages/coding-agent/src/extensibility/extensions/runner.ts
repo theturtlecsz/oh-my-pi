@@ -552,6 +552,10 @@ export class ExtensionRunner {
 		this.runtime.setServiceTier = actions.setServiceTier ?? throwUnsupportedServiceTierAction;
 		this.runtime.getSessionName = actions.getSessionName;
 		this.runtime.setSessionName = actions.setSessionName;
+		this.runtime.getSessionId = actions.getSessionId ?? (() => this.sessionManager.getSessionId());
+		this.runtime.deliverMessage =
+			actions.deliverMessage ??
+			(() => Promise.reject(new Error("deliverMessage unavailable: this host registered no delivery dispatcher")));
 		this.runtime.registerProvider = (name, config, sourceId) => {
 			this.modelRegistry.registerProvider(name, config, sourceId);
 		};

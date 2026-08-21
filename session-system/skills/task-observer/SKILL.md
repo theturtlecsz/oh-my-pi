@@ -90,6 +90,15 @@ above).
    call it governs. A rule held only "in awareness" has repeatedly failed
    at the moment of command construction (#42 → #67 → #71: the same
    pipe-masking rule was violated in three sessions while logged OPEN).
+   Scope restated rules by observable command SHAPE, not intent category:
+   ANY invocation of a build/test-runner binary (cargo test, bun test,
+   npm test, vitest, pytest, …) gets the prescribed form regardless of
+   whose code it tests or why — intent-keyed rules ("gates") fail on
+   boundary cases like diagnostic probes (#83). When the session begins
+   from an approved plan document, scan the plan itself for prescriptive
+   command-construction clauses ("never pipe", "run separately", "exact
+   command") and restate them alongside OPEN-observation rules — plans
+   are a second source of never/always rules (#139).
 3. Read `skill-observations/last-review-date.txt`. The value carries the
    truth: a date = when the last review actually ran; `never` = no review
    has run yet. A missing file is abnormal (step 1 creates it) — recreate

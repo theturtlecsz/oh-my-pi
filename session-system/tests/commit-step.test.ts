@@ -6,11 +6,11 @@
  *  - the credential scan fires on ADDED lines only (a secret on a removed line
  *    must not false-abort; a secret on an added line must never reach the
  *    public fork);
- *  - the integration path stages exact paths, excludes packages/* (Chris's own
- *    lane), commits `session close: <identifier>`, and reports the no-remote
- *    not-pushed variant;
+ *  - the integration path stages exact paths (literal pathspecs); pre-session
+ *    and packages/* paths are separate owner-confirmed opt-in groups (OMP-57)
+ *    — declined groups stay uncommitted, accepted groups freeze;
  *  - a secret hit aborts the commit and restores the tree (no staged residue);
- *  - owner decline leaves the repo untouched.
+ *  - owner decline leaves the repo untouched and returns a typed refusal.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -46,18 +46,20 @@ interface FakeUi {
 	notices: string[];
 	confirms: { title: string; body: string }[];
 }
-const makeUi = (answer: boolean): FakeUi => {
+const makeUi = (answer: boolean | ((title: string) => boolean)): FakeUi => {
 	const ui: FakeUi = {
 		notices: [],
 		confirms: [],
 		confirm: async (title, body) => {
 			ui.confirms.push({ title, body });
-			return answer;
+			return typeof answer === "function" ? answer(title) : answer;
 		},
 		notify: (msg, level) => ui.notices.push(`${level ?? "info"}: ${msg}`),
 	};
 	return ui;
 };
+const frozenPaths = (outcome: Awaited<ReturnType<typeof freezeCandidateCommit>>): string[] | undefined =>
+	"refused" in outcome ? undefined : outcome.paths;
 
 describe("candidate freeze and push", () => {
 	test("parsePorcelain keeps rename new path, drops original", () => {
@@ -70,55 +72,87 @@ describe("candidate freeze and push", () => {
 		expect(findSecrets("-const k = 'lin_api_abc123';\n+const k = env.KEY;")).toEqual([]);
 		expect(findSecrets("+++ b/file.ts\n+const x = 1;")).toEqual([]);
 	});
-	test("candidate freeze leaves pre-session owner files uncommitted", async () => {
+	test("pre-session files stay uncommitted when the owner declines the inherited group", async () => {
 		const repo = makeRepo();
 		fs.writeFileSync(path.join(repo, "owner.txt"), "owner setting\n");
 		const preExisting = dirtyPaths(repo);
 		fs.writeFileSync(path.join(repo, "session.txt"), "session work\n");
+		const ui = makeUi(title => !title.includes("pre-session"));
+
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1", preExisting);
+
+		expect(frozenPaths(frozen)).toEqual(["session.txt"]);
+		expect(git(repo, "show", "--name-only", "--format=", "HEAD")).toBe("session.txt");
+		expect(fs.readFileSync(path.join(repo, "owner.txt"), "utf8")).toBe("owner setting\n");
+		expect(git(repo, "status", "--porcelain")).toBe("?? owner.txt");
+		expect(ui.confirms[0].title).toContain("pre-session");
+		expect(ui.confirms[0].body).toContain("owner.txt");
+		expect(ui.confirms[1].body).toContain("left alone: 1 pre-session file(s)");
+	});
+
+	test("inherited files freeze into the candidate on explicit owner yes (OMP-57 cross-session close)", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, "built-earlier.txt"), "candidate work from a dead session\n");
+		fs.writeFileSync(path.join(repo, "also-earlier.txt"), "more of it\n");
+		const preExisting = dirtyPaths(repo);
 		const ui = makeUi(true);
 
 		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1", preExisting);
 
-		expect(frozen?.paths).toEqual(["session.txt"]);
-		expect(git(repo, "show", "--name-only", "--format=", "HEAD")).toBe("session.txt");
-		expect(fs.readFileSync(path.join(repo, "owner.txt"), "utf8")).toBe("owner setting\n");
-		expect(git(repo, "status", "--porcelain")).toBe("?? owner.txt");
-		expect(ui.confirms[0].body).toContain("left alone: 1 pre-session file(s)");
+		expect(frozenPaths(frozen)?.sort()).toEqual(["also-earlier.txt", "built-earlier.txt"]);
+		expect(git(repo, "show", "--name-only", "--format=", "HEAD").split("\n").sort()).toEqual(["also-earlier.txt", "built-earlier.txt"]);
+		expect(git(repo, "status", "--porcelain")).toBe("");
+		expect(ui.confirms[0].title).toContain("2 pre-session file(s)");
 	});
 
-	test("packages/ paths stay out of the candidate; lookalike prefixes do not (OMP-38 re-probe)", async () => {
+	test("packages/ paths stay out when the owner declines the lane group; lookalike prefixes commit (OMP-38 re-probe)", async () => {
 		const repo = makeRepo();
 		fs.mkdirSync(path.join(repo, "packages/sub"), { recursive: true });
 		fs.writeFileSync(path.join(repo, "packages/sub/lib.ts"), "chris lane\n");
 		fs.writeFileSync(path.join(repo, "packages-extra.txt"), "session work\n");
 		fs.writeFileSync(path.join(repo, "session.txt"), "session work\n");
+		const ui = makeUi(title => !title.includes("packages/"));
+
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
+
+		// prefix match is path-segment exact: packages/ offered separately, packages-extra.txt committed
+		expect(frozenPaths(frozen)).toEqual(["packages-extra.txt", "session.txt"]);
+		expect(git(repo, "show", "--name-only", "--format=", "HEAD").split("\n").sort()).toEqual(["packages-extra.txt", "session.txt"]);
+		expect(git(repo, "status", "--porcelain")).toBe("?? packages/");
+		expect(ui.confirms[0].title).toContain("packages/");
+		expect(ui.confirms[1].body).toContain("left alone: 1 file(s) under packages/");
+	});
+
+	test("packages/ paths freeze on explicit owner yes (plan-scope lane work, OMP-57)", async () => {
+		const repo = makeRepo();
+		fs.mkdirSync(path.join(repo, "packages/sub"), { recursive: true });
+		fs.writeFileSync(path.join(repo, "packages/sub/lib.ts"), "plan-scope lane work\n");
+		fs.writeFileSync(path.join(repo, "session.txt"), "session work\n");
 		const ui = makeUi(true);
 
 		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
 
-		// prefix match is path-segment exact: packages/ excluded, packages-extra.txt committed
-		expect(frozen?.paths).toEqual(["packages-extra.txt", "session.txt"]);
-		expect(git(repo, "show", "--name-only", "--format=", "HEAD").split("\n").sort()).toEqual(["packages-extra.txt", "session.txt"]);
-		expect(git(repo, "status", "--porcelain")).toBe("?? packages/");
-		expect(ui.confirms[0].body).toContain("file(s) under packages/");
+		expect(frozenPaths(frozen)?.sort()).toEqual(["packages/sub/lib.ts", "session.txt"]);
+		expect(git(repo, "status", "--porcelain")).toBe("");
 	});
 
-	test("candidate freeze adopts current HEAD when only pre-session files are dirty", async () => {
+	test("candidate freeze adopts current HEAD when inherited dirt is declined", async () => {
 		const repo = makeRepo();
 		fs.writeFileSync(path.join(repo, "session.txt"), "committed work\n");
 		Bun.spawnSync(["git", "add", "--", "session.txt"], { cwd: repo });
 		Bun.spawnSync(["git", "commit", "-q", "-m", "work"], { cwd: repo });
 		const head = git(repo, "rev-parse", "HEAD");
 		fs.writeFileSync(path.join(repo, "owner.txt"), "owner setting\n");
-		const ui = makeUi(true);
+		const ui = makeUi(title => !title.includes("pre-session"));
 
 		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1", dirtyPaths(repo));
 
-		expect(frozen?.commitSha).toBe(head);
-		expect(frozen?.paths).toEqual(["session.txt"]);
+		expect("refused" in frozen ? undefined : frozen.commitSha).toBe(head);
+		expect(frozenPaths(frozen)).toEqual(["session.txt"]);
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("2");
 		expect(git(repo, "status", "--porcelain")).toBe("?? owner.txt");
-		expect(ui.confirms[0].title).toContain("Use current HEAD");
+		expect(ui.confirms[1].title).toContain("Use current HEAD");
+		expect(ui.confirms[1].body).toContain("NOT be part of the candidate");
 	});
 
 	test("secret in staged diff aborts freeze and restores the tree", async () => {
@@ -126,20 +160,113 @@ describe("candidate freeze and push", () => {
 		fs.writeFileSync(path.join(repo, "config.ts"), "const key = 'lin_api_FAKE123';\n");
 		const ui = makeUi(true);
 		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
-		expect(frozen).toBeNull();
+		expect("refused" in frozen && frozen.refused).toBe("failed");
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1"); // seed only
 		expect(git(repo, "diff", "--cached", "--name-only")).toBe(""); // nothing left staged
 		expect(ui.notices.some(n => n.startsWith("error: freeze refused — possible secret") && n.includes("linear-key"))).toBe(true);
 	});
 
-	test("owner decline leaves repo untouched", async () => {
+	test("pre-staged index entries refuse the freeze (no unconfirmed bytes in the candidate)", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, "sneaky.txt"), "already staged\n");
+		Bun.spawnSync(["git", "add", "--", "sneaky.txt"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "session.txt"), "session work\n");
+		const ui = makeUi(true);
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
+		expect("refused" in frozen && frozen.refused).toBe("failed");
+		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1");
+		expect(ui.notices.some(n => n.includes("already has staged entries"))).toBe(true);
+	});
+
+	test("glob characters in a filename stage that file only (literal pathspecs)", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, "a*.txt"), "glob-named session file\n");
+		fs.writeFileSync(path.join(repo, "ab.txt"), "owner file the glob must not sweep\n");
+		const preExisting = ["ab.txt"];
+		const ui = makeUi(title => !title.includes("pre-session"));
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1", preExisting);
+		expect(frozenPaths(frozen)).toEqual(["a*.txt"]);
+		expect(git(repo, "status", "--porcelain")).toBe("?? ab.txt");
+	});
+
+	test("unreadable working tree refuses the freeze instead of adopting HEAD (fail closed)", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, ".git/index"), "garbage — not an index\n");
+		const ui = makeUi(true);
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
+		expect("refused" in frozen && frozen.refused).toBe("failed");
+		expect(ui.confirms).toEqual([]); // never reached an adoption or freeze prompt
+		expect(ui.notices.some(n => n.includes("could not enumerate the working tree"))).toBe(true);
+	});
+
+	test("hook-injected paths roll the marker commit back; retry can never bind them (Sol review)", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, "session.txt"), "session work\n");
+		fs.writeFileSync(path.join(repo, "injected.txt"), "bytes a hook sneaks in\n");
+		const hook = path.join(repo, ".git/hooks/pre-commit");
+		fs.writeFileSync(hook, "#!/bin/sh\ngit add -- injected.txt\n");
+		fs.chmodSync(hook, 0o755);
+		const ui = makeUi(title => !title.includes("pre-session"));
+
+		const first = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1", ["injected.txt"]);
+
+		expect("refused" in first && first.refused).toBe("failed");
+		expect(ui.notices.some(n => n.includes("rolled back"))).toBe(true);
+		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1"); // poisoned marker removed
+		expect(fs.readFileSync(path.join(repo, "session.txt"), "utf8")).toBe("session work\n"); // worktree preserved
+
+		// Retry: the marker is gone, so the reuse branch cannot bind the injected
+		// path; the normal path re-runs and refuses again for the same reason.
+		const retryUi = makeUi(title => !title.includes("pre-session"));
+		const second = await freezeCandidateCommit(retryUi, repo, "HOME-1", "candidate-1", ["injected.txt"]);
+		expect("refused" in second && second.refused).toBe("failed");
+		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1");
+		expect(git(repo, "log", "--all", "--name-only", "--format=")).not.toContain("injected.txt");
+	});
+
+	test("hook mutating an approved file's content after the scan rolls the commit back (tree OID binding)", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, "session.txt"), "clean scanned content\n");
+		const hook = path.join(repo, ".git/hooks/pre-commit");
+		// Same path set, different bytes: re-stages secret content at the
+		// already-approved path — invisible to any path-set comparison.
+		fs.writeFileSync(hook, "#!/bin/sh\nprintf \"const key = 'lin_api_SNEAKED1';\\n\" > session.txt\ngit add -- session.txt\n");
+		fs.chmodSync(hook, 0o755);
+		const ui = makeUi(true);
+
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
+
+		expect("refused" in frozen && frozen.refused).toBe("failed");
+		expect(ui.notices.some(n => n.includes("differs from the scanned tree"))).toBe(true);
+		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1"); // poisoned marker removed
+		expect(git(repo, "log", "--all", "-p", "--format=")).not.toContain("lin_api_SNEAKED1");
+	});
+
+	test("oversized files in an opt-in group are flagged loudly in the confirm body", async () => {
+		const repo = makeRepo();
+		const fd = fs.openSync(path.join(repo, "stray.dump"), "w");
+		fs.ftruncateSync(fd, 60_000_000); // sparse — no real disk cost
+		fs.closeSync(fd);
+		fs.writeFileSync(path.join(repo, "session.txt"), "session work\n");
+		const ui = makeUi(title => !title.includes("pre-session")); // decline the flagged group
+
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1", ["stray.dump"]);
+
+		expect(ui.confirms[0].body).toContain("WARNING — unusually large file(s)");
+		expect(ui.confirms[0].body).toContain("stray.dump (60 MB)");
+		expect(frozenPaths(frozen)).toEqual(["session.txt"]);
+		expect(git(repo, "show", "--name-only", "--format=", "HEAD")).toBe("session.txt");
+	});
+
+	test("owner decline leaves repo untouched and returns a typed, notified refusal", async () => {
 		const repo = makeRepo();
 		fs.writeFileSync(path.join(repo, "a.txt"), "work\n");
 		const ui = makeUi(false);
 		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
-		expect(frozen).toBeNull();
+		expect("refused" in frozen && frozen.refused).toBe("declined");
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1");
 		expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+		expect(ui.notices.some(n => n.startsWith("warning: freeze declined"))).toBe(true);
 	});
 
 	test("pushCandidate reports not_pushed when no remote", () => {

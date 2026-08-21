@@ -11,7 +11,7 @@
  * Slash commands keep the ctx.ui.confirm modal — they are owner-entered already.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { currentTranscriptRef, resetTranscriptRef } from "./audit-bridge";
+import { currentTranscriptRef, resetTranscriptRef } from "./transcript";
 
 export interface ConfirmationReceipt {
 	id: string;

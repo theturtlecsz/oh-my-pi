@@ -10,13 +10,24 @@ import type {
 import { escapeXmlAttribute, escapeXmlText } from "@oh-my-pi/pi-utils";
 import adviseDescription from "../prompts/advisor/advise-tool.md" with { type: "text" };
 
+export type AdvisorCategory =
+	| "gate-defect"
+	| "model-procedure-miss"
+	| "semantic-concern"
+	| "policy-ambiguity"
+	| "possible-false-positive";
+
 const adviseSchema = type({
 	note: type("string").describe(
-		"One concrete piece of advice for the agent you are watching. Terse, specific, actionable.",
+		"One concrete piece of advice for the agent you are watching. Terse, specific, actionable: claim + cited observation + consequence + suggested check.",
+	),
+	category: type(
+		"'gate-defect' | 'model-procedure-miss' | 'semantic-concern' | 'policy-ambiguity' | 'possible-false-positive'",
+	).describe(
+		"What kind of finding this is (OMP-55). Measured criticism, never authority: gate-defect = a deterministic gate misfired; model-procedure-miss = the agent skipped a required step; semantic-concern = the work may be wrong; policy-ambiguity = the rules conflict or underspecify; possible-false-positive = your own observation may be wrong.",
 	),
 	"severity?": type("'nit' | 'concern' | 'blocker'").describe("How strongly to weigh this. Omit for a plain nit."),
 });
-
 export type AdviseParams = typeof adviseSchema.infer;
 
 export type AdvisorSeverity = "nit" | "concern" | "blocker";
@@ -24,6 +35,7 @@ export type AdvisorSeverity = "nit" | "concern" | "blocker";
 export interface AdviseDetails {
 	note: string;
 	severity?: AdvisorSeverity;
+	category?: AdvisorCategory;
 	/** Which configured advisor produced this note (omitted for the default advisor). */
 	advisor?: string;
 }
@@ -32,10 +44,10 @@ export interface AdviseDetails {
 export interface AdvisorNote {
 	note: string;
 	severity?: AdvisorSeverity;
+	category?: AdvisorCategory;
 	/** Which configured advisor produced this note (omitted for the default advisor). */
 	advisor?: string;
 }
-
 /** Details payload on the batched `advisor` custom message rendered in the transcript. */
 export interface AdvisorMessageDetails {
 	notes: AdvisorNote[];
@@ -59,8 +71,9 @@ export function formatAdvisorBatchContent(notes: readonly AdvisorNote[]): string
 	return notes
 		.map(n => {
 			const severity = n.severity ? ` severity="${n.severity}"` : "";
+			const category = n.category ? ` category="${n.category}"` : "";
 			const who = n.advisor ? ` advisor="${escapeXmlAttribute(n.advisor)}"` : "";
-			return `<advisory${who}${severity} guidance="${ADVISOR_GUIDANCE}">\n${escapeXmlText(n.note)}\n</advisory>`;
+			return `<advisory${who}${category}${severity} guidance="${ADVISOR_GUIDANCE}">\n${escapeXmlText(n.note)}\n</advisory>`;
 		})
 		.join("\n");
 }
@@ -182,7 +195,13 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	#deliveredNoteSeverities = new Map<string, number>();
 	#inProgressUpdate = false;
 
-	constructor(private readonly onAdvice: (note: string, severity?: AdviseDetails["severity"]) => void) {}
+	constructor(
+		private readonly onAdvice: (
+			note: string,
+			severity?: AdviseDetails["severity"],
+			category?: AdvisorCategory,
+		) => void,
+	) {}
 
 	/**
 	 * Mark whether the next advisor prompt reviews an in-progress primary turn.
@@ -209,7 +228,7 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		if (this.#inProgressUpdate && args.severity !== "blocker") {
 			return {
 				content: [{ type: "text", text: "Recorded." }],
-				details: { note: args.note, severity: args.severity },
+				details: { note: args.note, severity: args.severity, category: args.category },
 				useless: true,
 			};
 		}
@@ -219,15 +238,15 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		if (rank <= previousRank) {
 			return {
 				content: [{ type: "text", text: "Duplicate advice ignored." }],
-				details: { note: args.note, severity: args.severity },
+				details: { note: args.note, severity: args.severity, category: args.category },
 				useless: true,
 			};
 		}
 		this.#deliveredNoteSeverities.set(key, rank);
-		this.onAdvice(args.note, args.severity);
+		this.onAdvice(args.note, args.severity, args.category);
 		return {
 			content: [{ type: "text", text: "Recorded." }],
-			details: { note: args.note, severity: args.severity },
+			details: { note: args.note, severity: args.severity, category: args.category },
 			useless: true,
 		};
 	}

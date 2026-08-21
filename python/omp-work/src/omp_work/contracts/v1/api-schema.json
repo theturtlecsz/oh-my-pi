@@ -141,6 +141,147 @@
       "title": "AttestCutoverPlanResult",
       "type": "object"
     },
+    "AuditManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "candidate_commit": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Candidate Commit",
+          "type": "string"
+        },
+        "candidate_id": {
+          "format": "uuid",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "candidate_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Sha256",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "manifest_id": {
+          "format": "uuid",
+          "title": "Manifest Id",
+          "type": "string"
+        },
+        "manifest_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Manifest Version",
+          "type": "integer"
+        },
+        "plan_receipt_id": {
+          "format": "uuid",
+          "title": "Plan Receipt Id",
+          "type": "string"
+        },
+        "section_hashes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Section Hashes",
+          "type": "object"
+        },
+        "task_body": {
+          "minLength": 1,
+          "title": "Task Body",
+          "type": "string"
+        },
+        "task_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "verification_receipt_id": {
+          "format": "uuid",
+          "title": "Verification Receipt Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest_id",
+        "work_id",
+        "attempt_id",
+        "plan_receipt_id",
+        "verification_receipt_id",
+        "candidate_id",
+        "candidate_sha256",
+        "candidate_commit",
+        "task_body",
+        "task_sha256",
+        "section_hashes",
+        "created_at"
+      ],
+      "title": "AuditManifest",
+      "type": "object"
+    },
+    "AuditorLaunch": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "title": "Launch Id",
+          "type": "string"
+        },
+        "launch_number": {
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Launch Number",
+          "type": "integer"
+        },
+        "manifest_id": {
+          "format": "uuid",
+          "title": "Manifest Id",
+          "type": "string"
+        },
+        "reserved_at": {
+          "format": "date-time",
+          "title": "Reserved At",
+          "type": "string"
+        },
+        "task_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "minLength": 1,
+          "title": "Tool Call Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "launch_id",
+        "attempt_id",
+        "manifest_id",
+        "launch_number",
+        "task_sha256",
+        "tool_call_id",
+        "reserved_at"
+      ],
+      "title": "AuditorLaunch",
+      "type": "object"
+    },
     "AuthorityView": {
       "additionalProperties": false,
       "properties": {
@@ -276,20 +417,149 @@
       "title": "Candidate",
       "type": "object"
     },
-    "CloseoutIntentView": {
+    "CheckpointDelivery": {
       "additionalProperties": false,
       "properties": {
+        "authorization_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authorization Ref"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "delivery_id": {
+          "format": "uuid",
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "delivery_sequence": {
+          "minimum": 1,
+          "title": "Delivery Sequence",
+          "type": "integer"
+        },
+        "event_id": {
+          "format": "uuid",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "owner_session_id": {
+          "title": "Owner Session Id",
+          "type": "string"
+        },
+        "rendered_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Rendered Sha256",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "delivered",
+            "failed",
+            "waived"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "delivery_id",
+        "event_id",
+        "delivery_sequence",
+        "owner_session_id",
+        "rendered_sha256",
+        "status",
+        "created_at"
+      ],
+      "title": "CheckpointDelivery",
+      "type": "object"
+    },
+    "CloseAttempt": {
+      "$defs": {
+        "CloseAttemptState": {
+          "enum": [
+            "active",
+            "audit_ready",
+            "auditor_in_flight",
+            "audited",
+            "closeout_requested",
+            "remediation_required",
+            "blocked",
+            "budget_exhausted",
+            "superseded",
+            "completed"
+          ],
+          "title": "CloseAttemptState",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "accepted_report_count": {
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Accepted Report Count",
+          "type": "integer"
+        },
+        "attempt_id": {
+          "format": "uuid",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "authorization_kind": {
+          "enum": [
+            "summary",
+            "legacy"
+          ],
+          "title": "Authorization Kind",
+          "type": "string"
+        },
+        "authorization_ref": {
+          "minLength": 1,
+          "title": "Authorization Ref",
+          "type": "string"
+        },
+        "candidate_commit": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Commit"
+        },
         "candidate_id": {
           "format": "uuid",
           "title": "Candidate Id",
           "type": "string"
         },
-        "intent_id": {
-          "format": "uuid",
-          "title": "Intent Id",
-          "type": "string"
+        "candidate_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Sha256"
         },
-        "requested_at": {
+        "closeout_requested_at": {
           "anyOf": [
             {
               "format": "date-time",
@@ -300,20 +570,167 @@
             }
           ],
           "default": null,
-          "title": "Requested At"
+          "title": "Closeout Requested At"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "completion_authorization_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion Authorization Ref"
+        },
+        "diff_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Diff Sha256"
+        },
+        "in_flight_launch_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Flight Launch Id"
+        },
+        "launch_count": {
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Launch Count",
+          "type": "integer"
+        },
+        "owner_session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Session Id"
+        },
+        "owner_session_start_commit": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Session Start Commit"
+        },
+        "owner_session_started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Session Started At"
+        },
+        "plan_receipt_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan Receipt Id"
+        },
+        "repository": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
         },
         "revision_id": {
           "format": "uuid",
           "title": "Revision Id",
           "type": "string"
         },
-        "state": {
-          "enum": [
-            "pending",
-            "completed"
+        "starting_dirty_paths": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "State",
-          "type": "string"
+          "default": null,
+          "title": "Starting Dirty Paths"
+        },
+        "state": {
+          "$ref": "#/$defs/CloseAttemptState"
+        },
+        "terminal_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Reason"
         },
         "work_id": {
           "format": "uuid",
@@ -322,31 +739,412 @@
         }
       },
       "required": [
-        "intent_id",
+        "attempt_id",
         "work_id",
         "revision_id",
         "candidate_id",
-        "state"
+        "authorization_kind",
+        "authorization_ref",
+        "launch_count",
+        "accepted_report_count",
+        "state",
+        "requested_at"
       ],
-      "title": "CloseoutIntentView",
+      "title": "CloseAttempt",
       "type": "object"
     },
-    "CloseoutResult": {
+    "CloseAttemptEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempt Id"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "event_id": {
+          "format": "uuid",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_type": {
+          "title": "Event Type",
+          "type": "string"
+        },
+        "launch_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Launch Id"
+        },
+        "legal_next_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Legal Next Actions",
+          "type": "array"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "remaining_launches": {
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Remaining Launches",
+          "type": "integer"
+        },
+        "remaining_reports": {
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Remaining Reports",
+          "type": "integer"
+        },
+        "rendered_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Rendered Sha256",
+          "type": "string"
+        },
+        "rendered_text": {
+          "title": "Rendered Text",
+          "type": "string"
+        },
+        "requires_delivery": {
+          "title": "Requires Delivery",
+          "type": "boolean"
+        },
+        "requires_fresh_authorization": {
+          "title": "Requires Fresh Authorization",
+          "type": "boolean"
+        },
+        "sequence": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sequence"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_id",
+        "work_id",
+        "event_type",
+        "reason_code",
+        "reason",
+        "legal_next_actions",
+        "remaining_launches",
+        "remaining_reports",
+        "requires_fresh_authorization",
+        "rendered_text",
+        "rendered_sha256",
+        "requires_delivery",
+        "created_at"
+      ],
+      "title": "CloseAttemptEvent",
+      "type": "object"
+    },
+    "CloseAttemptResult": {
       "$defs": {
-        "CloseoutIntentView": {
+        "AuditManifest": {
           "additionalProperties": false,
           "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
             "candidate_id": {
               "format": "uuid",
               "title": "Candidate Id",
               "type": "string"
             },
-            "intent_id": {
-              "format": "uuid",
-              "title": "Intent Id",
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
               "type": "string"
             },
-            "requested_at": {
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "manifest_version": {
+              "const": 1,
+              "default": 1,
+              "title": "Manifest Version",
+              "type": "integer"
+            },
+            "plan_receipt_id": {
+              "format": "uuid",
+              "title": "Plan Receipt Id",
+              "type": "string"
+            },
+            "section_hashes": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Section Hashes",
+              "type": "object"
+            },
+            "task_body": {
+              "minLength": 1,
+              "title": "Task Body",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "verification_receipt_id": {
+              "format": "uuid",
+              "title": "Verification Receipt Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "manifest_id",
+            "work_id",
+            "attempt_id",
+            "plan_receipt_id",
+            "verification_receipt_id",
+            "candidate_id",
+            "candidate_sha256",
+            "candidate_commit",
+            "task_body",
+            "task_sha256",
+            "section_hashes",
+            "created_at"
+          ],
+          "title": "AuditManifest",
+          "type": "object"
+        },
+        "AuditorLaunch": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "launch_number": {
+              "maximum": 3,
+              "minimum": 1,
+              "title": "Launch Number",
+              "type": "integer"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "reserved_at": {
+              "format": "date-time",
+              "title": "Reserved At",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "attempt_id",
+            "manifest_id",
+            "launch_number",
+            "task_sha256",
+            "tool_call_id",
+            "reserved_at"
+          ],
+          "title": "AuditorLaunch",
+          "type": "object"
+        },
+        "CheckpointDelivery": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Authorization Ref"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "delivery_id": {
+              "format": "uuid",
+              "title": "Delivery Id",
+              "type": "string"
+            },
+            "delivery_sequence": {
+              "minimum": 1,
+              "title": "Delivery Sequence",
+              "type": "integer"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "owner_session_id": {
+              "title": "Owner Session Id",
+              "type": "string"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "delivered",
+                "failed",
+                "waived"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delivery_id",
+            "event_id",
+            "delivery_sequence",
+            "owner_session_id",
+            "rendered_sha256",
+            "status",
+            "created_at"
+          ],
+          "title": "CheckpointDelivery",
+          "type": "object"
+        },
+        "CloseAttempt": {
+          "additionalProperties": false,
+          "properties": {
+            "accepted_report_count": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Accepted Report Count",
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "authorization_kind": {
+              "enum": [
+                "summary",
+                "legacy"
+              ],
+              "title": "Authorization Kind",
+              "type": "string"
+            },
+            "authorization_ref": {
+              "minLength": 1,
+              "title": "Authorization Ref",
+              "type": "string"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "closeout_requested_at": {
               "anyOf": [
                 {
                   "format": "date-time",
@@ -357,20 +1155,167 @@
                 }
               ],
               "default": null,
-              "title": "Requested At"
+              "title": "Closeout Requested At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "completion_authorization_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completion Authorization Ref"
+            },
+            "diff_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Diff Sha256"
+            },
+            "in_flight_launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "In Flight Launch Id"
+            },
+            "launch_count": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Launch Count",
+              "type": "integer"
+            },
+            "owner_session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Id"
+            },
+            "owner_session_start_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Start Commit"
+            },
+            "owner_session_started_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Started At"
+            },
+            "plan_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Receipt Id"
+            },
+            "repository": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Repository"
+            },
+            "requested_at": {
+              "format": "date-time",
+              "title": "Requested At",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
               "title": "Revision Id",
               "type": "string"
             },
-            "state": {
-              "enum": [
-                "pending",
-                "completed"
+            "starting_dirty_paths": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "State",
-              "type": "string"
+              "default": null,
+              "title": "Starting Dirty Paths"
+            },
+            "state": {
+              "$ref": "#/$defs/CloseAttemptState"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
             },
             "work_id": {
               "format": "uuid",
@@ -379,20 +1324,843 @@
             }
           },
           "required": [
-            "intent_id",
+            "attempt_id",
             "work_id",
             "revision_id",
             "candidate_id",
-            "state"
+            "authorization_kind",
+            "authorization_ref",
+            "launch_count",
+            "accepted_report_count",
+            "state",
+            "requested_at"
           ],
-          "title": "CloseoutIntentView",
+          "title": "CloseAttempt",
+          "type": "object"
+        },
+        "CloseAttemptEvent": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "event_type": {
+              "title": "Event Type",
+              "type": "string"
+            },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
+            "legal_next_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Legal Next Actions",
+              "type": "array"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "remaining_launches": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Remaining Launches",
+              "type": "integer"
+            },
+            "remaining_reports": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Remaining Reports",
+              "type": "integer"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "rendered_text": {
+              "title": "Rendered Text",
+              "type": "string"
+            },
+            "requires_delivery": {
+              "title": "Requires Delivery",
+              "type": "boolean"
+            },
+            "requires_fresh_authorization": {
+              "title": "Requires Fresh Authorization",
+              "type": "boolean"
+            },
+            "sequence": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sequence"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "work_id",
+            "event_type",
+            "reason_code",
+            "reason",
+            "legal_next_actions",
+            "remaining_launches",
+            "remaining_reports",
+            "requires_fresh_authorization",
+            "rendered_text",
+            "rendered_sha256",
+            "requires_delivery",
+            "created_at"
+          ],
+          "title": "CloseAttemptEvent",
+          "type": "object"
+        },
+        "CloseAttemptState": {
+          "enum": [
+            "active",
+            "audit_ready",
+            "auditor_in_flight",
+            "audited",
+            "closeout_requested",
+            "remediation_required",
+            "blocked",
+            "budget_exhausted",
+            "superseded",
+            "completed"
+          ],
+          "title": "CloseAttemptState",
+          "type": "string"
+        },
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout",
+            "handoff",
+            "same_session_found_fixed"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
           "type": "object"
         }
       },
       "additionalProperties": false,
+      "description": "Shared typed result for the five close-ritual commands: expected gate\nfailures are refusals WITH an event, never generic exceptions (OMP-47).",
       "properties": {
-        "intent": {
-          "$ref": "#/$defs/CloseoutIntentView"
+        "attempt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloseAttempt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckpointDelivery"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "event": {
+          "$ref": "#/$defs/CloseAttemptEvent"
+        },
+        "launch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditorLaunch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "manifest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "refused"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "begin_close_attempt",
+            "seal_audit_manifest",
+            "reserve_auditor_launch",
+            "settle_auditor_launch",
+            "attest_checkpoint_delivery"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "enum": [
+                "PASS",
+                "NEEDS_FIX",
+                "BLOCKED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verdict"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "event"
+      ],
+      "title": "CloseAttemptResult",
+      "type": "object"
+    },
+    "CloseoutResult": {
+      "$defs": {
+        "CloseAttempt": {
+          "additionalProperties": false,
+          "properties": {
+            "accepted_report_count": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Accepted Report Count",
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "authorization_kind": {
+              "enum": [
+                "summary",
+                "legacy"
+              ],
+              "title": "Authorization Kind",
+              "type": "string"
+            },
+            "authorization_ref": {
+              "minLength": 1,
+              "title": "Authorization Ref",
+              "type": "string"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "closeout_requested_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closeout Requested At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "completion_authorization_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completion Authorization Ref"
+            },
+            "diff_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Diff Sha256"
+            },
+            "in_flight_launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "In Flight Launch Id"
+            },
+            "launch_count": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Launch Count",
+              "type": "integer"
+            },
+            "owner_session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Id"
+            },
+            "owner_session_start_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Start Commit"
+            },
+            "owner_session_started_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Started At"
+            },
+            "plan_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Receipt Id"
+            },
+            "repository": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Repository"
+            },
+            "requested_at": {
+              "format": "date-time",
+              "title": "Requested At",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "starting_dirty_paths": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Starting Dirty Paths"
+            },
+            "state": {
+              "$ref": "#/$defs/CloseAttemptState"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "attempt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "authorization_kind",
+            "authorization_ref",
+            "launch_count",
+            "accepted_report_count",
+            "state",
+            "requested_at"
+          ],
+          "title": "CloseAttempt",
+          "type": "object"
+        },
+        "CloseAttemptEvent": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "event_type": {
+              "title": "Event Type",
+              "type": "string"
+            },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
+            "legal_next_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Legal Next Actions",
+              "type": "array"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "remaining_launches": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Remaining Launches",
+              "type": "integer"
+            },
+            "remaining_reports": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Remaining Reports",
+              "type": "integer"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "rendered_text": {
+              "title": "Rendered Text",
+              "type": "string"
+            },
+            "requires_delivery": {
+              "title": "Requires Delivery",
+              "type": "boolean"
+            },
+            "requires_fresh_authorization": {
+              "title": "Requires Fresh Authorization",
+              "type": "boolean"
+            },
+            "sequence": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sequence"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "work_id",
+            "event_type",
+            "reason_code",
+            "reason",
+            "legal_next_actions",
+            "remaining_launches",
+            "remaining_reports",
+            "requires_fresh_authorization",
+            "rendered_text",
+            "rendered_sha256",
+            "requires_delivery",
+            "created_at"
+          ],
+          "title": "CloseAttemptEvent",
+          "type": "object"
+        },
+        "CloseAttemptState": {
+          "enum": [
+            "active",
+            "audit_ready",
+            "auditor_in_flight",
+            "audited",
+            "closeout_requested",
+            "remediation_required",
+            "blocked",
+            "budget_exhausted",
+            "superseded",
+            "completed"
+          ],
+          "title": "CloseAttemptState",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloseAttempt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "event": {
+          "$ref": "#/$defs/CloseAttemptEvent"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "refused"
+          ],
+          "title": "Status",
+          "type": "string"
         },
         "type": {
           "const": "request_closeout",
@@ -402,7 +2170,8 @@
       },
       "required": [
         "type",
-        "intent"
+        "status",
+        "event"
       ],
       "title": "CloseoutResult",
       "type": "object"
@@ -481,6 +2250,147 @@
           "title": "AttestCutoverPlanResult",
           "type": "object"
         },
+        "AuditManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "manifest_version": {
+              "const": 1,
+              "default": 1,
+              "title": "Manifest Version",
+              "type": "integer"
+            },
+            "plan_receipt_id": {
+              "format": "uuid",
+              "title": "Plan Receipt Id",
+              "type": "string"
+            },
+            "section_hashes": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Section Hashes",
+              "type": "object"
+            },
+            "task_body": {
+              "minLength": 1,
+              "title": "Task Body",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "verification_receipt_id": {
+              "format": "uuid",
+              "title": "Verification Receipt Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "manifest_id",
+            "work_id",
+            "attempt_id",
+            "plan_receipt_id",
+            "verification_receipt_id",
+            "candidate_id",
+            "candidate_sha256",
+            "candidate_commit",
+            "task_body",
+            "task_sha256",
+            "section_hashes",
+            "created_at"
+          ],
+          "title": "AuditManifest",
+          "type": "object"
+        },
+        "AuditorLaunch": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "launch_number": {
+              "maximum": 3,
+              "minimum": 1,
+              "title": "Launch Number",
+              "type": "integer"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "reserved_at": {
+              "format": "date-time",
+              "title": "Reserved At",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "attempt_id",
+            "manifest_id",
+            "launch_number",
+            "task_sha256",
+            "tool_call_id",
+            "reserved_at"
+          ],
+          "title": "AuditorLaunch",
+          "type": "object"
+        },
         "Candidate": {
           "additionalProperties": false,
           "properties": {
@@ -542,20 +2452,131 @@
           "title": "Candidate",
           "type": "object"
         },
-        "CloseoutIntentView": {
+        "CheckpointDelivery": {
           "additionalProperties": false,
           "properties": {
+            "authorization_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Authorization Ref"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "delivery_id": {
+              "format": "uuid",
+              "title": "Delivery Id",
+              "type": "string"
+            },
+            "delivery_sequence": {
+              "minimum": 1,
+              "title": "Delivery Sequence",
+              "type": "integer"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "owner_session_id": {
+              "title": "Owner Session Id",
+              "type": "string"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "delivered",
+                "failed",
+                "waived"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delivery_id",
+            "event_id",
+            "delivery_sequence",
+            "owner_session_id",
+            "rendered_sha256",
+            "status",
+            "created_at"
+          ],
+          "title": "CheckpointDelivery",
+          "type": "object"
+        },
+        "CloseAttempt": {
+          "additionalProperties": false,
+          "properties": {
+            "accepted_report_count": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Accepted Report Count",
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "authorization_kind": {
+              "enum": [
+                "summary",
+                "legacy"
+              ],
+              "title": "Authorization Kind",
+              "type": "string"
+            },
+            "authorization_ref": {
+              "minLength": 1,
+              "title": "Authorization Ref",
+              "type": "string"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
             "candidate_id": {
               "format": "uuid",
               "title": "Candidate Id",
               "type": "string"
             },
-            "intent_id": {
-              "format": "uuid",
-              "title": "Intent Id",
-              "type": "string"
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
             },
-            "requested_at": {
+            "closeout_requested_at": {
               "anyOf": [
                 {
                   "format": "date-time",
@@ -566,20 +2587,167 @@
                 }
               ],
               "default": null,
-              "title": "Requested At"
+              "title": "Closeout Requested At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "completion_authorization_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completion Authorization Ref"
+            },
+            "diff_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Diff Sha256"
+            },
+            "in_flight_launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "In Flight Launch Id"
+            },
+            "launch_count": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Launch Count",
+              "type": "integer"
+            },
+            "owner_session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Id"
+            },
+            "owner_session_start_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Start Commit"
+            },
+            "owner_session_started_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Started At"
+            },
+            "plan_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Receipt Id"
+            },
+            "repository": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Repository"
+            },
+            "requested_at": {
+              "format": "date-time",
+              "title": "Requested At",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
               "title": "Revision Id",
               "type": "string"
             },
-            "state": {
-              "enum": [
-                "pending",
-                "completed"
+            "starting_dirty_paths": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "State",
-              "type": "string"
+              "default": null,
+              "title": "Starting Dirty Paths"
+            },
+            "state": {
+              "$ref": "#/$defs/CloseAttemptState"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
             },
             "work_id": {
               "format": "uuid",
@@ -588,20 +2756,291 @@
             }
           },
           "required": [
-            "intent_id",
+            "attempt_id",
             "work_id",
             "revision_id",
             "candidate_id",
-            "state"
+            "authorization_kind",
+            "authorization_ref",
+            "launch_count",
+            "accepted_report_count",
+            "state",
+            "requested_at"
           ],
-          "title": "CloseoutIntentView",
+          "title": "CloseAttempt",
           "type": "object"
+        },
+        "CloseAttemptEvent": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "event_type": {
+              "title": "Event Type",
+              "type": "string"
+            },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
+            "legal_next_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Legal Next Actions",
+              "type": "array"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "remaining_launches": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Remaining Launches",
+              "type": "integer"
+            },
+            "remaining_reports": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Remaining Reports",
+              "type": "integer"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "rendered_text": {
+              "title": "Rendered Text",
+              "type": "string"
+            },
+            "requires_delivery": {
+              "title": "Requires Delivery",
+              "type": "boolean"
+            },
+            "requires_fresh_authorization": {
+              "title": "Requires Fresh Authorization",
+              "type": "boolean"
+            },
+            "sequence": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sequence"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "work_id",
+            "event_type",
+            "reason_code",
+            "reason",
+            "legal_next_actions",
+            "remaining_launches",
+            "remaining_reports",
+            "requires_fresh_authorization",
+            "rendered_text",
+            "rendered_sha256",
+            "requires_delivery",
+            "created_at"
+          ],
+          "title": "CloseAttemptEvent",
+          "type": "object"
+        },
+        "CloseAttemptResult": {
+          "additionalProperties": false,
+          "description": "Shared typed result for the five close-ritual commands: expected gate\nfailures are refusals WITH an event, never generic exceptions (OMP-47).",
+          "properties": {
+            "attempt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloseAttempt"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "delivery": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CheckpointDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "event": {
+              "$ref": "#/$defs/CloseAttemptEvent"
+            },
+            "launch": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AuditorLaunch"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "manifest": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AuditManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EvidenceReceipt"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "refused"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "begin_close_attempt",
+                "seal_audit_manifest",
+                "reserve_auditor_launch",
+                "settle_auditor_launch",
+                "attest_checkpoint_delivery"
+              ],
+              "title": "Type",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "event"
+          ],
+          "title": "CloseAttemptResult",
+          "type": "object"
+        },
+        "CloseAttemptState": {
+          "enum": [
+            "active",
+            "audit_ready",
+            "auditor_in_flight",
+            "audited",
+            "closeout_requested",
+            "remediation_required",
+            "blocked",
+            "budget_exhausted",
+            "superseded",
+            "completed"
+          ],
+          "title": "CloseAttemptState",
+          "type": "string"
         },
         "CloseoutResult": {
           "additionalProperties": false,
           "properties": {
-            "intent": {
-              "$ref": "#/$defs/CloseoutIntentView"
+            "attempt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloseAttempt"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "event": {
+              "$ref": "#/$defs/CloseAttemptEvent"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "refused"
+              ],
+              "title": "Status",
+              "type": "string"
             },
             "type": {
               "const": "request_closeout",
@@ -611,9 +3050,84 @@
           },
           "required": [
             "type",
-            "intent"
+            "status",
+            "event"
           ],
           "title": "CloseoutResult",
+          "type": "object"
+        },
+        "CompleteWorkResult": {
+          "additionalProperties": false,
+          "properties": {
+            "completed_work_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Completed Work Ids",
+              "type": "array"
+            },
+            "event": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloseAttemptEvent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "row_version": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Row Version"
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "State"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "refused"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "complete_work",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "work_id"
+          ],
+          "title": "CompleteWorkResult",
           "type": "object"
         },
         "CreateWorkBatchResult": {
@@ -687,7 +3201,8 @@
             "audit",
             "push",
             "closeout",
-            "handoff"
+            "handoff",
+            "same_session_found_fixed"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -840,6 +3355,17 @@
         "EvidenceResult": {
           "additionalProperties": false,
           "properties": {
+            "event": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloseAttemptEvent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "receipt": {
               "$ref": "#/$defs/EvidenceReceipt"
             },
@@ -1119,10 +3645,7 @@
               "type": "string"
             },
             "type": {
-              "enum": [
-                "set_work_state",
-                "complete_work"
-              ],
+              "const": "set_work_state",
               "title": "Type",
               "type": "string"
             },
@@ -1152,18 +3675,23 @@
             "mapping": {
               "activate_cutover": "#/$defs/ActivateCutoverResult",
               "append_evidence": "#/$defs/EvidenceResult",
+              "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
+              "begin_close_attempt": "#/$defs/CloseAttemptResult",
               "clear_focus": "#/$defs/FocusResult",
-              "complete_work": "#/$defs/WorkItemResult",
+              "complete_work": "#/$defs/CompleteWorkResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
               "finalize_candidate": "#/$defs/FinalizeCandidateResult",
               "put_relation": "#/$defs/RelationResult",
               "record_project_health": "#/$defs/ProjectHealthResult",
               "remove_relation": "#/$defs/RelationResult",
               "request_closeout": "#/$defs/CloseoutResult",
+              "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
               "revise_work": "#/$defs/ReviseWorkResult",
+              "seal_audit_manifest": "#/$defs/CloseAttemptResult",
               "set_focus": "#/$defs/FocusResult",
-              "set_work_state": "#/$defs/WorkItemResult"
+              "set_work_state": "#/$defs/WorkItemResult",
+              "settle_auditor_launch": "#/$defs/CloseAttemptResult"
             },
             "propertyName": "type"
           },
@@ -1178,6 +3706,9 @@
               "$ref": "#/$defs/WorkItemResult"
             },
             {
+              "$ref": "#/$defs/CompleteWorkResult"
+            },
+            {
               "$ref": "#/$defs/RelationResult"
             },
             {
@@ -1188,6 +3719,9 @@
             },
             {
               "$ref": "#/$defs/FinalizeCandidateResult"
+            },
+            {
+              "$ref": "#/$defs/CloseAttemptResult"
             },
             {
               "$ref": "#/$defs/CloseoutResult"
@@ -1210,6 +3744,206 @@
         "result"
       ],
       "title": "CommandResponse",
+      "type": "object"
+    },
+    "CompleteWorkResult": {
+      "$defs": {
+        "CloseAttemptEvent": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "event_type": {
+              "title": "Event Type",
+              "type": "string"
+            },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
+            "legal_next_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Legal Next Actions",
+              "type": "array"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "remaining_launches": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Remaining Launches",
+              "type": "integer"
+            },
+            "remaining_reports": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Remaining Reports",
+              "type": "integer"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "rendered_text": {
+              "title": "Rendered Text",
+              "type": "string"
+            },
+            "requires_delivery": {
+              "title": "Requires Delivery",
+              "type": "boolean"
+            },
+            "requires_fresh_authorization": {
+              "title": "Requires Fresh Authorization",
+              "type": "boolean"
+            },
+            "sequence": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sequence"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "work_id",
+            "event_type",
+            "reason_code",
+            "reason",
+            "legal_next_actions",
+            "remaining_launches",
+            "remaining_reports",
+            "requires_fresh_authorization",
+            "rendered_text",
+            "rendered_sha256",
+            "requires_delivery",
+            "created_at"
+          ],
+          "title": "CloseAttemptEvent",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "completed_work_ids": {
+          "default": [],
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": "Completed Work Ids",
+          "type": "array"
+        },
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloseAttemptEvent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "row_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Version"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "State"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "refused"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "complete_work",
+          "title": "Type",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "work_id"
+      ],
+      "title": "CompleteWorkResult",
       "type": "object"
     },
     "CreateWorkBatchResult": {
@@ -1328,7 +4062,8 @@
             "audit",
             "push",
             "closeout",
-            "handoff"
+            "handoff",
+            "same_session_found_fixed"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -1480,6 +4215,130 @@
     },
     "EvidenceResult": {
       "$defs": {
+        "CloseAttemptEvent": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "event_type": {
+              "title": "Event Type",
+              "type": "string"
+            },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
+            "legal_next_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Legal Next Actions",
+              "type": "array"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "remaining_launches": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Remaining Launches",
+              "type": "integer"
+            },
+            "remaining_reports": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Remaining Reports",
+              "type": "integer"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "rendered_text": {
+              "title": "Rendered Text",
+              "type": "string"
+            },
+            "requires_delivery": {
+              "title": "Requires Delivery",
+              "type": "boolean"
+            },
+            "requires_fresh_authorization": {
+              "title": "Requires Fresh Authorization",
+              "type": "boolean"
+            },
+            "sequence": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sequence"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "work_id",
+            "event_type",
+            "reason_code",
+            "reason",
+            "legal_next_actions",
+            "remaining_launches",
+            "remaining_reports",
+            "requires_fresh_authorization",
+            "rendered_text",
+            "rendered_sha256",
+            "requires_delivery",
+            "created_at"
+          ],
+          "title": "CloseAttemptEvent",
+          "type": "object"
+        },
         "EvidenceKind": {
           "enum": [
             "plan",
@@ -1487,7 +4346,8 @@
             "audit",
             "push",
             "closeout",
-            "handoff"
+            "handoff",
+            "same_session_found_fixed"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -1640,6 +4500,17 @@
       },
       "additionalProperties": false,
       "properties": {
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloseAttemptEvent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "receipt": {
           "$ref": "#/$defs/EvidenceReceipt"
         },
@@ -2268,6 +5139,147 @@
           "title": "AttestCutoverPlanResult",
           "type": "object"
         },
+        "AuditManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "manifest_version": {
+              "const": 1,
+              "default": 1,
+              "title": "Manifest Version",
+              "type": "integer"
+            },
+            "plan_receipt_id": {
+              "format": "uuid",
+              "title": "Plan Receipt Id",
+              "type": "string"
+            },
+            "section_hashes": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Section Hashes",
+              "type": "object"
+            },
+            "task_body": {
+              "minLength": 1,
+              "title": "Task Body",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "verification_receipt_id": {
+              "format": "uuid",
+              "title": "Verification Receipt Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "manifest_id",
+            "work_id",
+            "attempt_id",
+            "plan_receipt_id",
+            "verification_receipt_id",
+            "candidate_id",
+            "candidate_sha256",
+            "candidate_commit",
+            "task_body",
+            "task_sha256",
+            "section_hashes",
+            "created_at"
+          ],
+          "title": "AuditManifest",
+          "type": "object"
+        },
+        "AuditorLaunch": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "launch_number": {
+              "maximum": 3,
+              "minimum": 1,
+              "title": "Launch Number",
+              "type": "integer"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "reserved_at": {
+              "format": "date-time",
+              "title": "Reserved At",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "attempt_id",
+            "manifest_id",
+            "launch_number",
+            "task_sha256",
+            "tool_call_id",
+            "reserved_at"
+          ],
+          "title": "AuditorLaunch",
+          "type": "object"
+        },
         "Candidate": {
           "additionalProperties": false,
           "properties": {
@@ -2329,20 +5341,131 @@
           "title": "Candidate",
           "type": "object"
         },
-        "CloseoutIntentView": {
+        "CheckpointDelivery": {
           "additionalProperties": false,
           "properties": {
+            "authorization_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Authorization Ref"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "delivery_id": {
+              "format": "uuid",
+              "title": "Delivery Id",
+              "type": "string"
+            },
+            "delivery_sequence": {
+              "minimum": 1,
+              "title": "Delivery Sequence",
+              "type": "integer"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "owner_session_id": {
+              "title": "Owner Session Id",
+              "type": "string"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "delivered",
+                "failed",
+                "waived"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delivery_id",
+            "event_id",
+            "delivery_sequence",
+            "owner_session_id",
+            "rendered_sha256",
+            "status",
+            "created_at"
+          ],
+          "title": "CheckpointDelivery",
+          "type": "object"
+        },
+        "CloseAttempt": {
+          "additionalProperties": false,
+          "properties": {
+            "accepted_report_count": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Accepted Report Count",
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "authorization_kind": {
+              "enum": [
+                "summary",
+                "legacy"
+              ],
+              "title": "Authorization Kind",
+              "type": "string"
+            },
+            "authorization_ref": {
+              "minLength": 1,
+              "title": "Authorization Ref",
+              "type": "string"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
             "candidate_id": {
               "format": "uuid",
               "title": "Candidate Id",
               "type": "string"
             },
-            "intent_id": {
-              "format": "uuid",
-              "title": "Intent Id",
-              "type": "string"
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
             },
-            "requested_at": {
+            "closeout_requested_at": {
               "anyOf": [
                 {
                   "format": "date-time",
@@ -2353,20 +5476,167 @@
                 }
               ],
               "default": null,
-              "title": "Requested At"
+              "title": "Closeout Requested At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "completion_authorization_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completion Authorization Ref"
+            },
+            "diff_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Diff Sha256"
+            },
+            "in_flight_launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "In Flight Launch Id"
+            },
+            "launch_count": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Launch Count",
+              "type": "integer"
+            },
+            "owner_session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Id"
+            },
+            "owner_session_start_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Start Commit"
+            },
+            "owner_session_started_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Started At"
+            },
+            "plan_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Receipt Id"
+            },
+            "repository": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Repository"
+            },
+            "requested_at": {
+              "format": "date-time",
+              "title": "Requested At",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
               "title": "Revision Id",
               "type": "string"
             },
-            "state": {
-              "enum": [
-                "pending",
-                "completed"
+            "starting_dirty_paths": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "State",
-              "type": "string"
+              "default": null,
+              "title": "Starting Dirty Paths"
+            },
+            "state": {
+              "$ref": "#/$defs/CloseAttemptState"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
             },
             "work_id": {
               "format": "uuid",
@@ -2375,20 +5645,291 @@
             }
           },
           "required": [
-            "intent_id",
+            "attempt_id",
             "work_id",
             "revision_id",
             "candidate_id",
-            "state"
+            "authorization_kind",
+            "authorization_ref",
+            "launch_count",
+            "accepted_report_count",
+            "state",
+            "requested_at"
           ],
-          "title": "CloseoutIntentView",
+          "title": "CloseAttempt",
           "type": "object"
+        },
+        "CloseAttemptEvent": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "event_type": {
+              "title": "Event Type",
+              "type": "string"
+            },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
+            "legal_next_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Legal Next Actions",
+              "type": "array"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "remaining_launches": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Remaining Launches",
+              "type": "integer"
+            },
+            "remaining_reports": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Remaining Reports",
+              "type": "integer"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "rendered_text": {
+              "title": "Rendered Text",
+              "type": "string"
+            },
+            "requires_delivery": {
+              "title": "Requires Delivery",
+              "type": "boolean"
+            },
+            "requires_fresh_authorization": {
+              "title": "Requires Fresh Authorization",
+              "type": "boolean"
+            },
+            "sequence": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sequence"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "work_id",
+            "event_type",
+            "reason_code",
+            "reason",
+            "legal_next_actions",
+            "remaining_launches",
+            "remaining_reports",
+            "requires_fresh_authorization",
+            "rendered_text",
+            "rendered_sha256",
+            "requires_delivery",
+            "created_at"
+          ],
+          "title": "CloseAttemptEvent",
+          "type": "object"
+        },
+        "CloseAttemptResult": {
+          "additionalProperties": false,
+          "description": "Shared typed result for the five close-ritual commands: expected gate\nfailures are refusals WITH an event, never generic exceptions (OMP-47).",
+          "properties": {
+            "attempt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloseAttempt"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "delivery": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CheckpointDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "event": {
+              "$ref": "#/$defs/CloseAttemptEvent"
+            },
+            "launch": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AuditorLaunch"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "manifest": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AuditManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EvidenceReceipt"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "refused"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "begin_close_attempt",
+                "seal_audit_manifest",
+                "reserve_auditor_launch",
+                "settle_auditor_launch",
+                "attest_checkpoint_delivery"
+              ],
+              "title": "Type",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "event"
+          ],
+          "title": "CloseAttemptResult",
+          "type": "object"
+        },
+        "CloseAttemptState": {
+          "enum": [
+            "active",
+            "audit_ready",
+            "auditor_in_flight",
+            "audited",
+            "closeout_requested",
+            "remediation_required",
+            "blocked",
+            "budget_exhausted",
+            "superseded",
+            "completed"
+          ],
+          "title": "CloseAttemptState",
+          "type": "string"
         },
         "CloseoutResult": {
           "additionalProperties": false,
           "properties": {
-            "intent": {
-              "$ref": "#/$defs/CloseoutIntentView"
+            "attempt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloseAttempt"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "event": {
+              "$ref": "#/$defs/CloseAttemptEvent"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "refused"
+              ],
+              "title": "Status",
+              "type": "string"
             },
             "type": {
               "const": "request_closeout",
@@ -2398,9 +5939,84 @@
           },
           "required": [
             "type",
-            "intent"
+            "status",
+            "event"
           ],
           "title": "CloseoutResult",
+          "type": "object"
+        },
+        "CompleteWorkResult": {
+          "additionalProperties": false,
+          "properties": {
+            "completed_work_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Completed Work Ids",
+              "type": "array"
+            },
+            "event": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloseAttemptEvent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "row_version": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Row Version"
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "State"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "refused"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "complete_work",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "work_id"
+          ],
+          "title": "CompleteWorkResult",
           "type": "object"
         },
         "CreateWorkBatchResult": {
@@ -2474,7 +6090,8 @@
             "audit",
             "push",
             "closeout",
-            "handoff"
+            "handoff",
+            "same_session_found_fixed"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -2627,6 +6244,17 @@
         "EvidenceResult": {
           "additionalProperties": false,
           "properties": {
+            "event": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloseAttemptEvent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "receipt": {
               "$ref": "#/$defs/EvidenceReceipt"
             },
@@ -2906,10 +6534,7 @@
               "type": "string"
             },
             "type": {
-              "enum": [
-                "set_work_state",
-                "complete_work"
-              ],
+              "const": "set_work_state",
               "title": "Type",
               "type": "string"
             },
@@ -2955,18 +6580,23 @@
                 "mapping": {
                   "activate_cutover": "#/$defs/ActivateCutoverResult",
                   "append_evidence": "#/$defs/EvidenceResult",
+                  "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
                   "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
+                  "begin_close_attempt": "#/$defs/CloseAttemptResult",
                   "clear_focus": "#/$defs/FocusResult",
-                  "complete_work": "#/$defs/WorkItemResult",
+                  "complete_work": "#/$defs/CompleteWorkResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
                   "finalize_candidate": "#/$defs/FinalizeCandidateResult",
                   "put_relation": "#/$defs/RelationResult",
                   "record_project_health": "#/$defs/ProjectHealthResult",
                   "remove_relation": "#/$defs/RelationResult",
                   "request_closeout": "#/$defs/CloseoutResult",
+                  "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
                   "revise_work": "#/$defs/ReviseWorkResult",
+                  "seal_audit_manifest": "#/$defs/CloseAttemptResult",
                   "set_focus": "#/$defs/FocusResult",
-                  "set_work_state": "#/$defs/WorkItemResult"
+                  "set_work_state": "#/$defs/WorkItemResult",
+                  "settle_auditor_launch": "#/$defs/CloseAttemptResult"
                 },
                 "propertyName": "type"
               },
@@ -2981,6 +6611,9 @@
                   "$ref": "#/$defs/WorkItemResult"
                 },
                 {
+                  "$ref": "#/$defs/CompleteWorkResult"
+                },
+                {
                   "$ref": "#/$defs/RelationResult"
                 },
                 {
@@ -2991,6 +6624,9 @@
                 },
                 {
                   "$ref": "#/$defs/FinalizeCandidateResult"
+                },
+                {
+                  "$ref": "#/$defs/CloseAttemptResult"
                 },
                 {
                   "$ref": "#/$defs/CloseoutResult"
@@ -3077,10 +6713,7 @@
           "type": "string"
         },
         "type": {
-          "enum": [
-            "set_work_state",
-            "complete_work"
-          ],
+          "const": "set_work_state",
           "title": "Type",
           "type": "string"
         },
@@ -3397,6 +7030,147 @@
     },
     "WorkflowView": {
       "$defs": {
+        "AuditManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "manifest_version": {
+              "const": 1,
+              "default": 1,
+              "title": "Manifest Version",
+              "type": "integer"
+            },
+            "plan_receipt_id": {
+              "format": "uuid",
+              "title": "Plan Receipt Id",
+              "type": "string"
+            },
+            "section_hashes": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Section Hashes",
+              "type": "object"
+            },
+            "task_body": {
+              "minLength": 1,
+              "title": "Task Body",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "verification_receipt_id": {
+              "format": "uuid",
+              "title": "Verification Receipt Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "manifest_id",
+            "work_id",
+            "attempt_id",
+            "plan_receipt_id",
+            "verification_receipt_id",
+            "candidate_id",
+            "candidate_sha256",
+            "candidate_commit",
+            "task_body",
+            "task_sha256",
+            "section_hashes",
+            "created_at"
+          ],
+          "title": "AuditManifest",
+          "type": "object"
+        },
+        "AuditorLaunch": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "launch_number": {
+              "maximum": 3,
+              "minimum": 1,
+              "title": "Launch Number",
+              "type": "integer"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "reserved_at": {
+              "format": "date-time",
+              "title": "Reserved At",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "attempt_id",
+            "manifest_id",
+            "launch_number",
+            "task_sha256",
+            "tool_call_id",
+            "reserved_at"
+          ],
+          "title": "AuditorLaunch",
+          "type": "object"
+        },
         "Candidate": {
           "additionalProperties": false,
           "properties": {
@@ -3458,20 +7232,131 @@
           "title": "Candidate",
           "type": "object"
         },
-        "CloseoutIntentView": {
+        "CheckpointDelivery": {
           "additionalProperties": false,
           "properties": {
+            "authorization_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Authorization Ref"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "delivery_id": {
+              "format": "uuid",
+              "title": "Delivery Id",
+              "type": "string"
+            },
+            "delivery_sequence": {
+              "minimum": 1,
+              "title": "Delivery Sequence",
+              "type": "integer"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "owner_session_id": {
+              "title": "Owner Session Id",
+              "type": "string"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "delivered",
+                "failed",
+                "waived"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delivery_id",
+            "event_id",
+            "delivery_sequence",
+            "owner_session_id",
+            "rendered_sha256",
+            "status",
+            "created_at"
+          ],
+          "title": "CheckpointDelivery",
+          "type": "object"
+        },
+        "CloseAttempt": {
+          "additionalProperties": false,
+          "properties": {
+            "accepted_report_count": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Accepted Report Count",
+              "type": "integer"
+            },
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "authorization_kind": {
+              "enum": [
+                "summary",
+                "legacy"
+              ],
+              "title": "Authorization Kind",
+              "type": "string"
+            },
+            "authorization_ref": {
+              "minLength": 1,
+              "title": "Authorization Ref",
+              "type": "string"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
             "candidate_id": {
               "format": "uuid",
               "title": "Candidate Id",
               "type": "string"
             },
-            "intent_id": {
-              "format": "uuid",
-              "title": "Intent Id",
-              "type": "string"
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
             },
-            "requested_at": {
+            "closeout_requested_at": {
               "anyOf": [
                 {
                   "format": "date-time",
@@ -3482,20 +7367,167 @@
                 }
               ],
               "default": null,
-              "title": "Requested At"
+              "title": "Closeout Requested At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "completion_authorization_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completion Authorization Ref"
+            },
+            "diff_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Diff Sha256"
+            },
+            "in_flight_launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "In Flight Launch Id"
+            },
+            "launch_count": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Launch Count",
+              "type": "integer"
+            },
+            "owner_session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Id"
+            },
+            "owner_session_start_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Start Commit"
+            },
+            "owner_session_started_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Owner Session Started At"
+            },
+            "plan_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Receipt Id"
+            },
+            "repository": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Repository"
+            },
+            "requested_at": {
+              "format": "date-time",
+              "title": "Requested At",
+              "type": "string"
             },
             "revision_id": {
               "format": "uuid",
               "title": "Revision Id",
               "type": "string"
             },
-            "state": {
-              "enum": [
-                "pending",
-                "completed"
+            "starting_dirty_paths": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "State",
-              "type": "string"
+              "default": null,
+              "title": "Starting Dirty Paths"
+            },
+            "state": {
+              "$ref": "#/$defs/CloseAttemptState"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
             },
             "work_id": {
               "format": "uuid",
@@ -3504,14 +7536,159 @@
             }
           },
           "required": [
-            "intent_id",
+            "attempt_id",
             "work_id",
             "revision_id",
             "candidate_id",
-            "state"
+            "authorization_kind",
+            "authorization_ref",
+            "launch_count",
+            "accepted_report_count",
+            "state",
+            "requested_at"
           ],
-          "title": "CloseoutIntentView",
+          "title": "CloseAttempt",
           "type": "object"
+        },
+        "CloseAttemptEvent": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "event_type": {
+              "title": "Event Type",
+              "type": "string"
+            },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
+            "legal_next_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Legal Next Actions",
+              "type": "array"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "reason_code": {
+              "title": "Reason Code",
+              "type": "string"
+            },
+            "remaining_launches": {
+              "maximum": 3,
+              "minimum": 0,
+              "title": "Remaining Launches",
+              "type": "integer"
+            },
+            "remaining_reports": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Remaining Reports",
+              "type": "integer"
+            },
+            "rendered_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rendered Sha256",
+              "type": "string"
+            },
+            "rendered_text": {
+              "title": "Rendered Text",
+              "type": "string"
+            },
+            "requires_delivery": {
+              "title": "Requires Delivery",
+              "type": "boolean"
+            },
+            "requires_fresh_authorization": {
+              "title": "Requires Fresh Authorization",
+              "type": "boolean"
+            },
+            "sequence": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sequence"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "work_id",
+            "event_type",
+            "reason_code",
+            "reason",
+            "legal_next_actions",
+            "remaining_launches",
+            "remaining_reports",
+            "requires_fresh_authorization",
+            "rendered_text",
+            "rendered_sha256",
+            "requires_delivery",
+            "created_at"
+          ],
+          "title": "CloseAttemptEvent",
+          "type": "object"
+        },
+        "CloseAttemptState": {
+          "enum": [
+            "active",
+            "audit_ready",
+            "auditor_in_flight",
+            "audited",
+            "closeout_requested",
+            "remediation_required",
+            "blocked",
+            "budget_exhausted",
+            "superseded",
+            "completed"
+          ],
+          "title": "CloseAttemptState",
+          "type": "string"
         },
         "EvidenceKind": {
           "enum": [
@@ -3520,7 +7697,8 @@
             "audit",
             "push",
             "closeout",
-            "handoff"
+            "handoff",
+            "same_session_found_fixed"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -3953,12 +8131,47 @@
       },
       "additionalProperties": false,
       "properties": {
-        "closeout": {
+        "audit_manifest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "auditor_launches": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/CloseoutIntentView"
+            "$ref": "#/$defs/AuditorLaunch"
           },
-          "title": "Closeout",
+          "title": "Auditor Launches",
+          "type": "array"
+        },
+        "checkpoint_deliveries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CheckpointDelivery"
+          },
+          "title": "Checkpoint Deliveries",
+          "type": "array"
+        },
+        "close_attempt_events": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CloseAttemptEvent"
+          },
+          "title": "Close Attempt Events",
+          "type": "array"
+        },
+        "close_attempts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CloseAttempt"
+          },
+          "title": "Close Attempts",
           "type": "array"
         },
         "item": {

@@ -10,7 +10,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "done" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "done" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -98,9 +98,10 @@ describe("HOME-122 workflow sequence", () => {
 		expect(reviews).toHaveLength(1);
 		expect(reviews[0]).toContain("**Session review**");
 		expect(reviews[0]).toContain("Plan SHA-256:");
-		// OMP-43 depth-0 controls: owner lifecycle still clears the shared bridge.
-		expect(record(out.lifecycleAfterStart)).toEqual({ generationChanged: true, bindingPresent: false });
-		expect(record(out.ownerSwitchLifecycle)).toEqual({ generationChanged: true, bindingPresent: false });
+		// OMP-47/OMP-43: owner lifecycle resets the shared transcript ref; a new
+		// literal /summary begins exactly one fresh ledger attempt per candidate.
+		expect(record(out.lifecycleAfterStart)).toEqual({ transcriptChanged: true });
+		expect(record(out.ownerSwitchLifecycle)).toEqual({ transcriptChanged: true });
 	});
 
 	test("subagent summary provenance cannot authorize the review", () => {
@@ -110,9 +111,9 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.afterStructured).toContain("literally enter /summary");
 		expect(list(out.reviewBodies)).toHaveLength(0);
 		// OMP-43: the subagent's own lifecycle events (the auditor's session_start,
-		// any switch) must leave the owner's in-flight audit binding untouched.
-		expect(record(out.lifecycleAfterStart)).toEqual({ generationChanged: false, bindingPresent: true });
-		expect(record(out.lifecycleAfterSwitch)).toEqual({ generationChanged: false, bindingPresent: true });
+		// any switch) must leave the owner's shared transcript ref untouched.
+		expect(record(out.lifecycleAfterStart)).toEqual({ transcriptChanged: false });
+		expect(record(out.lifecycleAfterSwitch)).toEqual({ transcriptChanged: false });
 	});
 
 	test("fresh sessions restore the backend focus without a local cache", () => {
@@ -130,42 +131,59 @@ describe("HOME-122 workflow sequence", () => {
 		expect(beforeReviewUi).toContain("notify:Run /summary first.");
 		expect(beforeReviewUi.some(call => call.startsWith("confirm:") || call.startsWith("select:"))).toBe(false);
 		expect(record(out.beforeReviewWrites)).toMatchObject({ closed: 0, comments: 1, removeNow: 0 });
+		expect(out.verify, "verification append seals the audit manifest").toContain("audit manifest sealed");
 		const doneUi = list(out.doneUi);
 		expect(doneUi.filter(call => call.startsWith("confirm:This is your verdict"))).toHaveLength(1);
 		expect(doneUi.some(call => call.startsWith("select:"))).toBe(false);
 		expect(record(out.doneWrites)).toMatchObject({ closed: 1, removeNow: 1, verdictComments: 1 });
+		expect(String(out.doneAuthorization), "the literal /done mints a fresh single-use authorization").toStartWith("done:");
 		expect(out.now).toBe("NOW unset");
 		expect(record(out.afterSecondDone)).toMatchObject({ closed: 1, removeNow: 1 });
 	});
 
-	test("the audit bridge binds verbatim bytes to exactly one recorded receipt", () => {
+	test("a structured-only /summary recovers from a refused freeze and re-authorizes", () => {
+		const out = run("summary-reauth");
+		expect(out.beginAfterRefused, "a refused freeze begins nothing").toBe(0);
+		// The state that used to deadlock: authorized, no begun attempt. The
+		// SAME structured channel must recover after remediation — no raw
+		// input event, no session restart.
+		expect(out.beginAfterStructuredRetry, "structured retry begins a fresh attempt").toBe(1);
+		expect(out.beginAfterUnrelated, "unrelated owner messages never authorize").toBe(1);
+		// The raw channel also re-authorizes; the service supersedes to keep
+		// exactly one live attempt.
+		expect(out.beginAfterRaw, "raw /summary re-authorizes").toBe(2);
+	});
+
+	test("the ledger-sealed audit task drives one exact-byte bounded launch", () => {
 		const out = run("audit");
-		// OMP-38: get_work carries the complete PLAN PACKET the auditor task is built from
-		expect(out.getWork).toContain("PLAN PACKET");
-		expect(out.getWork).toContain("plan body (exact stored bytes):");
-		// the stored body embeds its own ## Verification heading — the ordered
-		// section parse must tolerate it inside the Approved plan section
-		expect(String(out.packetPlanBody)).toContain("## Verification");
-		// structured revision criteria flow into the packet verbatim
-		expect(out.packetCriteria).toEqual(["AC-1 the focused check passes"]);
-		expect(String(out.packetCommit)).toMatch(/^[0-9a-f]{40}$/);
-		expect(String(out.packetReceiptSha)).toMatch(/^[0-9a-f]{64}$/);
-		expect(out.spawnBlocked, "the auditor spawn clears the gate").toBe(false);
-		// OMP-43/OMP-38 TOCTOU: an A→A rebind mid-run refuses the late report,
-		// releases the slot (the second spawn above succeeded), and consumes no
-		// replacement.
-		expect(out.spawn0Blocked, "the first auditor spawn clears the gate").toBe(false);
-		expect(String(out.staleRefusal)).toContain("changed while the auditor ran");
+		// Pre-summary close-ritual writes are refused.
 		expect(out.unauthorized, "audit is a close-ritual kind").toContain("literally enter /summary");
-		expect(out.edited, "interior edits never match the receipt").toContain("no fresh auditor receipt matches");
-		// OMP-38 AC-3 live regression 2026-08-20: an honest forward carrying only
-		// outer whitespace (trailing newline) must still match its receipt.
-		expect(out.exact).toContain("audit receipt recorded on HOME-1 (verdict PASS)");
-		expect(out.replay, "the receipt is consumed by the first match").toContain("no fresh auditor receipt matches");
-		expect(out.auditBodies, "exactly one audit comment landed").toBe(1);
-		// OMP-38: the persisted audit receipt names the exact bound candidate commit
-		expect(out.auditReceiptCommit).toBe(out.packetCommit);
-		expect(out.repeatSummaryNotice).toContain("No plan is stamped on this work");
+		// The literal /summary began ONE ledger attempt with host-computed identity.
+		expect(out.beginCalls).toBe(1);
+		expect(record(out.beginSession)).toEqual({ hasStartCommit: true, hasDiffSha: true, hasAuthorization: true });
+		// Verification append sealed the manifest; get_work renders the exact task.
+		expect(out.verify).toContain("audit manifest sealed");
+		expect(out.getWork).toContain("AUDIT TASK (sealed");
+		expect(out.sealedBodyPresent).toBe(true);
+		expect(out.sealedHasManifest, "the Final diff carries the git-range-sha256 manifest").toBe(true);
+		// Changed bytes refuse BEFORE spawn with zero slot burn; schema refused.
+		expect(out.wrongBlocked).toBe(true);
+		expect(String(out.wrongReason)).toContain("manifest_task_mismatch");
+		expect(out.launchCountAfterWrong).toBe(0);
+		expect(out.schemaBlocked).toBe(true);
+		// Exact bytes reserve one launch and the spawn proceeds.
+		expect(out.exactBlocked).toBe(false);
+		expect(out.launchCountAfterExact).toBe(1);
+		// The tool result settled with the UNTOUCHED transport payload; the
+		// service minted the audit receipt itself and the outcome reached the
+		// model in-band plus the owner as an attested checkpoint.
+		expect(out.settlePayload).toContain("VERDICT: PASS");
+		expect(String(out.settleAppended)).toContain("launch settled by the ledger");
+		expect(out.attemptState).toBe("audited");
+		expect(out.auditIssuer).toBe("work-service/auditor-settle");
+		expect(out.auditVerdict).toBe("PASS");
+		expect(out.attestCalls).toBeGreaterThanOrEqual(1);
+		expect(out.attestStatus).toBe("delivered");
 	});
 
 	test("footer splits the inline current issue from the lower summary", () => {

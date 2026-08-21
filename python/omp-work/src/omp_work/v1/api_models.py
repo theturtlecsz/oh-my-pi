@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import Field
 
-from .models import Candidate, EvidenceReceipt, FocusSlot, OperationReceipt, RelationEdge, StrictModel, WorkAlias, WorkRevision
+from .models import AuditManifest, AuditorLaunch, Candidate, CheckpointDelivery, CloseAttempt, CloseAttemptEvent, EvidenceReceipt, FocusSlot, OperationReceipt, RelationEdge, StrictModel, WorkAlias, WorkRevision
 
 
 class AcceptanceCriterionView(StrictModel):
@@ -25,13 +25,18 @@ class WorkItemView(StrictModel):
     archived: bool = False
 
 
-class CloseoutIntentView(StrictModel):
-    intent_id: UUID
-    work_id: UUID
-    revision_id: UUID
-    candidate_id: UUID
-    state: Literal["pending", "completed"]
-    requested_at: datetime | None = None
+class CloseAttemptResult(StrictModel):
+    """Shared typed result for the five close-ritual commands: expected gate
+    failures are refusals WITH an event, never generic exceptions (OMP-47)."""
+    type: Literal["begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery"]
+    status: Literal["applied", "refused"]
+    attempt: CloseAttempt | None = None
+    manifest: AuditManifest | None = None
+    launch: AuditorLaunch | None = None
+    receipt: EvidenceReceipt | None = None
+    delivery: CheckpointDelivery | None = None
+    verdict: Literal["PASS", "NEEDS_FIX", "BLOCKED"] | None = None
+    event: CloseAttemptEvent
 
 
 class ProjectView(StrictModel):
@@ -47,7 +52,11 @@ class WorkflowView(StrictModel):
     item: WorkItemView
     relations: tuple[RelationEdge, ...] = ()
     receipts: tuple[EvidenceReceipt, ...] = ()
-    closeout: tuple[CloseoutIntentView, ...] = ()
+    close_attempts: tuple[CloseAttempt, ...] = ()
+    audit_manifest: AuditManifest | None = None
+    auditor_launches: tuple[AuditorLaunch, ...] = ()
+    close_attempt_events: tuple[CloseAttemptEvent, ...] = ()
+    checkpoint_deliveries: tuple[CheckpointDelivery, ...] = ()
     project: ProjectView | None = None
 
 
@@ -86,10 +95,20 @@ class ReviseWorkResult(StrictModel):
 
 
 class WorkItemResult(StrictModel):
-    type: Literal["set_work_state", "complete_work"]
+    type: Literal["set_work_state"]
     work_id: UUID
     state: str
     row_version: int
+
+
+class CompleteWorkResult(StrictModel):
+    type: Literal["complete_work"]
+    status: Literal["applied", "refused"]
+    work_id: UUID
+    state: str | None = None
+    row_version: int | None = None
+    completed_work_ids: tuple[UUID, ...] = ()
+    event: CloseAttemptEvent | None = None
 
 
 class RelationResult(StrictModel):
@@ -111,6 +130,7 @@ class FocusResult(StrictModel):
 class EvidenceResult(StrictModel):
     type: Literal["append_evidence"]
     receipt: EvidenceReceipt
+    event: CloseAttemptEvent | None = None
 
 
 class FinalizeCandidateResult(StrictModel):
@@ -126,7 +146,9 @@ class HealthView(StrictModel):
 
 class CloseoutResult(StrictModel):
     type: Literal["request_closeout"]
-    intent: CloseoutIntentView
+    status: Literal["applied", "refused"]
+    attempt: CloseAttempt | None = None
+    event: CloseAttemptEvent
 
 
 class ProjectHealthResult(StrictModel):
@@ -158,7 +180,7 @@ class AuthorityView(StrictModel):
 
 
 CommandResult = Annotated[
-    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseoutResult | ProjectHealthResult | ActivateCutoverResult | AttestCutoverPlanResult,
+    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | CompleteWorkResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseAttemptResult | CloseoutResult | ProjectHealthResult | ActivateCutoverResult | AttestCutoverPlanResult,
     Field(discriminator="type"),
 ]
 

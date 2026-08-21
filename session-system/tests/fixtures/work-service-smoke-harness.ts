@@ -40,7 +40,7 @@ const runner = new ExtensionRunner(
 	loaded.extensions,
 	loaded.runtime,
 	probe,
-	{ getCwd: () => probe, getBranch: () => [] } as never,
+	{ getCwd: () => probe, getBranch: () => [], getSessionId: () => "smoke-session" } as never,
 	{ getAvailable: () => [fableModel], hasProvider: () => true } as never,
 	undefined,
 	// AC-4 (OMP-38): @audit resolves to the SESSION'S OWN family — the gate must
@@ -53,6 +53,8 @@ const runner = new ExtensionRunner(
 runner.initialize(
 	{
 		appendEntry: () => {},
+		getSessionId: () => "smoke-session",
+		deliverMessage: async () => {},
 		setModel: async () => true,
 		getThinkingLevel: () => "high",
 		setThinkingLevel: () => {},
@@ -73,7 +75,10 @@ runner.initialize(
 		select: async () => undefined,
 		confirm: async (title: string) => {
 			uiCalls.push(`confirm:${title}`);
-			return true; // smoke confirms every gate: freeze, verdict, capture
+			// Decline ONLY the pre-session opt-in (owner.txt must stay outside the
+			// candidate — asserted by the smoke); confirm every other gate:
+			// freeze, verdict, capture.
+			return !title.includes("pre-session file(s)");
 		},
 	} as never,
 );
@@ -126,8 +131,8 @@ out.plan = planResult === undefined ? "stamped" : planResult;
 // 3. work happens: a dirty file the freeze must pick up.
 fs.writeFileSync(path.join(probe, "smoke.txt"), "candidate payload\n");
 
-// 4. owner-entered /summary: gate → freeze → finalize_candidate.
-await runner.emitInput("/summary", undefined, "interactive");
+// 4. owner-entered /summary (production shape: structured skill-prompt only):
+// gate → freeze → finalize_candidate.
 await runner.emit(summaryMessage as never);
 
 // 5. OMP-38: rebuild the auditor task from the ledger's PLAN PACKET — no
@@ -147,26 +152,15 @@ out.packetReceiptSha = packetReceiptSha;
 out.packetPlanBody = packetPlanBody;
 out.packetCriteria = packetCriteria;
 
-// 6. fresh auditor through model-bookends → bridge receipt. The Approved plan
-// section is the packet's EXACT stored plan body (it embeds ## Approach and
-// ## Verification headings — the ordered section parse must tolerate them).
-const AUDIT_TASK = [
-	"Approved plan:",
-	`Plan receipt SHA-256: ${packetReceiptSha}`,
-	packetPlanBody,
-	"Acceptance criteria:",
-	...packetCriteria.map(criterion => `- ${criterion}`),
-	"Starting state: clean probe repo; dirty file smoke.txt.",
-	"Final diff:",
-	`Final commit: ${packetCommit}`,
-	"```diff",
-	"--- /dev/null",
-	"+++ b/smoke.txt",
-	"@@ -0,0 +1 @@",
-	"+candidate payload",
-	"```",
-	"Verification: this smoke's assertions.",
-].join("\n");
+// 6. OMP-47: verification evidence seals the audit manifest server-side.
+out.verification = await execute({ action: "append_evidence", work: key, kind: "verification", body: "the smoke asserts the end state" });
+
+// 7. get_work now renders the sealed auditor task byte-for-byte; the bookends
+// gate reserves ONE launch against exactly those bytes.
+const sealedScreen = await execute({ action: "get_work", work: key });
+out.sealedScreen = sealedScreen;
+const sealedTask = /----- SEALED AUDITOR TASK BEGIN -----\n([\s\S]*?)\n----- SEALED AUDITOR TASK END -----/.exec(sealedScreen)?.[1] ?? "";
+out.sealedTaskPresent = sealedTask.length > 0;
 const REPORT = [
 	"VERDICT: PASS",
 	"",
@@ -185,14 +179,24 @@ const REPORT = [
 	"REMAINING QUESTIONS",
 	"none",
 ].join("\n");
+// A transformed-equivalent task must refuse BEFORE spawn with zero slot burn.
+const wrongSpawn = await runner.emitToolCall({
+	type: "tool_call",
+	toolName: "task",
+	toolCallId: "aud-0",
+	input: { context: "audit the completed work", tasks: [{ agent: "auditor", task: `${sealedTask}\n` }] },
+} as never);
+out.wrongSpawnBlocked = wrongSpawn && typeof wrongSpawn === "object" && "block" in wrongSpawn ? Boolean(wrongSpawn.block) : false;
 const spawn = await runner.emitToolCall({
 	type: "tool_call",
 	toolName: "task",
 	toolCallId: "aud-1",
-	input: { context: "audit the completed work", tasks: [{ agent: "auditor", task: AUDIT_TASK }] },
+	input: { context: "audit the completed work", tasks: [{ agent: "auditor", task: sealedTask }] },
 } as never);
 out.spawnBlocked = spawn && typeof spawn === "object" && "block" in spawn ? Boolean(spawn.block) : false;
-await runner.emitToolResult({
+// The settle transaction verifies the report, mints the audit receipt
+// service-side, and returns the typed outcome to the model in-band.
+const settle = (await runner.emitToolResult({
 	type: "tool_result",
 	toolName: "task",
 	toolCallId: "aud-1",
@@ -200,11 +204,10 @@ await runner.emitToolResult({
 	content: [{ type: "text", text: `<task-result id="Aud" agent="auditor" status="completed">\n<output>\n${REPORT}\n</output>\n</task-result>` }],
 	details: { results: [{ output: REPORT }] },
 	isError: false,
-} as never);
+} as never)) as { content?: Array<{ type: string; text?: string }> } | undefined;
+out.audit = (settle?.content ?? []).map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
 
-// 7. typed receipts in close-ritual order.
-out.verification = await execute({ action: "append_evidence", work: key, kind: "verification", body: "the smoke asserts the end state" });
-out.audit = await execute({ action: "append_evidence", work: key, kind: "audit", body: REPORT });
+// 8. closeout review receipt (delivered checkpoint), then the owner close request.
 out.closeout = await execute({ action: "append_evidence", work: key, kind: "closeout", body: "session review: candidate smoke completed" });
 
 // 8. owner close request, then /done (preflight → verdict → push → complete).

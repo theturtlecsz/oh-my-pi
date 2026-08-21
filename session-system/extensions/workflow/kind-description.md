@@ -1,1 +1,1 @@
-handoff: execution handoff checkpoint | verification: fresh verification output (close-ritual) | audit: fresh-auditor report, forwarded verbatim (bridge-bound) | closeout: close-ritual session review
+handoff: execution handoff checkpoint | verification: fresh verification output (close-ritual; seals the audit manifest) | closeout: close-ritual session review | same_session_found_fixed: child fix found+fixed in the parent's owner session — body needs `## Finding` and `## Verification` sections; audit receipts are minted by the service's settle transaction only, never appended

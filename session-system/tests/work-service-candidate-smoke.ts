@@ -174,13 +174,16 @@ try {
 	assert.ok(String(out.captured).includes("Captured →"), "/capture filed the item");
 	assert.ok(String(out.nowAfterSelect).includes(key), "/now selected the item");
 	assert.equal(out.plan, "stamped", "plan stamp landed");
-	assert.equal(out.spawnBlocked, false, "auditor spawn not blocked");
+	assert.equal(out.sealedTaskPresent, true, "get_work renders the sealed auditor task");
+	assert.equal(out.wrongSpawnBlocked, true, "transformed-equivalent task refused before spawn");
+	assert.equal(out.spawnBlocked, false, "exact-byte auditor spawn not blocked");
 	assert.ok(String(out.getWork).includes("PLAN PACKET"), "get_work renders the plan packet");
 	assert.ok(String(out.packetPlanBody).includes("## Verification"), "packet carries the exact stored plan body");
 	assert.match(String(out.packetReceiptSha), /^[0-9a-f]{64}$/, "packet cites the plan receipt sha256");
 	assert.deepEqual(out.packetCriteria, ["AC-1 the item closes done with a pushed candidate"], "description-fallback criteria flow into the packet");
 	assert.ok(String(out.verification).includes("verification receipt recorded"), "verification receipt");
-	assert.ok(String(out.audit).includes("audit receipt recorded"), "audit receipt");
+	assert.ok(String(out.verification).includes("audit manifest sealed"), "verification append seals the manifest");
+	assert.ok(String(out.audit).includes("the auditor reported PASS"), "settle minted the audit outcome");
 	assert.ok(String(out.closeout).includes("closeout receipt recorded"), "closeout receipt");
 	assert.ok(String(out.requestCloseout).includes("close"), "closeout intent requested");
 	const notices = (out.doneUi as string[]).join("\n");
@@ -235,9 +238,9 @@ try {
 			{ command_type: "plan_stamp", passed: out.plan === "stamped" },
 			{ command_type: "summary_freeze", passed: headSha !== initialSha && git(probe, ["show", "HEAD:smoke.txt"]) === "candidate payload" },
 			{ command_type: "plan_packet", passed: String(out.getWork).includes("PLAN PACKET") && out.packetCommit === headSha && /^[0-9a-f]{64}$/.test(String(out.packetReceiptSha)) },
-			{ command_type: "auditor_spawn", passed: out.spawnBlocked === false },
-			{ command_type: "verification", passed: String(out.verification).includes("verification receipt recorded") },
-			{ command_type: "audit", passed: String(out.audit).includes("audit receipt recorded") },
+			{ command_type: "auditor_spawn", passed: out.spawnBlocked === false && out.wrongSpawnBlocked === true && out.sealedTaskPresent === true },
+			{ command_type: "verification", passed: String(out.verification).includes("verification receipt recorded") && String(out.verification).includes("audit manifest sealed") },
+			{ command_type: "audit", passed: String(out.audit).includes("the auditor reported PASS") },
 			{ command_type: "audit_binding", passed: bound.find(r => r.kind === "audit")?.candidate_commit === headSha },
 			{ command_type: "closeout", passed: String(out.closeout).includes("closeout receipt recorded") },
 			{ command_type: "request_closeout", passed: String(out.requestCloseout).includes("close") },

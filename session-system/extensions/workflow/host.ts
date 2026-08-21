@@ -6,6 +6,7 @@
  * /capture /work), the bounded tool, transcript-bound confirmation receipts,
  * and the audit-receipt bridge consumer. A WorkflowBackend supplies storage.
  */
+import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -23,11 +24,11 @@ import sequenceText from "./sequence.md" with { type: "text" };
 import toolDescriptionTemplate from "./tool-description.md" with { type: "text" };
 import {
 	BatchPartialError,
-	CandidateDriftError,
 	CLOSEOUT_BOUNDARY,
 	STOP_REMINDER_BOUNDARY,
 	type BackendIssue,
 	type CenterSnapshot,
+	type CloseAttemptSession,
 	type EvidenceKind,
 	type EvidenceMeta,
 	type GoalTree,
@@ -35,21 +36,14 @@ import {
 	type MapSurface,
 	type NowRef,
 	type PlanPacket,
+	type SealedAuditTask,
 	type TreeItem,
 	type WorkflowBackend,
 	type WorkStateCarrier,
 } from "./backend";
+import { deliverCheckpoint, deliverPendingCheckpoints } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
-import {
-	claimAuditReceipt,
-	clearAuditBinding,
-	commitAuditReceipt,
-	invalidateAuditReceipt,
-	registerAuditBinding,
-	releaseAuditReceipt,
-	reportSha256,
-} from "./audit-bridge";
-import { dirtyPaths } from "./git";
+import { dirtyPaths, headCommit, rangeDiffSha256 } from "./git";
 
 /** Tool actions — the canonical action set for the `work` tool. */
 export type CanonicalAction =
@@ -65,12 +59,13 @@ export type CanonicalAction =
 	| "set_now"
 	| "record_health"
 	| "request_closeout"
+	| "waive_delivery"
 	| "cancel_work";
 
 const ACTIONS = [
 	"get_work", "tree", "waiting", "my_now", "status",
 	"append_evidence", "create_work", "queue_work", "revise_work",
-	"set_now", "record_health", "request_closeout", "cancel_work",
+	"set_now", "record_health", "request_closeout", "waive_delivery", "cancel_work",
 ] as const;
 const ACTION_ENUM: [string, ...string[]] = [...ACTIONS];
 const TOOL_NAME = "work";
@@ -168,6 +163,19 @@ export function renderPlanPacket(packet: PlanPacket | undefined): string[] {
 	];
 }
 
+/** OMP-50 get_work tail: the sealed auditor task, byte-for-byte, never truncated.
+ *  The model copies THIS body into the one auditor task — no transcript reads,
+ *  no reconstruction; the service refuses any launch whose bytes differ. */
+export function renderAuditTask(task: SealedAuditTask | undefined): string[] {
+	if (!task) return ["AUDIT TASK: none sealed — /summary (begin attempt) + verification evidence seal it"];
+	return [
+		`AUDIT TASK (sealed, attempt ${task.attemptId}, state ${task.attemptState}) — spawn ONE auditor task whose text is EXACTLY the body below, byte-for-byte; task sha256 ${task.taskSha256}:`,
+		"----- SEALED AUDITOR TASK BEGIN -----",
+		task.taskBody,
+		"----- SEALED AUDITOR TASK END -----",
+	];
+}
+
 function sectionItems(content: string, heading: "Approach" | "Verification"): string[] {
 	const lines = content.split("\n");
 	const start = lines.findIndex(line => line.trim() === `## ${heading}`);
@@ -262,8 +270,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 	let intakeSelected = false;
 	let planTarget: NowRef | undefined;
 	let summaryAuthorized = false;
-	let summaryAttemptFinished = false;
 	let preExistingDirtyPaths: string[] = [];
+	// OMP-47: owner-session identity for close attempts. The start commit is
+	// captured at session start; the authorization references are host-minted at
+	// the LITERAL owner commands — models can never fabricate them.
+	let sessionStartCommit: string | null = null;
+	let sessionStartedAt: string = new Date().toISOString();
+	let summaryAuthorizationRef: string | undefined;
 	let models: ExtensionModelQuery | undefined;
 
 	// HOME-114 mechanical lock: flips ONLY on host-observed owner entry of /summary
@@ -544,29 +557,62 @@ export function createWorkflowHost(cfg: HostConfig) {
 		return [backend.bookendTitle, nowLine, scopeLine, ...(await treeLines), ...extras, ...contracts].join("\n");
 	}
 
+	/** OMP-47: bind this literal /summary to a ledger-owned close attempt. Every
+	 *  identity field is host-computed; the service refuses with a typed event. */
+	async function beginAttempt(now: NowRef, ctx: ExtensionContext): Promise<void> {
+		const commitSha = carrier().commitSha;
+		if (!commitSha) return; // nothing finalized — begin waits for the next /summary after /plan
+		if (!sessionStartCommit) {
+			ctx.ui.notify("close attempt not begun — no session start commit (outside a git repo?); /done will refuse", "warning");
+			return;
+		}
+		const diffSha256 = rangeDiffSha256(process.cwd(), sessionStartCommit, commitSha);
+		if (!diffSha256) {
+			ctx.ui.notify(`close attempt not begun — could not hash the ${sessionStartCommit.slice(0, 12)}..${commitSha.slice(0, 12)} diff; /done will refuse`, "warning");
+			return;
+		}
+		summaryAuthorizationRef ??= `summary:${randomUUID()}`;
+		const session: CloseAttemptSession = {
+			authorizationRef: summaryAuthorizationRef,
+			sessionId: piRef.getSessionId(),
+			startedAt: sessionStartedAt,
+			startCommit: sessionStartCommit,
+			repository: process.cwd(),
+			diffSha256,
+			dirtyPaths: [...preExistingDirtyPaths],
+		};
+		const outcome = await backend.beginCloseAttempt(now, session);
+		if (outcome.status === "refused") {
+			ctx.ui.notify(`close attempt refused: ${outcome.event.reasonCode}`, "warning");
+		}
+		if (outcome.event.requiresDelivery) {
+			try {
+				await deliverCheckpoint(piRef, backend, outcome.event);
+			} catch (error) {
+				pendingNotices.push(`[${TOOL_NAME}] close-attempt checkpoint delivery failed (${String(error)}) — it retries at the next owner session start`);
+			}
+		}
+	}
+
 	async function authorizeSummary(ctx: ExtensionContext): Promise<void> {
-		if (summaryAuthorized && !summaryAttemptFinished) return;
 		summaryAuthorized = true;
-		summaryAttemptFinished = false;
 		closeoutAuthorized = true;
+		// A literal /summary mints a FRESH authorization: the service supersedes
+		// any prior non-terminal attempt under it (OMP-47).
+		summaryAuthorizationRef = `summary:${randomUUID()}`;
 		const now = currentNowRef();
 		if (!now) {
-			clearAuditBinding();
 			ctx.ui.notify("No NOW is selected. Review can run, but /done stays blocked; run /intake first.", "warning");
 			return;
 		}
 		try {
 			const gate = await backend.summaryGate(now, carrier(), hooksFor(ctx));
 			if (!gate.ok) {
-				clearAuditBinding();
 				ctx.ui.notify(gate.reason, "warning");
 				return;
 			}
 			mergeCarrier(gate.carrier);
-			// OMP-38: bind this /summary attempt to the finalized candidate. No
-			// binding (no finalized candidate / no plan receipt) clears any stale one.
-			if (gate.binding) registerAuditBinding(gate.binding);
-			else clearAuditBinding();
+			await beginAttempt(now, ctx);
 			if (gate.warning) {
 				ctx.ui.notify(gate.warning, "warning");
 				persistSession();
@@ -586,7 +632,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 			recordDeliveredOutcome(`summary gate passed for ${now.key} — candidate finalized, awaiting verdict`);
 			footer(ctx);
 		} catch (error) {
-			clearAuditBinding();
 			ctx.ui.notify(`Could not load ${now.key} workflow state (${String(error)}). Review can run, but /done stays blocked.`, "warning");
 		}
 	}
@@ -920,11 +965,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 		pi.on("session_start", async (_e, ctx) => {
 			preExistingDirtyPaths = dirtyPaths(process.cwd());
 			closeoutAuthorized = false;
+			sessionStartCommit = headCommit(process.cwd());
+			sessionStartedAt = new Date().toISOString();
+			summaryAuthorizationRef = undefined;
 			centerPending = false; // fresh session: no centering turn, tool set comes from init
 			centerActive = false;
 			centerSavedTools = undefined;
 			summaryAuthorized = false;
-			summaryAttemptFinished = false;
 			intakeActive = false;
 			intakeSelected = false;
 			planTarget = undefined;
@@ -983,6 +1030,17 @@ export function createWorkflowHost(cfg: HostConfig) {
 			} catch {
 				/* ack failure: claims linger, retry stays fail-closed */
 			}
+			// OMP-51: retry pending close-attempt checkpoint deliveries for the
+			// current NOW BEFORE any close action can run this session.
+			if (ownerSession(ctx) && state.identifier) {
+				try {
+					const pass = await deliverPendingCheckpoints(pi, backend, state.identifier);
+					pendingNotices.push(...pass.notices.map(notice => `[${TOOL_NAME}] ${notice}`));
+					if (pass.delivered > 0) pendingNotices.push(`[${TOOL_NAME}] Recovered ${pass.delivered} pending close-attempt checkpoint(s).`);
+				} catch (error) {
+					pendingNotices.push(`[${TOOL_NAME}] checkpoint recovery failed (${String(error)}) — deliveries stay pending and closeout stays blocked`);
+				}
+			}
 			digestPending = true;
 			digestInjectedThisSession = false;
 			if (gitRooted && !projectFilter) {
@@ -1011,7 +1069,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 			preExistingDirtyPaths = dirtyPaths(process.cwd());
 			closeoutAuthorized = false; // authorization never crosses transcripts
 			summaryAuthorized = false;
-			summaryAttemptFinished = false;
+			sessionStartCommit = headCommit(process.cwd());
+			sessionStartedAt = new Date().toISOString();
+			summaryAuthorizationRef = undefined;
 			intakeActive = false;
 			intakeSelected = false;
 			planTarget = undefined;
@@ -1038,6 +1098,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 				}
 				planTarget = now;
 			}
+			// A LITERAL owner /summary always re-authorizes: the service supersedes
+			// any prior non-terminal attempt under the fresh authorization (OMP-47).
 			if (/^\s*\/summary\b/.test(event.text)) await authorizeSummary(ctx);
 			else if (/^\s*\/done\b/.test(event.text)) closeoutAuthorized = true;
 			return undefined;
@@ -1050,7 +1112,18 @@ export function createWorkflowHost(cfg: HostConfig) {
 				intakeActive = true;
 				return;
 			}
-			if (m.details?.name === "summary") await authorizeSummary(ctx);
+			if (m.details?.name === "summary") {
+				// Every host-observed literal /summary re-authorizes, on EITHER
+				// channel (Sol review, HOME-131): the production client delivers
+				// /summary as a structured skill-prompt only, and a guarded call
+				// here once no-opped every retry after a refused freeze — a
+				// deadlock only a session restart escaped. If a client ever
+				// delivers one command on both channels, the second authorization
+				// costs one benign supersede: the service keeps exactly one live
+				// attempt (test_duplicate_begins_one_live_attempt) and the begin
+				// checkpoint delivers immediately.
+				await authorizeSummary(ctx);
+			}
 		});
 		pi.on("before_agent_start", async (event, ctx) => {
 			// OMP-25: the centering turn starts here — only NOW do tools flip, so a
@@ -1112,7 +1185,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 				armExecution(res.issue, stamp.hash);
 				planTarget = undefined;
 				summaryAuthorized = false;
-				summaryAttemptFinished = false;
 				closeoutAuthorized = false;
 				await saveCache(); // armExecution's own save is fire-and-forget
 				// Receipt LAST: startup may ack the stamp claims from it.
@@ -1288,7 +1360,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 						`"${now.title}"\n\nMoves to Done + records the verdict. Not reversible from here.`,
 					);
 					if (!confirmed) return;
-					const line = await backend.closeWithVerdict(now, "done", undefined, carrier(), hooksFor(ctx));
+					// OMP-47: the LITERAL /done mints a fresh single-use authorization —
+					// the service refuses reuse and refuses the /summary reference.
+					const line = await backend.closeWithVerdict(now, "done", undefined, carrier(), hooksFor(ctx), `done:${randomUUID()}`);
 					try {
 						await backend.clearNowRemote(now.id);
 					} catch (e) {
@@ -1477,7 +1551,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				try {
 					// HOME-114: wrap-up writes remain host-locked; only /done closes.
 					// This refusal names the lock at any depth — checked first.
-					if ((action === "record_health" || action === "request_closeout" || action === "cancel_work") && !closeoutAuthorized) {
+					if ((action === "record_health" || action === "request_closeout" || action === "waive_delivery" || action === "cancel_work") && !closeoutAuthorized) {
 						return deny(LOCK_REFUSAL);
 					}
 					// Review provenance refusal names /summary at any depth — checked
@@ -1525,6 +1599,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 									`state: ${i.state} · project: ${i.project ?? "none"} · labels: ${i.labels.join(",") || "none"}`,
 									(i.description ?? "").slice(0, 1200),
 									...renderPlanPacket(i.planPacket),
+									...renderAuditTask(i.auditTask),
 								].join("\n"),
 							);
 						}
@@ -1536,52 +1611,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (!workflow?.plan) {
 								return deny(`Run /plan first; ${params.work} has no current approved plan.`);
 							}
-							// Close-ritual kinds (everything but the execution handoff) require an
-							// owner-entered /summary — including audit, whose bridge receipt only
-							// ever exists inside a summary flow.
-							if (kind !== "handoff" && !summaryAuthorized) {
+							// Close-ritual kinds (everything but the execution handoff and a
+							// same-session child receipt) require an owner-entered /summary.
+							if (kind !== "handoff" && kind !== "same_session_found_fixed" && !summaryAuthorized) {
 								return deny(`REFUSED — ${kind} evidence is a close-ritual write; it requires Chris to literally enter /summary in this owner session.`);
 							}
 							const issue = workflow?.issue ?? (await backend.findIssue(params.work));
 							const meta: EvidenceMeta = { ...(workflow?.plan ? { planHash: workflow.plan.hash } : {}) };
-							if (kind === "audit") {
-								// Bridge-authenticated forward: the persisted bytes are the receipt's
-								// captured auditor report, never the model-supplied body.
-								const sha = reportSha256(params.body);
-								const receipt = claimAuditReceipt(sha);
-								if (!receipt) {
-									return deny(
-										"REFUSED — no fresh auditor receipt matches those bytes. Run the fresh auditor and forward its report VERBATIM as the body; edited or fabricated reports are never recorded.",
-									);
-								}
-								try {
-									await backend.appendEvidence(issue, "audit", receipt.report, {
-										...meta,
-										verdict: receipt.verdict,
-										independent: true,
-										// OMP-38: the backend refuses the append when the LIVE candidate
-										// no longer matches the identity the report was captured under.
-										...(receipt.binding
-											? { expectedCandidate: { id: receipt.binding.candidateId, sha256: receipt.binding.candidateSha256, commit: receipt.binding.commitSha } }
-											: {}),
-									});
-								} catch (error) {
-									summaryAttemptFinished = true;
-									if (error instanceof CandidateDriftError) {
-										// The bound candidate is gone: the receipt can never land — kill it
-										// (and the stale binding) so only a fresh /summary + audit can retry.
-										invalidateAuditReceipt(sha);
-										return deny(`${error.message} on ${issue.key} — audit receipt invalidated; rerun /summary to freeze and audit the current candidate`);
-									}
-									releaseAuditReceipt(sha);
-									return deny(`${String(error)} on ${issue.key} — audit receipt released, forward stays retryable`);
-								}
-								commitAuditReceipt(sha);
-								summaryAttemptFinished = true;
-								// The audit receipt settles NOTHING: only the closeout review
-								// (reviewKind) settles the review obligation.
-								return okText(`audit receipt recorded on ${issue.key} (verdict ${receipt.verdict})`);
-							}
 							try {
 								await backend.appendEvidence(issue, kind, params.body, meta);
 							} catch (error) {
@@ -1589,6 +1625,32 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 							if (kind === "handoff") settleCheckpoint(issue.id, "handoff", ctx);
 							else if (kind === backend.reviewKind) settleCheckpoint(issue.id, "review", ctx);
+							if (kind === "verification" && summaryAuthorized && ownerSession(ctx)) {
+								// OMP-50: the service seals the audit manifest from the exact
+								// verification receipt — get_work then renders the sealed task.
+								try {
+									const sealed = await backend.sealAuditManifest(issue);
+									if (sealed.event.requiresDelivery) {
+										try {
+											await deliverCheckpoint(pi, backend, sealed.event);
+										} catch (error) {
+											pendingNotices.push(`[${TOOL_NAME}] seal checkpoint delivery failed (${String(error)}) — it retries at the next owner session start`);
+										}
+									}
+									if (sealed.status === "applied") {
+										return okText(`${kind} receipt recorded on ${issue.key}; audit manifest sealed — read the AUDIT TASK from work get_work and spawn ONE auditor with those exact bytes`);
+									}
+									return okText(`${kind} receipt recorded on ${issue.key}; manifest not sealed — ${sealed.event.reasonCode}: ${sealed.event.renderedText}`);
+								} catch (error) {
+									return okText(`${kind} receipt recorded on ${issue.key}; manifest not sealed (${String(error)}) — begin the close attempt with /summary, then append verification again`);
+								}
+							}
+							if (kind === backend.reviewKind && ownerSession(ctx)) {
+								// OMP-51: the review checkpoint the service minted must reach the
+								// owner and be attested before request_closeout can succeed.
+								const pass = await deliverPendingCheckpoints(pi, backend, issue.key);
+								pendingNotices.push(...pass.notices.map(notice => `[${TOOL_NAME}] ${notice}`));
+							}
 							return okText(`${kind} receipt recorded on ${issue.key}`);
 						}
 						case "create_work": {
@@ -1715,6 +1777,32 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (!gate.approved) return deny(gate.preview);
 							await backend.proposeClose(issue, params.body);
 							return okText(`close proposed on ${issue.key} — owner verdict closes`);
+						}
+						case "waive_delivery": {
+							// OMP-51: an owner-visible two-phase waiver for ONE failed pending
+							// checkpoint delivery. Only a failed latest delivery can be waived;
+							// the service enforces that — this gate makes the choice visible.
+							if (!params.work) return deny("work key required");
+							const issue = await backend.findIssue(params.work);
+							const pending = await backend.pendingDeliveries(issue.key);
+							const target = params.body ? pending.find(event => event.eventId === params.body) : pending.length === 1 ? pending[0] : undefined;
+							if (!target) {
+								return deny(
+									pending.length === 0
+										? `nothing to waive — ${issue.key} has no pending checkpoint deliveries`
+										: `name the event to waive in body — pending: ${pending.map(event => `${event.eventId} (${event.eventType})`).join("; ")}`,
+								);
+							}
+							const gate = confirmWrite(
+								"waive_delivery",
+								"Model wants to WAIVE a failed checkpoint delivery",
+								`${issue.key} ${issue.title}\nevent: ${target.eventType} (${target.eventId})\n\n${target.renderedText}\n\nWaiving records that Chris accepts this checkpoint as handled without a delivered message.`,
+								params,
+							);
+							if (!gate.approved) return deny(gate.preview);
+							const outcome = await backend.attestDelivery(target.eventId, pi.getSessionId(), target.renderedSha256, "waived", `waiver:${params.confirmation_id}`);
+							if (outcome.status === "refused") return deny(outcome.event.renderedText);
+							return okText(`delivery waived for event ${target.eventId} on ${issue.key}`);
 						}
 						case "cancel_work": {
 							if (!params.work) return deny("work key required");

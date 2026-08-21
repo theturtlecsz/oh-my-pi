@@ -22,6 +22,12 @@ def sha256(value: object) -> str:
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
 
+def text_sha256(text: str) -> str:
+    """Plain UTF-8 byte hash for rendered event text and sealed task bodies —
+    NOT canonical-JSON: TS and Python must hash the exact same bytes."""
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
 def candidate_sha256(commit_sha: str, paths: Iterable[str]) -> str:
     """Canonical candidate hash, pinned by decision 0004 and contracts/v1/candidate-hash.json.
 

@@ -390,9 +390,9 @@ describe("advisor", () => {
 		it("forwards advice to the callback and returns details", async () => {
 			const onAdvice = vi.fn();
 			const tool = new AdviseTool(onAdvice);
-			const result = await tool.execute("tc-1", { note: "x", severity: "concern" });
-			expect(onAdvice).toHaveBeenCalledWith("x", "concern");
-			expect(result.details).toEqual({ note: "x", severity: "concern" });
+			const result = await tool.execute("tc-1", { note: "x", severity: "concern", category: "semantic-concern" });
+			expect(onAdvice).toHaveBeenCalledWith("x", "concern", "semantic-concern");
+			expect(result.details).toEqual({ note: "x", severity: "concern", category: "semantic-concern" });
 			expect(result.useless).toBe(true);
 		});
 
@@ -401,11 +401,11 @@ describe("advisor", () => {
 			const tool = new AdviseTool(onAdvice);
 			const note = "I'll pause here and wait for the YAML revision.";
 
-			await tool.execute("tc-1", { note, severity: "nit" });
-			await tool.execute("tc-2", { note, severity: "nit" });
+			await tool.execute("tc-1", { note, severity: "nit", category: "semantic-concern" });
+			await tool.execute("tc-2", { note, severity: "nit", category: "semantic-concern" });
 
 			expect(onAdvice).toHaveBeenCalledTimes(1);
-			expect(onAdvice).toHaveBeenCalledWith(note, "nit");
+			expect(onAdvice).toHaveBeenCalledWith(note, "nit", "semantic-concern");
 		});
 
 		it("allows the same advice after delivered-note memory resets", async () => {
@@ -413,13 +413,13 @@ describe("advisor", () => {
 			const tool = new AdviseTool(onAdvice);
 			const note = "Acknowledged.";
 
-			await tool.execute("tc-1", { note, severity: "nit" });
+			await tool.execute("tc-1", { note, severity: "nit", category: "semantic-concern" });
 			tool.resetDeliveredNotes();
-			await tool.execute("tc-2", { note, severity: "nit" });
+			await tool.execute("tc-2", { note, severity: "nit", category: "semantic-concern" });
 
 			expect(onAdvice).toHaveBeenCalledTimes(2);
-			expect(onAdvice).toHaveBeenNthCalledWith(1, note, "nit");
-			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "nit");
+			expect(onAdvice).toHaveBeenNthCalledWith(1, note, "nit", "semantic-concern");
+			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "nit", "semantic-concern");
 		});
 
 		it("forwards escalations of an already-delivered note and suppresses downgrades", async () => {
@@ -427,17 +427,17 @@ describe("advisor", () => {
 			const tool = new AdviseTool(onAdvice);
 			const note = "Rename collides with the existing helper.";
 
-			await tool.execute("tc-1", { note, severity: "nit" });
-			await tool.execute("tc-2", { note, severity: "concern" });
-			await tool.execute("tc-3", { note, severity: "blocker" });
+			await tool.execute("tc-1", { note, severity: "nit", category: "semantic-concern" });
+			await tool.execute("tc-2", { note, severity: "concern", category: "semantic-concern" });
+			await tool.execute("tc-3", { note, severity: "blocker", category: "semantic-concern" });
 			// De-escalation back to nit or concern is treated as a duplicate.
-			await tool.execute("tc-4", { note, severity: "concern" });
-			await tool.execute("tc-5", { note, severity: "nit" });
+			await tool.execute("tc-4", { note, severity: "concern", category: "semantic-concern" });
+			await tool.execute("tc-5", { note, severity: "nit", category: "semantic-concern" });
 
 			expect(onAdvice).toHaveBeenCalledTimes(3);
-			expect(onAdvice).toHaveBeenNthCalledWith(1, note, "nit");
-			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "concern");
-			expect(onAdvice).toHaveBeenNthCalledWith(3, note, "blocker");
+			expect(onAdvice).toHaveBeenNthCalledWith(1, note, "nit", "semantic-concern");
+			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "concern", "semantic-concern");
+			expect(onAdvice).toHaveBeenNthCalledWith(3, note, "blocker", "semantic-concern");
 		});
 
 		it("withholds non-blockers for in-progress updates without consuming dedupe state", async () => {
@@ -446,26 +446,34 @@ describe("advisor", () => {
 			const note = "The result still needs a focused regression test.";
 
 			tool.beginUpdate(true);
-			await tool.execute("tc-1", { note, severity: "concern" });
-			await tool.execute("tc-2", { note: "Minor naming cleanup.", severity: "nit" });
-			await tool.execute("tc-3", { note: "A destructive command is running.", severity: "blocker" });
+			await tool.execute("tc-1", { note, severity: "concern", category: "semantic-concern" });
+			await tool.execute("tc-2", { note: "Minor naming cleanup.", severity: "nit", category: "semantic-concern" });
+			await tool.execute("tc-3", {
+				note: "A destructive command is running.",
+				severity: "blocker",
+				category: "gate-defect",
+			});
 
 			expect(onAdvice).toHaveBeenCalledTimes(1);
-			expect(onAdvice).toHaveBeenCalledWith("A destructive command is running.", "blocker");
+			expect(onAdvice).toHaveBeenCalledWith("A destructive command is running.", "blocker", "gate-defect");
 
 			tool.beginUpdate(false);
-			await tool.execute("tc-4", { note, severity: "concern" });
+			await tool.execute("tc-4", { note, severity: "concern", category: "semantic-concern" });
 			expect(onAdvice).toHaveBeenCalledTimes(2);
-			expect(onAdvice).toHaveBeenLastCalledWith(note, "concern");
+			expect(onAdvice).toHaveBeenLastCalledWith(note, "concern", "semantic-concern");
 		});
 
 		it("validates parameters using ArkType", () => {
 			const onAdvice = vi.fn();
 			const tool = new AdviseTool(onAdvice);
-			const valid = tool.parameters({ note: "x", severity: "concern" });
+			const valid = tool.parameters({ note: "x", severity: "concern", category: "semantic-concern" });
 			expect(valid instanceof type.errors).toBe(false);
 
-			const invalid = tool.parameters({ note: 123, severity: "invalid" as any });
+			// category is REQUIRED (OMP-55) — a note without one is refused.
+			const missingCategory = tool.parameters({ note: "x", severity: "concern" });
+			expect(missingCategory instanceof type.errors).toBe(true);
+
+			const invalid = tool.parameters({ note: 123, severity: "invalid" as never, category: "semantic-concern" });
 			expect(invalid instanceof type.errors).toBe(true);
 		});
 	});

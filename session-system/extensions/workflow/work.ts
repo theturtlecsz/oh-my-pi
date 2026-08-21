@@ -10,6 +10,8 @@
 import { randomUUID } from "node:crypto";
 import {
 	candidateSha256,
+	type CloseAttempt,
+	type CloseAttemptEvent,
 	type Command,
 	type CommandEnvelope,
 	type CommandResult,
@@ -18,6 +20,7 @@ import {
 	type Fetch,
 	payloadHash,
 	type ProjectHealth,
+	sha256Hex,
 	type UUID,
 	WorkClient,
 	WorkError,
@@ -31,6 +34,9 @@ import {
 	type BatchOutcome,
 	CandidateDriftError,
 	type CenterSnapshot,
+	type CloseAttemptOutcome,
+	type CloseAttemptSession,
+	type CloseEventView,
 	type CreateBatchInput,
 	type EvidenceKind,
 	type EvidenceMeta,
@@ -41,6 +47,7 @@ import {
 	PLAN_PACKET_MAX_BYTES,
 	type PlanPacket,
 	type PlanStamp,
+	type SealedAuditTask,
 	type SummaryGateBlocked,
 	type SummaryGateOk,
 	type TreeItem,
@@ -76,13 +83,43 @@ const NON_APPLYING_CODES = new Set([
 ]);
 
 /** Model-facing kinds map one-for-one onto the service's receipt kinds
- *  (`plan`/`push` are minted internally by stampPlan/closeWithVerdict). */
+ *  (`plan`/`push` are minted internally by stampPlan/closeWithVerdict; `audit`
+ *  is minted ONLY by the service's settle transaction — OMP-47). */
 const SERVICE_KIND: Record<EvidenceKind, ServiceEvidenceKind> = {
 	handoff: "handoff",
 	verification: "verification",
-	audit: "audit",
 	closeout: "closeout",
+	same_session_found_fixed: "same_session_found_fixed",
 };
+
+/** Attempt states that own the single live slot per work item (OMP-47). */
+const LIVE_ATTEMPT_STATES: Record<string, true> = { active: true, audit_ready: true, auditor_in_flight: true, audited: true, closeout_requested: true };
+
+export function liveAttempt(view: WorkflowView): CloseAttempt | undefined {
+	return view.close_attempts.find(attempt => LIVE_ATTEMPT_STATES[attempt.state] === true);
+}
+
+function eventView(event: CloseAttemptEvent): CloseEventView {
+	return {
+		eventId: event.event_id,
+		eventType: event.event_type,
+		reasonCode: event.reason_code,
+		renderedText: event.rendered_text,
+		renderedSha256: event.rendered_sha256,
+		requiresDelivery: event.requires_delivery,
+		requiresFreshAuthorization: event.requires_fresh_authorization,
+	};
+}
+
+function outcomeOf(result: { status: "applied" | "refused"; attempt?: CloseAttempt | null; verdict?: "PASS" | "NEEDS_FIX" | "BLOCKED" | null; launch?: { launch_id: UUID } | null; event: CloseAttemptEvent }): CloseAttemptOutcome {
+	return {
+		status: result.status,
+		...(result.attempt ? { attemptId: result.attempt.attempt_id, attemptState: result.attempt.state } : {}),
+		...(result.verdict ? { verdict: result.verdict } : {}),
+		...(result.launch ? { launchId: result.launch.launch_id } : {}),
+		event: eventView(result.event),
+	};
+}
 
 /** RFC-4122-shaped deterministic id over the canonical payload hash: the same
  *  logical content mints the same id regardless of key insertion order, so a
@@ -247,26 +284,60 @@ export function createWorkBackend(
 		return hit.project_id;
 	}
 
-	async function receipt(kind: ServiceEvidenceKind, issue: NowRef, body: string, meta?: EvidenceMeta): Promise<EvidenceReceipt> {
+	/** Split a same-session receipt body into its finding and verification texts
+	 *  (OMP-52): the model writes `## Finding` and `## Verification` sections. */
+	function sameSessionSections(body: string): { finding: string; verification: string } | null {
+		const finding = /^##\s+Finding\s*$([\s\S]*?)(?=^##\s|\Z)/im.exec(body);
+		const verification = /^##\s+Verification\s*$([\s\S]*?)(?=^##\s|\Z)/im.exec(body);
+		if (!finding?.[1]?.trim() || !verification?.[1]?.trim()) return null;
+		return { finding: finding[1].trim(), verification: verification[1].trim() };
+	}
+
+	async function receipt(kind: ServiceEvidenceKind, issue: NowRef, body: string, _meta?: EvidenceMeta): Promise<EvidenceReceipt> {
 		const item = await client.workItem(issue.key);
+		if (kind === "same_session_found_fixed") {
+			// OMP-52: the child's receipt binds the PARENT attempt's audited candidate.
+			const sections = sameSessionSections(body);
+			if (!sections) {
+				throw new Error("a same_session_found_fixed body needs non-empty `## Finding` and `## Verification` sections");
+			}
+			const view = await client.workflow(issue.key);
+			const parentEdge = view.relations.find(edge => edge.active && edge.kind === "parent" && edge.source_work_id === item.work_id);
+			if (!parentEdge) throw new Error(`${item.alias.key} has no active parent — same-session receipts ride the parent's close attempt`);
+			const tree = await client.tree();
+			const parentKey = tree.items.find(candidate => candidate.work_id === parentEdge.target_work_id)?.alias.key;
+			if (!parentKey) throw new Error("parent work item not found");
+			const attempt = liveAttempt(await client.workflow(parentKey));
+			if (!attempt || !attempt.candidate_sha256 || !attempt.candidate_commit || !attempt.owner_session_id || !attempt.owner_session_start_commit) {
+				throw new Error(`${parentKey} has no live summary close attempt — run /summary on the parent first`);
+			}
+			const payload: Record<string, unknown> = {
+				attempt_id: attempt.attempt_id,
+				owner_session_id: attempt.owner_session_id,
+				base_commit: attempt.owner_session_start_commit,
+				fix_commit: attempt.candidate_commit,
+				candidate_sha256: attempt.candidate_sha256,
+				finding: sections.finding,
+				verification: sections.verification,
+			};
+			const payloadSha = payloadHash(payload);
+			return {
+				receipt_id: stableId("receipt", item.work_id, item.revision.revision_id, attempt.candidate_id, kind, payloadSha),
+				work_id: item.work_id,
+				revision_id: item.revision.revision_id,
+				candidate_id: attempt.candidate_id,
+				kind,
+				payload,
+				payload_sha256: payloadSha,
+				issuer: ISSUER,
+				issued_at: new Date().toISOString(),
+				independent: false,
+			};
+		}
 		const candidate = item.candidate;
 		if (!candidate) throw new Error(`${item.alias.key} has no current candidate — run /plan first`);
-		if ((kind === "verification" || kind === "audit") && !candidate.commit_sha) {
+		if (kind === "verification" && !candidate.commit_sha) {
 			throw new Error(`${item.alias.key}'s candidate is not finalized — run /summary first`);
-		}
-		if (kind === "audit" && meta?.expectedCandidate) {
-			// OMP-38 second check: the receipt was captured under one bound candidate;
-			// the LIVE candidate must still be it at append time.
-			const expected = meta.expectedCandidate;
-			if (
-				candidate.candidate_id !== expected.id ||
-				candidate.candidate_sha256 !== expected.sha256 ||
-				candidate.commit_sha !== expected.commit
-			) {
-				throw new CandidateDriftError(
-					`audit receipt is bound to candidate ${expected.id.slice(0, 8)}…/${expected.commit.slice(0, 12)} but ${item.alias.key}'s live candidate is ${candidate.candidate_id.slice(0, 8)}…/${candidate.commit_sha?.slice(0, 12) ?? "unfinalized"} — run /summary again to freeze and audit the current candidate`,
-				);
-			}
 		}
 		const payload: Record<string, unknown> = { body };
 		const payloadSha = payloadHash(payload);
@@ -284,16 +355,6 @@ export function createWorkBackend(
 			issued_at: new Date().toISOString(),
 			independent: false,
 		};
-		if (kind === "audit") {
-			if (!meta?.verdict) throw new Error("audit evidence requires a bridge-authenticated verdict");
-			return {
-				...base,
-				verdict: meta.verdict,
-				independent: meta.independent === true,
-				candidate_sha256: candidate.candidate_sha256,
-				...(candidate.commit_sha ? { candidate_commit: candidate.commit_sha } : {}),
-			};
-		}
 		if (kind === "verification") {
 			return { ...base, candidate_sha256: candidate.candidate_sha256, ...(candidate.commit_sha ? { candidate_commit: candidate.commit_sha } : {}) };
 		}
@@ -306,22 +367,6 @@ export function createWorkBackend(
 			.join("\n");
 	}
 
-	/** The audit-bridge binding for a view's finalized candidate: identity plus
-	 *  the plan receipt the auditor task must cite. Undefined until a finalized
-	 *  candidate with a plan receipt exists. */
-	function bindingFor(view: WorkflowView): SummaryGateOk["binding"] {
-		const candidate = view.item.candidate;
-		if (!candidate?.commit_sha) return undefined;
-		const packet = buildPlanPacket(view);
-		if (!packet) return undefined;
-		return {
-			candidateId: candidate.candidate_id,
-			candidateSha256: candidate.candidate_sha256,
-			commitSha: candidate.commit_sha,
-			planReceiptSha256: packet.planReceiptSha256,
-			...(packet.capped ? { capped: true } : {}),
-		};
-	}
 
 	/** Preflight mirror of semantics.completion_blockers, minus push_unverified —
 	 *  closeWithVerdict creates the push receipt before complete_work. The service
@@ -345,8 +390,9 @@ export function createWorkBackend(
 		if (!latest || !latest.independent || latest.verdict !== "PASS") {
 			return "the latest audit is not an independent PASS — run /summary again after fixing its findings";
 		}
-		if (!view.closeout.some(c => c.state === "pending" && c.candidate_id === candidate.candidate_id)) {
-			return "no approved closeout request — complete /summary before /done";
+		const attempt = liveAttempt(view);
+		if (!attempt || attempt.state !== "closeout_requested" || attempt.candidate_id !== candidate.candidate_id) {
+			return "no requested close attempt on this candidate — complete /summary (through request_closeout) before /done";
 		}
 		return null;
 	}
@@ -359,7 +405,7 @@ export function createWorkBackend(
 		cacheFile: "work-now.json",
 		queueNoun: "TRIAGE",
 		reviewKind: "closeout",
-		evidenceKinds: ["handoff", "verification", "audit", "closeout"],
+		evidenceKinds: ["handoff", "verification", "closeout", "same_session_found_fixed"],
 		bookendTitle: "── Work Ledger bookend (work.omp.dev/v1) ──",
 
 		readCarrier(raw: unknown): WorkStateCarrier {
@@ -433,6 +479,12 @@ export function createWorkBackend(
 					.filter(e => e.active && e.kind === kind && (mine === "source" ? e.source_work_id : e.target_work_id) === view.item.work_id)
 					.map(e => keyOf.get(mine === "source" ? e.target_work_id : e.source_work_id) ?? "?");
 			const packet = buildPlanPacket(view);
+			const attempt = liveAttempt(view);
+			const manifest = view.audit_manifest;
+			const auditTask: SealedAuditTask | undefined =
+				attempt && manifest && manifest.attempt_id === attempt.attempt_id
+					? { attemptId: attempt.attempt_id, attemptState: attempt.state, taskBody: manifest.task_body, taskSha256: manifest.task_sha256 }
+					: undefined;
 			return {
 				title: view.item.revision.title,
 				state: view.item.state,
@@ -447,6 +499,7 @@ export function createWorkBackend(
 				commentsLast7d: view.receipts.filter(r => Date.now() - Date.parse(r.issued_at) < 7 * 86_400_000).length,
 				digestPacket: linesOf(view) || "no receipts yet",
 				...(packet ? { planPacket: packet } : {}),
+				...(auditTask ? { auditTask } : {}),
 			};
 		},
 
@@ -731,7 +784,10 @@ export function createWorkBackend(
 		},
 
 		async proposeClose(issue: NowRef): Promise<void> {
-			await run("request_closeout", { work_id: issue.id });
+			const attempt = liveAttempt(await client.workflow(issue.key));
+			if (!attempt) throw new Error(`${issue.key} has no live close attempt — run /summary first`);
+			const result = await run("request_closeout", { work_id: issue.id, attempt_id: attempt.attempt_id });
+			if (result.status === "refused") throw new Error(result.event.rendered_text);
 		},
 
 		async reviseWork(issue: NowRef, fields: { title?: string; description?: string }): Promise<void> {
@@ -769,12 +825,14 @@ export function createWorkBackend(
 			reason: string | undefined,
 			carrier: WorkStateCarrier,
 			hooks: BackendHooks,
+			doneAuthorizationRef?: string,
 		): Promise<string> {
 			if (outcome === "canceled") {
 				await run("set_work_state", { work_id: now.id, state: "CANCELED" });
 				await backend.clearNowRemote(now.id);
 				return `${now.key} canceled${reason ? ` — ${reason}` : ""}`;
 			}
+			if (!doneAuthorizationRef) throw new Error("a done close needs the host-minted /done authorization reference");
 			const view = await client.workflow(now.key);
 			const candidate = view.item.candidate;
 			const commitSha = carrier.commitSha ?? candidate?.commit_sha;
@@ -783,7 +841,7 @@ export function createWorkBackend(
 			}
 			const push = pushCandidate(hooks.cwd, commitSha);
 			if (push.status === "not_pushed") {
-				throw new Error(`push unverified — ${push.detail ?? "remote refused"}; the closeout intent stays pending`);
+				throw new Error(`push unverified — ${push.detail ?? "remote refused"}; the close attempt stays requested`);
 			}
 			await run("append_evidence", {
 				receipt: {
@@ -798,7 +856,25 @@ export function createWorkBackend(
 			);
 			const finalCandidate = refreshed.item.candidate;
 			if (!finalCandidate) throw new Error("candidate vanished mid-close");
-			await run("complete_work", {
+			const attempt = liveAttempt(refreshed);
+			if (!attempt) throw new Error("no live close attempt — run /summary first");
+			// OMP-52: children found+fixed in this owner session ride the parent's
+			// audited candidate — include every child whose current revision carries
+			// a same_session receipt bound to THIS attempt; the service revalidates
+			// each one transactionally and refuses the whole close on any mismatch.
+			const satisfied: UUID[] = [];
+			const childEdges = refreshed.relations.filter(edge => edge.active && edge.kind === "parent" && edge.target_work_id === now.id);
+			const treeItems = childEdges.length > 0 ? (await client.tree()).items : [];
+			for (const edge of childEdges) {
+				const child = treeItems.find(candidateItem => candidateItem.work_id === edge.source_work_id);
+				if (!child || child.state === "DONE" || child.state === "CANCELED") continue;
+				const childView = await client.workflow(child.alias.key);
+				const bound = childView.receipts.some(
+					r => r.kind === "same_session_found_fixed" && r.revision_id === child.revision.revision_id && r.payload.attempt_id === attempt.attempt_id,
+				);
+				if (bound) satisfied.push(child.work_id);
+			}
+			const result = await run("complete_work", {
 				input: {
 					work_id: now.id,
 					current_revision_id: refreshed.item.revision.revision_id,
@@ -806,9 +882,14 @@ export function createWorkBackend(
 					receipts,
 					closeout_requested: true,
 				},
+				attempt_id: attempt.attempt_id,
+				done_authorization_ref: doneAuthorizationRef,
+				...(satisfied.length > 0 ? { satisfied_work_ids: satisfied } : {}),
 			});
+			if (result.status === "refused") throw new Error(result.event?.rendered_text ?? "completion refused");
 			await backend.clearNowRemote(now.id);
-			return `${now.key} done — ${finalCandidate.candidate_sha256.slice(0, 12)} pushed${push.status === "remote_commit" ? " (verified on remote)" : ""}`;
+			const children = result.status === "applied" && result.completed_work_ids?.length ? ` (+${result.completed_work_ids.length} same-session child(ren))` : "";
+			return `${now.key} done${children} — ${finalCandidate.candidate_sha256.slice(0, 12)} pushed${push.status === "remote_commit" ? " (verified on remote)" : ""}`;
 		},
 
 		async summaryGate(now: NowRef, carrier: WorkStateCarrier, hooks: BackendHooks): Promise<SummaryGateOk | SummaryGateBlocked> {
@@ -816,17 +897,13 @@ export function createWorkBackend(
 			const current = item.candidate;
 			if (current?.kind === "final" && current.commit_sha) {
 				const view = await client.workflow(now.key);
-				// One source of truth (OMP-38): the sorted packet supplies both the
-				// armed plan hash and the audit binding — they can never disagree.
 				const packet = buildPlanPacket(view);
-				const binding = bindingFor(view);
 				return {
 					ok: true,
 					issue: now,
 					...(packet ? { planHash: packet.planSha256 } : {}),
 					warning: packet ? undefined : "no plan evidence on this candidate — /done will refuse",
 					carrier: { candidateId: current.candidate_id, candidateSha: current.candidate_sha256, commitSha: current.commit_sha },
-					...(binding ? { binding } : {}),
 				};
 			}
 			// The item's CURRENT planned candidate is authoritative — the local
@@ -843,7 +920,7 @@ export function createWorkBackend(
 				return { ok: true, issue: now, warning: "No plan is stamped on this work — review may run, but /done will refuse until /plan stamps one." };
 			}
 			const freeze = await freezeCandidateCommit(hooks.ui, hooks.cwd, now.key, current.candidate_id, hooks.preExistingDirtyPaths);
-			if (!freeze) return { ok: false, reason: "candidate freeze refused — nothing frozen, /summary stays blocked" };
+			if ("refused" in freeze) return { ok: false, reason: freeze.reason };
 			const candidateId = stableId("final-candidate", item.work_id, item.revision.revision_id, current.candidate_id, freeze.commitSha);
 			const frozenSha = candidateSha256(freeze.commitSha, freeze.paths);
 			await run("finalize_candidate", {
@@ -856,15 +933,106 @@ export function createWorkBackend(
 			});
 			const view = await client.workflow(now.key);
 			const packet = buildPlanPacket(view);
-			const binding = bindingFor(view);
 			return {
 				ok: true,
 				issue: now,
 				...(packet ? { planHash: packet.planSha256 } : {}),
 				carrier: { candidateId, candidateSha: frozenSha, commitSha: freeze.commitSha },
-				...(binding ? { binding } : {}),
 			};
 		},
+
+		// ---- OMP-47 close attempts: the service owns every gate; these are transport ----
+
+		async beginCloseAttempt(now: NowRef, session: CloseAttemptSession): Promise<CloseAttemptOutcome> {
+			const result = await run("begin_close_attempt", {
+				work_id: now.id,
+				attempt_id: stableId("close-attempt", now.id, session.authorizationRef),
+				authorization_ref: session.authorizationRef,
+				owner_session_id: session.sessionId,
+				owner_session_started_at: session.startedAt,
+				owner_session_start_commit: session.startCommit,
+				repository: session.repository,
+				diff_sha256: session.diffSha256,
+				starting_dirty_paths: session.dirtyPaths,
+			});
+			return outcomeOf(result);
+		},
+
+		async sealAuditManifest(now: NowRef): Promise<CloseAttemptOutcome> {
+			const view = await client.workflow(now.key);
+			const attempt = liveAttempt(view);
+			if (!attempt) throw new Error(`${now.key} has no live close attempt — run /summary first`);
+			const verification = view.receipts
+				.filter(r => r.kind === "verification" && r.revision_id === attempt.revision_id && r.candidate_id === attempt.candidate_id)
+				.sort((a, b) => a.issued_at.localeCompare(b.issued_at) || a.receipt_id.localeCompare(b.receipt_id))
+				.at(-1);
+			if (!verification) throw new Error(`${now.key} has no verification receipt on the attempt's candidate — append verification first`);
+			const result = await run("seal_audit_manifest", { attempt_id: attempt.attempt_id, verification_receipt_id: verification.receipt_id });
+			return outcomeOf(result);
+		},
+
+		async sealedAuditTask(key: string): Promise<SealedAuditTask | null> {
+			const view = await client.workflow(key);
+			const attempt = liveAttempt(view);
+			const manifest = view.audit_manifest;
+			if (!attempt || !manifest || manifest.attempt_id !== attempt.attempt_id) return null;
+			return { attemptId: attempt.attempt_id, attemptState: attempt.state, taskBody: manifest.task_body, taskSha256: manifest.task_sha256 };
+		},
+
+		async reserveAuditorLaunch(key: string, taskSha256: string, toolCallId: string): Promise<CloseAttemptOutcome> {
+			const attempt = liveAttempt(await client.workflow(key));
+			if (!attempt) throw new Error(`${key} has no live close attempt — run /summary first`);
+			const result = await run("reserve_auditor_launch", { attempt_id: attempt.attempt_id, task_sha256: taskSha256, tool_call_id: toolCallId });
+			return outcomeOf(result);
+		},
+
+		async settleAuditorLaunch(key: string, launchId: string, transport: { payload?: unknown; failed?: boolean }): Promise<CloseAttemptOutcome> {
+			// Resolve the attempt from the immutable launch row, NOT the live slot:
+			// a lost settle response may have already moved the attempt terminal,
+			// and the retry must still replay the stored result (same intent).
+			const view = await client.workflow(key);
+			const launch = view.auditor_launches.find(row => row.launch_id === launchId);
+			const attemptId = launch?.attempt_id ?? liveAttempt(view)?.attempt_id;
+			if (!attemptId) throw new Error(`${key} has no launch ${launchId.slice(0, 8)}… and no live close attempt — nothing to settle`);
+			const result = await run("settle_auditor_launch", {
+				attempt_id: attemptId,
+				launch_id: launchId,
+				...(transport.failed ? { transport_failed: true } : { transport_payload: transport.payload }),
+			});
+			return outcomeOf(result);
+		},
+
+		async pendingDeliveries(key: string): Promise<CloseEventView[]> {
+			const view = await client.workflow(key);
+			const latestByEvent = new Map<string, string>();
+			for (const delivery of view.checkpoint_deliveries) {
+				// deliveries arrive ordered by created_at; the highest sequence wins
+				const prior = latestByEvent.get(delivery.event_id);
+				if (prior === undefined || delivery.delivery_sequence >= Number(prior.split(":")[0])) {
+					latestByEvent.set(delivery.event_id, `${delivery.delivery_sequence}:${delivery.status}`);
+				}
+			}
+			return view.close_attempt_events
+				.filter(event => {
+					if (!event.requires_delivery) return false;
+					const latest = latestByEvent.get(event.event_id);
+					const status = latest?.split(":")[1];
+					return status !== "delivered" && status !== "waived";
+				})
+				.map(eventView);
+		},
+
+		async attestDelivery(eventId: string, ownerSessionId: string, renderedSha256: string, status: "delivered" | "failed" | "waived", authorizationRef?: string): Promise<CloseAttemptOutcome> {
+			const result = await run("attest_checkpoint_delivery", {
+				event_id: eventId,
+				owner_session_id: ownerSessionId,
+				rendered_sha256: renderedSha256,
+				status,
+				...(authorizationRef ? { authorization_ref: authorizationRef } : {}),
+			});
+			return outcomeOf(result);
+		},
+
 		deliveredOps(): UUID[] {
 			return [...deliveredOps];
 		},

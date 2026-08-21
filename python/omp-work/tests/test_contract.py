@@ -11,7 +11,7 @@ import pytest
 import urllib.error
 
 import omp_work
-from omp_work.v1.models import Anomaly, Candidate, CommandEnvelope, CompletionInput, CutoverManifest, EvidenceKind, EvidenceReceipt, RelationEdge, RelationKind, WorkAlias
+from omp_work.v1.models import Anomaly, Candidate, CloseAttempt, CommandEnvelope, CompletionInput, CutoverManifest, EvidenceKind, EvidenceReceipt, RelationEdge, RelationKind, WorkAlias
 from omp_work.v1.canonical import command_sha256
 from omp_work.v1.semantics import completion_blockers, replay_decision, revision_decision, validate_cutover_manifest, would_create_cycle
 
@@ -52,6 +52,34 @@ def candidate(**updates: object) -> Candidate:
     }
     data.update(updates)
     return Candidate.model_validate(data)
+
+
+def close_attempt(**updates: object) -> CloseAttempt:
+    data: dict[str, object] = {
+        "attempt_id": UUID("00000000-0000-7000-8000-0000000000aa"),
+        "work_id": WORK,
+        "revision_id": REVISION,
+        "candidate_id": CANDIDATE,
+        "plan_receipt_id": UUID("00000000-0000-7000-8000-0000000000ab"),
+        "candidate_sha256": "b" * 64,
+        "candidate_commit": "c" * 40,
+        "owner_session_id": "session-1",
+        "owner_session_started_at": NOW,
+        "owner_session_start_commit": "e" * 40,
+        "repository": "/repo",
+        "diff_sha256": "f" * 64,
+        "starting_dirty_paths": (),
+        "authorization_kind": "summary",
+        "authorization_ref": "summary:1",
+        "launch_count": 1,
+        "accepted_report_count": 1,
+        "in_flight_launch_id": None,
+        "state": "closeout_requested",
+        "requested_at": NOW,
+        "closeout_requested_at": NOW,
+    }
+    data.update(updates)
+    return CloseAttempt.model_validate(data)
 
 
 
@@ -147,10 +175,20 @@ def test_stale_evidence_blocks_completion_after_revision_changes() -> None:
 
 def test_pushed_branch_requires_remote_candidate_and_preserves_closeout() -> None:
     receipts = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.CLOSEOUT), receipt(EvidenceKind.PUSH, remote_commit="d" * 40))
-    blocked = completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=receipts, closeout_requested=True))
+    blocked = completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=receipts, closeout_requested=True), attempt=close_attempt())
     assert {blocker.code for blocker in blocked} == {"push_unverified"}
-    fresh = (*receipts[:-1], receipt(EvidenceKind.PUSH, remote_commit="c" * 40))
-    assert completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=fresh, closeout_requested=True)) == ()
+
+
+def test_completion_requires_requested_attempt_and_resolved_deliveries() -> None:
+    receipts = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.CLOSEOUT), receipt(EvidenceKind.PUSH, remote_commit="c" * 40))
+    input = CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=receipts, closeout_requested=True)
+    assert {blocker.code for blocker in completion_blockers(input)} == {"attempt_missing"}
+    audited = close_attempt(state="audited", closeout_requested_at=None)
+    assert {blocker.code for blocker in completion_blockers(input, attempt=audited)} == {"attempt_not_requested"}
+    drifted = close_attempt(candidate_commit="d" * 40)
+    assert {blocker.code for blocker in completion_blockers(input, attempt=drifted)} == {"stale_evidence"}
+    assert {blocker.code for blocker in completion_blockers(input, attempt=close_attempt(), pending_delivery_count=2)} == {"delivery_pending"}
+    assert completion_blockers(input, attempt=close_attempt()) == ()
 
 
 def test_completion_rejects_work_and_revision_binding_mismatches() -> None:
@@ -182,9 +220,9 @@ def test_bundle_approval_and_tamper_detection(tmp_path: Path, monkeypatch: pytes
 def test_planned_candidate_and_missing_closeout_evidence_block_completion() -> None:
     receipts = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.PUSH, remote_commit="c" * 40))
     planned = CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(kind="planned", commit_sha=None), receipts=receipts, closeout_requested=True)
-    assert {blocker.code for blocker in completion_blockers(planned)} >= {"candidate_not_final", "push_unverified"}
+    assert {blocker.code for blocker in completion_blockers(planned, attempt=close_attempt())} >= {"candidate_not_final", "push_unverified"}
     no_closeout = CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=receipts, closeout_requested=True)
-    assert {blocker.code for blocker in completion_blockers(no_closeout)} == {"closeout_missing"}
+    assert {blocker.code for blocker in completion_blockers(no_closeout, attempt=close_attempt())} == {"closeout_missing"}
 
 
 def test_evidence_payload_body_is_bounded() -> None:

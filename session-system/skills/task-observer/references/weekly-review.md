@@ -196,6 +196,11 @@ after. When seeding staged
 copies from the read-only mount, `chmod -R u+w` the staged path first —
 the mount's read-only mode travels with the copy, for directories as
 well as files. Do not edit skill files in place — nothing goes live
-until the user installs it. **Keep-two rule:** for any skill, keep only
+until the user installs it. Skill dirs can be symlinks into a shared
+home (obs #72): stage with dereference (`cp -rL --no-preserve=mode`) and
+verify the staged SKILL.md is a regular file before editing; before
+installing, `readlink -f` each live skill path and state which physical
+file will change — a symlinked skill install lands in a shared home and
+updates every consumer at once. **Keep-two rule:** for any skill, keep only
 the two most recent date directories under `skill-updates/`; delete
 older ones.

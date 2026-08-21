@@ -46,7 +46,7 @@ def config(tmp_path: Path) -> OperationsConfig:
 
 def test_pinned_migration_set_is_forward_only() -> None:
     files = migrations()
-    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     assert all(path.name.startswith(f"{ordinal:04d}_") for ordinal, path in files)
     assert len(migration_set_sha256()) == 64
 
@@ -171,6 +171,75 @@ def test_restore_drill_forwards_requested_backup_id(monkeypatch: pytest.MonkeyPa
         backup.restore_drill(config, reason="pre-activation-final", backup_id="wanted")
 
 
+
+
+def test_populated_v13_to_v14_upgrade_migrates_legacy_closeout_intents(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OMP-47 upgrade rehearsal: a v13 database with real pending+completed
+    closeout_intents rows migrates to close_attempts with the legacy state
+    mapping, candidate/plan backfill, and FORCE RLS restored (the migration
+    lifts FORCE for its own transaction because the migrator holds no
+    workspace claim)."""
+    import omp_work.operations.database as database_module
+
+    with native_postgres(config.state_dir, config.port):
+        original_migrate = database_module.migrate
+        monkeypatch.setattr(database_module, "migrate", lambda cfg: original_migrate(cfg, target=13))
+        bootstrap(config)
+        monkeypatch.setattr(database_module, "migrate", original_migrate)
+        workspace_id = uuid4()
+        pending_work, pending_revision, pending_candidate = uuid4(), uuid4(), uuid4()
+        done_work, done_revision, done_candidate = uuid4(), uuid4(), uuid4()
+        plan_receipt_id, pending_intent, completed_intent = uuid4(), uuid4(), uuid4()
+        now = datetime.now(timezone.utc)
+        with psycopg.connect(**config.connection_kwargs("postgres"), autocommit=True) as connection:
+            cursor = connection.cursor()
+            cursor.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)", (workspace_id,))
+            for work_id, revision_id, candidate_id, candidate_hash, commit, title in (
+                (pending_work, pending_revision, pending_candidate, "a" * 64, "b" * 40, "legacy pending"),
+                (done_work, done_revision, done_candidate, "c" * 64, "d" * 40, "legacy done"),
+            ):
+                cursor.execute("INSERT INTO omp_work.work_items(work_id,workspace_id,state) VALUES (%s,%s,'NOW')", (work_id, workspace_id))
+                cursor.execute(
+                    "INSERT INTO omp_work.work_revisions(revision_id,work_id,workspace_id,revision_number,title,description,scope,content_sha256,created_by,supplied_at) VALUES (%s,%s,%s,1,%s,'','',%s,'owner',%s)",
+                    (revision_id, work_id, workspace_id, title, "e" * 64, now),
+                )
+                cursor.execute("UPDATE omp_work.work_items SET current_revision_id=%s WHERE work_id=%s", (revision_id, work_id))
+                cursor.execute(
+                    "INSERT INTO omp_work.candidates(candidate_id,workspace_id,work_id,revision_id,candidate_sha256,commit_sha,allocated_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                    (candidate_id, workspace_id, work_id, revision_id, candidate_hash, commit, now),
+                )
+                cursor.execute("UPDATE omp_work.work_items SET current_candidate_id=%s WHERE work_id=%s", (candidate_id, work_id))
+            cursor.execute(
+                "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,issued_at) VALUES (%s,%s,%s,%s,%s,'plan','{}',%s,%s)",
+                (plan_receipt_id, workspace_id, pending_work, pending_revision, pending_candidate, "0" * 64, now),
+            )
+            cursor.execute(
+                "INSERT INTO omp_evidence.closeout_intents(intent_id,workspace_id,work_id,revision_id,candidate_id,state,requested_at) VALUES (%s,%s,%s,%s,%s,'pending',%s)",
+                (pending_intent, workspace_id, pending_work, pending_revision, pending_candidate, now),
+            )
+            cursor.execute(
+                "INSERT INTO omp_evidence.closeout_intents(intent_id,workspace_id,work_id,revision_id,candidate_id,state,requested_at,completed_at) VALUES (%s,%s,%s,%s,%s,'completed',%s,%s)",
+                (completed_intent, workspace_id, done_work, done_revision, done_candidate, now, now),
+            )
+        original_migrate(config)
+        with psycopg.connect(**config.connection_kwargs("postgres")) as connection:
+            cursor = connection.cursor()
+            cursor.execute("SELECT attempt_id,state,authorization_kind,authorization_ref,candidate_sha256,candidate_commit,plan_receipt_id,closeout_requested_at FROM omp_work.close_attempts")
+            rows = {str(row[0]): row for row in cursor.fetchall()}
+            assert len(rows) == 2
+            pending_row = rows[str(pending_intent)]
+            completed_row = rows[str(completed_intent)]
+            assert pending_row[1] == "closeout_requested" and pending_row[2] == "legacy"
+            assert pending_row[3] == f"legacy:{pending_intent}"
+            assert pending_row[4] == "a" * 64 and pending_row[5] == "b" * 40
+            assert str(pending_row[6]) == str(plan_receipt_id) and pending_row[7] is not None
+            assert completed_row[1] == "completed" and completed_row[2] == "legacy" and completed_row[4] == "c" * 64
+            cursor.execute(
+                "SELECT relname, relforcerowsecurity FROM pg_class WHERE oid IN ('omp_work.close_attempts'::regclass,'omp_work.work_items'::regclass,'omp_work.candidates'::regclass,'omp_evidence.receipts'::regclass,'omp_work.audit_manifests'::regclass)"
+            )
+            assert all(force for _, force in cursor.fetchall()), "FORCE RLS restored on every table the migration touched"
+            cursor.execute("SELECT count(*) FROM omp_work.audit_manifests")
+            assert cursor.fetchone()[0] == 0
 
 
 def test_bootstrap_migrates_pinned_postgres(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:

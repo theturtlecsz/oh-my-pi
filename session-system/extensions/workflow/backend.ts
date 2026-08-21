@@ -5,7 +5,7 @@
  * supplies storage I/O only.
  */
 
-import type { AuditBinding } from "./audit-bridge";
+
 
 export const WORKFLOW_SEQUENCE =
 	"WORKFLOW SEQUENCE: /intake creates and selects → /plan approves, stamps, and executes → execution handoff → /summary reviews → /done closes. The ledger tracks every stage; Chris never moves state, re-identifies the work, or answers bookkeeping prompts.";
@@ -26,11 +26,51 @@ export const CLOSEOUT_LOCK_REFUSAL =
  *  bytes are never silently omitted (OMP-38). */
 export const PLAN_PACKET_MAX_BYTES = 32 * 1024;
 
-/** Thrown by appendEvidence when an audit receipt's expected candidate no
- *  longer matches the ledger's LIVE candidate (OMP-38). The host reacts by
- *  invalidating the receipt and clearing the binding — only a fresh /summary
- *  freeze + audit can retry. */
+/** Thrown by appendEvidence when the service refuses the write against the
+ *  LIVE candidate (OMP-38/OMP-47). */
 export class CandidateDriftError extends Error {}
+
+// ---- OMP-47 close attempts (service-owned authority) ----
+
+/** Host-computed identity captured at literal owner /summary (never model text). */
+export interface CloseAttemptSession {
+	authorizationRef: string;
+	sessionId: string;
+	startedAt: string;
+	startCommit: string;
+	repository: string;
+	diffSha256: string;
+	dirtyPaths: string[];
+}
+
+/** One typed service event, exactly as the ledger rendered it. */
+export interface CloseEventView {
+	eventId: string;
+	eventType: string;
+	reasonCode: string;
+	renderedText: string;
+	renderedSha256: string;
+	requiresDelivery: boolean;
+	requiresFreshAuthorization: boolean;
+}
+
+/** Typed outcome of a close-attempt command: refusals carry the event, never throw. */
+export interface CloseAttemptOutcome {
+	status: "applied" | "refused";
+	attemptId?: string;
+	attemptState?: string;
+	verdict?: "PASS" | "NEEDS_FIX" | "BLOCKED";
+	launchId?: string;
+	event: CloseEventView;
+}
+
+/** The sealed auditor task get_work must render byte-for-byte (OMP-50). */
+export interface SealedAuditTask {
+	attemptId: string;
+	attemptState: string;
+	taskBody: string;
+	taskSha256: string;
+}
 
 /** Bounded audit-reconstruction packet (OMP-38): everything the /summary
  *  auditor task needs, read from the ledger's newest plan receipt on the
@@ -87,6 +127,8 @@ export interface IssueDetail {
 	digestPacket: string;
 	/** OMP-38: bounded ledger packet for audit reconstruction (work backend). */
 	planPacket?: PlanPacket;
+	/** OMP-50: the sealed auditor task, rendered byte-for-byte once it exists. */
+	auditTask?: SealedAuditTask;
 }
 
 export interface TreeItem {
@@ -164,18 +206,14 @@ export interface BatchOutcome {
 
 /** Model-facing evidence kinds — every kind exists in work.omp.dev/v1.
  *  There is deliberately no generic "evidence" default: the ledger records
- *  typed receipts only. The session review is `closeout`; the fresh auditor's
- *  report is a separate exact-body `audit` write bound through the receipt bridge. */
-export type EvidenceKind = "handoff" | "verification" | "audit" | "closeout";
+ *  typed receipts only. The session review is `closeout`; audit receipts are
+ *  minted ONLY by the service's settle transaction (OMP-47) and never appended
+ *  through this surface. */
+export type EvidenceKind = "handoff" | "verification" | "closeout" | "same_session_found_fixed";
 
 export interface EvidenceMeta {
 	planHash?: string;
-	verdict?: "PASS" | "NEEDS_FIX" | "BLOCKED"; // work audit receipts (bridge-supplied only)
-	independent?: boolean;
-	candidateSha256?: string; // binds verification/audit/closeout to the final candidate
-	/** OMP-38: the candidate identity the audit receipt was captured under —
-	 *  the backend refuses the append when the LIVE candidate differs. */
-	expectedCandidate?: { id: string; sha256: string; commit: string };
+	candidateSha256?: string; // binds verification/closeout to the final candidate
 }
 
 /** Hooks the host hands a backend for interactive flows (freeze/push verdicts). */
@@ -200,10 +238,6 @@ export interface SummaryGateOk {
 	/** Work backend: candidate ids allocated during the gate (freeze/finalize) —
 	 *  the host merges them into the opaque carrier it persists. */
 	carrier?: WorkStateCarrier;
-	/** Work backend (OMP-38): the finalized candidate this /summary attempt is
-	 *  bound to — present whenever a finalized candidate with a plan receipt
-	 *  exists; the host registers it on the audit bridge. */
-	binding?: AuditBinding;
 }
 
 export interface SummaryGateBlocked {
@@ -272,7 +306,7 @@ export interface WorkflowBackend {
 	closeBlocker(now: NowRef, carrier: WorkStateCarrier): Promise<string | null>;
 	/** Full close: push + push receipt + complete_work + clear focus. Returns the
 	 *  one-line result; throws on failure (state left recoverable). */
-	closeWithVerdict(now: NowRef, outcome: "done" | "canceled", reason: string | undefined, carrier: WorkStateCarrier, hooks: BackendHooks): Promise<string>;
+	closeWithVerdict(now: NowRef, outcome: "done" | "canceled", reason: string | undefined, carrier: WorkStateCarrier, hooks: BackendHooks, doneAuthorizationRef?: string): Promise<string>;
 	/** Durable pending-operation journal:
 	 *  deliveredOps() lists operation ids whose results have been handed to the
 	 *  host since the last ack; the host passes them to ackOps() at
@@ -284,6 +318,23 @@ export interface WorkflowBackend {
 	/** /summary authorization: freeze the candidate and finalize it.
 	 *  planHash arms the review obligation. */
 	summaryGate(now: NowRef, carrier: WorkStateCarrier, hooks: BackendHooks): Promise<SummaryGateOk | SummaryGateBlocked>;
+
+	// ---- OMP-47 close attempts: the service owns every gate; these are transport ----
+
+	/** Bind this literal /summary to one ledger-owned close attempt. */
+	beginCloseAttempt(now: NowRef, session: CloseAttemptSession): Promise<CloseAttemptOutcome>;
+	/** Seal the audit manifest from the newest verification receipt on the live attempt. */
+	sealAuditManifest(now: NowRef): Promise<CloseAttemptOutcome>;
+	/** The sealed task for the live attempt, or null before seal. */
+	sealedAuditTask(key: string): Promise<SealedAuditTask | null>;
+	/** Reserve one bounded auditor launch against the sealed task hash. */
+	reserveAuditorLaunch(key: string, taskSha256: string, toolCallId: string): Promise<CloseAttemptOutcome>;
+	/** Settle the reserved launch with the UNTOUCHED transport payload. */
+	settleAuditorLaunch(key: string, launchId: string, transport: { payload?: unknown; failed?: boolean }): Promise<CloseAttemptOutcome>;
+	/** Unresolved requires_delivery events for this work item (any attempt). */
+	pendingDeliveries(key: string): Promise<CloseEventView[]>;
+	/** Record one delivery receipt (delivered | failed | owner-authorized waived). */
+	attestDelivery(eventId: string, ownerSessionId: string, renderedSha256: string, status: "delivered" | "failed" | "waived", authorizationRef?: string): Promise<CloseAttemptOutcome>;
 }
 
 /** Thrown by createBatch after a partial publish — the host formats the exact

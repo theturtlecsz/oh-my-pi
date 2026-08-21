@@ -1399,6 +1399,18 @@ export interface ExtensionAPI {
 	/** Set the session name. Persists to the session file. */
 	setSessionName(name: string): Promise<void>;
 
+	/** Stable id of the owning session (OMP-51: binds deliveries and close attempts). */
+	getSessionId(): string;
+
+	/**
+	 * Receipt-backed message delivery (OMP-51): resolves only after the message
+	 * was actually injected into the conversation (streaming aside or idle
+	 * flush); rejects on session disposal, a missing delivery dispatcher, or
+	 * render/injection failure. Use for checkpoints whose delivery must be
+	 * attested — never fire-and-forget sendMessage.
+	 */
+	deliverMessage(message: ExtensionDeliveryPayload): Promise<void>;
+
 	// =========================================================================
 	// Provider Registration
 	// =========================================================================
@@ -1567,6 +1579,18 @@ export type SendUserMessageHandler = (
 	options?: { deliverAs?: "steer" | "followUp" },
 ) => void;
 
+/** Receipt-backed extension delivery payload (OMP-51). */
+export interface ExtensionDeliveryPayload {
+	customType: string;
+	content: string;
+	display?: boolean;
+	details?: unknown;
+}
+
+/** Resolves only after the message was injected (streaming or idle); rejects on
+ *  disposal, a missing dispatcher, or render/injection failure. */
+export type DeliverMessageHandler = (message: ExtensionDeliveryPayload) => Promise<void>;
+
 export type AppendEntryHandler = <T = unknown>(customType: string, data?: T) => void;
 
 export type GetActiveToolsHandler = () => string[];
@@ -1615,6 +1639,8 @@ export interface ExtensionActions {
 	setServiceTier?: SetServiceTierHandler;
 	getSessionName: () => string | undefined;
 	setSessionName: (name: string) => Promise<void>;
+	getSessionId?: () => string;
+	deliverMessage?: DeliverMessageHandler;
 }
 
 /** Actions for ExtensionContext (ctx.* in event handlers). */
@@ -1648,6 +1674,8 @@ export interface ExtensionCommandContextActions {
 export interface ExtensionRuntime extends ExtensionRuntimeState, ExtensionActions {
 	getServiceTiers: GetServiceTiersHandler;
 	setServiceTier: SetServiceTierHandler;
+	getSessionId: () => string;
+	deliverMessage: DeliverMessageHandler;
 }
 
 /** Loaded extension with all registered items. */

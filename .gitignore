@@ -92,3 +92,6 @@ packages/coding-agent/bench/boot-baseline.json
 /bazel-pi
 /bazel-oh-my-pi
 /.bazelrc.user
+
+# core dumps (OMP-42 crash artifacts; OMP-57 keeps them out of candidate freezes)
+/core.[0-9]*

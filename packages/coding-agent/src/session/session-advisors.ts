@@ -41,6 +41,7 @@ import {
 	ADVISOR_DEFAULT_TOOL_NAMES,
 	AdviseTool,
 	type AdvisorAgent,
+	type AdvisorCategory,
 	type AdvisorConfig,
 	AdvisorEmissionGuard,
 	type AdvisorMessageDetails,
@@ -121,6 +122,8 @@ export interface AdvisorStats {
 		assistant: number;
 		total: number;
 	};
+	/** Delivered-note counts per OMP-55 category, across every advisor. */
+	categories: Partial<Record<AdvisorCategory, number>>;
 	/** Per-advisor breakdown for every configured advisor. */
 	advisors: PerAdvisorStat[];
 }
@@ -161,6 +164,7 @@ interface ActiveAdvisor {
 	retryFallback?: AdvisorRetryFallbackState;
 	retryFallbackPendingSuccess: boolean;
 	signature: string;
+	categoryCounts: Partial<Record<AdvisorCategory, number>>;
 }
 
 interface AdvisorCompactionSummaryMessage extends CompactionSummaryMessage {
@@ -690,7 +694,9 @@ export class SessionAdvisors {
 			} = descriptor;
 
 			const emissionGuard = new AdvisorEmissionGuard();
-			const adviseTool = new AdviseTool((note, severity) => this.#routeAdvice(advisorRef, note, severity));
+			const adviseTool = new AdviseTool((note, severity, category) =>
+				this.#routeAdvice(advisorRef, note, severity, category),
+			);
 
 			// `#advisorWatchdogPrompt` already carries WATCHDOG.md + YAML shared
 			// instructions; `config.instructions` adds this advisor's specialization.
@@ -891,7 +897,7 @@ export class SessionAdvisors {
 			);
 			const runtime = new AdvisorRuntime(advisorAgentFacade, {
 				snapshotMessages: () => this.#host.agent.state.messages,
-				enqueueAdvice: (note, severity) => this.#routeAdvice(advisorRef, note, severity),
+				enqueueAdvice: (note, severity, category) => this.#routeAdvice(advisorRef, note, severity, category),
 				maintainContext: (incomingTokens, signal) =>
 					this.#maintainAdvisorContext(advisorRef, incomingTokens, signal),
 				obfuscator: this.#host.obfuscator,
@@ -945,6 +951,7 @@ export class SessionAdvisors {
 				providerSessionId: advisorProviderSessionId,
 				retryFallbackPendingSuccess: false,
 				signature,
+				categoryCounts: {},
 			};
 			this.#refreshAdvisorProviderIdentity(advisorRef);
 			this.#attachAdvisorRecorderFeed(advisorRef);
@@ -998,7 +1005,7 @@ export class SessionAdvisors {
 		return isTerminalTextAssistantAnswer(messages[tail]);
 	}
 
-	#routeAdvice(advisor: ActiveAdvisor, note: string, severity?: AdvisorSeverity): void {
+	#routeAdvice(advisor: ActiveAdvisor, note: string, severity?: AdvisorSeverity, category?: AdvisorCategory): void {
 		if (!advisor.emissionGuard.accept(note)) {
 			logger.debug("advisor advice suppressed by emission guard", { severity, advisor: advisor.name });
 			return;
@@ -1006,6 +1013,7 @@ export class SessionAdvisors {
 		// The implicit single ("default") advisor stamps no source name, so its
 		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
 		const source = advisor.slug ? advisor.name : undefined;
+		if (category) advisor.categoryCounts[category] = (advisor.categoryCounts[category] ?? 0) + 1;
 		const interrupting = isInterruptingSeverity(severity);
 		const channel = resolveAdvisorDeliveryChannel({
 			severity,
@@ -1020,10 +1028,10 @@ export class SessionAdvisors {
 			interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
 		});
 		if (channel === "aside") {
-			this.#host.yieldQueue.enqueue("advisor", { note, severity, advisor: source });
+			this.#host.yieldQueue.enqueue("advisor", { note, severity, category, advisor: source });
 			return;
 		}
-		const notes: AdvisorNote[] = [{ note, severity, advisor: source }];
+		const notes: AdvisorNote[] = [{ note, severity, category, advisor: source }];
 		const content = formatAdvisorBatchContent(notes);
 		const details = { notes } satisfies AdvisorMessageDetails;
 		if (channel === "preserve") {
@@ -1712,6 +1720,13 @@ export class SessionAdvisors {
 		}
 		const active = liveAdvisors.length > 0;
 		const cost = this.getAdvisorCost();
+		const categories: Partial<Record<AdvisorCategory, number>> = {};
+		for (const advisor of this.#advisors) {
+			for (const [category, count] of Object.entries(advisor.categoryCounts)) {
+				const key = category as AdvisorCategory;
+				categories[key] = (categories[key] ?? 0) + (count ?? 0);
+			}
+		}
 		if (liveAdvisors.length === 0) {
 			return {
 				configured,
@@ -1721,6 +1736,7 @@ export class SessionAdvisors {
 				tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				cost,
 				messages: { user: 0, assistant: 0, total: 0 },
+				categories,
 				advisors: roster,
 			};
 		}
@@ -1750,6 +1766,7 @@ export class SessionAdvisors {
 			tokens,
 			cost,
 			messages,
+			categories,
 			advisors: roster,
 		};
 	}
@@ -1823,7 +1840,12 @@ export class SessionAdvisors {
 			if (s.tokens.cacheWrite > 0) spendParts.push(`${s.tokens.cacheWrite.toLocaleString()} cache write`);
 			const spendLine = `Spend: ${spendParts.join(", ")}, $${stats.cost.toFixed(4)}`;
 			if (!s.model || s.status !== "running") return `Advisor "${s.name}" is ${s.status.replace("_", " ")}.`;
-			return `Advisor is enabled (${s.model.provider}/${s.model.id}). ${contextLine}. ${spendLine}.`;
+			const categoryEntries = Object.entries(stats.categories).filter(([, count]) => (count ?? 0) > 0);
+			const categoryLine =
+				categoryEntries.length > 0
+					? ` Notes: ${categoryEntries.map(([category, count]) => `${category} ${count}`).join(", ")}.`
+					: "";
+			return `Advisor is enabled (${s.model.provider}/${s.model.id}). ${contextLine}. ${spendLine}.${categoryLine}`;
 		}
 		const lines = [`Advisors enabled (${stats.advisors.length}):`];
 		for (const s of stats.advisors) {
@@ -1835,8 +1857,9 @@ export class SessionAdvisors {
 				`  • ${s.name}${s.model && s.status === "running" ? ` (${s.model.provider}/${s.model.id})` : ` [${s.status}]`} — context ${ctx} tokens, $${s.cost.toFixed(4)}`,
 			);
 		}
+		const categoryEntries = Object.entries(stats.categories).filter(([, count]) => (count ?? 0) > 0);
 		lines.push(
-			`Totals: ${stats.tokens.input.toLocaleString()} input, ${stats.tokens.output.toLocaleString()} output, $${stats.cost.toFixed(4)}.`,
+			`Totals: ${stats.tokens.input.toLocaleString()} input, ${stats.tokens.output.toLocaleString()} output, $${stats.cost.toFixed(4)}.${categoryEntries.length > 0 ? ` Notes: ${categoryEntries.map(([category, count]) => `${category} ${count}`).join(", ")}.` : ""}`,
 		);
 		return lines.join("\n");
 	}

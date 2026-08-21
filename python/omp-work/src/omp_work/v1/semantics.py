@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Literal
 from uuid import UUID
 
-from .models import Anomaly, Candidate, CompletionBlocker, CompletionInput, ContractExamples, EvidenceKind, EvidenceReceipt, RelationEdge, RelationKind
+from .models import Anomaly, Candidate, CloseAttempt, CloseAttemptState, CompletionBlocker, CompletionInput, ContractExamples, EvidenceKind, EvidenceReceipt, RelationEdge, RelationKind
 
 
 def revision_decision(current_hash: str, proposed_hash: str) -> Literal["noop", "append"]:
@@ -45,13 +47,23 @@ def evidence_is_fresh(receipt: EvidenceReceipt, candidate: Candidate, revision_i
     return True
 
 
-def completion_blockers(input: CompletionInput) -> tuple[CompletionBlocker, ...]:
+def completion_blockers(input: CompletionInput, *, attempt: CloseAttempt | None = None, pending_delivery_count: int = 0) -> tuple[CompletionBlocker, ...]:
     if not input.closeout_requested:
         return (CompletionBlocker(code="closeout_missing", detail="closeout intent is required"),)
+    attempt_blockers: list[CompletionBlocker] = []
+    if attempt is None:
+        attempt_blockers.append(CompletionBlocker(code="attempt_missing", detail="completion requires a live close attempt on the current candidate"))
+    else:
+        if attempt.state is not CloseAttemptState.CLOSEOUT_REQUESTED:
+            attempt_blockers.append(CompletionBlocker(code="attempt_not_requested", detail=f"the current close attempt is {attempt.state.value}, not closeout_requested"))
+        if attempt.candidate_id != input.candidate.candidate_id or attempt.candidate_sha256 != input.candidate.candidate_sha256 or attempt.candidate_commit != input.candidate.commit_sha:
+            attempt_blockers.append(CompletionBlocker(code="stale_evidence", detail="the close attempt binds a different candidate than the current one"))
+    if pending_delivery_count > 0:
+        attempt_blockers.append(CompletionBlocker(code="delivery_pending", detail=f"{pending_delivery_count} close-attempt event(s) still owe an owner delivery (delivered or waived)"))
     fresh = tuple(receipt for receipt in input.receipts if evidence_is_fresh(receipt, input.candidate, input.current_revision_id))
     stale = input.candidate.work_id != input.work_id or input.candidate.revision_id != input.current_revision_id or len(fresh) != len(input.receipts)
     kinds = {receipt.kind for receipt in fresh}
-    blockers: list[CompletionBlocker] = []
+    blockers: list[CompletionBlocker] = attempt_blockers
     if input.candidate.kind != "final" or input.candidate.commit_sha is None:
         blockers.append(CompletionBlocker(code="candidate_not_final", detail="completion requires a finalized candidate bound to an exact commit"))
     if EvidenceKind.CLOSEOUT not in kinds:
@@ -71,6 +83,48 @@ def completion_blockers(input: CompletionInput) -> tuple[CompletionBlocker, ...]
     if stale:
         blockers.append(CompletionBlocker(code="stale_evidence", detail="one or more receipts or the candidate bind a different work, revision, or candidate"))
     return tuple(blockers)
+
+
+REPORT_SECTIONS: tuple[str, ...] = ("FINDINGS", "ACCEPTANCE COVERAGE", "OUT OF SCOPE", "CHECKS RUN", "REMAINING QUESTIONS")
+_VERDICT_LINE = re.compile(r"\AVERDICT\s*:\s*(PASS|NEEDS_FIX|BLOCKED)\b")
+_OUTPUT_WRAPPER = re.compile(r"\A<output>\n?([\s\S]*?)\n?</output>\Z")
+
+
+def normalize_auditor_report(payload: object) -> tuple[str, Literal["PASS", "NEEDS_FIX", "BLOCKED"]] | tuple[None, str]:
+    """Service-owned transport normalization (OMP-47 replaces the TS bridge).
+    Accepts EXACTLY three forms: raw canonical report text, one direct
+    {"report": str} or {"text": str} object, or one bare <output>…</output>
+    wrapper. ONE unwrap layer; the canonical report must then start with the
+    VERDICT line (only outer whitespace tolerated). JSON-serialized wrappers,
+    quoted strings, nested wrappers, arrays, extra keys, and incomplete
+    reports refuse with stable reason codes."""
+    text: str
+    if isinstance(payload, dict):
+        keys = list(payload.keys())
+        if len(keys) != 1 or keys[0] not in ("report", "text") or not isinstance(payload[keys[0]], str):
+            return None, "report_wrapper_invalid"
+        text = payload[keys[0]]
+    elif isinstance(payload, str):
+        text = payload.strip()
+        wrapped = _OUTPUT_WRAPPER.match(text)
+        if wrapped:
+            text = wrapped.group(1)
+    else:
+        return None, "report_not_text"
+    text = text.strip()
+    if text.startswith(("{", '"', "[")):
+        return None, "report_wrapper_serialized"
+    if text.startswith(("<output>", "<task-result")):
+        return None, "report_wrapper_nested"
+    if not _VERDICT_LINE.match(text):
+        return None, "verdict_missing"
+    canonical = text.replace("\r\n", "\n")
+    missing = [section for section in REPORT_SECTIONS if not re.search(rf"^\s*(?:#+\s*)?{re.escape(section)}(?:[ \t]*\([^)\n]*\))?[ \t]*[:—-]?[ \t]*$", canonical, re.MULTILINE)]
+    if missing:
+        return None, "report_sections_missing"
+    verdict = _VERDICT_LINE.match(canonical)
+    assert verdict is not None
+    return canonical, verdict.group(1)  # type: ignore[return-value]
 
 
 def validate_cutover_manifest(manifest_anomalies: tuple[Anomaly, ...], parity_differences: tuple[str, ...]) -> None:

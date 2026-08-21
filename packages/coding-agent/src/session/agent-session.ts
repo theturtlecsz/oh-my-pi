@@ -275,6 +275,11 @@ import {
 	TOOL_EXECUTION_START_CUSTOM_TYPE,
 	type ToolExecutionStartData,
 } from "./exit-diagnostics";
+import {
+	buildExtensionDeliveryBatchMessage,
+	EXTENSION_DELIVERY_MESSAGE_TYPE,
+	type ExtensionDeliveryEntry,
+} from "./extension-delivery";
 import { IrcBridge, type IrcBridgeHost } from "./irc-bridge";
 import {
 	buildLaunchCompletionBatchMessage,
@@ -1245,6 +1250,13 @@ export class AgentSession {
 			isStale: entry =>
 				this.#isDisposed || !isLaunchCompletionOwner(entry.owner, this.sessionManager.getSessionId()),
 			build: buildLaunchCompletionBatchMessage,
+		});
+		// Receipt-backed extension deliveries (OMP-51): resolve only on injection,
+		// and only into the session that enqueued them — a switch makes them stale.
+		this.yieldQueue.register<ExtensionDeliveryEntry>(EXTENSION_DELIVERY_MESSAGE_TYPE, {
+			isStale: entry =>
+				this.#isDisposed || (entry.owner !== undefined && entry.owner !== this.sessionManager.getSessionId()),
+			build: buildExtensionDeliveryBatchMessage,
 		});
 		// Background-job completions / late diagnostics are pulled into the run at
 		// each step boundary as non-interrupting asides. Peer IRCs share the aside
@@ -5939,6 +5951,20 @@ export class AgentSession {
 		const delivered = this.yieldQueue.enqueueWithReceipt<LaunchCompletionEntry>(
 			LAUNCH_COMPLETION_MESSAGE_TYPE,
 			notification,
+		);
+		this.yieldQueue.requestIdleFlush();
+		return delivered;
+	}
+
+	/** Receipt-backed extension delivery (OMP-51): mirrors queueLaunchCompletion —
+	 *  the returned promise settles only after real streaming/idle injection into
+	 *  THIS session (the enqueue-time session id is stamped on the entry). */
+	queueExtensionDelivery(entry: ExtensionDeliveryEntry): Promise<void> {
+		if (this.#isDisposed) return Promise.reject(new Error("Session disposed before extension delivery"));
+		const stamped = { ...entry, owner: entry.owner ?? this.sessionManager.getSessionId() };
+		const delivered = this.yieldQueue.enqueueWithReceipt<ExtensionDeliveryEntry>(
+			EXTENSION_DELIVERY_MESSAGE_TYPE,
+			stamped,
 		);
 		this.yieldQueue.requestIdleFlush();
 		return delivered;

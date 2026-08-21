@@ -31,7 +31,9 @@ _SCOPES = frozenset({
 })
 _COMMAND_TYPES = frozenset({
     "create_work_batch", "revise_work", "set_work_state", "put_relation", "remove_relation", "set_focus",
-    "clear_focus", "append_evidence", "finalize_candidate", "request_closeout", "complete_work", "record_project_health",
+    "clear_focus", "append_evidence", "finalize_candidate", "begin_close_attempt", "seal_audit_manifest",
+    "reserve_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery", "request_closeout",
+    "complete_work", "record_project_health",
     "stage_import_batch", "promote_import_batch", "activate_cutover", "attest_cutover_plan",
 })
 

@@ -6,6 +6,7 @@
     "decisions/0002-evidence-completion-and-recovery.md",
     "decisions/0003-one-ledger-cutover.md",
     "decisions/0004-home-147-pre-cutover-amendment.md",
+    "decisions/0005-close-attempt-authority.md",
     "examples.json",
     "manifest.json",
     "schema.json"

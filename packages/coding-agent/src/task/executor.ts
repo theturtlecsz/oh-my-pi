@@ -3277,6 +3277,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						getServiceTiers: () => session.serviceTierByFamily,
 						setServiceTier: (family, tier) => session.setServiceTierFamily(family, tier),
 						getSessionName: () => session.sessionManager.getSessionName(),
+						getSessionId: () => session.sessionManager.getSessionId(),
+						deliverMessage: message => session.queueExtensionDelivery(message),
 						setSessionName: async name => {
 							await session.sessionManager.setSessionName(name, "user");
 						},

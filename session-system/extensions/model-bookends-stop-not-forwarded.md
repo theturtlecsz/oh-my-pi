@@ -1,1 +1,0 @@
-Audit gate: the auditor report exists but has not been forwarded VERBATIM — call the `work` tool with action:"append_evidence", kind:"audit", body = the report bytes exactly as the auditor emitted them. Post it now.

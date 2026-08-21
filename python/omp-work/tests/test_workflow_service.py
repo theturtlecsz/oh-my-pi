@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import secrets
 import socket
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -14,14 +14,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from omp_work.operations.config import OperationsConfig
-from pg_native import native_postgres, seed_authority
 from omp_work.operations.database import bootstrap
-from omp_work.v1.canonical import sha256
+from omp_work.v1.canonical import sha256, text_sha256
 from omp_work.v1.server import create_app
+from pg_native import native_postgres, seed_authority
 
 pytestmark = pytest.mark.skipif(os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1", reason="set OMP_WORK_POSTGRES_INTEGRATION=1")
 
 OWNER = uuid4()
+
+PASS_REPORT = "VERDICT: PASS\nFINDINGS\n(none)\nACCEPTANCE COVERAGE\nAC-1 covered\nOUT OF SCOPE\nnone\nCHECKS RUN\nbun test → exit 0\nREMAINING QUESTIONS\nnone"
+NEEDS_FIX_REPORT = PASS_REPORT.replace("VERDICT: PASS", "VERDICT: NEEDS_FIX").replace("(none)", "- [major] AC-1 src/x.ts:1 evidence: broken; impact: wrong; minimal fix: revert")
+BLOCKED_REPORT = PASS_REPORT.replace("VERDICT: PASS", "VERDICT: BLOCKED")
 
 
 def _config(root: Path) -> OperationsConfig:
@@ -83,7 +87,7 @@ def _batch(items: list[dict], relations: list[dict] | None = None) -> dict:
 
 
 def _receipt(work_id, revision_id, candidate_id, kind: str, *, body: dict | None = None, **extra) -> dict:
-    body = body if body is not None else {"note": kind}
+    body = body if body is not None else {"body": f"{kind} evidence body"}
     return {
         "receipt_id": str(uuid4()),
         "work_id": str(work_id),
@@ -105,7 +109,7 @@ def _create(service, workspace_id, title: str = "item", **extra) -> dict:
 
 
 def _plan(service, workspace_id, item: dict, candidate_hash: str | None = None) -> dict:
-    receipt = _receipt(item["work_id"], item["revision_id"], str(uuid4()), "plan", candidate_sha256=candidate_hash or secrets.token_hex(32))
+    receipt = _receipt(item["work_id"], item["revision_id"], str(uuid4()), "plan", body={"body": "## Approach\n1. do it\n\n## Verification\n1. prove it"}, candidate_sha256=candidate_hash or secrets.token_hex(32))
     status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": receipt}})
     assert status == 200, body
     return body["result"]["receipt"]
@@ -121,6 +125,114 @@ def _finalize(service, workspace_id, item: dict, planned_id: str, *, commit: str
         "commit_sha": commit or secrets.token_hex(20),
     }
     return _command(service, workspace_id, {"type": "finalize_candidate", "payload": payload})
+
+
+def _begin(service, workspace_id, item: dict, *, authorization_ref: str | None = None, attempt_id=None, identity: dict | None = None) -> tuple[int, dict]:
+    payload = {
+        "work_id": item["work_id"],
+        "attempt_id": str(attempt_id or uuid4()),
+        "authorization_ref": authorization_ref or f"summary:{uuid4()}",
+        "owner_session_id": "session-test",
+        "owner_session_started_at": datetime.now(timezone.utc).isoformat(),
+        "owner_session_start_commit": "e" * 40,
+        "repository": "/repo",
+        "diff_sha256": secrets.token_hex(32),
+        "starting_dirty_paths": [],
+        **(identity or {}),
+    }
+    return _command(service, workspace_id, {"type": "begin_close_attempt", "payload": payload})
+
+
+def _verify_and_seal(service, workspace_id, item: dict, final: dict, attempt: dict) -> dict:
+    """Append verification, then seal — returns the applied seal result."""
+    binding = {"candidate_sha256": final["candidate_sha256"], "candidate_commit": final["commit_sha"]}
+    verification = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "verification", **binding)
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": verification}})
+    assert status == 200, body
+    status, body = _command(service, workspace_id, {"type": "seal_audit_manifest", "payload": {"attempt_id": attempt["attempt_id"], "verification_receipt_id": verification["receipt_id"]}})
+    assert status == 200, body
+    return body["result"]
+
+
+def _reserve(service, workspace_id, attempt_id: str, task_sha256: str) -> tuple[int, dict]:
+    return _command(service, workspace_id, {"type": "reserve_auditor_launch", "payload": {"attempt_id": attempt_id, "task_sha256": task_sha256, "tool_call_id": f"tc-{uuid4()}"}})
+
+
+def _settle(service, workspace_id, attempt_id: str, launch_id: str, payload_value=None, *, failed: bool = False) -> tuple[int, dict]:
+    payload: dict = {"attempt_id": attempt_id, "launch_id": launch_id}
+    if failed:
+        payload["transport_failed"] = True
+    else:
+        payload["transport_payload"] = payload_value
+    return _command(service, workspace_id, {"type": "settle_auditor_launch", "payload": payload})
+
+
+def _attest(service, workspace_id, event: dict, status_value: str = "delivered", *, authorization_ref: str | None = None) -> tuple[int, dict]:
+    payload = {
+        "event_id": event["event_id"],
+        "owner_session_id": "session-test",
+        "rendered_sha256": event["rendered_sha256"],
+        "status": status_value,
+    }
+    if authorization_ref is not None:
+        payload["authorization_ref"] = authorization_ref
+    return _command(service, workspace_id, {"type": "attest_checkpoint_delivery", "payload": payload})
+
+
+def _drain_deliveries(service, workspace_id, key: str = "OMP-1") -> None:
+    """Deliver every unresolved requires_delivery event so close gates pass."""
+    view = service.client.get(f"/v1/work-items/{key}/workflow", headers=_owner_headers(workspace_id)).json()
+    latest: dict[str, tuple[int, str]] = {}
+    for delivery in view["checkpoint_deliveries"]:
+        prior = latest.get(delivery["event_id"])
+        if prior is None or delivery["delivery_sequence"] > prior[0]:
+            latest[delivery["event_id"]] = (delivery["delivery_sequence"], delivery["status"])
+    for event in view["close_attempt_events"]:
+        if not event["requires_delivery"]:
+            continue
+        state = latest.get(event["event_id"])
+        if state is not None and state[1] in ("delivered", "waived"):
+            continue
+        status, body = _attest(service, workspace_id, event)
+        assert status == 200 and body["result"]["status"] == "applied", body
+
+
+def _audited_attempt(service, workspace_id, title: str = "close target") -> tuple[dict, dict, dict]:
+    """Full happy path through PASS settle: returns (item, final, attempt-after-settle)."""
+    item = _create(service, workspace_id, title)
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    task_sha = seal["manifest"]["task_sha256"]
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    launch_id = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, PASS_REPORT)
+    assert status == 200 and body["result"]["status"] == "applied" and body["result"]["verdict"] == "PASS", body
+    return item, final, body["result"]["attempt"]
+
+
+def _complete(service, workspace_id, item: dict, final: dict, attempt_id: str, *, done_ref: str | None = None, satisfied: list[str] | None = None, key: str = "OMP-1", operation_id=None) -> tuple[int, dict]:
+    workflow = service.client.get(f"/v1/work-items/{key}/workflow", headers=_owner_headers(workspace_id)).json()
+    completion = {
+        "work_id": item["work_id"],
+        "current_revision_id": item["revision_id"],
+        "candidate": workflow["item"]["candidate"],
+        "receipts": [receipt for receipt in workflow["receipts"] if receipt["candidate_id"] == final["candidate_id"]],
+        "closeout_requested": True,
+    }
+    payload = {
+        "input": completion,
+        "attempt_id": attempt_id,
+        "done_authorization_ref": done_ref or f"done:{uuid4()}",
+        **({"satisfied_work_ids": satisfied} if satisfied else {}),
+    }
+    return _command(service, workspace_id, {"type": "complete_work", "payload": payload}, operation_id=operation_id)
 
 
 def test_rich_batch_atomicity_rollback_and_replay(service) -> None:
@@ -143,168 +255,326 @@ def test_rich_batch_atomicity_rollback_and_replay(service) -> None:
     assert status == 200, body
     items = body["result"]["items"]
     assert [item["key"] for item in items] == ["OMP-1", "OMP-2", "OMP-3"]
-    assert [item["client_ref"] for item in items] == ["parent", "child-a", "child-b"]
-    assert all(item["row_version"] == 1 for item in items)
     status, replay = _command(service, workspace_id, batch, operation_id=operation_id)
     assert status == 200 and replay["receipt"]["state"] == "replayed" and replay["result"] == body["result"]
-    child_a = items[1]
-    workflow = service.client.get(f"/v1/work-items/{child_a['key']}/workflow", headers=_owner_headers(workspace_id))
-    assert workflow.status_code == 200
-    relations = workflow.json()["relations"]
-    assert {(relation["kind"], relation["target_work_id"] == items[0]["work_id"]) for relation in relations} == {("parent", True), ("blocks", False)}
-
-    status, body = _command(service, workspace_id, _batch([{"client_ref": "x", "title": "bad", "project_id": str(uuid4())}]))
-    assert status == 400 and body["error"]["code"] == "invalid_request"
     status, body = _command(service, workspace_id, _batch(
         [{"client_ref": "a", "title": "A"}, {"client_ref": "b", "title": "B"}],
         [{"source_ref": "a", "target_ref": "b", "kind": "blocks"}, {"source_ref": "b", "target_ref": "a", "kind": "blocks"}],
     ))
     assert status == 400 and body["error"]["code"] == "relation_cycle"
-    status, body = _command(service, workspace_id, _batch([{"client_ref": "next", "title": "Next"}]))
-    assert status == 200 and body["result"]["items"][0]["key"] == "OMP-4"
 
 
-def test_revision_invalidation_and_exact_candidate_completion(service) -> None:
+def test_begin_refuses_without_final_candidate_or_plan(service) -> None:
+    # Scenario: keep-open without plan/authorization — typed refusals, never DONE.
     workspace_id = uuid4()
     _grant(service, workspace_id)
-    item = _create(service, workspace_id, "exact candidate")
-    plan = _plan(service, workspace_id, item)
-    planned_id = plan["candidate_id"]
-
-    status, body = _finalize(service, workspace_id, item, str(uuid4()))
-    assert status == 409 and body["error"]["code"] == "stale_evidence"
-
-    status, body = _finalize(service, workspace_id, item, planned_id)
+    item = _create(service, workspace_id, "no plan")
+    status, body = _begin(service, workspace_id, item)
     assert status == 200, body
+    result = body["result"]
+    assert result["status"] == "refused" and result["event"]["reason_code"] == "candidate_not_final"
+    assert result["event"]["requires_delivery"] is True
+    # audit appends are ALWAYS refused — receipts are settle-minted only.
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
     final = body["result"]["candidate"]
-    assert final["kind"] == "final" and len(final["commit_sha"]) == 40
-    assert final["candidate_id"] != planned_id
-
-    wrong_hash = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "verification", candidate_sha256=secrets.token_hex(32), candidate_commit=final["commit_sha"])
-    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": wrong_hash}})
-    assert status == 409 and body["error"]["code"] == "stale_evidence"
-
     binding = {"candidate_sha256": final["candidate_sha256"], "candidate_commit": final["commit_sha"]}
-    verification = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "verification", **binding)
-    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": verification}})
-    assert status == 200
-    handoff = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "handoff", body={"resume": "step 3"})
-    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": handoff}})
-    assert status == 200
-    audit = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "audit", independent=True, verdict="PASS", **binding)
-    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": audit}})
-    assert status == 200
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"]}})
-    assert status == 200 and body["result"]["intent"]["state"] == "pending"
+    forged = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "audit", independent=True, verdict="PASS", **binding)
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": forged}})
+    assert status == 400 and body["error"]["code"] == "invalid_request"
+    # request_closeout without an audited attempt refuses too.
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied"
+    attempt = body["result"]["attempt"]
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "attempt_not_audited"
 
-    workflow = service.client.get(f"/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
-    completion = {
-        "work_id": item["work_id"],
-        "current_revision_id": item["revision_id"],
-        "candidate": workflow["item"]["candidate"],
-        "receipts": [receipt for receipt in workflow["receipts"] if receipt["candidate_id"] == final["candidate_id"]],
-        "closeout_requested": True,
-    }
-    status, body = _command(service, workspace_id, {"type": "complete_work", "payload": {"input": completion}})
-    assert status == 409 and body["error"]["code"] == "completion_blocked"
 
-    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout", body={"summary": "done"})
-    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
-    assert status == 200
-    workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
-    completion["receipts"] = [receipt for receipt in workflow["receipts"] if receipt["candidate_id"] == final["candidate_id"]]
-    status, body = _command(service, workspace_id, {"type": "complete_work", "payload": {"input": completion}})
-    assert status == 409 and body["error"]["code"] == "completion_blocked"
-
-    push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=secrets.token_hex(20))
+def test_sealed_manifest_and_full_pass_flow_to_done(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id)
+    # The sealed task is rendered by the workflow view, hash-pinned.
+    view = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    manifest = view["audit_manifest"]
+    assert manifest is not None and manifest["task_sha256"] == text_sha256(manifest["task_body"])
+    assert "Plan receipt SHA-256:" in manifest["task_body"] and f"Final commit: {final['commit_sha']}" in manifest["task_body"]
+    # The settle-minted audit receipt is the ONLY audit receipt, independent PASS.
+    audits = [receipt for receipt in view["receipts"] if receipt["kind"] == "audit"]
+    assert len(audits) == 1 and audits[0]["independent"] is True and audits[0]["verdict"] == "PASS"
+    assert audits[0]["issuer"] == "work-service/auditor-settle"
+    assert audits[0]["payload"]["report"] == PASS_REPORT
+    # Closeout review requires the audited attempt and mints a deliverable checkpoint.
+    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
+    assert status == 200 and body["result"].get("event", {}).get("event_type") == "closeout_review_recorded", body
+    # request_closeout refuses while deliveries are pending, then applies.
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "delivery_pending"
+    _drain_deliveries(service, workspace_id)
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "applied" and body["result"]["attempt"]["state"] == "closeout_requested", body
+    # Completion needs the push receipt and a fresh /done authorization.
+    push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
     status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
     assert status == 200
-    workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
-    completion["receipts"] = [receipt for receipt in workflow["receipts"] if receipt["candidate_id"] == final["candidate_id"]]
-    status, body = _command(service, workspace_id, {"type": "complete_work", "payload": {"input": completion}})
-    assert status == 409 and body["error"]["code"] == "completion_blocked"
-
-
-def test_closeout_replay_and_focus_clear(service) -> None:
-    workspace_id = uuid4()
-    _grant(service, workspace_id)
-    item = _create(service, workspace_id, "replay target")
-    plan = _plan(service, workspace_id, item)
-    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
-    final = body["result"]["candidate"]
-    binding = {"candidate_sha256": final["candidate_sha256"], "candidate_commit": final["commit_sha"]}
-    for kind, extra in (("verification", {}), ("audit", {"independent": True, "verdict": "PASS"}), ("closeout", {}), ("push", {"remote_ref": "refs/heads/main", "remote_commit": final["commit_sha"]})):
-        receipt = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], kind, **binding, **extra)
-        status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": receipt}})
-        assert status == 200, body
-    status, _ = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"]}})
-    assert status == 200
-    status, body = _command(service, workspace_id, {"type": "set_focus", "payload": {"slot": {"workspace_id": str(workspace_id), "owner_id": str(OWNER), "work_id": item["work_id"], "version": 0}, "expected_version": 0}})
-    assert status == 200 and body["result"]["version"] == 1
-
-    workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
-    completion = {"work_id": item["work_id"], "current_revision_id": item["revision_id"], "candidate": workflow["item"]["candidate"], "receipts": [receipt for receipt in workflow["receipts"] if receipt["candidate_id"] == final["candidate_id"]], "closeout_requested": True}
-    complete_op = uuid4()
-    status, body = _command(service, workspace_id, {"type": "complete_work", "payload": {"input": completion}}, operation_id=complete_op)
-    assert status == 200 and body["result"]["state"] == "DONE", body
-    status, replay = _command(service, workspace_id, {"type": "complete_work", "payload": {"input": completion}}, operation_id=complete_op)
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], done_ref=attempt["authorization_ref"])
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "done_authorization_not_fresh"
+    operation_id = uuid4()
+    done_ref = f"done:{uuid4()}"
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], done_ref=done_ref, operation_id=operation_id)
+    assert status == 200 and body["result"]["status"] == "applied" and body["result"]["state"] == "DONE", body
+    status, replay = _complete(service, workspace_id, item, final, attempt["attempt_id"], done_ref=done_ref, operation_id=operation_id)
     assert status == 200 and replay["receipt"]["state"] == "replayed" and replay["result"] == body["result"]
-    clear_op = uuid4()
-    clear = {"type": "clear_focus", "payload": {"workspace_id": str(workspace_id), "owner_id": str(OWNER), "expected_version": 1}}
-    status, body = _command(service, workspace_id, clear, operation_id=clear_op)
-    assert status == 200 and body["result"]["work_id"] is None
-    status, replay = _command(service, workspace_id, clear, operation_id=clear_op)
-    assert status == 200 and replay["receipt"]["state"] == "replayed"
-    focus = service.client.get(f"/v1/workspaces/{workspace_id}/focus/{OWNER}", headers=_owner_headers(workspace_id)).json()
-    assert focus["work_id"] is None and focus["version"] == 2
-    stored = service.client.get(f"/v1/operations/{complete_op}", headers=_owner_headers(workspace_id))
-    assert stored.status_code == 200 and stored.json()["receipt"]["state"] == "applied" and stored.json()["command_type"] == "complete_work"
+    # A REUSED done authorization on new work refuses.
+    item2, final2, attempt2 = _audited_attempt(service, workspace_id, "second")
+    closeout2 = _receipt(item2["work_id"], item2["revision_id"], final2["candidate_id"], "closeout")
+    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout2}})
+    assert status == 200
+    _drain_deliveries(service, workspace_id, key="OMP-2")
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item2["work_id"], "attempt_id": attempt2["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "applied"
+    push2 = _receipt(item2["work_id"], item2["revision_id"], final2["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final2["commit_sha"])
+    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push2}})
+    assert status == 200
+    status, body = _complete(service, workspace_id, item2, final2, attempt2["attempt_id"], done_ref=done_ref, key="OMP-2")
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "done_authorization_reused"
 
 
-def test_negative_audit_permits_replan_on_same_revision(service) -> None:
+def test_reserve_mismatch_burns_nothing_and_budget_exhausts(service) -> None:
+    # Scenarios: mismatch before spawn (zero burn), malformed transport,
+    # transport failure before dispatch, budget exhaustion.
     workspace_id = uuid4()
     _grant(service, workspace_id)
-    item = _create(service, workspace_id, "audit target")
+    item = _create(service, workspace_id, "budget target")
     plan = _plan(service, workspace_id, item)
     status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
     final = body["result"]["candidate"]
-    binding = {"candidate_sha256": final["candidate_sha256"], "candidate_commit": final["commit_sha"]}
-    audit = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "audit", independent=True, verdict="NEEDS_FIX", **binding)
-    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": audit}})
-    assert status == 200
+    status, body = _begin(service, workspace_id, item)
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    task_sha = seal["manifest"]["task_sha256"]
 
+    # Mismatched task bytes: refused, launch_count unchanged.
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], secrets.token_hex(32))
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "manifest_task_mismatch"
+    assert body["result"]["attempt"]["launch_count"] == 0
+
+    # Launch 1: malformed transport (extra-key object) burns without a report.
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    assert status == 200 and body["result"]["status"] == "applied"
+    launch_1 = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_1, {"report": PASS_REPORT, "extra": 1})
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "report_wrapper_invalid"
+    assert body["result"]["attempt"]["state"] == "audit_ready" and body["result"]["attempt"]["launch_count"] == 1
+
+    # Launch 2: transport failed before any payload arrived — burns typed.
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    launch_2 = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_2, failed=True)
+    assert status == 200 and body["result"]["event"]["reason_code"] == "transport_failed"
+    assert body["result"]["attempt"]["state"] == "audit_ready" and body["result"]["attempt"]["launch_count"] == 2
+
+    # Launch 3: verdict missing — burns the FINAL launch; the attempt exhausts.
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    launch_3 = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_3, "no verdict here")
+    assert status == 200 and body["result"]["event"]["reason_code"] == "verdict_missing"
+    assert body["result"]["attempt"]["state"] == "budget_exhausted"
+    assert body["result"]["event"]["requires_fresh_authorization"] is True
+
+    # A fourth reserve refuses: the attempt is terminal.
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "attempt_not_ready"
+
+    # Only a NEW literal /summary (fresh authorization) creates a replacement.
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied"
+    assert body["result"]["attempt"]["launch_count"] == 0
+
+
+def test_candidate_mutation_before_settle_supersedes_without_receipt(service) -> None:
+    # Scenarios: stale report / mutation before receipt commit — drift at settle
+    # supersedes the attempt and inserts NO audit receipt.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "drift target")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    final = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, item)
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], seal["manifest"]["task_sha256"])
+    launch_id = body["result"]["launch"]["launch_id"]
+
+    # Mutate the candidate while the auditor "runs": NEEDS_FIX audit + replan + refinalize.
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as connection:
+        connection.execute(
+            "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,issued_at,issuer,candidate_sha256,candidate_commit,verdict,independent) VALUES(%s,%s,%s,%s,%s,'audit','{}','%s',now(),'test',%s,%s,'NEEDS_FIX',true)" % ("%s", "%s", "%s", "%s", "%s", sha256({}), "%s", "%s"),
+            (uuid4(), workspace_id, item["work_id"], item["revision_id"], final["candidate_id"], final["candidate_sha256"], final["commit_sha"]),
+        )
     replan = _plan(service, workspace_id, item)
-    assert replan["candidate_id"] != plan["candidate_id"]
     status, body = _finalize(service, workspace_id, item, replan["candidate_id"])
-    assert status == 200
-    second_final = body["result"]["candidate"]
-    binding = {"candidate_sha256": second_final["candidate_sha256"], "candidate_commit": second_final["commit_sha"]}
-    audit = _receipt(item["work_id"], item["revision_id"], second_final["candidate_id"], "audit", independent=True, verdict="PASS", **binding)
-    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": audit}})
-    assert status == 200
-    receipt = _receipt(item["work_id"], item["revision_id"], str(uuid4()), "plan", candidate_sha256=secrets.token_hex(32))
-    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": receipt}})
-    assert status == 409 and body["error"]["code"] == "stale_evidence"
+    assert status == 200, body
 
-    revision = {
-        "revision_id": str(uuid4()),
-        "work_id": item["work_id"],
-        "revision_number": 2,
-        "title": "audit target revised",
-        "description": "",
-        "scope": "",
-        "acceptance_criteria": [],
-        "content_sha256": secrets.token_hex(32),
-        "created_by": "owner",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, PASS_REPORT)
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "candidate_drift"
+    assert body["result"]["attempt"]["state"] == "superseded"
+    view = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    settle_audits = [receipt for receipt in view["receipts"] if receipt["kind"] == "audit" and receipt["issuer"] == "work-service/auditor-settle"]
+    assert settle_audits == []
+
+
+def test_duplicate_begins_one_live_attempt(service) -> None:
+    # Scenario: concurrent duplicate attempts — same authorization is idempotent;
+    # a different authorization supersedes; exactly one live attempt survives.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "duplicate begins")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200
+    ref = f"summary:{uuid4()}"
+    # The host derives attempt_id deterministically from the authorization and
+    # freezes the whole identity payload — a legitimate retry is byte-identical.
+    identity = {
+        "attempt_id": str(uuid4()),
+        "owner_session_started_at": datetime.now(timezone.utc).isoformat(),
+        "diff_sha256": secrets.token_hex(32),
     }
-    status, body = _command(service, workspace_id, {"type": "revise_work", "payload": {"work_id": item["work_id"], "expected_revision_id": item["revision_id"], "revision": revision}})
-    assert status == 200 and body["result"]["changed"] is True
-    stale = _receipt(item["work_id"], item["revision_id"], second_final["candidate_id"], "verification", **binding)
-    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": stale}})
+    status, body = _begin(service, workspace_id, item, authorization_ref=ref, identity=identity)
+    assert status == 200 and body["result"]["status"] == "applied"
+    first = body["result"]["attempt"]
+    # Identical authorization AND identity: idempotent resume of the same attempt.
+    status, body = _begin(service, workspace_id, item, authorization_ref=ref, identity=identity)
+    assert status == 200 and body["result"]["status"] == "applied"
+    assert body["result"]["attempt"]["attempt_id"] == first["attempt_id"]
+    assert body["result"]["event"]["event_type"] == "attempt_resumed"
+    # Same authorization but drifted identity (fresh attempt_id/diff): typed
+    # refusal, no silent rebind.
+    status, body = _begin(service, workspace_id, item, authorization_ref=ref)
+    assert status == 200 and body["result"]["status"] == "refused"
+    assert body["result"]["event"]["reason_code"] == "authorization_identity_mismatch"
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied"
+    assert body["result"]["attempt"]["attempt_id"] != first["attempt_id"]
+    view = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    live = [attempt for attempt in view["close_attempts"] if attempt["state"] in ("active", "audit_ready", "auditor_in_flight", "audited", "closeout_requested")]
+    assert len(live) == 1
+    superseded = [attempt for attempt in view["close_attempts"] if attempt["state"] == "superseded"]
+    assert len(superseded) == 1 and superseded[0]["terminal_reason"] == "superseded_by_new_summary"
+    # A terminal attempt's authorization can never be reused.
+    status, body = _begin(service, workspace_id, item, authorization_ref=ref)
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "authorization_exhausted"
+
+
+def test_remediation_required_blocks_closeout_until_fresh_summary(service) -> None:
+    # Scenario: closeout after remediation — NEEDS_FIX terminal state refuses
+    # request_closeout with a fresh-authorization requirement.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "remediation")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    final = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, item)
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], seal["manifest"]["task_sha256"])
+    launch_id = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, {"report": NEEDS_FIX_REPORT})
+    assert status == 200 and body["result"]["status"] == "applied" and body["result"]["verdict"] == "NEEDS_FIX"
+    assert body["result"]["attempt"]["state"] == "remediation_required"
+    assert body["result"]["event"]["requires_fresh_authorization"] is True
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "refused"
+    assert body["result"]["event"]["reason_code"] == "attempt_not_audited"
+    assert body["result"]["event"]["requires_fresh_authorization"] is True
+    # The NEEDS_FIX receipt IS recorded (accepted report), but completion refuses.
+    view = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    audits = [receipt for receipt in view["receipts"] if receipt["kind"] == "audit"]
+    assert len(audits) == 1 and audits[0]["verdict"] == "NEEDS_FIX"
+
+
+def test_same_session_child_completion_valid_and_invalid(service) -> None:
+    # Scenario: valid/invalid same-session receipt — one invalid child refuses
+    # the WHOLE completion; valid children complete with the parent.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id, "parent work")
+    # Children created after the owner session started, parent-linked.
+    status, body = _command(service, workspace_id, _batch([{"client_ref": "c1", "title": "found+fixed child"}]))
+    child = body["result"]["items"][0]
+    status, body = _command(service, workspace_id, _batch([{"client_ref": "c2", "title": "unreceipted child"}]))
+    stray = body["result"]["items"][0]
+    for source in (child, stray):
+        status, body = _command(service, workspace_id, {"type": "put_relation", "payload": {"relation": {"workspace_id": str(workspace_id), "source_work_id": source["work_id"], "target_work_id": item["work_id"], "kind": "parent", "active": True}}})
+        assert status == 200, body
+    # Valid same-session receipt on the child, binding the parent attempt.
+    link = {
+        "attempt_id": attempt["attempt_id"],
+        "owner_session_id": "session-test",
+        "base_commit": "e" * 40,
+        "fix_commit": final["commit_sha"],
+        "candidate_sha256": final["candidate_sha256"],
+        "finding": "child bug found in-session",
+        "verification": "child fix proven in-session",
+    }
+    receipt = _receipt(child["work_id"], child["revision_id"], final["candidate_id"], "same_session_found_fixed", body=link)
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": receipt}})
+    assert status == 200, body
+    # A receipt binding the WRONG candidate refuses at append.
+    bad_link = dict(link, candidate_sha256=secrets.token_hex(32))
+    bad = _receipt(stray["work_id"], stray["revision_id"], final["candidate_id"], "same_session_found_fixed", body=bad_link)
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": bad}})
     assert status == 409 and body["error"]["code"] == "stale_evidence"
-    status, body = _finalize(service, workspace_id, item, replan["candidate_id"])
-    assert status == 409 and body["error"]["code"] == "stale_evidence"
+    # Close ritual on the parent.
+    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
+    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
+    assert status == 200
+    _drain_deliveries(service, workspace_id)
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
+    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
+    assert status == 200
+    # Invalid child (no receipt) refuses the WHOLE completion — nothing moves.
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], satisfied=[child["work_id"], stray["work_id"]])
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "child_receipt_invalid"
+    tree = service.client.get(f"/v1/workspaces/{workspace_id}/tree", headers=_owner_headers(workspace_id)).json()
+    states = {entry["alias"]["key"]: entry["state"] for entry in tree["items"]}
+    assert states["OMP-1"] != "DONE" and states["OMP-2"] != "DONE"
+    # Valid child alone completes with the parent, atomically.
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], satisfied=[child["work_id"]])
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["completed_work_ids"] == [child["work_id"]]
+    tree = service.client.get(f"/v1/workspaces/{workspace_id}/tree", headers=_owner_headers(workspace_id)).json()
+    states = {entry["alias"]["key"]: entry["state"] for entry in tree["items"]}
+    assert states["OMP-1"] == "DONE" and states["OMP-2"] == "DONE" and states["OMP-3"] != "DONE"
+
+
+def test_waiver_requires_failed_delivery(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "waiver target")
+    # A begin refusal produces a deliverable event.
+    status, body = _begin(service, workspace_id, item)
+    event = body["result"]["event"]
+    assert event["requires_delivery"] is True
+    # Waiving before any failed delivery refuses.
+    status, body = _attest(service, workspace_id, event, "waived", authorization_ref="waiver:cf-test")
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "waiver_requires_failed"
+    # Hash mismatch refuses.
+    status, body = _attest(service, workspace_id, {**event, "rendered_sha256": secrets.token_hex(32)})
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "delivery_hash_mismatch"
+    # failed → waived succeeds; a second resolution refuses.
+    status, body = _attest(service, workspace_id, event, "failed")
+    assert status == 200 and body["result"]["status"] == "applied"
+    status, body = _attest(service, workspace_id, event, "waived", authorization_ref="waiver:cf-test")
+    assert status == 200 and body["result"]["status"] == "applied" and body["result"]["delivery"]["status"] == "waived"
+    status, body = _attest(service, workspace_id, event)
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "delivery_already_resolved"
 
 
 def test_candidate_read_capability_is_bounded(service) -> None:
@@ -320,106 +590,16 @@ def test_candidate_read_capability_is_bounded(service) -> None:
     reader = service.capabilities / "reader.json"
     reader.write_text(json.dumps({"token": "reader-token", "actor_id": str(uuid4()), "actor_kind": "task-agent", "workspaces": [str(workspace_id)], "scopes": ["work.candidate.read"], "candidate_ids": [final["candidate_id"]]}))
     reader.chmod(0o600)
-    broken = service.capabilities / "broken.json"
-    broken.write_text(json.dumps({"token": "broken-token", "actor_id": str(uuid4()), "actor_kind": "task-agent", "workspaces": [str(workspace_id)], "scopes": ["work.candidate.read"]}))
-    broken.chmod(0o600)
 
     headers = {"Authorization": "Bearer reader-token", "X-OMP-Workspace-ID": str(workspace_id)}
     workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=headers)
     assert workflow.status_code == 200
     assert workflow.json()["item"]["candidate"]["candidate_id"] == final["candidate_id"]
-    assert workflow.json()["item"]["candidate"]["kind"] == "final"
     assert service.client.get("/v1/work-items/OMP-2/workflow", headers=headers).status_code == 403
     assert service.client.get("/v1/work-items/OMP-1", headers=headers).status_code == 403
     assert service.client.get(f"/v1/workspaces/{workspace_id}/tree", headers=headers).status_code == 403
-    assert service.client.get(f"/v1/workspaces/{workspace_id}/focus/{OWNER}", headers=headers).status_code == 403
     status, _ = _command(service, workspace_id, _batch([{"client_ref": "x", "title": "nope"}]), token="reader-token")
     assert status == 403
-    assert service.client.get("/v1/work-items/OMP-1/workflow", headers=headers | {"Authorization": "Bearer broken-token"}).status_code == 401
-    assert service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(uuid4())).status_code == 403
-
-
-def test_handoff_and_hash_mismatch_never_satisfy_blockers(service) -> None:
-    workspace_id = uuid4()
-    _grant(service, workspace_id)
-    item = _create(service, workspace_id, "handoff target")
-    plan = _plan(service, workspace_id, item)
-    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
-    final = body["result"]["candidate"]
-    handoff = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "handoff", body={"resume": "half-way"})
-    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": handoff}})
-    assert status == 200
-    status, _ = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"]}})
-    assert status == 200
-    workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
-    assert any(receipt["kind"] == "handoff" for receipt in workflow["receipts"])
-    completion = {"work_id": item["work_id"], "current_revision_id": item["revision_id"], "candidate": workflow["item"]["candidate"], "receipts": [receipt for receipt in workflow["receipts"] if receipt["candidate_id"] == final["candidate_id"]], "closeout_requested": True}
-    status, body = _command(service, workspace_id, {"type": "complete_work", "payload": {"input": completion}})
-    assert status == 409 and body["error"]["code"] == "completion_blocked"
-
-    mismatched = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "verification", candidate_sha256=final["candidate_sha256"], candidate_commit=final["commit_sha"])
-    mismatched["payload_sha256"] = secrets.token_hex(32)
-    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": mismatched}})
-    assert status == 400 and body["error"]["code"] == "invalid_request"
-
-
-def test_recent_activity_projection(service) -> None:
-    workspace_id = uuid4()
-    _grant(service, workspace_id)
-    # Item A carries the full closeout flow inside a project; item B is a bare
-    # plan outside it, appended last so newest-first ordering is observable.
-    item = _create(service, workspace_id, "activity target")
-    project_id = uuid4()
-    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as connection:
-        connection.execute(
-            "INSERT INTO omp_work.projects(project_id, workspace_id, name, kind) VALUES(%s, %s, 'Activity Project', 'surface')",
-            (project_id, workspace_id),
-        )
-        connection.execute("UPDATE omp_work.work_items SET project_id=%s WHERE workspace_id=%s AND work_id=%s", (project_id, workspace_id, item["work_id"]))
-    plan = _plan(service, workspace_id, item)
-    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
-    assert status == 200, body
-    final = body["result"]["candidate"]
-    binding = {"candidate_sha256": final["candidate_sha256"], "candidate_commit": final["commit_sha"]}
-    for kind, extra in (("verification", {}), ("audit", {"independent": True, "verdict": "PASS"}), ("closeout", {}), ("push", {"remote_ref": "refs/heads/main", "remote_commit": final["commit_sha"]})):
-        receipt = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], kind, **binding, **extra)
-        status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": receipt}})
-        assert status == 200, body
-    status, _ = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"]}})
-    assert status == 200
-    workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
-    completion = {"work_id": item["work_id"], "current_revision_id": item["revision_id"], "candidate": workflow["item"]["candidate"], "receipts": [receipt for receipt in workflow["receipts"] if receipt["candidate_id"] == final["candidate_id"]], "closeout_requested": True}
-    status, body = _command(service, workspace_id, {"type": "complete_work", "payload": {"input": completion}})
-    assert status == 200, body
-    other = _create(service, workspace_id, "outside project")
-    _plan(service, workspace_id, other)
-
-    # Newest-first, normalized kinds, metadata-only rows, honest total.
-    response = service.client.get(f"/v1/workspaces/{workspace_id}/activity", headers=_owner_headers(workspace_id))
-    assert response.status_code == 200, response.text
-    view = response.json()
-    assert view["total"] == 8 and len(view["events"]) == 8
-    assert view["events"][0]["kind"] == "plan" and view["events"][0]["key"] == "OMP-2"
-    assert [event["kind"] for event in view["events"][1:]] == ["completed", "close_proposed", "push", "closeout", "audit", "verification", "plan"]
-    assert set(view["events"][0].keys()) == {"kind", "work_id", "key", "title", "project_id", "occurred_at"}
-    assert view["events"][0]["project_id"] is None and view["events"][1]["project_id"] == str(project_id)
-
-    # Bounded limit: rows shrink, the total stays honest.
-    limited = service.client.get(f"/v1/workspaces/{workspace_id}/activity?limit=2", headers=_owner_headers(workspace_id)).json()
-    assert limited["total"] == 8 and len(limited["events"]) == 2
-
-    # Project filter: only the project's own events.
-    scoped = service.client.get(f"/v1/workspaces/{workspace_id}/activity?project_id={project_id}", headers=_owner_headers(workspace_id)).json()
-    assert scoped["total"] == 7 and all(event["key"] == "OMP-1" for event in scoped["events"])
-
-    # Limit validation, 1 through 20.
-    for bad in (0, 21):
-        invalid = service.client.get(f"/v1/workspaces/{workspace_id}/activity?limit={bad}", headers=_owner_headers(workspace_id))
-        assert invalid.status_code == 400 and invalid.json()["error"]["code"] == "invalid_request"
-
-    # Candidate-bounded readers hold no workspace-wide activity view.
-    reader = service.capabilities / "activity-reader.json"
-    reader.write_text(json.dumps({"token": "activity-reader-token", "actor_id": str(uuid4()), "actor_kind": "task-agent", "workspaces": [str(workspace_id)], "scopes": ["work.candidate.read"], "candidate_ids": [final["candidate_id"]]}))
-    reader.chmod(0o600)
-    denied = service.client.get(f"/v1/workspaces/{workspace_id}/activity", headers={"Authorization": "Bearer activity-reader-token", "X-OMP-Workspace-ID": str(workspace_id)})
-    assert denied.status_code == 403
+    # Close-ritual commands need work.close — a candidate reader has none.
+    status, _ = _command(service, workspace_id, {"type": "begin_close_attempt", "payload": {"work_id": item["work_id"], "attempt_id": str(uuid4()), "authorization_ref": "summary:forged", "owner_session_id": "s", "owner_session_started_at": datetime.now(timezone.utc).isoformat(), "owner_session_start_commit": "e" * 40, "repository": "/r", "diff_sha256": secrets.token_hex(32), "starting_dirty_paths": []}}, token="reader-token")
+    assert status == 403

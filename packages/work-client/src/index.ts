@@ -71,7 +71,14 @@ export type OperationReceipt = {
 };
 
 export type RelationKind = "parent" | "blocks" | "duplicate_of" | "related";
-export type EvidenceKind = "plan" | "verification" | "audit" | "push" | "closeout" | "handoff";
+export type EvidenceKind =
+	| "plan"
+	| "verification"
+	| "audit"
+	| "push"
+	| "closeout"
+	| "handoff"
+	| "same_session_found_fixed";
 export type ProjectHealth = "onTrack" | "atRisk" | "offTrack";
 export type Verdict = "PASS" | "NEEDS_FIX" | "BLOCKED";
 
@@ -124,6 +131,98 @@ export type EvidenceReceipt = {
 	remote_commit?: string | null;
 };
 
+// ---- close attempts (OMP-47) ----
+
+export type CloseAttemptState =
+	| "active"
+	| "audit_ready"
+	| "auditor_in_flight"
+	| "audited"
+	| "closeout_requested"
+	| "remediation_required"
+	| "blocked"
+	| "budget_exhausted"
+	| "superseded"
+	| "completed";
+export type CloseAttempt = {
+	attempt_id: UUID;
+	work_id: UUID;
+	revision_id: UUID;
+	candidate_id: UUID;
+	plan_receipt_id: UUID | null;
+	candidate_sha256: string | null;
+	candidate_commit: string | null;
+	owner_session_id: string | null;
+	owner_session_started_at: string | null;
+	owner_session_start_commit: string | null;
+	repository: string | null;
+	diff_sha256: string | null;
+	starting_dirty_paths: string[] | null;
+	authorization_kind: "summary" | "legacy";
+	authorization_ref: string;
+	launch_count: number;
+	accepted_report_count: number;
+	in_flight_launch_id: UUID | null;
+	state: CloseAttemptState;
+	terminal_reason: string | null;
+	requested_at: string;
+	closeout_requested_at: string | null;
+	completed_at: string | null;
+	completion_authorization_ref: string | null;
+};
+export type AuditManifest = {
+	manifest_id: UUID;
+	work_id: UUID;
+	attempt_id: UUID;
+	manifest_version: 1;
+	plan_receipt_id: UUID;
+	verification_receipt_id: UUID;
+	candidate_id: UUID;
+	candidate_sha256: string;
+	candidate_commit: string;
+	task_body: string;
+	task_sha256: string;
+	section_hashes: Record<string, string>;
+	created_at: string;
+};
+export type AuditorLaunch = {
+	launch_id: UUID;
+	attempt_id: UUID;
+	manifest_id: UUID;
+	launch_number: number;
+	task_sha256: string;
+	tool_call_id: string;
+	reserved_at: string;
+};
+export type CloseAttemptEvent = {
+	event_id: UUID;
+	sequence: number | null;
+	work_id: UUID;
+	attempt_id: UUID | null;
+	launch_id: UUID | null;
+	event_type: string;
+	reason_code: string;
+	reason: string;
+	legal_next_actions: string[];
+	remaining_launches: number;
+	remaining_reports: number;
+	requires_fresh_authorization: boolean;
+	rendered_text: string;
+	rendered_sha256: string;
+	requires_delivery: boolean;
+	created_at: string;
+};
+export type CheckpointDelivery = {
+	delivery_id: UUID;
+	event_id: UUID;
+	delivery_sequence: number;
+	owner_session_id: string;
+	rendered_sha256: string;
+	status: "delivered" | "failed" | "waived";
+	authorization_ref: string | null;
+	created_at: string;
+};
+
 // ---- command payloads ----
 
 export type CreateWorkInput = {
@@ -152,7 +251,7 @@ export type FinalizeCandidatePayload = {
 	candidate_sha256: string;
 	commit_sha: string;
 };
-export type RequestCloseoutPayload = { work_id: UUID };
+export type RequestCloseoutPayload = { work_id: UUID; attempt_id: UUID };
 export type CompletionInput = {
 	work_id: UUID;
 	current_revision_id: UUID;
@@ -160,7 +259,39 @@ export type CompletionInput = {
 	receipts: EvidenceReceipt[];
 	closeout_requested: boolean;
 };
-export type CompleteWorkPayload = { input: CompletionInput };
+export type CompleteWorkPayload = {
+	input: CompletionInput;
+	attempt_id: UUID;
+	done_authorization_ref: string;
+	satisfied_work_ids?: UUID[];
+};
+export type BeginCloseAttemptPayload = {
+	work_id: UUID;
+	attempt_id: UUID;
+	authorization_ref: string;
+	owner_session_id: string;
+	owner_session_started_at: string;
+	owner_session_start_commit: string;
+	repository: string;
+	diff_sha256: string;
+	starting_dirty_paths?: string[];
+};
+export type SealAuditManifestPayload = { attempt_id: UUID; verification_receipt_id: UUID };
+export type ReserveAuditorLaunchPayload = { attempt_id: UUID; task_sha256: string; tool_call_id: string };
+export type SettleAuditorLaunchPayload = {
+	attempt_id: UUID;
+	launch_id: UUID;
+	/** UNTOUCHED transport payload — any JSON shape; WorkService owns normalization. */
+	transport_payload?: unknown;
+	transport_failed?: boolean;
+};
+export type AttestCheckpointDeliveryPayload = {
+	event_id: UUID;
+	owner_session_id: string;
+	rendered_sha256: string;
+	status: "delivered" | "failed" | "waived";
+	authorization_ref?: string | null;
+};
 export type RecordProjectHealthPayload = { project_id: UUID; health: ProjectHealth };
 
 export type CommandSmokeResult = { command_type: string; passed: boolean };
@@ -215,6 +346,11 @@ export type Command =
 	| { type: "clear_focus"; payload: ClearFocusPayload }
 	| { type: "append_evidence"; payload: AppendEvidencePayload }
 	| { type: "finalize_candidate"; payload: FinalizeCandidatePayload }
+	| { type: "begin_close_attempt"; payload: BeginCloseAttemptPayload }
+	| { type: "seal_audit_manifest"; payload: SealAuditManifestPayload }
+	| { type: "reserve_auditor_launch"; payload: ReserveAuditorLaunchPayload }
+	| { type: "settle_auditor_launch"; payload: SettleAuditorLaunchPayload }
+	| { type: "attest_checkpoint_delivery"; payload: AttestCheckpointDeliveryPayload }
 	| { type: "request_closeout"; payload: RequestCloseoutPayload }
 	| { type: "complete_work"; payload: CompleteWorkPayload }
 	| { type: "record_project_health"; payload: RecordProjectHealthPayload }
@@ -233,7 +369,16 @@ export type CreatedWorkItem = {
 export type CommandResult =
 	| { type: "create_work_batch"; items: CreatedWorkItem[] }
 	| { type: "revise_work"; revision_id: UUID; changed: boolean }
-	| { type: "set_work_state" | "complete_work"; work_id: UUID; state: string; row_version: number }
+	| { type: "set_work_state"; work_id: UUID; state: string; row_version: number }
+	| {
+			type: "complete_work";
+			status: "applied" | "refused";
+			work_id: UUID;
+			state?: string | null;
+			row_version?: number | null;
+			completed_work_ids?: UUID[];
+			event?: CloseAttemptEvent | null;
+	  }
 	| {
 			type: "put_relation" | "remove_relation";
 			source_work_id: UUID;
@@ -242,9 +387,30 @@ export type CommandResult =
 			active: boolean;
 	  }
 	| { type: "set_focus" | "clear_focus"; workspace_id: UUID; owner_id: UUID; work_id: UUID | null; version: number }
-	| { type: "append_evidence"; receipt: EvidenceReceipt }
+	| { type: "append_evidence"; receipt: EvidenceReceipt; event?: CloseAttemptEvent | null }
 	| { type: "finalize_candidate"; candidate: Candidate }
-	| { type: "request_closeout"; intent: CloseoutIntentView }
+	| {
+			type:
+				| "begin_close_attempt"
+				| "seal_audit_manifest"
+				| "reserve_auditor_launch"
+				| "settle_auditor_launch"
+				| "attest_checkpoint_delivery";
+			status: "applied" | "refused";
+			attempt?: CloseAttempt | null;
+			manifest?: AuditManifest | null;
+			launch?: AuditorLaunch | null;
+			receipt?: EvidenceReceipt | null;
+			delivery?: CheckpointDelivery | null;
+			verdict?: Verdict | null;
+			event: CloseAttemptEvent;
+	  }
+	| {
+			type: "request_closeout";
+			status: "applied" | "refused";
+			attempt?: CloseAttempt | null;
+			event: CloseAttemptEvent;
+	  }
 	| { type: "record_project_health"; health: ProjectHealthView }
 	| {
 			type: "activate_cutover";
@@ -274,14 +440,6 @@ export type WorkItemView = {
 	project_id: UUID | null;
 	archived: boolean;
 };
-export type CloseoutIntentView = {
-	intent_id: UUID;
-	work_id: UUID;
-	revision_id: UUID;
-	candidate_id: UUID;
-	state: "pending" | "completed";
-	requested_at: string | null;
-};
 export type ProjectView = {
 	project_id: UUID;
 	workspace_id: UUID;
@@ -294,7 +452,11 @@ export type WorkflowView = {
 	item: WorkItemView;
 	relations: RelationEdge[];
 	receipts: EvidenceReceipt[];
-	closeout: CloseoutIntentView[];
+	close_attempts: CloseAttempt[];
+	audit_manifest: AuditManifest | null;
+	auditor_launches: AuditorLaunch[];
+	close_attempt_events: CloseAttemptEvent[];
+	checkpoint_deliveries: CheckpointDelivery[];
 	project: ProjectView | null;
 };
 export type WorkspaceTree = {

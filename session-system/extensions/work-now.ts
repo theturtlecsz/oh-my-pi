@@ -36,6 +36,6 @@ export default function workNow(pi: ExtensionAPI) {
 		entryType: "work-now",
 		acceptEntry: data => data.backend === "work",
 		reviewCheckpointHint:
-			"Forward the fresh auditor's report verbatim as the body; the host binds the registered audit receipt.",
+			"The body carries the closeout review; the fresh auditor's report is already on the ledger as the attempt's service-minted audit receipt.",
 	})(pi);
 }

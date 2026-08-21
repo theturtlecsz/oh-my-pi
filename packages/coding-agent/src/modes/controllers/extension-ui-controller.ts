@@ -182,6 +182,8 @@ export class ExtensionUiController {
 			setServiceTier: (family, tier) => this.ctx.session.setServiceTierFamily(family, tier),
 			getCommands: () => getSessionSlashCommands(this.ctx.session),
 			getSessionName: () => this.ctx.sessionManager.getSessionName(),
+			getSessionId: () => this.ctx.sessionManager.getSessionId(),
+			deliverMessage: message => this.ctx.session.queueExtensionDelivery(message),
 			setSessionName: name => this.#updateSessionName(name),
 		};
 		const contextActions: ExtensionContextActions = {
@@ -415,6 +417,8 @@ export class ExtensionUiController {
 			setServiceTier: (family, tier) => this.ctx.session.setServiceTierFamily(family, tier),
 			getCommands: () => getSessionSlashCommands(this.ctx.session),
 			getSessionName: () => this.ctx.sessionManager.getSessionName(),
+			getSessionId: () => this.ctx.sessionManager.getSessionId(),
+			deliverMessage: message => this.ctx.session.queueExtensionDelivery(message),
 			setSessionName: name => this.#updateSessionName(name),
 		};
 		const contextActions: ExtensionContextActions = {

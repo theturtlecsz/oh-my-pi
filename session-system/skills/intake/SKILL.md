@@ -95,7 +95,15 @@ category names stay internal. The scan renders on every interviewing entry
 seam, even when there is nothing left to ask: a quiet session must be visibly
 deliberate, not silently self-directed. On the existing-plan seam, the draft's
 key decisions the owner never personally ratified are judgment calls and enter
-the asking-you pile as confirm-or-overturn items. `--publish` skips the
+the asking-you pile as confirm-or-overturn items. Mechanics of "rendered" (obs #122, #137): the scan MUST be a standalone
+assistant message with ZERO tool calls in that turn — the first
+AskUserQuestion may only follow in a later turn; text co-emitted with a tool
+call can be swallowed by the harness and leaves no evidence of rendering.
+If delivery is ever disputed, the wire transcript settles it: grep the main
+transcript (the sibling `<session>.jsonl`, not the session artifact
+directory) for the content in a `role:assistant` TEXT block — recalled
+composition and quote/echo hits in advisor or subagent streams are
+non-evidence. `--publish` skips the
 interview and the scan by definition. There is NO question quota — the rule is
 "facts get looked up, judgment calls get asked" (owner ruling at HOME-108
 execution, 2026-08-13, superseding the floor-count design).
@@ -293,11 +301,24 @@ decision), Q&A transcript, task breakdown, scores of any kind.
 No side effects before lint passes — the ontology lives at the ledger. Check:
 
 - [ ] Every acceptance criterion asserting live state is probed (result recorded)
-      or explicitly hedged ("unverified — probe at build").
+      or explicitly hedged ("unverified — probe at build"). Hedging is
+      permitted ONLY when the probe is genuinely expensive (needs the owner,
+      another device, money, or long setup); a probe runnable in-session in
+      minutes is run now — "probe at build" is not a license to skip cheap
+      verification (obs #111).
 - [ ] Every Deferred item carries a category tag.
 - [ ] Every noun used in acceptance criteria is defined in Entities & Rules (or
       the section is legitimately absent because no new noun was minted).
 - [ ] Target surface exists — probe the workflow tool's `tree`, don't assume.
+      When `tree` can't confirm the target, the phase-1 `create_issue`
+      preview (which writes nothing) is the canonical existence probe — its
+      preview either resolves the target or errors (obs #110).
+- [ ] Any categorical mapping over live records (states → buckets/labels/
+      branches) was exercised against the single most important live
+      exemplar (the current NOW, the newest record) with the resulting
+      rendered line shown in the blueprint — and a falsified mapping
+      assumption at execution is a surfaced conflict + parked decision,
+      never a silent in-flight contract change (obs #112).
 - [ ] Blocking edges among proposed issues are acyclic.
 - [ ] The visible scan was shown before the session's first question (a
       no-question session still shows it).
@@ -364,5 +385,9 @@ questions, the cap never tripped; (c) owner-codified independent
 multi-complaint publication (Blueprint section); (d) added the BINDING visible
 scan (HOME-108; owner revised the numeric-floor design at execution); (e)
 folded obs #103 (already present), #108, #109 into the lint gate. Next review
-after ~5 more real intake sessions (count: 8 as of 2026-08-19 — HOME-111; HOME-112; HOME-123; HOME-130; HOME-131; HOME-136; HOME-137; OMP-25). Increment the
-count line here at the end of every real intake session.
+after ~5 more real intake sessions (count: 9 as of 2026-08-20 — HOME-111; HOME-112; HOME-123; HOME-130; HOME-131; HOME-136; HOME-137; OMP-25; OMP-38). Increment the
+count in `~/.agents/skill-observations/intake-session-count.txt` (one line:
+`count: N as of YYYY-MM-DD — <keys>`) at the end of every real intake
+session. The counter lives OUTSIDE this file so routine bookkeeping never
+edits a methodology file governed by staged-only review (obs #114); the
+count line above is the last in-file value, frozen at externalization.

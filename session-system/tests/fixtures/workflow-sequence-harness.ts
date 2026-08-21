@@ -4,11 +4,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ExtensionRunner, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { confirmRoundTrip } from "./two-phase";
-import { currentAuditBinding, currentBindingGeneration, registerAuditBinding } from "../../extensions/workflow/audit-bridge";
+import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "summary", "summary-subagent", "done", "footer", "audit", "restore", "center", "center-scoped", "center-stale"];
+const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "done", "footer", "audit", "restore", "center", "center-scoped", "center-stale"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -29,7 +29,65 @@ let nowSelected = mode === "restore";
 let nowId: string | null = mode === "restore" ? "id-1" : null;
 let slotVersion = 1;
 const receipts: Array<Record<string, unknown>> = [];
-const closeoutIntents: Array<{ state: string; candidate_id: string }> = [];
+interface MockAttempt {
+	attempt_id: string;
+	work_id: string;
+	revision_id: string;
+	candidate_id: string;
+	plan_receipt_id: string | null;
+	candidate_sha256: string | null;
+	candidate_commit: string | null;
+	owner_session_id: string | null;
+	owner_session_started_at: string | null;
+	owner_session_start_commit: string | null;
+	repository: string | null;
+	diff_sha256: string | null;
+	starting_dirty_paths: string[];
+	authorization_kind: string;
+	authorization_ref: string;
+	launch_count: number;
+	accepted_report_count: number;
+	in_flight_launch_id: string | null;
+	state: string;
+	terminal_reason: string | null;
+	requested_at: string;
+	closeout_requested_at: string | null;
+	completed_at: string | null;
+	completion_authorization_ref: string | null;
+}
+const attempts: MockAttempt[] = [];
+const manifests: Array<Record<string, unknown>> = [];
+const launches: Array<Record<string, unknown>> = [];
+const closeEvents: Array<Record<string, unknown>> = [];
+const deliveries: Array<Record<string, unknown>> = [];
+let eventSeq = 0;
+const beginCalls: Array<Record<string, unknown>> = [];
+const settleCalls: Array<Record<string, unknown>> = [];
+const attestCalls: Array<Record<string, unknown>> = [];
+function mockEvent(workId: string, attemptId: string | null, eventType: string, reasonCode: string, requiresDelivery: boolean): Record<string, unknown> {
+	eventSeq += 1;
+	const rendered = `CLOSE ATTEMPT — ${eventType}\n${reasonCode}: mock`;
+	const event = {
+		event_id: `ev-${eventSeq}`,
+		sequence: eventSeq,
+		work_id: workId,
+		attempt_id: attemptId,
+		launch_id: null,
+		event_type: eventType,
+		reason_code: reasonCode,
+		reason: "mock",
+		legal_next_actions: [],
+		remaining_launches: 3,
+		remaining_reports: 2,
+		requires_fresh_authorization: false,
+		rendered_text: rendered,
+		rendered_sha256: new Bun.CryptoHasher("sha256").update(rendered, "utf8").digest("hex"),
+		requires_delivery: requiresDelivery,
+		created_at: new Date().toISOString(),
+	};
+	closeEvents.push(event);
+	return event;
+}
 
 interface MockWorkItem {
 	work_id: string;
@@ -38,7 +96,7 @@ interface MockWorkItem {
 	revision: { revision_id: string; title: string; description: string; scope: string; acceptance_criteria: string[] };
 	state: string;
 	project_id: string | null;
-	candidate: { candidate_id: string; candidate_sha256: string } | null;
+	candidate: { candidate_id: string; candidate_sha256: string; commit_sha?: string } | null;
 }
 
 const items = new Map<string, MockWorkItem>();
@@ -155,6 +213,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 		const audit = receipts.filter(r => r.kind === "audit").at(-1) as Record<string, unknown> | undefined;
 		const closeout = receipts.filter(r => r.kind === "closeout").at(-1) as Record<string, unknown> | undefined;
 		const review = closeout ?? audit;
+		const live = attempts.find(a => ["active", "audit_ready", "auditor_in_flight", "audited", "closeout_requested"].includes(a.state));
 		return new Response(
 			JSON.stringify({
 				item: it,
@@ -162,7 +221,11 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 				plan: plan ? { plan_name: "work-plan.md", plan_sha256: ((plan.payload as Record<string, unknown>)?.plan_sha256 as string) ?? "", at: plan.issued_at } : null,
 				handoff: handoff ? { at: handoff.issued_at } : null,
 				review: review ? { hash: String((review.payload_sha256 as string) ?? "").slice(0, 12), at: review.issued_at } : null,
-				closeout: closeoutIntents,
+				close_attempts: attempts,
+				audit_manifest: live ? (manifests.find(m => m.attempt_id === live.attempt_id) ?? null) : null,
+				auditor_launches: launches,
+				close_attempt_events: closeEvents,
+				checkpoint_deliveries: deliveries,
 				relations: [],
 				receipts,
 				current_candidate: it.candidate,
@@ -296,14 +359,171 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 				{ status: 200 },
 			);
 		}
+		if (cmdType === "begin_close_attempt") {
+			beginCalls.push(payload);
+			const it = items.get(payload.work_id as string) ?? initialItem;
+			if (!it.candidate || !("commit_sha" in it.candidate) || !(it.candidate as { commit_sha?: string }).commit_sha) {
+				const event = mockEvent(it.work_id, null, "close_attempt_refused", "candidate_not_final", true);
+				return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-begin-${eventSeq}` }, result: { type: "begin_close_attempt", status: "refused", attempt: null, event } }), { status: 200 });
+			}
+			for (const attempt of attempts) {
+				if (["active", "audit_ready", "auditor_in_flight", "audited", "closeout_requested"].includes(attempt.state)) {
+					attempt.state = "superseded";
+					attempt.terminal_reason = "superseded_by_new_summary";
+				}
+			}
+			const candidate = it.candidate as { candidate_id: string; candidate_sha256: string; commit_sha?: string };
+			const attempt: MockAttempt = {
+				attempt_id: payload.attempt_id as string,
+				work_id: it.work_id,
+				revision_id: it.revision.revision_id,
+				candidate_id: candidate.candidate_id,
+				plan_receipt_id: "plan-receipt-1",
+				candidate_sha256: candidate.candidate_sha256,
+				candidate_commit: candidate.commit_sha ?? null,
+				owner_session_id: payload.owner_session_id as string,
+				owner_session_started_at: payload.owner_session_started_at as string,
+				owner_session_start_commit: payload.owner_session_start_commit as string,
+				repository: payload.repository as string,
+				diff_sha256: payload.diff_sha256 as string,
+				starting_dirty_paths: (payload.starting_dirty_paths as string[]) ?? [],
+				authorization_kind: "summary",
+				authorization_ref: payload.authorization_ref as string,
+				launch_count: 0,
+				accepted_report_count: 0,
+				in_flight_launch_id: null,
+				state: "active",
+				terminal_reason: null,
+				requested_at: new Date().toISOString(),
+				closeout_requested_at: null,
+				completed_at: null,
+				completion_authorization_ref: null,
+			};
+			attempts.push(attempt);
+			const event = mockEvent(it.work_id, attempt.attempt_id, "attempt_begun", "attempt_begun", false);
+			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-begin-${eventSeq}` }, result: { type: "begin_close_attempt", status: "applied", attempt, event } }), { status: 200 });
+		}
+		if (cmdType === "seal_audit_manifest") {
+			const attempt = attempts.find(a => a.attempt_id === payload.attempt_id);
+			if (!attempt) throw new Error("seal without attempt");
+			const taskBody = [
+				"Approved plan",
+				`Plan receipt SHA-256: ${"d".repeat(64)}`,
+				"the exact stored plan body",
+				"",
+				"Acceptance criteria",
+				"- AC-1: the focused check passes",
+				"",
+				"Starting state (commit + pre-existing dirty files)",
+				`Start commit: ${attempt.owner_session_start_commit}`,
+				"Pre-existing dirty files: (none)",
+				"",
+				"Final diff",
+				"Mode: git-range-sha256",
+				`Repository: ${attempt.repository}`,
+				`Start commit: ${attempt.owner_session_start_commit}`,
+				`Final commit: ${attempt.candidate_commit}`,
+				`SHA-256: ${attempt.diff_sha256}`,
+				"",
+				"Verification",
+				"bun test → pass",
+			].join("\n");
+			const manifest = {
+				manifest_id: `man-${attempt.attempt_id}`,
+				work_id: attempt.work_id,
+				attempt_id: attempt.attempt_id,
+				manifest_version: 1,
+				plan_receipt_id: "plan-receipt-1",
+				verification_receipt_id: payload.verification_receipt_id,
+				candidate_id: attempt.candidate_id,
+				candidate_sha256: attempt.candidate_sha256,
+				candidate_commit: attempt.candidate_commit,
+				task_body: taskBody,
+				task_sha256: new Bun.CryptoHasher("sha256").update(taskBody, "utf8").digest("hex"),
+				section_hashes: {},
+				created_at: new Date().toISOString(),
+			};
+			manifests.push(manifest);
+			attempt.state = "audit_ready";
+			const event = mockEvent(attempt.work_id, attempt.attempt_id, "manifest_sealed", "manifest_sealed", false);
+			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-seal-${eventSeq}` }, result: { type: "seal_audit_manifest", status: "applied", attempt, manifest, event } }), { status: 200 });
+		}
+		if (cmdType === "reserve_auditor_launch") {
+			const attempt = attempts.find(a => a.attempt_id === payload.attempt_id);
+			const manifest = manifests.find(m => m.attempt_id === payload.attempt_id);
+			if (!attempt || !manifest) throw new Error("reserve without seal");
+			if (payload.task_sha256 !== manifest.task_sha256) {
+				const event = mockEvent(attempt.work_id, attempt.attempt_id, "close_attempt_refused", "manifest_task_mismatch", true);
+				return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-res-${eventSeq}` }, result: { type: "reserve_auditor_launch", status: "refused", attempt, event } }), { status: 200 });
+			}
+			if (attempt.state !== "audit_ready") {
+				const event = mockEvent(attempt.work_id, attempt.attempt_id, "close_attempt_refused", "attempt_not_ready", true);
+				return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-res-${eventSeq}` }, result: { type: "reserve_auditor_launch", status: "refused", attempt, event } }), { status: 200 });
+			}
+			attempt.launch_count += 1;
+			attempt.state = "auditor_in_flight";
+			const launch = { launch_id: `launch-${attempt.launch_count}`, attempt_id: attempt.attempt_id, manifest_id: manifest.manifest_id, launch_number: attempt.launch_count, task_sha256: payload.task_sha256, tool_call_id: payload.tool_call_id, reserved_at: new Date().toISOString() };
+			attempt.in_flight_launch_id = launch.launch_id as string;
+			launches.push(launch);
+			const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_reserved", "auditor_launch_reserved", false);
+			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-res-${eventSeq}` }, result: { type: "reserve_auditor_launch", status: "applied", attempt, launch, event } }), { status: 200 });
+		}
+		if (cmdType === "settle_auditor_launch") {
+			settleCalls.push(payload);
+			const attempt = attempts.find(a => a.attempt_id === payload.attempt_id);
+			if (!attempt) throw new Error("settle without attempt");
+			attempt.in_flight_launch_id = null;
+			const transport = payload.transport_payload;
+			const text = typeof transport === "string" ? transport : typeof (transport as Record<string, unknown>)?.report === "string" ? String((transport as Record<string, unknown>).report) : "";
+			const verdictMatch = /^VERDICT\s*:\s*(PASS|NEEDS_FIX|BLOCKED)\b/.exec(text.trim());
+			if (payload.transport_failed === true || !verdictMatch) {
+				attempt.state = attempt.launch_count >= 3 ? "budget_exhausted" : "audit_ready";
+				if (attempt.state === "budget_exhausted") attempt.terminal_reason = "auditor_budget_exhausted";
+				const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_settled", payload.transport_failed === true ? "transport_failed" : "verdict_missing", true);
+				return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-set-${eventSeq}` }, result: { type: "settle_auditor_launch", status: "refused", attempt, event } }), { status: 200 });
+			}
+			const verdict = verdictMatch[1];
+			attempt.accepted_report_count += 1;
+			attempt.state = verdict === "PASS" ? "audited" : verdict === "NEEDS_FIX" ? "remediation_required" : "blocked";
+			if (verdict !== "PASS") attempt.terminal_reason = verdict === "NEEDS_FIX" ? "needs_fix" : "auditor_blocked";
+			const receipt = {
+				receipt_id: `rec-audit-${eventSeq}`,
+				work_id: attempt.work_id,
+				revision_id: attempt.revision_id,
+				candidate_id: attempt.candidate_id,
+				kind: "audit",
+				payload: { report: text.trim() },
+				payload_sha256: "0".repeat(64),
+				issuer: "work-service/auditor-settle",
+				issued_at: new Date().toISOString(),
+				candidate_sha256: attempt.candidate_sha256,
+				candidate_commit: attempt.candidate_commit,
+				verdict,
+				independent: true,
+			};
+			receipts.push(receipt);
+			comments.push({ body: text.trim(), createdAt: new Date().toISOString() });
+			const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_settled", `verdict_${verdict.toLowerCase()}`, true);
+			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-set-${eventSeq}` }, result: { type: "settle_auditor_launch", status: "applied", attempt, receipt, verdict, event } }), { status: 200 });
+		}
+		if (cmdType === "attest_checkpoint_delivery") {
+			attestCalls.push(payload);
+			const target = closeEvents.find(e => e.event_id === payload.event_id);
+			if (!target) throw new Error("attest without event");
+			deliveries.push({ delivery_id: `del-${deliveries.length + 1}`, event_id: payload.event_id, delivery_sequence: deliveries.filter(d => d.event_id === payload.event_id).length + 1, owner_session_id: payload.owner_session_id, rendered_sha256: payload.rendered_sha256, status: payload.status, authorization_ref: payload.authorization_ref ?? null, created_at: new Date().toISOString() });
+			const event = mockEvent(target.work_id as string, (target.attempt_id as string) ?? null, "checkpoint_delivery_recorded", `delivery_${payload.status}`, false);
+			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-att-${eventSeq}` }, result: { type: "attest_checkpoint_delivery", status: "applied", delivery: deliveries.at(-1), event } }), { status: 200 });
+		}
 		if (cmdType === "request_closeout") {
-			const it = items.get("id-1") ?? initialItem;
-			const intent = { state: "pending", candidate_id: it.candidate?.candidate_id ?? "cand-1" };
-			closeoutIntents.push(intent);
+			const attempt = attempts.find(a => a.attempt_id === payload.attempt_id);
+			if (!attempt) throw new Error("request_closeout without attempt");
+			attempt.state = "closeout_requested";
+			attempt.closeout_requested_at = new Date().toISOString();
+			const event = mockEvent(attempt.work_id, attempt.attempt_id, "closeout_requested", "closeout_requested", false);
 			return new Response(
 				JSON.stringify({
 					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000015" },
-					result: { type: "request_closeout", intent },
+					result: { type: "request_closeout", status: "applied", attempt, event },
 				}),
 				{ status: 200 },
 			);
@@ -313,11 +533,18 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			const inp = payload.input as Record<string, unknown>;
 			const it = items.get((inp?.work_id as string) ?? "id-1") ?? initialItem;
 			it.state = "DONE";
+			const attempt = attempts.find(a => a.attempt_id === payload.attempt_id);
+			if (attempt) {
+				attempt.state = "completed";
+				attempt.completed_at = new Date().toISOString();
+				attempt.completion_authorization_ref = (payload.done_authorization_ref as string) ?? null;
+			}
 			comments.push({ body: "**Owner verdict in session: done**", createdAt: new Date().toISOString() });
+			const event = mockEvent(it.work_id, attempt?.attempt_id ?? null, "work_completed", "work_completed", false);
 			return new Response(
 				JSON.stringify({
 					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000016" },
-					result: { type: "complete_work", work_id: it.work_id, state: "DONE", row_version: 2 },
+					result: { type: "complete_work", status: "applied", work_id: it.work_id, state: "DONE", row_version: 2, completed_work_ids: (payload.satisfied_work_ids as string[]) ?? [], event },
 				}),
 				{ status: 200 },
 			);
@@ -364,7 +591,7 @@ const runner = new ExtensionRunner(
 	loaded.extensions,
 	loaded.runtime,
 	probe,
-	{ getCwd: () => probe, getBranch: () => inheritedNow } as never,
+	{ getCwd: () => probe, getBranch: () => inheritedNow, getSessionId: () => "session-test" } as never,
 	{ getAvailable: () => [fableModel, gptModel], hasProvider: () => true } as never,
 	undefined,
 	{ getModelRole: (role: string) => (role === "audit" ? "openai/gpt-5.2" : undefined), get: () => undefined, getStorage: () => undefined } as never,
@@ -375,6 +602,8 @@ const runner = new ExtensionRunner(
 runner.initialize(
 	{
 		appendEntry: () => {},
+		getSessionId: () => "session-test",
+		deliverMessage: async () => {},
 		setModel: async () => true,
 		getThinkingLevel: () => "high",
 		setThinkingLevel: () => {},
@@ -422,16 +651,13 @@ runner.initialize(
 		},
 	} as never,
 );
-// OMP-43: lifecycle events clear the shared audit bridge ONLY at task depth 0 —
-// a subagent's session_start/switch (the auditor itself) must leave the owner's
-// in-flight binding intact. Seed a binding before the start event and observe.
+// OMP-47: the process-global audit bridge is gone; owner lifecycle now resets
+// the shared transcript ref (confirmation receipts) only at task depth 0.
 const seedLifecycle = mode === "summary" || mode === "summary-subagent";
-const seedBinding = { candidateId: "cand-seed", candidateSha256: "0".repeat(64), commitSha: "f".repeat(40), planReceiptSha256: "1".repeat(64) };
-if (seedLifecycle) registerAuditBinding(seedBinding);
-const generationBeforeStart = currentBindingGeneration();
+const transcriptBeforeStart = currentTranscriptRef();
 await runner.emit({ type: "session_start" } as never);
 const lifecycleAfterStart = seedLifecycle
-	? { generationChanged: currentBindingGeneration() !== generationBeforeStart, bindingPresent: currentAuditBinding() !== null }
+	? { transcriptChanged: currentTranscriptRef() !== transcriptBeforeStart }
 	: undefined;
 const ctx = runner.createContext();
 
@@ -510,13 +736,10 @@ if (mode === "intake") {
 } else if (mode === "summary" || mode === "summary-subagent") {
 	out.lifecycleAfterStart = lifecycleAfterStart;
 	if (mode === "summary-subagent") {
-		// OMP-43: a subagent session_switch must also leave the shared bridge alone.
-		const generationBeforeSwitch = currentBindingGeneration();
+		// OMP-43: a subagent session_switch must leave the shared transcript ref alone.
+		const transcriptBeforeSwitch = currentTranscriptRef();
 		await runner.emit({ type: "session_switch", reason: "resume" } as never);
-		out.lifecycleAfterSwitch = {
-			generationChanged: currentBindingGeneration() !== generationBeforeSwitch,
-			bindingPresent: currentAuditBinding() !== null,
-		};
+		out.lifecycleAfterSwitch = { transcriptChanged: currentTranscriptRef() !== transcriptBeforeSwitch };
 	}
 	if (mode === "summary") await setNow(); // subagent mode inherits NOW from the branch
 	if (mode === "summary") {
@@ -532,14 +755,11 @@ if (mode === "intake") {
 	out.afterStructured = await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "review body" });
 	out.reviewBodies = comments.filter(comment => comment.body.startsWith("**Session review**")).map(comment => comment.body);
 	if (mode === "summary") {
-		// OMP-43 depth-0 control: an OWNER session_switch still clears the bridge.
-		registerAuditBinding(seedBinding);
-		const generationBeforeSwitch = currentBindingGeneration();
+		// OMP-43 depth-0 control: an OWNER session_switch still resets the shared ref.
+		const transcriptBeforeSwitch = currentTranscriptRef();
 		await runner.emit({ type: "session_switch", reason: "resume" } as never);
-		out.ownerSwitchLifecycle = {
-			generationChanged: currentBindingGeneration() !== generationBeforeSwitch,
-			bindingPresent: currentAuditBinding() !== null,
-		};
+		out.ownerSwitchLifecycle = { transcriptChanged: currentTranscriptRef() !== transcriptBeforeSwitch };
+		out.beginCalls = beginCalls.length;
 	}
 	out.uiCalls = uiCalls;
 } else if (mode === "restore") {
@@ -637,14 +857,17 @@ if (mode === "intake") {
 	await setNow();
 	out.callsAfterSetNow = [...statusCalls];
 } else if (mode === "audit") {
-	// HOME-147 bridge contract end-to-end: the auditor result arrives through
-	// model-bookends (separate top-level extension, separate module graph), the
-	// receipt crosses the process-global bridge, and the host's
-	// work/append_evidence/audit consumes exactly one receipt bound to the
-	// verbatim bytes.
+	// OMP-47 sealed-flow end-to-end: the ledger seals the auditor task after
+	// verification; get_work renders it byte-for-byte; model-bookends reserves
+	// one launch against the EXACT bytes and settles with the untouched
+	// transport payload; the service mints the audit receipt itself.
 	await setNow();
 	await approve(planA);
-	const REPORT_SECTIONS_TAIL = [
+	const REPORT = [
+		"VERDICT: PASS",
+		"",
+		"FINDINGS",
+		"(none)",
 		"",
 		"ACCEPTANCE COVERAGE",
 		"| AC-1 | met | tests |",
@@ -657,79 +880,50 @@ if (mode === "intake") {
 		"",
 		"REMAINING QUESTIONS",
 		"none",
-	];
-	const REPORT = ["VERDICT: PASS", "", "FINDINGS", "(none)", ...REPORT_SECTIONS_TAIL].join("\n");
+	].join("\n");
+	// Pre-summary close-ritual writes are refused (audit is not even a kind).
 	out.unauthorized = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT });
-	await runner.emitInput("/summary", undefined, "interactive");
+	// Production shape: the client delivers /summary as a structured
+	// skill-prompt only — one command, one authorization, one begin.
 	await runner.emit(summaryMessage as never);
-	// OMP-38: the auditor task is reconstructed from the ledger's PLAN PACKET —
-	// get_work supplies the bound Final commit and plan receipt SHA-256.
+	out.beginCalls = beginCalls.length;
+	out.beginSession = beginCalls[0] ? { hasStartCommit: typeof beginCalls[0].owner_session_start_commit === "string", hasDiffSha: typeof beginCalls[0].diff_sha256 === "string", hasAuthorization: String(beginCalls[0].authorization_ref ?? "").startsWith("summary:") } : null;
+	// Verification append seals the manifest.
+	out.verify = await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "bun test → pass" });
 	const getWork = await execute({ action: "get_work", work: "HOME-1" });
 	out.getWork = getWork;
-	const packetCommit = /^final commit: ([0-9a-f]{40})$/m.exec(getWork)?.[1] ?? "";
-	const packetReceiptSha = /^plan receipt sha256: ([0-9a-f]{64})$/m.exec(getWork)?.[1] ?? "";
-	const packetPlanBody = (getWork.split("plan body (exact stored bytes):\n")[1] ?? "").trim();
-	const packetCriteria = (/^acceptance criteria:\n([\s\S]*?)^plan body /m.exec(getWork)?.[1] ?? "")
-		.trim()
-		.split("\n")
-		.map(line => line.replace(/^- /, ""))
-		.filter(line => line && line !== "(none recorded)");
-	out.packetCommit = packetCommit;
-	out.packetReceiptSha = packetReceiptSha;
-	out.packetPlanBody = packetPlanBody;
-	out.packetCriteria = packetCriteria;
-	// The Approved plan section carries the packet's EXACT stored plan body —
-	// which itself contains `## Approach`/`## Verification` headings; the gate's
-	// ordered section parse must not let those satisfy or truncate outer sections.
-	const AUDIT_TASK = [
-		"Approved plan:",
-		`Plan receipt SHA-256: ${packetReceiptSha}`,
-		packetPlanBody,
-		"Acceptance criteria:",
-		...packetCriteria.map(criterion => `- ${criterion}`),
-		"Starting state: commit abc123; pre-existing dirty files: none.",
-		"Final diff:",
-		`Final commit: ${packetCommit}`,
-		"```diff",
-		"--- a/x",
-		"+++ b/x",
-		"@@ -1,1 +1,1 @@",
-		"-old shared path",
-		"+new shared path",
-		"```",
-		"Verification: bun test → pass.",
-	].join("\n");
-	// OMP-43/OMP-38 TOCTOU: an owner-side rebind while the auditor runs — even
-	// re-registering the IDENTICAL binding (A→A) — refuses the late report and
-	// releases the slot without consuming the bounded replacement.
-	const spawn0 = await runner.emitToolCall({
+	const sealedBody = /----- SEALED AUDITOR TASK BEGIN -----\n([\s\S]*?)\n----- SEALED AUDITOR TASK END -----/.exec(getWork)?.[1] ?? "";
+	out.sealedBodyPresent = sealedBody.length > 0;
+	out.sealedHasManifest = sealedBody.includes("Mode: git-range-sha256") && /Final commit: [0-9a-f]{40}/.test(sealedBody);
+	// Wrong bytes: blocked BEFORE spawn, zero slot burn.
+	const wrong = await runner.emitToolCall({
 		type: "tool_call",
 		toolName: "task",
 		toolCallId: "aud-0",
-		input: { context: "audit the completed work", tasks: [{ agent: "auditor", task: AUDIT_TASK }] },
+		input: { context: "audit", tasks: [{ agent: "auditor", task: `${sealedBody} tampered` }] },
 	} as never);
-	out.spawn0Blocked = spawn0 && typeof spawn0 === "object" && "block" in spawn0 ? Boolean(spawn0.block) : false;
-	const liveBinding = currentAuditBinding();
-	if (!liveBinding) throw new Error("no audit binding after /summary gate");
-	registerAuditBinding(liveBinding);
-	const stale = (await runner.emitToolResult({
-		type: "tool_result",
+	out.wrongBlocked = wrong && typeof wrong === "object" && "block" in wrong ? Boolean(wrong.block) : false;
+	out.wrongReason = wrong && typeof wrong === "object" && "reason" in wrong ? String(wrong.reason) : "";
+	out.launchCountAfterWrong = attempts.at(-1)?.launch_count ?? -1;
+	// outputSchema is refused.
+	const schema = await runner.emitToolCall({
+		type: "tool_call",
 		toolName: "task",
-		toolCallId: "aud-0",
-		input: {},
-		content: [{ type: "text", text: REPORT }],
-		details: { results: [{ output: REPORT }] },
-		isError: false,
-	} as never)) as { content?: Array<{ type: string; text?: string }> } | undefined;
-	out.staleRefusal = (stale?.content ?? []).map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-	const spawn = await runner.emitToolCall({
+		toolCallId: "aud-s",
+		input: { context: "audit", tasks: [{ agent: "auditor", task: sealedBody, outputSchema: { type: "object" } }] },
+	} as never);
+	out.schemaBlocked = schema && typeof schema === "object" && "block" in schema ? Boolean(schema.block) : false;
+	// Exact bytes: reserved, spawn proceeds.
+	const exact = await runner.emitToolCall({
 		type: "tool_call",
 		toolName: "task",
 		toolCallId: "aud-1",
-		input: { context: "audit the completed work", tasks: [{ agent: "auditor", task: AUDIT_TASK }] },
+		input: { context: "audit", tasks: [{ agent: "auditor", task: sealedBody }] },
 	} as never);
-	out.spawnBlocked = spawn && typeof spawn === "object" && "block" in spawn ? Boolean(spawn.block) : false;
-	await runner.emitToolResult({
+	out.exactBlocked = exact && typeof exact === "object" && "block" in exact ? Boolean(exact.block) : false;
+	out.launchCountAfterExact = attempts.at(-1)?.launch_count ?? -1;
+	// The tool result settles with the UNTOUCHED transport payload.
+	const settled = (await runner.emitToolResult({
 		type: "tool_result",
 		toolName: "task",
 		toolCallId: "aud-1",
@@ -737,18 +931,40 @@ if (mode === "intake") {
 		content: [{ type: "text", text: `<task-result id="Aud" agent="auditor" status="completed">\n<output>\n${REPORT}\n</output>\n</task-result>` }],
 		details: { results: [{ output: REPORT }] },
 		isError: false,
-	} as never);
-	out.edited = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT.replace("(none)", "(edited)") });
-	out.exact = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: `${REPORT}\n` });
-	out.replay = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT });
-	out.auditBodies = comments.filter(comment => comment.body.includes("VERDICT: PASS")).length;
-	out.auditReceiptCommit = (receipts.filter(r => r.kind === "audit").at(-1)?.candidate_commit as string | undefined) ?? null;
-	comments.length = 0;
-	receipts.length = 0;
-	for (const v of items.values()) v.candidate = null;
-	initialItem.candidate = null;
+	} as never)) as { content?: Array<{ type: string; text?: string }> } | undefined;
+	out.settleAppended = (settled?.content ?? []).map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
+	out.settlePayload = settleCalls[0]?.transport_payload ?? null;
+	out.attemptState = attempts.at(-1)?.state ?? null;
+	const auditReceipt = receipts.filter(r => r.kind === "audit").at(-1);
+	out.auditIssuer = auditReceipt?.issuer ?? null;
+	out.auditVerdict = auditReceipt?.verdict ?? null;
+	out.attestCalls = attestCalls.length;
+	// The settle outcome event was delivered and attested through the shared path.
+	out.attestStatus = attestCalls[0]?.status ?? null;
+} else if (mode === "summary-reauth") {
+	await setNow();
+	await approve(planA);
+	// A staged index entry makes the candidate freeze REFUSE before any
+	// attempt begins — the state that used to deadlock every later /summary.
+	fs.writeFileSync(path.join(probe, "work.txt"), "candidate work\n");
+	Bun.spawnSync(["git", "add", "work.txt"], { cwd: probe });
 	await runner.emit(summaryMessage as never);
-	out.repeatSummaryNotice = uiCalls.at(-1);
+	out.beginAfterRefused = beginCalls.length;
+	// Owner remediates; the SAME structured channel must recover without a
+	// raw input event and without a session restart.
+	Bun.spawnSync(["git", "reset", "-q"], { cwd: probe });
+	await runner.emit(summaryMessage as never);
+	out.beginAfterStructuredRetry = beginCalls.length;
+	// Unrelated owner messages never authorize anything.
+	await runner.emit({
+		type: "message_start",
+		message: { role: "custom", customType: "checkpoint", attribution: "system", content: "interleaved", timestamp: Date.now() },
+	} as never);
+	out.beginAfterUnrelated = beginCalls.length;
+	// The raw channel also re-authorizes: one more begin, and the service
+	// supersedes to keep exactly one live attempt.
+	await runner.emitInput("/summary", undefined, "interactive");
+	out.beginAfterRaw = beginCalls.length;
 } else {
 	await setNow();
 	fs.writeFileSync(path.join(probe, "dirty.txt"), "dirty\n");
@@ -762,39 +978,39 @@ if (mode === "intake") {
 	await done.handler("", runner.createCommandContext());
 	out.beforeReviewUi = [...uiCalls];
 	out.beforeReviewWrites = { ...writes, comments: comments.length };
-	await runner.emitInput("/summary", undefined, "interactive");
 	await runner.emit(summaryMessage as never);
-	const it = items.get("HOME-1") ?? initialItem;
-	const candId = it.candidate?.candidate_id ?? "cand-1";
-	receipts.push({
-		receipt_id: "rec-v",
-		work_id: it.work_id,
-		revision_id: "rev-1",
-		candidate_id: candId,
-		kind: "verification",
-		payload: { body: "tests pass" },
-		payload_sha256: "0".repeat(64),
-		issued_at: new Date().toISOString(),
-	});
+	// Verification append (seals the manifest server-side).
+	out.verify = await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "tests pass" });
+	// Simulate the accepted PASS settle the service would perform.
+	const attempt = attempts.at(-1);
+	if (!attempt) throw new Error("no attempt after /summary");
+	attempt.state = "audited";
+	attempt.accepted_report_count = 1;
 	receipts.push({
 		receipt_id: "rec-a",
-		work_id: it.work_id,
-		revision_id: "rev-1",
-		candidate_id: candId,
+		work_id: attempt.work_id,
+		revision_id: attempt.revision_id,
+		candidate_id: attempt.candidate_id,
 		kind: "audit",
 		verdict: "PASS",
 		independent: true,
 		payload: { report: "VERDICT: PASS" },
 		payload_sha256: "0".repeat(64),
+		issuer: "work-service/auditor-settle",
 		issued_at: new Date().toISOString(),
+		candidate_sha256: attempt.candidate_sha256,
+		candidate_commit: attempt.candidate_commit,
 	});
-	closeoutIntents.push({ state: "pending", candidate_id: candId });
 	out.review = await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "complete" });
+	// The review checkpoint delivered; the routine closeout request lands.
+	attempt.state = "closeout_requested";
+	attempt.closeout_requested_at = new Date().toISOString();
 	const commentsBeforeDone = comments.length;
 	uiCalls.length = 0;
 	await done.handler("", runner.createCommandContext());
 	out.doneUi = [...uiCalls];
 	out.doneWrites = { ...writes, verdictComments: comments.length - commentsBeforeDone };
+	out.doneAuthorization = attempts.at(-1)?.completion_authorization_ref ?? null;
 	out.now = await execute({ action: "my_now" });
 	await done.handler("", runner.createCommandContext());
 	out.afterSecondDone = { ...writes };

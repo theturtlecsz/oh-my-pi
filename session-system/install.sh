@@ -62,6 +62,7 @@ if [ -d "$EXT_DIR" ]; then
   shopt -s dotglob nullglob
   for src in "$EXT_DIR"/*; do
     case "${src##*/}" in
+      # names after model-bookends-audit.md are retired OMP-47 prompt files: excluded so a re-install drops them
       workflow|linear-now.ts|work-now.ts|model-bookends.ts|model-bookends-audit.md|model-bookends-refused.md|model-bookends-schema-refused.md|model-bookends-stop-no-audit.md|model-bookends-stop-not-forwarded.md|model-bookends-stop-refused.md) continue ;;
     esac
     cp -a -- "$src" "$SET_DIR/"
@@ -77,11 +78,6 @@ stage extensions/workflow workflow
 stage extensions/work-now.ts work-now.ts
 stage extensions/model-bookends.ts model-bookends.ts
 stage extensions/model-bookends-audit.md model-bookends-audit.md
-stage extensions/model-bookends-refused.md model-bookends-refused.md
-stage extensions/model-bookends-schema-refused.md model-bookends-schema-refused.md
-stage extensions/model-bookends-stop-no-audit.md model-bookends-stop-no-audit.md
-stage extensions/model-bookends-stop-not-forwarded.md model-bookends-stop-not-forwarded.md
-stage extensions/model-bookends-stop-refused.md model-bookends-stop-refused.md
 if [ -d "$EXT_DIR" ]; then
   chmod --reference="$EXT_DIR" "$SET_DIR"
   touch --reference="$EXT_DIR" "$SET_DIR"
