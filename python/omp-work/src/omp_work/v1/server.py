@@ -12,7 +12,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from omp_work.operations.config import OperationsConfig
-from omp_work.operations.database import collect_health
+from omp_work.operations.database import collect_health, migration_set_sha256
+from omp_work.operations.fingerprints import code_fingerprint
 from .api_models import CommandResponse
 from .models import CommandEnvelope
 from .service import Principal, WorkError, WorkService
@@ -53,6 +54,12 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
     async def invalid_request(_: Request, __: RequestValidationError) -> JSONResponse:
         return JSONResponse({"error": {"code": "invalid_request", "request_id": None, "correlation_id": None, "diagnostics": []}}, status_code=400)
     service = WorkService(store or PostgresWorkStore(config))
+    # OMP-89: writes fail closed when the on-disk source or migration set no
+    # longer matches what this process loaded — an editable install can change
+    # under a running service, and a stale service burns bounded budgets or
+    # writes against missing migrations. Startup migration enforcement plus
+    # this disk-snapshot compare make silent stale serving unreachable.
+    source_snapshot = code_fingerprint() + migration_set_sha256()
 
     @app.get("/v1/health/live")
     def live() -> dict[str, object]:
@@ -107,6 +114,15 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
         try:
             envelope = CommandEnvelope.model_validate(await request.json())
             principal = _principal(request, capabilities_dir)
+            if code_fingerprint() + migration_set_sha256() != source_snapshot:
+                raise WorkError(
+                    "unavailable",
+                    status=503,
+                    diagnostics=(
+                        "service_stale: on-disk source or migration set changed since this service started (OMP-89)",
+                        "apply pending migrations, then restart the work service (python -m omp_work serve) — no command was executed and no budget was spent",
+                    ),
+                )
             receipt, result = service.execute(principal, envelope)
             response = CommandResponse.model_validate({"receipt": receipt, "result": result})
             return JSONResponse(response.model_dump(mode="json"))

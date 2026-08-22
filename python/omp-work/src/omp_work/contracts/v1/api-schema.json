@@ -175,8 +175,11 @@
           "type": "string"
         },
         "manifest_version": {
-          "const": 1,
           "default": 1,
+          "enum": [
+            1,
+            2
+          ],
           "title": "Manifest Version",
           "type": "integer"
         },
@@ -499,6 +502,55 @@
           ],
           "title": "CloseAttemptState",
           "type": "string"
+        },
+        "SealedRider": {
+          "additionalProperties": false,
+          "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
+          "properties": {
+            "criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Criteria",
+              "type": "array"
+            },
+            "evidence": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence",
+            "title",
+            "evidence_sha256"
+          ],
+          "title": "SealedRider",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -705,6 +757,14 @@
           "format": "uuid",
           "title": "Revision Id",
           "type": "string"
+        },
+        "riders": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SealedRider"
+          },
+          "title": "Riders",
+          "type": "array"
         },
         "starting_dirty_paths": {
           "anyOf": [
@@ -917,8 +977,11 @@
               "type": "string"
             },
             "manifest_version": {
-              "const": 1,
               "default": 1,
+              "enum": [
+                1,
+                2
+              ],
               "title": "Manifest Version",
               "type": "integer"
             },
@@ -1295,6 +1358,14 @@
               "title": "Revision Id",
               "type": "string"
             },
+            "riders": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SealedRider"
+              },
+              "title": "Riders",
+              "type": "array"
+            },
             "starting_dirty_paths": {
               "anyOf": [
                 {
@@ -1643,6 +1714,55 @@
           ],
           "title": "EvidenceReceipt",
           "type": "object"
+        },
+        "SealedRider": {
+          "additionalProperties": false,
+          "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
+          "properties": {
+            "criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Criteria",
+              "type": "array"
+            },
+            "evidence": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence",
+            "title",
+            "evidence_sha256"
+          ],
+          "title": "SealedRider",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -1960,6 +2080,14 @@
               "title": "Revision Id",
               "type": "string"
             },
+            "riders": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SealedRider"
+              },
+              "title": "Riders",
+              "type": "array"
+            },
             "starting_dirty_paths": {
               "anyOf": [
                 {
@@ -2150,6 +2278,55 @@
           ],
           "title": "CloseAttemptState",
           "type": "string"
+        },
+        "SealedRider": {
+          "additionalProperties": false,
+          "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
+          "properties": {
+            "criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Criteria",
+              "type": "array"
+            },
+            "evidence": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence",
+            "title",
+            "evidence_sha256"
+          ],
+          "title": "SealedRider",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -2298,8 +2475,11 @@
               "type": "string"
             },
             "manifest_version": {
-              "const": 1,
               "default": 1,
+              "enum": [
+                1,
+                2
+              ],
               "title": "Manifest Version",
               "type": "integer"
             },
@@ -2736,6 +2916,14 @@
               "format": "uuid",
               "title": "Revision Id",
               "type": "string"
+            },
+            "riders": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SealedRider"
+              },
+              "title": "Riders",
+              "type": "array"
             },
             "starting_dirty_paths": {
               "anyOf": [
@@ -3650,6 +3838,55 @@
             "changed"
           ],
           "title": "ReviseWorkResult",
+          "type": "object"
+        },
+        "SealedRider": {
+          "additionalProperties": false,
+          "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
+          "properties": {
+            "criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Criteria",
+              "type": "array"
+            },
+            "evidence": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence",
+            "title",
+            "evidence_sha256"
+          ],
+          "title": "SealedRider",
           "type": "object"
         },
         "WorkItemResult": {
@@ -5193,8 +5430,11 @@
               "type": "string"
             },
             "manifest_version": {
-              "const": 1,
               "default": 1,
+              "enum": [
+                1,
+                2
+              ],
               "title": "Manifest Version",
               "type": "integer"
             },
@@ -5631,6 +5871,14 @@
               "format": "uuid",
               "title": "Revision Id",
               "type": "string"
+            },
+            "riders": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SealedRider"
+              },
+              "title": "Riders",
+              "type": "array"
             },
             "starting_dirty_paths": {
               "anyOf": [
@@ -6547,6 +6795,55 @@
           "title": "ReviseWorkResult",
           "type": "object"
         },
+        "SealedRider": {
+          "additionalProperties": false,
+          "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
+          "properties": {
+            "criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Criteria",
+              "type": "array"
+            },
+            "evidence": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence",
+            "title",
+            "evidence_sha256"
+          ],
+          "title": "SealedRider",
+          "type": "object"
+        },
         "WorkItemResult": {
           "additionalProperties": false,
           "properties": {
@@ -7090,8 +7387,11 @@
               "type": "string"
             },
             "manifest_version": {
-              "const": 1,
               "default": 1,
+              "enum": [
+                1,
+                2
+              ],
               "title": "Manifest Version",
               "type": "integer"
             },
@@ -7528,6 +7828,14 @@
               "format": "uuid",
               "title": "Revision Id",
               "type": "string"
+            },
+            "riders": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SealedRider"
+              },
+              "title": "Riders",
+              "type": "array"
             },
             "starting_dirty_paths": {
               "anyOf": [
@@ -7991,6 +8299,55 @@
           ],
           "title": "RelationKind",
           "type": "string"
+        },
+        "SealedRider": {
+          "additionalProperties": false,
+          "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
+          "properties": {
+            "criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Criteria",
+              "type": "array"
+            },
+            "evidence": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence",
+            "title",
+            "evidence_sha256"
+          ],
+          "title": "SealedRider",
+          "type": "object"
         },
         "WorkAlias": {
           "additionalProperties": false,

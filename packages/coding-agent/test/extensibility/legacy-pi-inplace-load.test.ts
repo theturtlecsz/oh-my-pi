@@ -103,6 +103,46 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.sharesHostType).toBe(true);
 	});
 
+	it("loads named exports from CJS output behind an import-only export condition (pi-bro/defuddle)", async () => {
+		// defuddle@0.19.2 ships tsc CommonJS output at `./node` but exposes it
+		// only under the `import` condition of a no-`type` package. The graph
+		// classifier must trust the file's CommonJS module scope over the
+		// manifest-derived ESM hint, or the named import fails at link time.
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "import-only-cjs-consumer", version: "1.0.0" }),
+			"node_modules/import-only-cjs/package.json": JSON.stringify({
+				name: "import-only-cjs",
+				version: "1.0.0",
+				main: "dist/index.js",
+				exports: {
+					".": { import: "./dist/index.js", require: "./dist/index.js" },
+					"./node": { import: "./dist/node.js" },
+				},
+			}),
+			"node_modules/import-only-cjs/dist/index.js": [
+				'"use strict";',
+				'Object.defineProperty(exports, "__esModule", { value: true });',
+				"exports.RootThing = void 0;",
+				"exports.RootThing = function RootThing() { return 'root'; };",
+			].join("\n"),
+			"node_modules/import-only-cjs/dist/node.js": [
+				'"use strict";',
+				'Object.defineProperty(exports, "__esModule", { value: true });',
+				"exports.Thing = Thing;",
+				"function Thing(input) { return 'cjs:' + input; }",
+			].join("\n"),
+			"index.ts": [
+				'import { Thing } from "import-only-cjs/node";',
+				'export const probed = Thing("ok");',
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.ts"))) as { probed: string };
+
+		expect(mod.probed).toBe("cjs:ok");
+	});
+
 	it("loads a default import from an ESM package's CommonJS canvas fallback", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "esm-canvas-consumer", version: "1.0.0", type: "module" }),

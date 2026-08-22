@@ -32,6 +32,14 @@ export class CandidateDriftError extends Error {}
 
 // ---- OMP-47 close attempts (service-owned authority) ----
 
+/** One historical work item riding this /summary's close attempt (OMP-93):
+ *  batch-owned proof text sealed into the audited task. */
+export interface RiderProof {
+	work_id: string;
+	revision_id: string;
+	evidence: string;
+}
+
 /** Host-computed identity captured at literal owner /summary (never model text). */
 export interface CloseAttemptSession {
 	authorizationRef: string;
@@ -41,6 +49,8 @@ export interface CloseAttemptSession {
 	repository: string;
 	diffSha256: string;
 	dirtyPaths: string[];
+	/** Sealed rider batch from the owner-staged .work-riders.json, if any. */
+	riders?: RiderProof[];
 }
 
 /** One typed service event, exactly as the ledger rendered it. */
@@ -335,6 +345,11 @@ export interface WorkflowBackend {
 
 	/** Bind this literal /summary to one ledger-owned close attempt. */
 	beginCloseAttempt(now: NowRef, session: CloseAttemptSession): Promise<CloseAttemptOutcome>;
+	/** Resolve an owner-staged rider batch ({key, evidence} entries) to exact
+	 *  RiderProof bindings against each item's CURRENT revision. Throws on any
+	 *  unknown key, DONE item, or empty evidence — a staged batch never
+	 *  silently shrinks. */
+	resolveRiders(entries: { key: string; evidence: string }[]): Promise<RiderProof[]>;
 	/** Seal the audit manifest from the newest verification receipt on the live attempt. */
 	sealAuditManifest(now: NowRef): Promise<CloseAttemptOutcome>;
 	/** The sealed task for the live attempt, or null before seal. */

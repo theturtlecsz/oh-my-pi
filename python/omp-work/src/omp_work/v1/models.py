@@ -171,13 +171,14 @@ class CloseAttempt(StrictModel):
     closeout_requested_at: datetime | None = None
     completed_at: datetime | None = None
     completion_authorization_ref: str | None = None
+    riders: tuple[SealedRider, ...] = ()
 
 
 class AuditManifest(StrictModel):
     manifest_id: UUID
     work_id: UUID
     attempt_id: UUID
-    manifest_version: Literal[1] = 1
+    manifest_version: Literal[1, 2] = 1
     plan_receipt_id: UUID
     verification_receipt_id: UUID
     candidate_id: UUID
@@ -464,6 +465,32 @@ class CompleteWorkPayload(StrictModel):
     satisfied_work_ids: tuple[UUID, ...] = ()
 
 
+class RiderProof(StrictModel):
+    """Owner ruling 2026-08-22 (close asymmetry, OMP-93): one historical work
+    item riding a close attempt. evidence is batch-owned proof text; it enters
+    the audited task body as indented data so the accepted report attests it."""
+    work_id: UUID
+    revision_id: UUID
+    evidence: str = Field(min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def _evidence_bounds(self) -> "RiderProof":
+        if len(self.evidence.encode("utf-8")) > 4096:
+            raise ValueError("rider evidence exceeds 4096 UTF-8 bytes")
+        if "\x00" in self.evidence:
+            raise ValueError("rider evidence must not contain NUL")
+        return self
+
+
+class SealedRider(RiderProof):
+    """Rider as sealed into the attempt at begin: title and acceptance-criteria
+    snapshot plus the service-computed evidence digest. Completion requires
+    this exact tuple."""
+    title: str = Field(min_length=1)
+    criteria: tuple[str, ...] = ()
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class BeginCloseAttemptPayload(StrictModel):
     """Host-issued at literal owner /summary, AFTER candidate finalization: every
     field is host-computed identity, never model-supplied task text."""
@@ -476,6 +503,7 @@ class BeginCloseAttemptPayload(StrictModel):
     repository: str = Field(min_length=1)
     diff_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     starting_dirty_paths: tuple[str, ...] = ()
+    riders: tuple[RiderProof, ...] = Field(default=(), max_length=32)
 
 
 class SealAuditManifestPayload(StrictModel):
@@ -811,4 +839,4 @@ class Approval(StrictModel):
     contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_by: Literal["owner"]
     approved_at: datetime
-    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47", "OMP-67"]
+    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47", "OMP-67", "OMP-93"]

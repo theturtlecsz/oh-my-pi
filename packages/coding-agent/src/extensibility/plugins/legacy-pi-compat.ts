@@ -424,6 +424,43 @@ function isGlobalRequireCall(node: StructuralAstNode | null, scope: BindingScope
 }
 
 /**
+ * Whether a parsed-as-script source unambiguously references the CommonJS
+ * module scope: assignments through unshadowed `exports`/`module.exports`,
+ * `Object.defineProperty(exports, …)`, or global `require()` calls. Such a
+ * file cannot evaluate as ESM, whatever the package manifest claims.
+ */
+function astHasCommonJsModuleScope(ast: ParseResult): boolean {
+	for (const { node, scope } of collectScopedAstNodes(
+		ast,
+		candidate => candidate.type === "CallExpression" || candidate.type === "AssignmentExpression",
+	)) {
+		if (node.type === "CallExpression") {
+			if (isGlobalRequireCall(node, scope)) {
+				return true;
+			}
+			const callee = asAstNode(node.callee);
+			if (
+				isUncomputedMember(callee, "Object", "defineProperty") &&
+				!scopeHasBinding(scope, OBJECT_BINDING) &&
+				isUnshadowedExportsTarget(nodeArgument(node, 0), scope)
+			) {
+				return true;
+			}
+			continue;
+		}
+		if (node.operator !== "=") continue;
+		const left = asAstNode(node.left);
+		if (left?.type === "MemberExpression" && isUnshadowedExportsTarget(asAstNode(left.object), scope)) {
+			return true;
+		}
+		if (isUnshadowedExportsTarget(left, scope)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
  * Whether `node` is a `createRequire(...)` factory call imported from
  * `node:module` (or its `module` alias).
  */
@@ -1400,10 +1437,24 @@ async function isCommonJsModulePath(
 	if (manifest?.type === "commonjs") {
 		return true;
 	}
-	const parsedSourceType =
-		sourceType ?? parseExtensionSource(await Bun.file(modulePath).text(), modulePath).program.sourceType;
+	let moduleAst: ParseResult | null = null;
+	let parsedSourceType = sourceType;
+	if (parsedSourceType === undefined) {
+		moduleAst = parseExtensionSource(await Bun.file(modulePath).text(), modulePath);
+		parsedSourceType = moduleAst.program.sourceType;
+	}
 	if (parsedSourceType === "module") {
 		return false;
+	}
+	if (inheritedKind === "esm") {
+		// A package export map's `import` condition can still point at CJS
+		// output (tsc CommonJS published import-only, e.g. defuddle's
+		// `./node`). A script that references the CommonJS module scope can
+		// never load as ESM, so the file wins over the manifest-derived hint.
+		moduleAst ??= parseExtensionSource(await Bun.file(modulePath).text(), modulePath);
+		if (astHasCommonJsModuleScope(moduleAst)) {
+			return true;
+		}
 	}
 	if (inheritedKind) {
 		return inheritedKind === "commonjs";

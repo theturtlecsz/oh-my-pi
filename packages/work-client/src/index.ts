@@ -144,6 +144,18 @@ export type CloseAttemptState =
 	| "budget_exhausted"
 	| "superseded"
 	| "completed";
+/** OMP-93: one historical work item riding a close attempt (owner ruling 2026-08-22). */
+export type RiderProof = {
+	work_id: UUID;
+	revision_id: UUID;
+	evidence: string;
+};
+/** Rider as sealed at begin: title/criteria snapshot + service-computed evidence digest. */
+export type SealedRider = RiderProof & {
+	title: string;
+	criteria?: string[];
+	evidence_sha256: string;
+};
 export type CloseAttempt = {
 	attempt_id: UUID;
 	work_id: UUID;
@@ -170,12 +182,14 @@ export type CloseAttempt = {
 	closeout_requested_at: string | null;
 	completed_at: string | null;
 	completion_authorization_ref: string | null;
+	riders?: SealedRider[];
 };
 export type AuditManifest = {
 	manifest_id: UUID;
 	work_id: UUID;
 	attempt_id: UUID;
-	manifest_version: 1;
+	/** v2 = v1's five sections plus the Riders section (OMP-93). */
+	manifest_version: 1 | 2;
 	plan_receipt_id: UUID;
 	verification_receipt_id: UUID;
 	candidate_id: UUID;
@@ -275,6 +289,7 @@ export type BeginCloseAttemptPayload = {
 	owner_session_start_commit: string;
 	repository: string;
 	diff_sha256: string;
+	riders?: RiderProof[];
 	starting_dirty_paths?: string[];
 };
 export type SealAuditManifestPayload = { attempt_id: UUID; verification_receipt_id: UUID };

@@ -8,6 +8,10 @@
 - Added a cancellable `plan_approved` extension event that both interactive and ACP hosts await before an approved plan can leave plan mode and execute.
 - Added an `inline` placement option to `ExtensionUIContext.setStatus` (`{ placement: "inline" }`) that renders a status in the main status line beside the path/branch segments; inline statuses truncate and disappear before any configured segment shrinks or drops. Footer placement remains the default.
 
+### Fixed
+
+- Fixed the legacy pi extension loader misclassifying CommonJS modules served behind import-only package export conditions as ESM, which dropped their named exports at link time (e.g. `pi-bro`'s `defuddle/node` dependency).
+
 ## [17.3.2] - 2026-08-13
 
 ### Fixed

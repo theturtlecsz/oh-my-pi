@@ -1247,7 +1247,8 @@
             "HOME-147",
             "HOME-148",
             "OMP-47",
-            "OMP-67"
+            "OMP-67",
+            "OMP-93"
           ],
           "title": "Issue",
           "type": "string"
@@ -1665,8 +1666,11 @@
           "type": "string"
         },
         "manifest_version": {
-          "const": 1,
           "default": 1,
+          "enum": [
+            1,
+            2
+          ],
           "title": "Manifest Version",
           "type": "integer"
         },
@@ -1812,6 +1816,15 @@
               "title": "Repository",
               "type": "string"
             },
+            "riders": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/RiderProof"
+              },
+              "maxItems": 32,
+              "title": "Riders",
+              "type": "array"
+            },
             "starting_dirty_paths": {
               "default": [],
               "items": {
@@ -1838,6 +1851,35 @@
           ],
           "title": "BeginCloseAttemptPayload",
           "type": "object"
+        },
+        "RiderProof": {
+          "additionalProperties": false,
+          "description": "Owner ruling 2026-08-22 (close asymmetry, OMP-93): one historical work\nitem riding a close attempt. evidence is batch-owned proof text; it enters\nthe audited task body as indented data so the accepted report attests it.",
+          "properties": {
+            "evidence": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence"
+          ],
+          "title": "RiderProof",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -1859,6 +1901,37 @@
       "type": "object"
     },
     "BeginCloseAttemptPayload": {
+      "$defs": {
+        "RiderProof": {
+          "additionalProperties": false,
+          "description": "Owner ruling 2026-08-22 (close asymmetry, OMP-93): one historical work\nitem riding a close attempt. evidence is batch-owned proof text; it enters\nthe audited task body as indented data so the accepted report attests it.",
+          "properties": {
+            "evidence": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence"
+          ],
+          "title": "RiderProof",
+          "type": "object"
+        }
+      },
       "additionalProperties": false,
       "description": "Host-issued at literal owner /summary, AFTER candidate finalization: every\nfield is host-computed identity, never model-supplied task text.",
       "properties": {
@@ -1896,6 +1969,15 @@
           "minLength": 1,
           "title": "Repository",
           "type": "string"
+        },
+        "riders": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RiderProof"
+          },
+          "maxItems": 32,
+          "title": "Riders",
+          "type": "array"
         },
         "starting_dirty_paths": {
           "default": [],
@@ -2223,6 +2305,55 @@
           ],
           "title": "CloseAttemptState",
           "type": "string"
+        },
+        "SealedRider": {
+          "additionalProperties": false,
+          "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
+          "properties": {
+            "criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Criteria",
+              "type": "array"
+            },
+            "evidence": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence",
+            "title",
+            "evidence_sha256"
+          ],
+          "title": "SealedRider",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -2429,6 +2560,14 @@
           "format": "uuid",
           "title": "Revision Id",
           "type": "string"
+        },
+        "riders": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SealedRider"
+          },
+          "title": "Riders",
+          "type": "array"
         },
         "starting_dirty_paths": {
           "anyOf": [
@@ -2951,6 +3090,15 @@
               "minLength": 1,
               "title": "Repository",
               "type": "string"
+            },
+            "riders": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/RiderProof"
+              },
+              "maxItems": 32,
+              "title": "Riders",
+              "type": "array"
             },
             "starting_dirty_paths": {
               "default": [],
@@ -4274,6 +4422,35 @@
             "revision"
           ],
           "title": "ReviseWorkPayload",
+          "type": "object"
+        },
+        "RiderProof": {
+          "additionalProperties": false,
+          "description": "Owner ruling 2026-08-22 (close asymmetry, OMP-93): one historical work\nitem riding a close attempt. evidence is batch-owned proof text; it enters\nthe audited task body as indented data so the accepted report attests it.",
+          "properties": {
+            "evidence": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence"
+          ],
+          "title": "RiderProof",
           "type": "object"
         },
         "SealAuditManifestCommand": {
@@ -8709,6 +8886,35 @@
       "title": "ReviseWorkPayload",
       "type": "object"
     },
+    "RiderProof": {
+      "additionalProperties": false,
+      "description": "Owner ruling 2026-08-22 (close asymmetry, OMP-93): one historical work\nitem riding a close attempt. evidence is batch-owned proof text; it enters\nthe audited task body as indented data so the accepted report attests it.",
+      "properties": {
+        "evidence": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Evidence",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "evidence"
+      ],
+      "title": "RiderProof",
+      "type": "object"
+    },
     "SameSessionExample": {
       "additionalProperties": false,
       "description": "OMP-52: the child fix rides the parent attempt's audited candidate.",
@@ -8890,6 +9096,55 @@
         "verification_receipt_id"
       ],
       "title": "SealAuditManifestPayload",
+      "type": "object"
+    },
+    "SealedRider": {
+      "additionalProperties": false,
+      "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
+      "properties": {
+        "criteria": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Criteria",
+          "type": "array"
+        },
+        "evidence": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Evidence",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "evidence",
+        "title",
+        "evidence_sha256"
+      ],
+      "title": "SealedRider",
       "type": "object"
     },
     "SecurityPolicy": {

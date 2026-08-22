@@ -6,9 +6,9 @@
  * /capture /work), the bounded tool, transcript-bound confirmation receipts,
  * and the audit-receipt bridge consumer. A WorkflowBackend supplies storage.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +36,7 @@ import {
 	type MapSurface,
 	type NowRef,
 	type PlanPacket,
+	type RiderProof,
 	type SealedAuditTask,
 	type TreeItem,
 	type WorkflowBackend,
@@ -44,6 +45,7 @@ import {
 import { deliverCheckpoint, deliverPendingCheckpoints } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
 import { dirtyPaths, headCommit, parentCommit, rangeDiffSha256 } from "./git";
+import { consumeStagedRiderBatch, readStagedRiderBatch, type StagedRiderBatch } from "./rider-batch";
 import { registerSessionLedger } from "./session-ledger";
 
 /** Tool actions — the canonical action set for the `work` tool. */
@@ -558,6 +560,47 @@ export function createWorkflowHost(cfg: HostConfig) {
 		return [backend.bookendTitle, nowLine, scopeLine, ...(await treeLines), ...extras, ...contracts].join("\n");
 	}
 
+	/** OMP-93 rider staging: host-owned path (never repo-controlled), one file
+	 *  per canonical working directory. Consumption requires an owner confirm
+	 *  bound to the exact keys and file digest, then a one-shot rename. */
+	function riderBatchPath(): string {
+		const canonical = realpathSync(process.cwd());
+		const cwdHash = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+		return join(getAgentDir(), "work-rider-batches", `${cwdHash}.json`);
+	}
+
+	async function stageRiders(ctx: ExtensionContext): Promise<{ riders: RiderProof[]; batch: StagedRiderBatch } | undefined | null> {
+		const path = riderBatchPath();
+		let batch: StagedRiderBatch | null;
+		try {
+			batch = readStagedRiderBatch(path);
+		} catch (error) {
+			ctx.ui.notify(`close attempt not begun — staged rider batch rejected (${String(error)}); fix or remove ${path}`, "warning");
+			return null; // fail closed: only a provably absent batch is skippable
+		}
+		if (batch === null) return undefined; // no staged batch — the normal case
+		try {
+			const riders = await backend.resolveRiders(batch.entries);
+			const keys = batch.entries.map(entry => entry.key).join(", ");
+			const yes = await ctx.ui.confirm(
+				`Seal ${riders.length} rider(s) into this close attempt?`,
+				`${keys}\n\nbatch sha256 ${batch.digest} — each rider closes with this item's /done, exactly as staged. Declining seals none.`,
+			);
+			if (!yes) {
+				consumeStagedRiderBatch(batch, "declined");
+				ctx.ui.notify("rider batch declined — archived, no riders sealed", "info");
+				return undefined;
+			}
+			// NOT consumed yet: the file is archived only after the service applies
+			// the begin — a refusal must leave the approved batch staged.
+			return { riders, batch };
+		} catch (error) {
+			ctx.ui.notify(`close attempt not begun — staged rider batch is invalid (${String(error)}); fix or remove ${path}`, "warning");
+			return null; // fail closed: never begin an attempt that silently drops a staged batch
+		}
+	}
+
+
 	/** OMP-47: bind this literal /summary to a ledger-owned close attempt. Every
 	 *  identity field is host-computed; the service refuses with a typed event. */
 	async function beginAttempt(now: NowRef, ctx: ExtensionContext, auditBaseCommit?: string, auditBaseDirtyPaths?: readonly string[]): Promise<void> {
@@ -579,6 +622,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 			return;
 		}
 		summaryAuthorizationRef ??= `summary:${randomUUID()}`;
+		const staged = await stageRiders(ctx);
+		if (staged === null) return;
 		const session: CloseAttemptSession = {
 			authorizationRef: summaryAuthorizationRef,
 			sessionId: piRef.getSessionId(),
@@ -587,8 +632,22 @@ export function createWorkflowHost(cfg: HostConfig) {
 			repository: process.cwd(),
 			diffSha256,
 			dirtyPaths: [...(auditBaseDirtyPaths ?? [])],
+			...(staged?.riders.length ? { riders: staged.riders } : {}),
 		};
 		const outcome = await backend.beginCloseAttempt(now, session);
+		if (staged) {
+			if (outcome.status === "applied") {
+				try {
+					consumeStagedRiderBatch(staged.batch, "consumed");
+				} catch (error) {
+					// Non-rollback: the service already sealed the riders. The file is
+					// now stale authority residue — the owner must remove it by hand.
+					pendingNotices.push(`[${TOOL_NAME}] riders ARE sealed, but archiving the batch file failed (${String(error)}) — remove ${staged.batch.path} manually before the next /summary`);
+				}
+			} else {
+				ctx.ui.notify("rider batch NOT consumed — the attempt was refused; it stays staged for the next /summary", "warning");
+			}
+		}
 		if (outcome.status === "refused") {
 			ctx.ui.notify(`close attempt refused: ${outcome.event.reasonCode}`, "warning");
 		}

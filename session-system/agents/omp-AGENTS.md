@@ -81,6 +81,31 @@ receipt is never authorization to alter the payload or bypass the gate.
 Obtain a fresh preview and reassess under the same action classification.
 
 
+## Close asymmetry (owner ruling, 2026-08-22)
+
+Filing is mandatory and free; closing must not cost Chris per-item ceremony.
+Three-part rule:
+
+1. **Same-session paper rides.** A finding found and fixed inside an owner
+   session is filed as a child of that session's NOW item with its
+   `same_session_found_fixed` receipt at creation time, so the session's own
+   `/done` closes it automatically (the OMP-52 mechanism). Never file
+   same-session fixes as free-standing items that need their own ceremony.
+2. **Historical paper is swept in prepared batches.** The
+   `ledger-maintenance` agent verifies ripe items, emits an explicit batch
+   report, and stages verified-delivered items as a rider batch
+   (`<agent-dir>/work-rider-batches/`, `[{key, evidence}]`). At the next
+   literal /summary the host shows the exact keys + batch digest and, on
+   Chris's yes, seals them into that close attempt; the audited task carries
+   every rider's criteria and evidence, and the /done completes primary +
+   riders atomically (OMP-93 rider authority, decision 0006). Owner-ruled
+   absorbed/duplicate/deletable items go to cancel inside an owner-entered
+   /done session instead — never relabel delivered work as canceled.
+3. **Contract changes ride owner hash-approval.** Rider authority (and any
+   future contract change) lands only when Chris approves the exact staged
+   `contract_sha256`; approval.json is his attestation and is never minted
+   from chat scope.
+
 ## Task Observer (installed 2026-07-18, owner-approved activation)
 
 At the start of any task-oriented session — any interaction where you will

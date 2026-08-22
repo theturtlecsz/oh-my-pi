@@ -46,6 +46,7 @@ import {
 	type NowRef,
 	PLAN_PACKET_MAX_BYTES,
 	type PlanPacket,
+	type RiderProof,
 	type PlanStamp,
 	type SealedAuditTask,
 	type SummaryGateBlocked,
@@ -1014,8 +1015,24 @@ export function createWorkBackend(
 				repository: session.repository,
 				diff_sha256: session.diffSha256,
 				starting_dirty_paths: session.dirtyPaths,
+				...(session.riders?.length ? { riders: session.riders } : {}),
 			});
 			return outcomeOf(result);
+		},
+
+		async resolveRiders(entries: { key: string; evidence: string }[]): Promise<RiderProof[]> {
+			const riders: RiderProof[] = [];
+			for (const entry of entries) {
+				if (!entry?.key || typeof entry.evidence !== "string" || !entry.evidence.trim()) {
+					throw new Error(`rider entry for ${entry?.key ?? "(missing key)"} needs a key and non-empty evidence`);
+				}
+				const view = await client.workflow(entry.key);
+				if (view.item.state === "DONE" || view.item.state === "CANCELED" || view.item.state === "CANCELLED" || view.item.archived) {
+					throw new Error(`rider ${entry.key} is terminal (${view.item.archived ? "archived" : view.item.state}) — riders complete only open work`);
+				}
+				riders.push({ work_id: view.item.work_id, revision_id: view.item.revision.revision_id, evidence: entry.evidence });
+			}
+			return riders;
 		},
 
 		async sealAuditManifest(now: NowRef): Promise<CloseAttemptOutcome> {

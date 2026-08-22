@@ -659,3 +659,163 @@ def test_candidate_read_capability_is_bounded(service) -> None:
     # Close-ritual commands need work.close — a candidate reader has none.
     status, _ = _command(service, workspace_id, {"type": "begin_close_attempt", "payload": {"work_id": item["work_id"], "attempt_id": str(uuid4()), "authorization_ref": "summary:forged", "owner_session_id": "s", "owner_session_started_at": datetime.now(timezone.utc).isoformat(), "owner_session_start_commit": "e" * 40, "repository": "/r", "diff_sha256": secrets.token_hex(32), "starting_dirty_paths": []}}, token="reader-token")
     assert status == 403
+
+
+def test_stale_service_refuses_writes_and_still_reads(service, monkeypatch: pytest.MonkeyPatch) -> None:
+    # OMP-89: once the on-disk source no longer matches the loaded snapshot,
+    # every command is refused with a typed restart instruction and no side
+    # effects; reads keep working so the ledger stays inspectable.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "pre-stale item")
+    import omp_work.v1.server as server_module
+    monkeypatch.setattr(server_module, "code_fingerprint", lambda: "deadbeef")
+    status, body = _command(service, workspace_id, _batch([{"client_ref": "stale", "title": "must not land"}]))
+    assert status == 503 and body["error"]["code"] == "unavailable"
+    assert any("service_stale" in diag for diag in body["error"]["diagnostics"])
+    assert any("restart" in diag for diag in body["error"]["diagnostics"])
+    workflow = service.client.get(f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id))
+    assert workflow.status_code == 200
+    monkeypatch.undo()
+    status, _ = _command(service, workspace_id, _batch([{"client_ref": "fresh", "title": "lands after restart-equivalent"}]))
+    assert status == 200
+
+
+def _close_ritual(service, workspace_id, item: dict, final: dict, attempt: dict) -> tuple[int, dict]:
+    """Post-PASS closeout: review receipt, drain, request, push, complete."""
+    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
+    assert status == 200, body
+    _drain_deliveries(service, workspace_id, key=item["key"])
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
+    assert status == 200, body
+    return _complete(service, workspace_id, item, final, attempt["attempt_id"], key=item["key"])
+
+
+def test_rider_batch_seals_audits_and_completes_with_primary(service) -> None:
+    # OMP-93: riders sealed at begin ride the primary /done; their evidence is
+    # rendered verbatim in the audited task body so the PASS attests them.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    rider_a = _create(service, workspace_id, "historical rider a")
+    rider_b = _create(service, workspace_id, "historical rider b")
+    item = _create(service, workspace_id, "batch primary")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    riders = [
+        {"work_id": rider_a["work_id"], "revision_id": rider_a["revision_id"], "evidence": "probe: pytest -k rider_a -> 3 passed"},
+        {"work_id": rider_b["work_id"], "revision_id": rider_b["revision_id"], "evidence": "probe: artifact b read -> present"},
+    ]
+    status, body = _begin(service, workspace_id, item, identity={"riders": riders})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    attempt = body["result"]["attempt"]
+    assert len(attempt["riders"]) == 2
+    assert all(r["evidence_sha256"] and r["title"] for r in attempt["riders"])
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    assert seal["manifest"]["manifest_version"] == 2
+    task_body = seal["manifest"]["task_body"]
+    assert "Riders (batch completion, owner ruling 2026-08-22)" in task_body
+    assert "    probe: pytest -k rider_a -> 3 passed" in task_body
+    assert "historical rider b" in task_body
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], seal["manifest"]["task_sha256"])
+    assert status == 200 and body["result"]["status"] == "applied", body
+    launch_id = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, json.dumps({"verdict": "PASS", "report": PASS_REPORT}))
+    assert status == 200 and body["result"]["verdict"] == "PASS", body
+    status, body = _close_ritual(service, workspace_id, item, final, attempt)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert set(body["result"]["completed_work_ids"]) == {rider_a["work_id"], rider_b["work_id"]}
+    for rider in (rider_a, rider_b):
+        view = service.client.get(f"/v1/work-items/{rider['key']}", headers=_owner_headers(workspace_id)).json()
+        assert view["state"] == "DONE", view
+        workflow = service.client.get(f"/v1/work-items/{rider['key']}/workflow", headers=_owner_headers(workspace_id)).json()
+        provenance = [event for event in workflow["close_attempt_events"] if event["event_type"] == "rider_completed"]
+        assert provenance and "sealed rider" in provenance[0]["reason"], workflow["close_attempt_events"]
+
+
+def test_rider_binding_refuses_wrong_revision_at_begin(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    rider = _create(service, workspace_id, "mis-sealed rider")
+    item = _create(service, workspace_id, "refusal primary")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    bad = [{"work_id": rider["work_id"], "revision_id": item["revision_id"], "evidence": "probe: n/a"}]
+    status, body = _begin(service, workspace_id, item, identity={"riders": bad})
+    assert status == 200 and body["result"]["status"] == "refused", body
+    assert body["result"]["event"]["reason_code"] == "rider_binding_invalid"
+
+
+def test_rider_closed_elsewhere_refuses_the_batch_done(service) -> None:
+    # Drift between seal and /done: the rider reaches DONE through its own
+    # ritual; the batch /done must refuse rather than double-complete.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    rider = _create(service, workspace_id, "independently closed rider")
+    item = _create(service, workspace_id, "stale-batch primary")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    riders = [{"work_id": rider["work_id"], "revision_id": rider["revision_id"], "evidence": "probe: superseded"}]
+    status, body = _begin(service, workspace_id, item, identity={"riders": riders})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], seal["manifest"]["task_sha256"])
+    assert status == 200, body
+    launch_id = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, json.dumps({"verdict": "PASS", "report": PASS_REPORT}))
+    assert status == 200 and body["result"]["verdict"] == "PASS", body
+    # Close the rider through its own full ritual.
+    rider_plan = _plan(service, workspace_id, rider)
+    status, body = _finalize(service, workspace_id, rider, rider_plan["candidate_id"])
+    assert status == 200, body
+    rider_final = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, rider)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    rider_attempt = body["result"]["attempt"]
+    rider_seal = _verify_and_seal(service, workspace_id, rider, rider_final, rider_attempt)
+    status, body = _reserve(service, workspace_id, rider_attempt["attempt_id"], rider_seal["manifest"]["task_sha256"])
+    assert status == 200, body
+    rider_launch = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, rider_attempt["attempt_id"], rider_launch, json.dumps({"verdict": "PASS", "report": PASS_REPORT}))
+    assert status == 200 and body["result"]["verdict"] == "PASS", body
+    status, body = _close_ritual(service, workspace_id, rider, rider_final, rider_attempt)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    # The batch /done now refuses on the sealed rider.
+    status, body = _close_ritual(service, workspace_id, item, final, attempt)
+    assert status == 200 and body["result"]["status"] == "refused", body
+    assert body["result"]["event"]["reason_code"] == "rider_binding_invalid"
+
+
+
+def test_rider_change_under_same_authorization_refuses_resume(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    rider = _create(service, workspace_id, "resume rider")
+    item = _create(service, workspace_id, "resume primary")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    auth = f"summary:{uuid4()}"
+    started_at = datetime.now(timezone.utc).isoformat()
+    diff_sha = secrets.token_hex(32)
+    riders = [{"work_id": rider["work_id"], "revision_id": rider["revision_id"], "evidence": "probe: original"}]
+    status, body = _begin(service, workspace_id, item, authorization_ref=auth, identity={"owner_session_started_at": started_at, "diff_sha256": diff_sha, "riders": riders})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    attempt = body["result"]["attempt"]
+    # Identical payload resumes.
+    status, body = _begin(service, workspace_id, item, authorization_ref=auth, attempt_id=attempt["attempt_id"], identity={"owner_session_started_at": started_at, "diff_sha256": diff_sha, "riders": riders})
+    assert status == 200 and body["result"]["event"]["event_type"] == "attempt_resumed", body
+    # Changed rider evidence under the same authorization refuses.
+    changed = [{"work_id": rider["work_id"], "revision_id": rider["revision_id"], "evidence": "probe: tampered"}]
+    status, body = _begin(service, workspace_id, item, authorization_ref=auth, attempt_id=attempt["attempt_id"], identity={"owner_session_started_at": started_at, "diff_sha256": diff_sha, "riders": changed})
+    assert status == 200 and body["result"]["status"] == "refused", body
+    assert body["result"]["event"]["reason_code"] == "authorization_identity_mismatch"
