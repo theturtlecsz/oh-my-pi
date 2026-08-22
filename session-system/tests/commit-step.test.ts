@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
-import { dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate } from "../extensions/workflow/git";
+import { dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256 } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -362,5 +362,73 @@ describe("candidate freeze and push", () => {
 		const head = git(repo, "rev-parse", "HEAD");
 		const outcome = pushCandidate(repo, head);
 		expect(outcome.status).toBe("not_pushed");
+	});
+});
+
+describe("rangeDiffSha256", () => {
+	// OMP-96: the sealed manifest digest must hash the canonical
+	// `git diff --binary --full-index <start>..<final> --` byte stream — the
+	// exact invocation the auditor's git-range-sha256 mode reconstructs. A
+	// binary file (NUL bytes) makes --binary load-bearing: without it git
+	// emits "Binary files differ" with an abbreviated index line. git defines
+	// --binary as implying --full-index, so a dropped --full-index is byte-
+	// invisible; the PATH-shim argv log below pins the exact invocation, so
+	// removing ANY canonical token from the producer's argv fails this test.
+	test("hashes the canonical --binary --full-index stream via the exact canonical argv", () => {
+		const repo = makeRepo();
+		const start = git(repo, "rev-parse", "HEAD");
+		fs.writeFileSync(path.join(repo, "blob.bin"), Buffer.from([0x00, 0x01, 0xff, 0x00, 0x42, 0x00]));
+		Bun.spawnSync(["git", "add", "--", "blob.bin"], { cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "binary blob"], { cwd: repo });
+		const final = git(repo, "rev-parse", "HEAD");
+
+		const digest = (...flags: string[]): string => {
+			const p = Bun.spawnSync(["git", "-C", repo, "diff", ...flags, `${start}..${final}`, "--"]);
+			expect(p.exitCode).toBe(0);
+			return new Bun.CryptoHasher("sha256").update(p.stdout).digest("hex");
+		};
+		const canonical = digest("--binary", "--full-index");
+		const plain = digest();
+		const missingBinary = digest("--full-index");
+
+		// PATH-shim git logs every argv, then delegates to the real binary. The
+		// helper runs in a child process because spawnSync's PATH lookup does not
+		// track in-process env mutation.
+		const realGit = Bun.which("git");
+		if (!realGit) throw new Error("git not on PATH");
+		const shimDir = fs.mkdtempSync(path.join(tempRoot, "git-shim-"));
+		const logFile = path.join(shimDir, "argv.log");
+		fs.writeFileSync(
+			path.join(shimDir, "git"),
+			`#!/bin/sh\n{ printf '%s\\037' "$@"; printf '\\n'; } >> "${logFile}"\nexec "${realGit}" "$@"\n`,
+			{ mode: 0o755 },
+		);
+		// Dynamic import exception: this string runs in a separate `bun -e`
+		// process (module loading boundary); the specifier is a runtime path.
+		const gitTs = path.join(import.meta.dir, "../extensions/workflow/git.ts");
+		const script = `const { rangeDiffSha256 } = await import(${JSON.stringify(gitTs)});
+			const got = rangeDiffSha256(${JSON.stringify(repo)}, ${JSON.stringify(start)}, ${JSON.stringify(final)});
+			if (!got) process.exit(2);
+			process.stdout.write(got);`;
+		const child = Bun.spawnSync([process.execPath, "-e", script], {
+			env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}` },
+		});
+		expect(child.exitCode).toBe(0);
+		const got = child.stdout.toString();
+
+		expect(got).toBe(canonical);
+		expect(canonical).not.toBe(plain);
+		expect(canonical).not.toBe(missingBinary);
+
+		const invocations = fs
+			.readFileSync(logFile, "utf8")
+			.split("\n")
+			.filter(line => line.length > 0)
+			.map(line => line.split("\u001f").slice(0, -1));
+		const diffCalls = invocations.filter(args => args.includes("diff"));
+		expect(diffCalls.length).toBe(1);
+		const args = diffCalls[0]!;
+		expect(args[0]).toBe("-C");
+		expect(args.slice(2)).toEqual(["diff", "--binary", "--full-index", `${start}..${final}`, "--"]);
 	});
 });

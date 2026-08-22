@@ -65,13 +65,14 @@ export function parentCommit(cwd: string, commit: string): string | null {
 }
 
 
-/** SHA-256 of the exact `git diff <start>..<final>` bytes — the range-diff
- *  manifest hash sealed into the close attempt (OMP-47). Null when the range
- *  cannot be produced (unknown commits, no repo). */
+/** SHA-256 of the canonical `git diff --binary --full-index <start>..<final> --`
+ *  byte stream — the range-diff manifest hash sealed into the close attempt
+ *  (OMP-47). Must match the auditor's git-range-sha256 mode contract exactly
+ *  (OMP-96). Null when the range cannot be produced (unknown commits, no repo). */
 export function rangeDiffSha256(cwd: string, startCommit: string, finalCommit: string): string | null {
 	const top = runGit(cwd, ["rev-parse", "--show-toplevel"]);
 	if (!top.ok) return null;
-	const diff = spawnSync("git", ["-C", top.out, "diff", `${startCommit}..${finalCommit}`], { timeout: 30_000, maxBuffer: 256 * 1024 * 1024 });
+	const diff = spawnSync("git", ["-C", top.out, "diff", "--binary", "--full-index", `${startCommit}..${finalCommit}`, "--"], { timeout: 30_000, maxBuffer: 256 * 1024 * 1024 });
 	if (diff.status !== 0 || !diff.stdout) return null;
 	return new Bun.CryptoHasher("sha256").update(diff.stdout).digest("hex");
 }
