@@ -35,9 +35,12 @@ Perform in order:
 
 4. **Independent audit** — call `work` `action:"get_work"` on the reviewed
    item and read its AUDIT TASK section: the complete, sealed, five-section
-   auditor task. Spawn exactly ONE `auditor` task whose text is EXACTLY the
-   sealed body between the BEGIN/END markers — byte-for-byte, nothing added,
-   never an outputSchema. The gate reserves one bounded launch before the
+   auditor task. Spawn exactly ONE `auditor` task VIA THE TASK TOOL whose text
+   is EXACTLY the sealed body between the BEGIN/END markers — byte-for-byte,
+   nothing added, never an outputSchema, never `agent()` inside an eval cell
+   (eval bypasses the audit gate entirely: its default 30s timeout killed a
+   live auditor mid-transport and burned the launch, OMP-68 2026-08-21).
+   The gate reserves one bounded launch before the
    spawn (changed bytes refuse with zero slot burn), and the tool result of
    the auditor settles the launch automatically: the service normalizes the
    report, mints the audit receipt itself, and answers with a typed event.

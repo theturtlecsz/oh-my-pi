@@ -215,7 +215,7 @@ def _audited_attempt(service, workspace_id, title: str = "close target") -> tupl
     status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
     assert status == 200 and body["result"]["status"] == "applied", body
     launch_id = body["result"]["launch"]["launch_id"]
-    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, json.dumps({"report": PASS_REPORT}))
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, json.dumps({"verdict": "PASS", "report": PASS_REPORT}))
     assert status == 200 and body["result"]["status"] == "applied" and body["result"]["verdict"] == "PASS", body
     return item, final, body["result"]["attempt"]
 
@@ -416,12 +416,12 @@ def test_reserve_mismatch_burns_nothing_and_budget_exhausts(service) -> None:
     assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "manifest_task_mismatch"
     assert body["result"]["attempt"]["launch_count"] == 0
 
-    # Launch 1: malformed transport (extra-key object) burns without a report.
+    # Launch 1: wrapper verdict contradicts the report line — mismatch burns, wrapper not trusted.
     status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
     assert status == 200 and body["result"]["status"] == "applied"
     launch_1 = body["result"]["launch"]["launch_id"]
-    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_1, {"report": PASS_REPORT, "extra": 1})
-    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "report_wrapper_invalid"
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_1, {"verdict": "NEEDS_FIX", "report": PASS_REPORT})
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "report_wrapper_verdict_mismatch"
     assert body["result"]["attempt"]["state"] == "audit_ready" and body["result"]["attempt"]["launch_count"] == 1
 
     # Launch 2: transport failed before any payload arrived — burns typed.

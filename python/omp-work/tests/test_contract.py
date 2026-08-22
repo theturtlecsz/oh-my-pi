@@ -172,6 +172,34 @@ def test_auditor_report_normalizes_one_serialized_report_wrapper() -> None:
     assert normalize_auditor_report(json.dumps({"report": json.dumps({"report": report})}))[1] == "report_wrapper_nested"
 
 
+def test_auditor_report_normalizes_verdict_and_report_wrapper() -> None:
+    # Incident 2026-08-21 (OMP-67, specimen 6214e47d): the auditor emitted the
+    # verdict as a sibling wrapper key; the report inside was complete.
+    report = "VERDICT: PASS\nFINDINGS\nnone\nACCEPTANCE COVERAGE\ncovered\nOUT OF SCOPE\nnone\nCHECKS RUN\npytest\nREMAINING QUESTIONS\nnone"
+    assert normalize_auditor_report({"verdict": "PASS", "report": report}) == (report, "PASS")
+    assert normalize_auditor_report(json.dumps({"verdict": "PASS", "report": report})) == (report, "PASS")
+    # Pretty-printed serialization is the shape every 2026-08-21 burn carried.
+    assert normalize_auditor_report(json.dumps({"report": report}, indent=2)) == (report, "PASS")
+    # Wrapper verdict is decoration and must not override the report: mismatch
+    # refuses BEFORE section validation (typed precedence).
+    assert normalize_auditor_report(json.dumps({"verdict": "NEEDS_FIX", "report": report})) == (None, "report_wrapper_verdict_mismatch")
+    assert normalize_auditor_report(json.dumps({"verdict": "NEEDS_FIX", "report": "VERDICT: PASS\nno sections"})) == (None, "report_wrapper_verdict_mismatch")
+    # Present-but-non-string verdict (incl. null) is out of contract.
+    assert normalize_auditor_report(json.dumps({"verdict": None, "report": report})) == (None, "report_wrapper_invalid")
+    assert normalize_auditor_report(json.dumps({"verdict": "PASS", "extra": "x", "report": report})) == (None, "report_wrapper_invalid")
+    assert normalize_auditor_report(json.dumps({"report": report, "text": report})) == (None, "report_wrapper_invalid")
+    # A task-tool error hand-carried as the payload must stay a refusal.
+    assert normalize_auditor_report("Missing `context`. Provide the shared background for this batch.") == (None, "verdict_missing")
+    # Strict-parse successes route through the wrapper parser: a decoded
+    # top-level non-object is a malformed wrapper (plan: non-object decoded
+    # value → report_wrapper_invalid). Decode failures keep the raw path.
+    assert normalize_auditor_report(json.dumps([])) == (None, "report_wrapper_invalid")
+    assert normalize_auditor_report(json.dumps("x")) == (None, "report_wrapper_invalid")
+    assert normalize_auditor_report(json.dumps(None)) == (None, "report_wrapper_invalid")
+    # Leading whitespace strips before the canonical byte-zero VERDICT check.
+    assert normalize_auditor_report("\n  " + report) == (report, "PASS")
+
+
 def test_stale_evidence_blocks_completion_after_revision_changes() -> None:
     stale = receipt(EvidenceKind.VERIFICATION, revision_id=UUID("00000000-0000-7000-8000-000000000099"))
     result = completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=(receipt(EvidenceKind.PLAN), stale, receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.PUSH, remote_commit="c" * 40)), closeout_requested=True))

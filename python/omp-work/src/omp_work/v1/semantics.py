@@ -90,31 +90,50 @@ _VERDICT_LINE = re.compile(r"\AVERDICT\s*:\s*(PASS|NEEDS_FIX|BLOCKED)\b")
 _OUTPUT_WRAPPER = re.compile(r"\A<output>\n?([\s\S]*?)\n?</output>\Z")
 
 
+def _unwrap_object(decoded: object) -> tuple[str, str | None] | tuple[None, str]:
+    """Extract (report_text, wrapper_verdict) from one direct transport wrapper object."""
+    if not isinstance(decoded, dict):
+        return None, "report_wrapper_invalid"
+    keys = set(decoded)
+    body_keys = keys & {"report", "text"}
+    if len(body_keys) != 1 or not keys <= {"report", "text", "verdict"}:
+        return None, "report_wrapper_invalid"
+    body_key = body_keys.pop()
+    if not isinstance(decoded[body_key], str):
+        return None, "report_wrapper_invalid"
+    verdict = None
+    if "verdict" in decoded:
+        verdict = decoded["verdict"]
+        if not isinstance(verdict, str):
+            return None, "report_wrapper_invalid"
+    return decoded[body_key], verdict
+
+
 def normalize_auditor_report(payload: object) -> tuple[str, Literal["PASS", "NEEDS_FIX", "BLOCKED"]] | tuple[None, str]:
     """Normalize one transport wrapper, then validate the canonical report."""
-    text: str
+    wrapper_verdict: str | None = None
     if isinstance(payload, dict):
-        keys = list(payload.keys())
-        if len(keys) != 1 or keys[0] not in ("report", "text") or not isinstance(payload[keys[0]], str):
-            return None, "report_wrapper_invalid"
-        text = payload[keys[0]]
+        unwrapped, extra = _unwrap_object(payload)
+        if unwrapped is None:
+            return None, extra  # type: ignore[return-value]
+        text, wrapper_verdict = unwrapped, extra
     elif isinstance(payload, str):
         text = payload.strip()
-        if text.startswith("{"):
-            try:
-                decoded = json.loads(text)
-            except json.JSONDecodeError:
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            if text.startswith("{"):
                 return None, "report_wrapper_serialized"
-            if not isinstance(decoded, dict) or len(decoded) != 1:
-                return None, "report_wrapper_invalid"
-            key = next(iter(decoded))
-            if key not in ("report", "text") or not isinstance(decoded[key], str):
-                return None, "report_wrapper_invalid"
-            text = decoded[key]
-        else:
             wrapped = _OUTPUT_WRAPPER.match(text)
             if wrapped:
                 text = wrapped.group(1)
+        else:
+            # Strict parse success routes through the sole wrapper parser:
+            # a decoded non-object is a malformed wrapper, typed invalid.
+            unwrapped, extra = _unwrap_object(decoded)
+            if unwrapped is None:
+                return None, extra  # type: ignore[return-value]
+            text, wrapper_verdict = unwrapped, extra
     else:
         return None, "report_not_text"
     text = text.strip()
@@ -122,8 +141,11 @@ def normalize_auditor_report(payload: object) -> tuple[str, Literal["PASS", "NEE
         return None, "report_wrapper_nested"
     if text.startswith(("<output>", "<task-result")):
         return None, "report_wrapper_nested"
-    if not _VERDICT_LINE.match(text):
+    verdict_line = _VERDICT_LINE.match(text)
+    if not verdict_line:
         return None, "verdict_missing"
+    if wrapper_verdict is not None and wrapper_verdict != verdict_line.group(1):
+        return None, "report_wrapper_verdict_mismatch"
     canonical = text.replace("\r\n", "\n")
     missing = [section for section in REPORT_SECTIONS if not re.search(rf"^\s*(?:#+\s*)?{re.escape(section)}(?:[ \t]*\([^)\n]*\))?[ \t]*[:—-]?[ \t]*$", canonical, re.MULTILINE)]
     if missing:

@@ -811,4 +811,4 @@ class Approval(StrictModel):
     contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_by: Literal["owner"]
     approved_at: datetime
-    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47"]
+    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47", "OMP-67"]

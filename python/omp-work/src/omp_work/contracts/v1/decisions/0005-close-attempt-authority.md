@@ -47,7 +47,12 @@ gate booleans, the process-global audit bridge, the stop-hook reminder, and
    Settlement (`settle_auditor_launch`) owns transport normalization — raw
    canonical text, one direct `{"report"}`/`{"text"}` object, one JSON string
    encoding that direct object, or one bare `<output>` wrapper; nested wrappers
-   remain refused. VERDICT starts at canonical byte 0, and each attempt accepts
+   remain refused. The direct object may carry one optional string `"verdict"`
+   key (OMP-67, incident 2026-08-21): it is decoration, never authority — a
+   value contradicting the report's own VERDICT line refuses as
+   `report_wrapper_verdict_mismatch` before section validation, and a present
+   non-string value (including null) refuses as `report_wrapper_invalid`.
+   VERDICT starts at canonical byte 0, and each attempt accepts
    at most two reports. Accepted reports mint the only legal `audit` evidence
    receipts (`independent=true`, issuer `work-service/auditor-settle`);
    external `append_evidence kind="audit"` is refused. Drift at settle
