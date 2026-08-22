@@ -207,9 +207,16 @@ def test_stale_evidence_blocks_completion_after_revision_changes() -> None:
 
 
 def test_pushed_branch_requires_remote_candidate_and_preserves_closeout() -> None:
-    receipts = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.CLOSEOUT), receipt(EvidenceKind.PUSH, remote_commit="d" * 40))
-    blocked = completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=receipts, closeout_requested=True), attempt=close_attempt())
+    base = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.CLOSEOUT))
+    # Neither shape: remote tip differs and the receipt does not attest the candidate.
+    blocked = completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=(*base, receipt(EvidenceKind.PUSH, remote_commit="d" * 40, candidate_commit=None)), closeout_requested=True), attempt=close_attempt())
     assert {blocker.code for blocker in blocked} == {"push_unverified"}
+    # OMP-99 containment shape: candidate_commit names the candidate, remote_commit a distinct non-null tip.
+    contained = completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=(*base, receipt(EvidenceKind.PUSH, remote_commit="d" * 40, candidate_commit="c" * 40)), closeout_requested=True), attempt=close_attempt())
+    assert contained == ()
+    # candidate_commit alone never satisfies: a null remote_commit still blocks.
+    null_remote = completion_blockers(CompletionInput(work_id=WORK, current_revision_id=REVISION, candidate=candidate(), receipts=(*base, receipt(EvidenceKind.PUSH, remote_commit=None, candidate_commit="c" * 40)), closeout_requested=True), attempt=close_attempt())
+    assert {blocker.code for blocker in null_remote} == {"push_unverified"}
 
 
 def test_completion_requires_requested_attempt_and_resolved_deliveries() -> None:

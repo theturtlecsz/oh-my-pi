@@ -78,7 +78,16 @@ def completion_blockers(input: CompletionInput, *, attempt: CloseAttempt | None 
     )
     if not audits or not audits[-1].independent or audits[-1].verdict != "PASS":
         blockers.append(CompletionBlocker(code="audit_missing", detail="current candidate lacks a current independent PASS audit"))
-    if not any(receipt.kind is EvidenceKind.PUSH and receipt.remote_commit == input.candidate.commit_sha for receipt in fresh):
+    def _push_satisfied(receipt: EvidenceReceipt) -> bool:
+        if receipt.kind is not EvidenceKind.PUSH:
+            return False
+        if receipt.remote_commit == input.candidate.commit_sha:
+            return True
+        # OMP-99 containment shape: the receipt names the candidate and a
+        # DIFFERENT non-null remote tip that contains it (host-attested).
+        return receipt.candidate_commit == input.candidate.commit_sha and receipt.remote_commit is not None and receipt.remote_commit != input.candidate.commit_sha
+
+    if not any(_push_satisfied(receipt) for receipt in fresh):
         blockers.append(CompletionBlocker(code="push_unverified", detail="remote ref does not resolve to candidate commit"))
     if stale:
         blockers.append(CompletionBlocker(code="stale_evidence", detail="one or more receipts or the candidate bind a different work, revision, or candidate"))

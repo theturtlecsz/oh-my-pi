@@ -397,6 +397,26 @@ def test_sealed_manifest_and_full_pass_flow_to_done(service) -> None:
     assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "done_authorization_reused"
 
 
+def test_containment_push_receipt_completes_to_done(service) -> None:
+    # OMP-99: a push receipt recording a newer same-branch tip (remote_commit)
+    # plus the audited candidate (candidate_commit) clears push_unverified.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id)
+    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
+    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
+    assert status == 200
+    _drain_deliveries(service, workspace_id)
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    tip = "a" * 40 if final["commit_sha"] != "a" * 40 else "b" * 40
+    push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=tip, candidate_commit=final["commit_sha"])
+    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
+    assert status == 200
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], done_ref=f"done:{uuid4()}")
+    assert status == 200 and body["result"]["status"] == "applied" and body["result"]["state"] == "DONE", body
+
+
 def test_reserve_mismatch_burns_nothing_and_budget_exhausts(service) -> None:
     # Scenarios: mismatch before spawn (zero burn), malformed transport,
     # transport failure before dispatch, budget exhaustion.

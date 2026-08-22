@@ -28,8 +28,13 @@ Changes:
    (NEEDS_FIX or BLOCKED) on a final candidate permits a new planned-candidate
    attempt on the same revision; revision changes still clear the current
    candidate and stale every old receipt. Completion requires a final
-   candidate with a non-null full object ID and a push receipt whose
-   `remote_commit` equals it; null never satisfies a push.
+   candidate with a non-null full object ID and a push receipt in one of two
+   exclusive shapes (OMP-99, incident 2026-08-22): exact — `remote_commit`
+   equals the candidate commit; or containment — `remote_commit` records the
+   newer same-branch tip, `candidate_commit` records the candidate, and the
+   receipt body carries a host containment attestation re-verified against
+   the remote at close time. Null never satisfies a push; branch rewinding
+   and permanent per-candidate refs remain forbidden.
 5. Capability records carrying `work.candidate.read` must name a non-empty
    `candidate_ids` allowlist; such principals may only read the workflow whose
    current candidate is allowlisted and cannot mutate.

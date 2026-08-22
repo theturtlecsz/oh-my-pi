@@ -304,6 +304,59 @@ describe("candidate freeze and push", () => {
 		expect(second.remoteCommit).toBe(frozen);
 	});
 
+	test("pushCandidate proves containment when a newer same-branch tip contains the frozen commit — no push runs", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		const branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD");
+		const frozen = git(repo, "rev-parse", "HEAD");
+		fs.writeFileSync(path.join(repo, "later.txt"), "later\n");
+		git(repo, "add", "--", "later.txt");
+		git(repo, "commit", "-q", "-m", "later");
+		const later = git(repo, "rev-parse", "HEAD");
+		git(repo, "push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+		const before = git(remote, "rev-parse", `refs/heads/${branch}`);
+		expect(before).toBe(later);
+
+		const outcome = pushCandidate(repo, frozen);
+
+		expect(outcome).toMatchObject({ status: "contained", remoteCommit: later });
+		expect(outcome.detail).toContain(`containment: ${later} contains ${frozen}`);
+		expect(outcome.detail).toContain("merge-base --is-ancestor exit 0");
+		// The branch was never touched — no backward push, tip byte-identical.
+		expect(git(remote, "rev-parse", `refs/heads/${branch}`)).toBe(before);
+	});
+
+	test("pushCandidate fails closed on a diverged remote, naming both commits, remote untouched", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		const branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD");
+		const frozen = git(repo, "rev-parse", "HEAD");
+		// Unrelated history force-pushed onto the branch: tip neither equals nor
+		// contains the candidate. Amend the other repo's root so the two seed
+		// commits (identical tree/message/second) cannot share a SHA.
+		const other = makeRepo();
+		git(other, "commit", "-q", "--amend", "-m", "unrelated-root");
+		fs.writeFileSync(path.join(other, "unrelated.txt"), "unrelated\n");
+		git(other, "add", "--", "unrelated.txt");
+		git(other, "commit", "-q", "-m", "unrelated");
+		expect(git(other, "rev-list", "--max-parents=0", "HEAD")).not.toBe(frozen);
+		git(other, "remote", "add", "origin", remote);
+		git(other, "push", "-q", "--force", "origin", `HEAD:refs/heads/${branch}`);
+		const unrelated = git(remote, "rev-parse", `refs/heads/${branch}`);
+
+		const outcome = pushCandidate(repo, frozen);
+
+		expect(outcome.status).toBe("not_pushed");
+		expect(outcome.detail).toContain(unrelated);
+		expect(outcome.detail).toContain(frozen);
+		expect(outcome.detail).toContain("does not contain it");
+		expect(git(remote, "rev-parse", `refs/heads/${branch}`)).toBe(unrelated);
+	});
+
 	test("pushCandidate reports not_pushed when no remote", () => {
 		const repo = makeRepo();
 		const head = git(repo, "rev-parse", "HEAD");

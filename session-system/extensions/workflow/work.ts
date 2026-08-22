@@ -392,6 +392,7 @@ export function createWorkBackend(
 					...(await receipt("push", now, push.detail ?? `pushed ${push.remoteRef}`)),
 					...(push.remoteRef ? { remote_ref: push.remoteRef } : {}),
 					...(push.remoteCommit ? { remote_commit: push.remoteCommit } : {}),
+					...(push.status === "contained" ? { candidate_commit: commitSha } : {}),
 				},
 			});
 		}
@@ -921,7 +922,7 @@ export function createWorkBackend(
 			if (result.status === "refused") throw new Error(result.event?.rendered_text ?? "completion refused");
 			await backend.clearNowRemote(now.id);
 			const children = result.status === "applied" && result.completed_work_ids?.length ? ` (+${result.completed_work_ids.length} same-session child(ren))` : "";
-			return `${now.key} done${children} — ${finalCandidate.candidate_sha256.slice(0, 12)} pushed${push.status === "remote_commit" ? " (verified on remote)" : ""}`;
+			return `${now.key} done${children} — ${finalCandidate.candidate_sha256.slice(0, 12)} ${push.status === "contained" ? `contained in remote tip ${push.remoteCommit?.slice(0, 12)}` : `pushed${push.status === "remote_commit" ? " (verified on remote)" : ""}`}`;
 		},
 
 		async summaryGate(now: NowRef, carrier: WorkStateCarrier, hooks: BackendHooks): Promise<SummaryGateOk | SummaryGateBlocked> {

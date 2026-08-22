@@ -307,17 +307,19 @@ export async function freezeCandidateCommit(
 }
 
 export interface PushOutcome {
-	status: "pushed" | "remote_commit" | "not_pushed";
+	status: "pushed" | "remote_commit" | "contained" | "not_pushed";
 	remoteUrl?: string;
 	remoteRef?: string;
 	remoteCommit?: string;
 	detail?: string;
 }
 
-/** Candidate push used at /summary freeze and repeated by /done: push the
- *  exact frozen commit, then verify the remote branch ref resolves to it.
- *  A failed command with a matching remote still returns "remote_commit";
- *  every other outcome is "not_pushed". NEVER throws. */
+/** Candidate push used at /summary freeze and repeated by /done. Reads the
+ *  remote tip first: tip equals the frozen commit → "remote_commit" (no push);
+ *  tip provably contains it on the same branch → "contained" (no push, the
+ *  branch is never rewound); otherwise push the exact commit and verify the
+ *  remote ref resolves to it. Divergence and unverifiable containment fail
+ *  closed as "not_pushed" naming both commits. NEVER throws. */
 export function pushCandidate(root: string, commitSha: string): PushOutcome {
 	try {
 		const branch = runGit(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -332,6 +334,37 @@ export function pushCandidate(root: string, commitSha: string): PushOutcome {
 			if (!ls.ok || !ls.out) return undefined;
 			return ls.out.split(/\s+/)[0];
 		};
+		const preTip = verify();
+		if (preTip === commitSha) {
+			return { status: "remote_commit", remoteUrl: remote.out, remoteRef, remoteCommit: preTip, detail: "already at remote tip" };
+		}
+		if (preTip) {
+			// OMP-99: a newer same-branch tip that contains the candidate is push
+			// proof — never rewind the branch to forge tip-equality. Fetch first so
+			// ancestry is checked against the live remote, not stale local refs; a
+			// failed fetch means containment is unverifiable and the close fails
+			// closed rather than guessing from stale objects.
+			const fetch = runGit(root, ["fetch", "origin", remoteRef], 30_000);
+			if (!fetch.ok) {
+				return {
+					status: "not_pushed",
+					remoteUrl: remote.out,
+					remoteRef,
+					remoteCommit: preTip,
+					detail: `containment unverifiable — fetch failed: ${fetch.err.split("\n")[0]}`,
+				};
+			}
+			const ancestor = runGit(root, ["merge-base", "--is-ancestor", commitSha, preTip]);
+			if (ancestor.ok) {
+				return {
+					status: "contained",
+					remoteUrl: remote.out,
+					remoteRef,
+					remoteCommit: preTip,
+					detail: `containment: ${preTip} contains ${commitSha} on ${branch.out} (merge-base --is-ancestor exit 0, verified ${new Date().toISOString()})`,
+				};
+			}
+		}
 		const push = runGit(root, ["push", "origin", `${commitSha}:${remoteRef}`], 30_000);
 		const remoteCommit = verify();
 		if (remoteCommit === commitSha) {
@@ -348,7 +381,7 @@ export function pushCandidate(root: string, commitSha: string): PushOutcome {
 			remoteUrl: remote.out,
 			remoteRef,
 			remoteCommit,
-			detail: push.ok ? `remote ${remoteRef} is ${remoteCommit ?? "absent"}, not ${commitSha.slice(0, 12)}` : push.err.split("\n")[0],
+			detail: `remote ${remoteRef} is ${remoteCommit ?? "absent"}, not ${commitSha} and does not contain it${push.ok ? "" : ` (${push.err.split("\n")[0]})`}`,
 		};
 	} catch (e) {
 		return { status: "not_pushed", detail: String(e) };
