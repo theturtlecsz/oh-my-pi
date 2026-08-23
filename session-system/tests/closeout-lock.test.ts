@@ -37,7 +37,7 @@ Bun.spawnSync(["git", "init", "-q"], { cwd: probe });
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
 const LOCK = "closeout lock (HOME-114)";
-const run = (mode: "input" | "skill" | "done" | "forged-subagent" | "legacy-host"): Record<string, string | string[]> => {
+const run = (mode: "input" | "skill" | "done" | "forged-subagent" | "legacy-host" | "body-refused"): Record<string, string | string[]> => {
 	const child = Bun.spawnSync([process.execPath, harness, probe, mode], {
 		cwd: probe,
 		env: { ...process.env, HOME: home },
@@ -91,5 +91,10 @@ describe("HOME-114 closeout lock (host-enforced)", () => {
 		const out = run("legacy-host");
 		expect(out.before).toContain(LOCK);
 		expect(out.afterAttempts).toContain(LOCK);
+	});
+
+	test("record_health rejects body after owner authorization", () => {
+		const out = run("body-refused");
+		expect(out.bodyRefused).toBe("REFUSED — record_health stores only project health and updated_at; omit body.");
 	});
 });

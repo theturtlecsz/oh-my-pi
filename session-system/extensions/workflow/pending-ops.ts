@@ -113,11 +113,14 @@ export async function dropPendingOp(path: string): Promise<void> {
  *  recorded delivery — the crash-recovery window is minutes, not days. */
 const RESOLVED_TTL_MS = 24 * 60 * 60_000;
 
-/** Delivery ack: drop resolved claims whose operation id is in `delivered`
- *  (the host proved those tool results entered conversation history), plus a
- *  TTL sweep of ancient resolved claims. Pending claims are NEVER swept — an
- *  unresolved POST may still commit, so only a terminal result or a
- *  definitive service refusal releases one. */
+/** Delivery ack: housekeep resolved claims. A delivered create/revise/state/evidence
+ *  claim remains readable until RESOLVED_TTL_MS expires so an expired confirmation
+ *  or lost response reuses the prior operation instead of creating a duplicate.
+ *  Resolved record_project_health claims are removed on the next session sweep
+ *  because that command is an idempotent current projection and a later
+ *  same-status recording must update its timestamp. Pending or unreadable claims
+ *  are NEVER swept — only a terminal result or a definitive service refusal
+ *  releases one. */
 export async function ackOps(dir: string, delivered: ReadonlySet<string>, now = Date.now()): Promise<void> {
 	let names: string[];
 	try {
@@ -130,8 +133,12 @@ export async function ackOps(dir: string, delivered: ReadonlySet<string>, now = 
 		const path = join(dir, name);
 		const record = await readRecord(path);
 		if (!record || record.result === undefined) continue; // pending/unreadable — keep
-		const opId = (record.envelope as { operation_id?: unknown }).operation_id;
-		if (typeof opId === "string" && delivered.has(opId)) {
+		const env = record.envelope;
+		const commandType =
+			env && typeof env === "object" && "command" in env && env.command && typeof env.command === "object" && "type" in env.command
+				? env.command.type
+				: undefined;
+		if (commandType === "record_project_health") {
 			await rm(path, { force: true });
 			continue;
 		}

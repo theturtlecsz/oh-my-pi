@@ -975,7 +975,7 @@ export function createWorkBackend(
 			await run("revise_work", { work_id: item.work_id, expected_revision_id: previous.revision_id, revision });
 		},
 
-		async recordHealth(project: string, health: ProjectHealth, _body: string): Promise<void> {
+		async recordHealth(project: string, health: ProjectHealth): Promise<void> {
 			await run("record_project_health", { project_id: await projectIdFor(project), health });
 		},
 

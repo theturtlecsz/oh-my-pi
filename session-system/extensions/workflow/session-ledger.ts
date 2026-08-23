@@ -237,6 +237,7 @@ export function registerSessionLedger(pi: ExtensionAPI, deps: SessionLedgerDeps)
 	pi.on("agent_end", async (event, ctx) => {
 		if (ctx.taskDepth !== 0) return;
 		if (event.willContinue === true) return;
+		if (!ctx.isIdle()) return; // stale end from an earlier run must not consume the live run's arm
 		if (!armed) return;
 		armed = false; // cleared before any async work — duplicates cannot re-enter
 		const settledGeneration = generation;

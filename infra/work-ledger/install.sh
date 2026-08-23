@@ -55,6 +55,7 @@ After=omp-work-postgres.service
 [Service]
 Type=simple
 {environment}
+ExecStartPre={root}/python/omp-work/.venv/bin/python -m omp_work ops migrate
 ExecStart={root}/python/omp-work/.venv/bin/python -m omp_work serve --port {httpport} --capabilities-dir {config}/capabilities
 Restart=on-failure
 

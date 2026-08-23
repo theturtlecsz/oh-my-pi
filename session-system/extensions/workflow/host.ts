@@ -383,7 +383,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if (data && Array.isArray(data.ops)) for (const id of data.ops) if (typeof id === "string") ids.push(id);
 			if (data && typeof data.outcome === "string") outcomes.push(data.outcome);
 		}
-		if (ids.length > 0) await backend.ackOps(ids);
+		await backend.ackOps(ids);
 		return outcomes;
 	}
 	async function saveCache() {
@@ -1632,7 +1632,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				description: z.string().optional().describe("Work description markdown (create_work, revise_work)"),
 				project: z.string().optional().describe("Project name (create_work target, record_health)"),
 				health: z.enum(["onTrack", "atRisk", "offTrack"]).optional().describe("Project health (record_health)"),
-				body: z.string().optional().describe("Receipt body, close reason, or one-line update"),
+				body: z.string().optional().describe("Receipt body or close reason; record_health is status-only and refuses body"),
 				kind: kindEnum.optional().describe(KIND_DESCRIPTION),
 				queue: z.boolean().optional().describe(`create_work: also mark ${backend.queueNoun} so the work lands in the owner decision queue`),
 				question: z.string().optional().describe("Owner decision question (max 240 chars, single line) — required when creating a TRIAGE issue (queue:true) or queueing an issue (queue_work)"),
@@ -1721,7 +1721,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								[
 									`${params.work} ${i.title}`,
 									`state: ${i.state} · project: ${i.project ?? "none"} · labels: ${i.labels.join(",") || "none"}`,
-									(i.description ?? "").slice(0, 1200),
+									i.description ?? "",
 									...renderPlanPacket(i.planPacket),
 									...renderAuditTask(i.auditTask),
 								].join("\n"),
@@ -1832,8 +1832,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 								for (let k = 0; k < n; k++) for (const j of entries[k]!.blocks ?? []) edgeLines.push(`[${k}] blocks [${j}]`);
 								const queueText = params.queue ? `\n→ + ${backend.queueNoun} on parent\n\nOwner question:\n${params.question?.trim()}` : "";
 								const detail = [
-									`PARENT "${params.title}" → ${target ? `project ${target}` : cfg.teamNoun}${queueText}${selectsNow ? "\n→ becomes NOW" : ""}${params.description ? `\n${params.description.slice(0, 400)}` : ""}`,
-									...entries.map((e, k) => `[${k}] "${e.title}"${e.description ? `\n${e.description.slice(0, 200)}` : ""}`),
+									`PARENT "${params.title}" → ${target ? `project ${target}` : cfg.teamNoun}${queueText}${selectsNow ? "\n→ becomes NOW" : ""}${params.description ? `\n${params.description}` : ""}`,
+									...entries.map((e, k) => `[${k}] "${e.title}"${e.description ? `\n${e.description}` : ""}`),
 									edgeLines.length > 0 ? `edges:\n${edgeLines.join("\n")}` : "edges: none",
 								].join("\n\n");
 								const gate = confirmWrite("create_work", `Model wants to publish a BATCH — 1 parent + ${n} children`, detail, params);
@@ -1882,7 +1882,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const singleRefusal = unscopedRefusal(target);
 							if (singleRefusal) return deny(singleRefusal);
 							const queueText = params.queue ? `\n→ + ${backend.queueNoun} (lands in your decision queue)\n\nOwner question:\n${params.question?.trim()}` : "";
-							const detail = `"${params.title}"\n→ ${target ? `project ${target}` : cfg.teamNoun}${queueText}${selectsNow ? "\n→ becomes NOW" : ""}\n\n${(params.description ?? "").slice(0, 400)}`;
+							const detail = `"${params.title}"\n→ ${target ? `project ${target}` : cfg.teamNoun}${queueText}${selectsNow ? "\n→ becomes NOW" : ""}\n\n${params.description ?? ""}`;
 							const gate = confirmWrite(
 								"create_work",
 								"Model wants to file a work item",
@@ -1993,10 +1993,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 							return okText(line);
 						}
 						case "record_health": {
-							if (!params.project || !params.health || !params.body) return deny("project, health, body all required");
-							const gate = confirmWrite("record_health", "Model wants to post a project update", `${params.project} → ${params.health}\n"${params.body}"`, params);
+							if (params.body !== undefined) return deny("REFUSED — record_health stores only project health and updated_at; omit body.");
+							if (!params.project || !params.health) return deny("project and health required");
+							const gate = confirmWrite("record_health", "Model wants to post a project update", `${params.project} → ${params.health}`, params);
 							if (!gate.approved) return deny(gate.preview);
-							await backend.recordHealth(params.project, params.health, params.body);
+							await backend.recordHealth(params.project, params.health);
 							return okText(`update posted: ${params.project} → ${params.health}`);
 						}
 						case "status": {
@@ -2013,7 +2014,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const gate = confirmWrite(
 								"revise_work",
 								"Model wants to revise this work in place",
-								`${issue.key} ${issue.title}${params.title ? `\n→ new title: "${params.title}"` : ""}${params.description ? `\n→ new description:\n${params.description.slice(0, 400)}` : ""}`,
+								`${issue.key} ${issue.title}${params.title ? `\n→ new title: "${params.title}"` : ""}${params.description ? `\n→ new description:\n${params.description}` : ""}`,
 								params,
 							);
 							if (!gate.approved) return deny(gate.preview);

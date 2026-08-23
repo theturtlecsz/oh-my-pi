@@ -455,7 +455,7 @@ export interface WorkflowBackend {
 	queueIssue(issue: NowRef, question?: string): Promise<void>;
 	proposeClose(issue: NowRef, reason: string | undefined): Promise<void>;
 	reviseWork(issue: NowRef, fields: { title?: string; description?: string }): Promise<void>;
-	recordHealth(project: string, health: "onTrack" | "atRisk" | "offTrack", body: string): Promise<void>;
+	recordHealth(project: string, health: "onTrack" | "atRisk" | "offTrack"): Promise<void>;
 
 	/** null = clear to close; string = the exact refusal the owner sees. */
 	closeBlocker(now: NowRef, carrier: WorkStateCarrier): Promise<string | null>;
@@ -476,8 +476,8 @@ export interface WorkflowBackend {
 	/** Durable pending-operation journal:
 	 *  deliveredOps() lists operation ids whose results have been handed to the
 	 *  host since the last ack; the host passes them to ackOps() at
-	 *  before_provider_request (proof the results entered conversation history).
-	 *  ackOps drops exactly those claims plus TTL-expired resolved ones. */
+	 *  session start and before_provider_request.
+	 *  ackOps retains delivered non-health claims until TTL, and sweeps resolved health claims. */
 	deliveredOps?(): string[];
 	ackOps?(delivered: string[]): Promise<void>;
 
