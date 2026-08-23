@@ -9,7 +9,7 @@ import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "done", "done-cancel", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "ledger"];
+const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "ledger"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -25,7 +25,7 @@ const WORKSPACE_ID = "00000000-0000-7000-8000-000000000001";
 const OWNER_ID = "00000000-0000-7000-8000-000000000002";
 const issue = { id: "id-1", identifier: "HOME-1", title: "First", project: undefined as { name: string } | undefined };
 const comments: Comment[] = [];
-const writes = { created: 0, addNow: 0, removeNow: 0, closed: 0 };
+const writes = { created: 0, addNow: 0, removeNow: 0, closed: 0, canceled: 0 };
 let nowSelected = mode === "restore";
 let nowId: string | null = mode === "restore" ? "id-1" : null;
 let slotVersion = 1;
@@ -121,7 +121,7 @@ const initialItem: MockWorkItem = {
 };
 items.set("HOME-1", initialItem);
 items.set("id-1", initialItem);
-if (mode === "done-cancel") {
+if (mode === "done-cancel" || mode === "done-cancel-decline") {
 	const item2: MockWorkItem = {
 		work_id: "id-2",
 		workspace_id: WORKSPACE_ID,
@@ -555,6 +555,13 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 				{ status: 200 },
 			);
 		}
+		if (cmdType === "set_work_state") {
+			const st = payload.state as string;
+			if (st === "CANCELED") writes.canceled++;
+			const it = items.get((payload.work_id as string) ?? "id-1");
+			if (it) it.state = st;
+			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-state-${eventSeq}` }, result: { type: "set_work_state", work_id: payload.work_id, state: st, row_version: 2 } }), { status: 200 });
+		}
 		if (cmdType === "complete_work") {
 			writes.closed++;
 			const inp = payload.input as Record<string, unknown>;
@@ -692,6 +699,7 @@ runner.initialize(
 		},
 		confirm: async (title: string, body?: string) => {
 			uiCalls.push(`confirm:${title}${body ? `\n${body}` : ""}`);
+			if (mode === "done-cancel-decline" && title.includes("This is your verdict")) return false;
 			return true;
 		},
 	} as never,
@@ -1062,7 +1070,7 @@ if (mode === "intake") {
 	// supersedes to keep exactly one live attempt.
 	await runner.emitInput("/summary", undefined, "interactive");
 	out.beginAfterRaw = beginCalls.length;
-} else if (mode === "done-cancel") {
+} else if (mode === "done-cancel" || mode === "done-cancel-decline") {
 	await setNow();
 	await approve(planA);
 	await runner.emit(summaryMessage as never);

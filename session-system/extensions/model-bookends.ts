@@ -23,7 +23,7 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { sha256Hex } from "@oh-my-pi/pi-work-client";
 import auditContract from "./model-bookends-audit.md" with { type: "text" };
 import type { WorkflowBackend } from "./workflow/backend";
-import { deliverCheckpoint } from "./workflow/checkpoint-delivery";
+import { queueCheckpointDelivery } from "./workflow/checkpoint-delivery";
 import { loadBearer, loadWorkConfig } from "./workflow/config";
 import { createWorkBackend } from "./workflow/work";
 
@@ -181,7 +181,7 @@ export default function modelBookends(pi: ExtensionAPI) {
 			try {
 				const outcome = await svc.cancelAuditorLaunch(key, launchId);
 				gate.inflight = undefined;
-				if (outcome.event.requiresDelivery) await deliverCheckpoint(pi, svc, outcome.event);
+				if (outcome.event.requiresDelivery) queueCheckpointDelivery(pi, svc, outcome.event);
 				return { content: [...event.content, { type: "text", text: `Audit gate — launch never started; reservation cancelled by the ledger:\n${outcome.event.renderedText}` }] };
 			} catch (error) {
 				return { content: [...event.content, { type: "text", text: `Audit gate: failed to cancel the unstarted launch (${String(error)}). Call work get_work and follow the attempt's state.` }] };
@@ -194,11 +194,7 @@ export default function modelBookends(pi: ExtensionAPI) {
 		try {
 			const outcome = await svc.settleAuditorLaunch(key, launchId, payload === undefined ? { failed: true } : { payload });
 			if (outcome.event.requiresDelivery) {
-				try {
-					await deliverCheckpoint(pi, svc, outcome.event);
-				} catch {
-					/* the delivery debt is recorded server-side; recovery runs at the next owner session start */
-				}
+				queueCheckpointDelivery(pi, svc, outcome.event);
 			}
 			// The typed outcome reaches the MODEL in-band — never a side channel only.
 			return { content: [...event.content, { type: "text", text: `Audit gate — launch settled by the ledger:\n${outcome.event.renderedText}` }] };
@@ -223,7 +219,7 @@ export default function modelBookends(pi: ExtensionAPI) {
 			const outcome = await svc.cancelAuditorLaunch(key, launchId);
 			if (outcome.status !== "applied") return;
 			gate.inflight = undefined;
-			if (outcome.event.requiresDelivery) await deliverCheckpoint(pi, svc, outcome.event);
+			if (outcome.event.requiresDelivery) queueCheckpointDelivery(pi, svc, outcome.event);
 		} catch (error) {
 			pi.logger.warn("audit gate: failed to cancel an unstarted auditor launch", { error: String(error) });
 		}

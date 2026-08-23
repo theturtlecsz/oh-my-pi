@@ -41,12 +41,8 @@ function deliverOneEvent(
 	const existing = inFlightDeliveries.get(event.eventId);
 	if (existing) return existing;
 
-	let resolveSlot!: (status: "delivered" | "failed") => void;
-	const slot = new Promise<"delivered" | "failed">(resolve => {
-		resolveSlot = resolve;
-	});
+	const { promise: slot, resolve: resolveSlot } = Promise.withResolvers<"delivered" | "failed">();
 	inFlightDeliveries.set(event.eventId, slot);
-
 	(async () => {
 		let status: "delivered" | "failed" = "delivered";
 		try {
@@ -121,9 +117,17 @@ export async function queuePendingCheckpointDeliveries(
  *  attestation (other than the idempotent "already resolved") throws with the
  *  service's exact rendered reason — the checkpoint is NOT settled. (For idle lifecycle contexts). */
 export async function deliverCheckpoint(pi: ExtensionAPI, backend: WorkflowBackend, event: CloseEventView): Promise<"delivered" | "failed"> {
-	return deliverOneEvent(pi, backend, event, notice => {
-		throw new Error(notice);
-	});
+	let status: "delivered" | "failed" = "delivered";
+	try {
+		await pi.deliverMessage({ customType: "close-attempt-checkpoint", content: event.renderedText });
+	} catch {
+		status = "failed";
+	}
+	const attested = await backend.attestDelivery(event.eventId, pi.getSessionId(), event.renderedSha256, status);
+	if (attested.status === "refused" && attested.event.reasonCode !== "delivery_already_resolved") {
+		throw new Error(attested.event.renderedText);
+	}
+	return status;
 }
 
 /** Deliver every unresolved requires_delivery event for one work item (bounded). (For idle lifecycle contexts). */

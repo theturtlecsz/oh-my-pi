@@ -204,6 +204,20 @@ describe("audit gate interception (OMP-47)", () => {
 		}
 	});
 
+	test("tool_result is ignored when no auditor launch was reserved", async () => {
+		const h = await makeHarness();
+		await armSummary(h);
+		const result = await h.runner.emitToolResult({
+			type: "tool_result",
+			toolName: "task",
+			toolCallId: "unrelated",
+			input: {},
+			content: [{ type: "text", text: "report" }],
+			isError: false,
+		} as never);
+		expect(result).toBeUndefined();
+	});
+
 	test("the gate is inert without /summary and in subagents", async () => {
 		const idle = await makeHarness();
 		expect(await idle.runner.emitToolCall(auditorCall("t-7"))).toBeUndefined();

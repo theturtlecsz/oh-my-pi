@@ -10,7 +10,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "done" | "done-cancel" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -152,6 +152,15 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.home2State).toBe("CANCELED");
 		expect(out.batchFileExists).toBe(false);
 		expect(list(out.consumedFiles).length).toBe(1);
+		expect(record(out.doneWrites)).toMatchObject({ closed: 1, canceled: 0 });
+	});
+
+	test("done declined leaves staged cancel batch file on disk with zero writes", () => {
+		const out = run("done-cancel-decline");
+		expect(out.home2State).toBe("BACKLOG");
+		expect(out.batchFileExists).toBe(true);
+		expect(list(out.consumedFiles).length).toBe(0);
+		expect(record(out.doneWrites)).toMatchObject({ closed: 0, canceled: 0 });
 	});
 
 	test("a structured-only /summary recovers from a refused freeze and re-authorizes", () => {

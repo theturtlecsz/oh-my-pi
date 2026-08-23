@@ -47,10 +47,12 @@ import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, 
 import { confirmWrite, resetConfirmations } from "./confirm";
 import { dirtyPaths, headCommit, parentCommit, rangeDiffSha256 } from "./git";
 import {
+	cancelBatchPath,
 	consumeStagedCancelBatch,
 	consumeStagedRiderBatch,
 	readStagedCancelBatch,
 	readStagedRiderBatch,
+	riderBatchPath,
 	type StagedCancelBatch,
 	type StagedRiderBatch,
 } from "./rider-batch";
@@ -571,14 +573,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 	/** OMP-93 rider staging: host-owned path (never repo-controlled), one file
 	 *  per canonical working directory. Consumption requires an owner confirm
 	 *  bound to the exact keys and file digest, then a one-shot rename. */
-	function riderBatchPath(): string {
-		const canonical = realpathSync(process.cwd());
-		const cwdHash = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
-		return join(getAgentDir(), "work-rider-batches", `${cwdHash}.json`);
-	}
-
 	async function stageRiders(ctx: ExtensionContext): Promise<{ riders: RiderProof[]; batch: StagedRiderBatch } | undefined | null> {
-		const path = riderBatchPath();
+		const path = riderBatchPath(getAgentDir(), process.cwd());
 		let batch: StagedRiderBatch | null;
 		try {
 			batch = readStagedRiderBatch(path);
@@ -608,14 +604,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 		}
 	}
 
-	function cancelBatchPath(): string {
-		const canonical = realpathSync(process.cwd());
-		const cwdHash = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
-		return join(getAgentDir(), "work-cancel-batches", `${cwdHash}.json`);
-	}
-
 	async function stageCancelBatch(nowKey: string, ctx: ExtensionContext): Promise<{ cancellations: CancellationProof[]; batch: StagedCancelBatch } | undefined | null> {
-		const path = cancelBatchPath();
+		const path = cancelBatchPath(getAgentDir(), process.cwd());
 		let batch: StagedCancelBatch | null;
 		try {
 			batch = readStagedCancelBatch(path);

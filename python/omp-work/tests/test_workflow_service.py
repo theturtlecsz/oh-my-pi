@@ -896,8 +896,85 @@ def test_complete_work_cancellation_refusals_and_rollback(service) -> None:
     assert status == 200 and body["result"]["status"] == "refused"
     assert body["result"]["event"]["reason_code"] == "cancel_binding_invalid"
 
+    # Already-terminal target refuses transaction with cancel_binding_invalid
+    terminal_target = _create(service, workspace_id, "terminal target")
+    status, _ = _command(service, workspace_id, {"type": "set_work_state", "payload": {"work_id": terminal_target["work_id"], "state": "CANCELED"}})
+    assert status == 200
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], cancellations=[{"work_id": terminal_target["work_id"], "revision_id": terminal_target["revision_id"], "reason": "already canceled"}], key=item["key"])
+    assert status == 200 and body["result"]["status"] == "refused"
+    assert body["result"]["event"]["reason_code"] == "cancel_binding_invalid"
+
     # Primary and target stay open
     primary_view = service.client.get(f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)).json()
     assert primary_view["item"]["state"] not in ("DONE", "CANCELED")
     target_view = service.client.get(f"/v1/work-items/{target['key']}/workflow", headers=_owner_headers(workspace_id)).json()
     assert target_view["item"]["state"] == "BACKLOG"
+
+
+def test_complete_work_overlap_guards_refuse_and_mutate_nothing(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id, "overlap primary")
+    target = _create(service, workspace_id, "overlap target")
+
+    def _snapshot(key: str) -> dict:
+        view = service.client.get(f"/v1/work-items/{key}/workflow", headers=_owner_headers(workspace_id)).json()
+        return {
+            "state": view["item"]["state"],
+            "revision": view["item"]["revision"]["revision_id"],
+            "terminal_events": sorted(e["event_id"] for e in view["close_attempt_events"] if e["event_type"] in ("work_completed", "batch_canceled")),
+        }
+
+    before_primary = _snapshot(item["key"])
+    before_target = _snapshot(target["key"])
+
+    # satisfied child ∩ cancellation target: exact typed refusal, zero mutation
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], satisfied=[target["work_id"]], cancellations=[{"work_id": target["work_id"], "revision_id": target["revision_id"], "reason": "overlap"}], key=item["key"])
+    assert status == 400 and body["error"]["code"] == "invalid_request"
+    assert "work item cannot be both a satisfied child and a cancellation target" in body["error"]["diagnostics"]
+    assert _snapshot(item["key"]) == before_primary
+    assert _snapshot(target["key"]) == before_target
+
+    # sealed rider ∩ cancellation target: exact typed refusal, zero mutation
+    rider = _create(service, workspace_id, "rider target")
+    rider_primary = _create(service, workspace_id, "rider primary")
+    plan = _plan(service, workspace_id, rider_primary)
+    status, body = _finalize(service, workspace_id, rider_primary, plan["candidate_id"])
+    assert status == 200, body
+    rider_final = body["result"]["candidate"]
+    riders = [{"work_id": rider["work_id"], "revision_id": rider["revision_id"], "evidence": "probe: rider"}]
+    status, body = _begin(service, workspace_id, rider_primary, identity={"riders": riders})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    rider_attempt = body["result"]["attempt"]
+    before_rider_primary = _snapshot(rider_primary["key"])
+    before_rider = _snapshot(rider["key"])
+    status, body = _complete(service, workspace_id, rider_primary, rider_final, rider_attempt["attempt_id"], cancellations=[{"work_id": rider["work_id"], "revision_id": rider["revision_id"], "reason": "overlap"}], key=rider_primary["key"])
+    assert status == 400 and body["error"]["code"] == "invalid_request"
+    assert "work item cannot be both a sealed rider and a cancellation target" in body["error"]["diagnostics"]
+    assert _snapshot(rider_primary["key"]) == before_rider_primary
+    assert _snapshot(rider["key"]) == before_rider
+
+    # Both cancel probes remain open
+    assert _snapshot(target["key"])["state"] == "BACKLOG"
+    assert _snapshot(rider["key"])["state"] == "BACKLOG"
+
+
+def test_closeout_refused_before_checkpoint_attestation_and_succeeds_after(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id, "gated item")
+    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
+    assert status == 200, body
+
+    # Before delivery is attested, request_closeout is refused with delivery_pending
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "refused", body
+    assert body["result"]["event"]["reason_code"] == "delivery_pending"
+
+    # Attest the delivery
+    _drain_deliveries(service, workspace_id, key=item["key"])
+
+    # After delivery is attested, request_closeout succeeds
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "applied", body

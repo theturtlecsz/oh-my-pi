@@ -288,6 +288,7 @@ export type CompleteWorkPayload = {
 	cancellations?: CancellationProof[];
 };
 export type BeginCloseAttemptPayload = {
+	work_id: UUID;
 	attempt_id: UUID;
 	authorization_ref: string;
 	owner_session_id: string;
