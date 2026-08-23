@@ -135,6 +135,7 @@ function ownerCtx(overrides: Record<string, unknown> = {}) {
 	return {
 		taskDepth: 0,
 		cwd: "/tmp/omp69-nonexistent",
+		isIdle: () => true,
 		models: { resolve: (spec: string) => (spec === "@advisor" ? advisorModel : undefined) },
 		...overrides,
 	};
@@ -349,6 +350,17 @@ describe("suppression", () => {
 		await settleTurn(h, [userMsg, assistantMsg("done")], ctx);
 		await h.emit("agent_end", { messages: [userMsg, assistantMsg("done")] }, ctx);
 		expect(h.sent).toHaveLength(1);
+	});
+
+	test("stale terminal end cannot consume the newer running turn arm", async () => {
+		const h = makeHarness();
+		const liveCtx = ownerCtx({ isIdle: () => false });
+		await settleTurn(h, [userMsg, assistantMsg("turn one")], ownerCtx());
+		await h.emit("agent_start", {}, liveCtx);
+		await h.emit("agent_end", { messages: [userMsg, assistantMsg("stale turn one")] }, liveCtx);
+		await h.emit("agent_end", { messages: [userMsg, assistantMsg("turn two")] }, ownerCtx());
+		expect(h.sent).toHaveLength(2);
+		expect(h.requests.at(-1)?.prompt).toContain("turn two");
 	});
 
 	test("unarmed terminal settle emits nothing", async () => {

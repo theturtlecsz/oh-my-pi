@@ -11,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -122,6 +122,18 @@ describe("HOME-122 workflow sequence", () => {
 		// any switch) must leave the owner's shared transcript ref untouched.
 		expect(record(out.lifecycleAfterStart)).toEqual({ transcriptChanged: false });
 		expect(record(out.lifecycleAfterSwitch)).toEqual({ transcriptChanged: false });
+	});
+
+	test("get_work and write previews retain complete descriptions", () => {
+		const out = run("descriptions");
+		expect(out.getWork).toContain("GET_WORK_SENTINEL");
+		expect(record(out.create).preview).toContain("PREVIEW_SENTINEL");
+		expect(record(out.create).confirmed).toContain("created HOME-1");
+		expect(record(out.batch).preview).toContain("PREVIEW_SENTINEL");
+		expect(record(out.batch).preview).toContain("CHILD_SENTINEL");
+		expect(record(out.batch).confirmed).toContain("HOME-2 + 1 child(ren)");
+		expect(record(out.revise).preview).toContain("PREVIEW_SENTINEL");
+		expect(record(out.revise).confirmed).toContain("HOME-1 revised");
 	});
 
 	test("fresh sessions restore the backend focus without a local cache", () => {

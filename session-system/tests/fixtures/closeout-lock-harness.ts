@@ -12,7 +12,7 @@ import { ExtensionRunner, loadExtensions, type ExtensionContext } from "@oh-my-p
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["input", "skill", "done", "forged-subagent", "legacy-host"];
+const MODES = ["input", "skill", "done", "forged-subagent", "legacy-host", "body-refused"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 
 globalThis.fetch = (async (url: unknown) => {
@@ -67,7 +67,7 @@ const attemptAction = async (label: string, params: Record<string, unknown>, ctx
 	}
 };
 const attempt = (label: string, ctx: ExtensionContext): Promise<void> =>
-	attemptAction(label, { action: "record_health", project: "P", health: "onTrack", body: "b" }, ctx);
+	attemptAction(label, { action: "record_health", project: "P", health: "onTrack" }, ctx);
 
 const uiCalls: string[] = [];
 
@@ -160,6 +160,9 @@ if (mode === "legacy-host") {
 			await runner.emit({ type: "message_start", message: skillPromptMessage } as never);
 		}
 		await attempt("afterAttempts", ctx);
+	}
+	if (mode === "body-refused") {
+		await attemptAction("bodyRefused", { action: "record_health", project: "P", health: "onTrack", body: "b" }, ctx);
 	}
 }
 process.stdout.write(JSON.stringify({ ...out, uiCalls }));

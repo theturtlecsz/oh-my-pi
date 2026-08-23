@@ -455,7 +455,7 @@ export interface WorkflowBackend {
 	queueIssue(issue: NowRef, question?: string): Promise<void>;
 	proposeClose(issue: NowRef, reason: string | undefined): Promise<void>;
 	reviseWork(issue: NowRef, fields: { title?: string; description?: string }): Promise<void>;
-	recordHealth(project: string, health: "onTrack" | "atRisk" | "offTrack", body: string): Promise<void>;
+	recordHealth(project: string, health: "onTrack" | "atRisk" | "offTrack"): Promise<void>;
 
 	/** null = clear to close; string = the exact refusal the owner sees. */
 	closeBlocker(now: NowRef, carrier: WorkStateCarrier): Promise<string | null>;

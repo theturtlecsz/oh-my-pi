@@ -12,6 +12,18 @@ uv run --project python/omp-work omp-work ops check
 uv run --project python/omp-work omp-work ops health --json
 ```
 
+## Contract changes
+
+After owner approval is present, register compatibility before service restart:
+
+```sh
+uv run --project python/omp-work omp-work ops migrate
+systemctl --user restart omp-work-service.service
+uv run --project python/omp-work omp-work ops health --json
+```
+
+The final health result must show `live:true`, `ready:true`, and no alerts.
+
 Provision and prove the dedicated backup target before enabling backup automation:
 
 ```sh

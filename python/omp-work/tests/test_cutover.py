@@ -134,8 +134,8 @@ def _activate_envelope(workspace_id: UUID, manifest: CutoverManifest, operation_
     return _envelope(workspace_id, ActivateCutoverCommand(type="activate_cutover", payload=ActivateCutoverPayload(manifest=manifest)), operation_id)
 
 
-def _create_envelope(workspace_id: UUID, operation_id: UUID | None = None) -> CommandEnvelope:
-    return _envelope(workspace_id, CreateWorkBatchCommand(type="create_work_batch", payload=CreateWorkBatchPayload(items=(CreateWorkInput(client_ref="a", title="first"),))), operation_id)
+def _create_envelope(workspace_id: UUID, operation_id: UUID | None = None, title: str = "first") -> CommandEnvelope:
+    return _envelope(workspace_id, CreateWorkBatchCommand(type="create_work_batch", payload=CreateWorkBatchPayload(items=(CreateWorkInput(client_ref="a", title=title),))), operation_id)
 
 
 def _activate(store: PostgresWorkStore, workspace_id: UUID, manifest: CutoverManifest, actor_id: UUID, operation_id: UUID | None = None):
@@ -205,7 +205,7 @@ def test_activation_applies_replays_once_and_stamps_first_mutation(tmp_path: Pat
 
         first = store.execute(_create_envelope(workspace_id), actor_id=actor_id, actor_kind="owner", required_scope="work.mutate")
         assert first[0].state.value == "applied"
-        store.execute(_create_envelope(workspace_id), actor_id=actor_id, actor_kind="owner", required_scope="work.mutate")
+        store.execute(_create_envelope(workspace_id, title="second"), actor_id=actor_id, actor_kind="owner", required_scope="work.mutate")
         with psycopg.connect(**config.connection_kwargs("postgres")) as connection:
             row = connection.execute("SELECT first_work_mutation_at, first_work_mutation_request_id FROM omp_control.workspace_authority WHERE workspace_id=%s", (workspace_id,)).fetchone()
         assert row[0] == stamped_at and str(row[1]) == str(manifest.first_mutation_request_id)

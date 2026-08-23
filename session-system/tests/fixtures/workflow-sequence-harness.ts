@@ -9,7 +9,7 @@ import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger"];
+const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -110,7 +110,7 @@ const initialItem: MockWorkItem = {
 	revision: {
 		revision_id: "rev-1",
 		title: "First",
-		description: "",
+		description: mode === "descriptions" ? `${"x".repeat(1201)} GET_WORK_SENTINEL` : "",
 		scope: "",
 		// OMP-38 audit mode: real structured criteria the PLAN PACKET must carry.
 		acceptance_criteria: mode === "audit" ? ["AC-1 the focused check passes"] : [],
@@ -299,7 +299,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 		const cmdType = env.command?.type;
 		const payload = env.command?.payload ?? {};
 		if (cmdType === "create_work_batch") {
-			const batchItems = (payload.items as Array<{ title: string; description?: string }>) ?? [];
+			const batchItems = (payload.items as Array<{ client_ref: string; title: string; description?: string }>) ?? [];
 			const createdList: Array<{ client_ref: string; work_id: string; revision_id: string; key: string; state: string; row_version: number }> = [];
 			for (const b of batchItems) {
 				writes.created++;
@@ -314,7 +314,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 				};
 				items.set(created.alias.key, created);
 				items.set(created.work_id, created);
-				createdList.push({ client_ref: "p", work_id: created.work_id, revision_id: created.revision.revision_id, key: created.alias.key, state: created.state, row_version: 1 });
+				createdList.push({ client_ref: b.client_ref, work_id: created.work_id, revision_id: created.revision.revision_id, key: created.alias.key, state: created.state, row_version: 1 });
 				if (writes.created === 1) Object.assign(issue, { id: created.work_id, identifier: created.alias.key, title: created.revision.title });
 			}
 			return new Response(
@@ -1076,6 +1076,18 @@ if (mode === "intake") {
 	out.queuedDescription = items.get("HOME-1")?.revision.description;
 
 	out.waitingOutput = await execute({ action: "waiting" });
+} else if (mode === "descriptions") {
+	out.getWork = await execute({ action: "get_work", work: "HOME-1" });
+	const description = `${"x".repeat(401)} PREVIEW_SENTINEL`;
+	out.create = await confirmRoundTrip(execute, { action: "create_work", title: "Long description", description, project: "The Bookends" });
+	out.batch = await confirmRoundTrip(execute, {
+		action: "create_work",
+		title: "Long batch parent",
+		description,
+		project: "The Bookends",
+		batch: [{ title: "Long batch child", description: `${"x".repeat(201)} CHILD_SENTINEL` }],
+	});
+	out.revise = await confirmRoundTrip(execute, { action: "revise_work", work: "HOME-1", description });
 } else if (mode === "footer") {
 	out.initialCalls = [...statusCalls];
 	await setNow();
