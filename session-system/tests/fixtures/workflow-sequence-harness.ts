@@ -9,7 +9,7 @@ import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "ledger"];
+const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -158,6 +158,34 @@ if (mode === "center" || mode === "center-scoped") {
 	};
 	items.set("HOME-50", parked);
 	items.set("id-t", parked);
+	const decisionWithQuestion: MockWorkItem = {
+		work_id: "id-q",
+		workspace_id: WORKSPACE_ID,
+		alias: { key: "HOME-16" },
+		revision: {
+			revision_id: "rev-q",
+			title: "Decision on fleet controller",
+			description: "## Owner question\nShould work resume on the autonomous fleet controller?",
+			scope: "",
+			acceptance_criteria: [],
+		},
+		state: "TRIAGE",
+		project_id: "proj-1",
+		candidate: null,
+	};
+	items.set("HOME-16", decisionWithQuestion);
+	items.set("id-q", decisionWithQuestion);
+	const blockedItem: MockWorkItem = {
+		work_id: "id-b",
+		workspace_id: WORKSPACE_ID,
+		alias: { key: "HOME-10" },
+		revision: { revision_id: "rev-b", title: "Blocked task", description: "", scope: "", acceptance_criteria: [] },
+		state: "BACKLOG",
+		project_id: "proj-1",
+		candidate: null,
+	};
+	items.set("HOME-10", blockedItem);
+	items.set("id-b", blockedItem);
 }
 let commandPosts = 0;
 const activityCalls: string[] = [];
@@ -166,9 +194,10 @@ const activityCalls: string[] = [];
 // fourth section degrades honestly while the other three survive.
 let activityFailuresLeft = mode === "center" ? 6 : 0;
 let idle = true;
-// One-shot: the agent "goes busy" during the snapshot's activity read.
 let busyDuringSnapshot = false;
-
+let throwNextTree = false;
+let switchSessionOnNextTree = false;
+let throwNextDeliverMessage = false;
 globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string }) => {
 	const u = String(url);
 	const method = init?.method ?? "GET";
@@ -180,6 +209,15 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 		return new Response(JSON.stringify({ authority: "work", epoch_id: null, epoch_state: "sealed" }), { status: 200 });
 	}
 	if (u.includes("/tree")) {
+		if (throwNextTree) {
+			throwNextTree = false;
+			return new Response(JSON.stringify({ error: { code: "unavailable", diagnostics: ["tree service down"] } }), { status: 503 });
+		}
+		if (switchSessionOnNextTree) {
+			switchSessionOnNextTree = false;
+			currentSessionId = "session-switched";
+			await runner.emit({ type: "session_switch", reason: "new" } as never);
+		}
 		return new Response(
 			JSON.stringify({
 				projects: [
@@ -187,7 +225,9 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 					...(mode === "center" || mode === "center-scoped" ? [{ project_id: "proj-2", workspace_id: WORKSPACE_ID, name: "Elsewhere", health: "onTrack" }] : []),
 				],
 				items: Array.from(new Set(items.values())),
-				relations: [],
+				relations: (mode === "center" || mode === "center-scoped")
+					? [{ workspace_id: WORKSPACE_ID, source_work_id: "id-1", target_work_id: "id-b", kind: "blocks", active: true }]
+					: [],
 			}),
 			{ status: 200 },
 		);
@@ -307,6 +347,35 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 				JSON.stringify({
 					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000012" },
 					result: { type: "clear_focus", workspace_id: WORKSPACE_ID, owner_id: OWNER_ID, work_id: null, version: slotVersion },
+				}),
+				{ status: 200 },
+			);
+		}
+		if (cmdType === "revise_work") {
+			const rev = payload.revision as { work_id: string; revision_id: string; title?: string; description?: string };
+			const it = items.get(rev.work_id) ?? items.get("HOME-1");
+			if (it) {
+				if (rev.title) it.revision.title = rev.title;
+				if (rev.description !== undefined) it.revision.description = rev.description;
+				it.revision.revision_id = rev.revision_id;
+			}
+			return new Response(
+				JSON.stringify({
+					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000015" },
+					result: { type: "revise_work", revision_id: rev.revision_id, changed: true },
+				}),
+				{ status: 200 },
+			);
+		}
+		if (cmdType === "set_work_state") {
+			const workId = payload.work_id as string;
+			const targetState = payload.state as string;
+			const it = items.get(workId) ?? items.get("HOME-1");
+			if (it) it.state = targetState;
+			return new Response(
+				JSON.stringify({
+					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000016" },
+					result: { type: "set_work_state", state: targetState },
 				}),
 				{ status: 200 },
 			);
@@ -621,12 +690,15 @@ const tool = extension.tools.get("work");
 if (!tool) throw new Error("work tool missing");
 
 const uiCalls: string[] = [];
+let currentSessionId = "session-test";
 const statuses: string[] = [];
 const statusCalls: { key: string; text: string | null; placement: string }[] = [];
-let activeTools = ["read", "bash", "work"];
 const sentUserMessages: string[] = [];
 const sentMessages: Array<{ message: unknown; options: unknown }> = [];
+const deliveredMessages: Array<{ customType?: string; content?: unknown; details?: unknown; display?: boolean }> = [];
+let activeTools = ["read", "bash", "work"];
 let throwNextSend = false;
+let throwNextSendMessage = false;
 let throwNextSetTools = false;
 let abortCalls = 0;
 const depth = mode === "summary-subagent" ? 1 : 0;
@@ -651,13 +723,26 @@ const runner = new ExtensionRunner(
 runner.initialize(
 	{
 		appendEntry: () => {},
-		getSessionId: () => "session-test",
-		deliverMessage: async () => {},
+		getSessionId: () => currentSessionId,
+		deliverMessage: async (payload: unknown) => {
+			if (throwNextDeliverMessage) {
+				throwNextDeliverMessage = false;
+				throw new Error("delivery rejected");
+			}
+			deliveredMessages.push(payload as never);
+		},
 		setModel: async () => true,
 		getThinkingLevel: () => "high",
 		setThinkingLevel: () => {},
 		sendMessage: (message: unknown, options?: unknown) => {
+			if (throwNextSendMessage) {
+				throwNextSendMessage = false;
+				throw new Error("delivery rejected");
+			}
 			sentMessages.push({ message, options });
+			if (message && typeof message === "object" && "customType" in message && message.customType === "center-readout") {
+				deliveredMessages.push(message as never);
+			}
 		},
 		sendUserMessage: (content: unknown) => {
 			if (throwNextSend) {
@@ -752,6 +837,76 @@ const pastedSummary = {
 const out: Record<string, unknown> = {};
 if (mode === "intake") {
 	await runner.emit(intakeMessage as never);
+	const immediateAsk = await runner.emitToolCall({
+		type: "tool_call",
+		toolName: "ask",
+		toolCallId: "ask-immediate",
+		input: { questions: [{ id: "q1", question: "one?" }] },
+	} as never);
+	out.immediateAsk = immediateAsk;
+	out.createBeforeScan = await execute({ action: "create_work", title: "Early", project: "The Bookends" });
+
+	await runner.emit({
+		type: "message_end",
+		message: {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "## Figured out myself\n1\n## Asking you\n2\n## Leaving for later\n3" },
+				{ type: "toolCall", id: "t-read", name: "read", arguments: {} },
+			],
+		},
+	} as never);
+	const askAfterCoEmitted = await runner.emitToolCall({
+		type: "tool_call",
+		toolName: "ask",
+		toolCallId: "ask-coemitted",
+		input: { questions: [{ id: "q1", question: "one?" }] },
+	} as never);
+	out.askAfterCoEmitted = askAfterCoEmitted;
+
+	await runner.emit({
+		type: "message_end",
+		message: {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "## Asking you\n2\n## Figured out myself\n1\n## Leaving for later\n3" },
+			],
+		},
+	} as never);
+	const askAfterBadOrder = await runner.emitToolCall({
+		type: "tool_call",
+		toolName: "ask",
+		toolCallId: "ask-badorder",
+		input: { questions: [{ id: "q1", question: "one?" }] },
+	} as never);
+	out.askAfterBadOrder = askAfterBadOrder;
+
+	await runner.emit({
+		type: "message_end",
+		message: {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "## Figured out myself\n- fact\n## Asking you\n- decision\n## Leaving for later\n- parked" },
+			],
+		},
+	} as never);
+
+	const askMulti = await runner.emitToolCall({
+		type: "tool_call",
+		toolName: "ask",
+		toolCallId: "ask-multi",
+		input: { questions: [{ id: "q1", question: "one?" }, { id: "q2", question: "two?" }] },
+	} as never);
+	out.askMulti = askMulti;
+
+	const askValid = await runner.emitToolCall({
+		type: "tool_call",
+		toolName: "ask",
+		toolCallId: "ask-valid",
+		input: { questions: [{ id: "q1", question: "one?" }] },
+	} as never);
+	out.askValid = askValid;
+
 	const first = await confirmRoundTrip(execute, { action: "create_work", title: "First", description: "one", project: "The Bookends" });
 	out.preview = first.preview;
 	out.confirmed = first.confirmed;
@@ -761,6 +916,21 @@ if (mode === "intake") {
 	out.stop = stop ?? null;
 	out.writes = writes;
 	out.nowSelected = nowSelected;
+
+	const publishMessage = {
+		type: "message_start",
+		message: {
+			role: "custom",
+			customType: "skill-prompt",
+			attribution: "user",
+			details: { name: "intake", args: "--publish local://blueprint.md" },
+			content: "intake --publish",
+			timestamp: Date.now(),
+		},
+	};
+	await runner.emit(publishMessage as never);
+	const publishTrip = await confirmRoundTrip(execute, { action: "create_work", title: "Published", description: "blueprint", project: "The Bookends" });
+	out.publishConfirmed = publishTrip.confirmed;
 } else if (mode === "plan") {
 	out.noNow = await runner.emitInput("/plan", undefined, "interactive");
 	await setNow();
@@ -818,93 +988,94 @@ if (mode === "intake") {
 } else if (mode === "restore") {
 	out.now = await execute({ action: "my_now" });
 } else if (mode === "center" || mode === "center-scoped") {
-	// OMP-25: fresh four-section prompts, no POSTs, tools flipped only inside
-	// the centering turn, write refusal, no stop continuation, exact restoration.
 	const center = extension.commands.get("center");
 	if (!center) throw new Error("center command missing");
 	const cmdCtx = runner.createCommandContext();
-	const stopHandler = extension.handlers.get("session_stop")?.[0];
 	const toolsBefore = [...activeTools];
+	const postsBefore = commandPosts;
+
 	if (mode === "center") {
-		// (a) Synchronous injection failure: tools untouched, /center recovers.
-		throwNextSend = true;
+		// (a) Read failure: tree read fails — tools untouched, one plain error.
+		throwNextTree = true;
 		await center.handler("", cmdCtx);
-		out.syncFailNotice = uiCalls.at(-1);
-		out.toolsAfterSyncFail = [...activeTools];
-		// (b) Lost injection: the prompt was sent but its turn never starts.
-		// While pending, /center refuses; fresh owner input clears the wedge and
-		// the next /center recovers WITHOUT any intervening turn (audit LOW fix).
+		out.readFailNotice = uiCalls.at(-1);
+		out.toolsAfterReadFail = [...activeTools];
+
+		// (b) Delivery failure: deliverMessage throws — tools untouched, one plain error.
+		throwNextDeliverMessage = true;
 		await center.handler("", cmdCtx);
-		out.lostPrompts = sentUserMessages.length;
+		out.deliverFailNotice = uiCalls.at(-1);
+		out.toolsAfterDeliverFail = [...activeTools];
+
+		// (c) Session switch during read: drops delivery and clears overlap guard.
+		switchSessionOnNextTree = true;
+		const deliveredBeforeSwitch = deliveredMessages.length;
 		await center.handler("", cmdCtx);
-		out.wedgedRefusal = uiCalls.at(-1);
-		out.promptsWhileWedged = sentUserMessages.length;
-		await runner.emitInput("unrelated owner input", undefined, "interactive");
-		await center.handler("", cmdCtx);
-		out.promptsAfterRecovery = sentUserMessages.length;
-		out.toolsAfterLostInjection = [...activeTools];
-		// Drop the recovery run's pending injection the same proven way, then
-		// also prove the unrelated-turn path still clears it.
-		await runner.emitInput("second owner input", undefined, "interactive");
-		await runner.emit({ type: "before_agent_start", prompt: "unrelated user prompt", systemPrompt: [] } as never);
-		sentUserMessages.length = 0;
-		// (d) Steer race: the agent goes busy during the snapshot reads — the
-		// post-read idle re-check refuses and nothing is sent.
+		out.deliveredDuringSwitch = deliveredMessages.length - deliveredBeforeSwitch;
+
+		// (d) Steer race / busy guard
 		busyDuringSnapshot = true;
 		await center.handler("", cmdCtx);
-		out.steerRaceNotice = uiCalls.at(-1);
-		out.steerRacePrompts = sentUserMessages.length;
+		out.busyNotice = uiCalls.at(-1);
 		idle = true;
-		// (c) Isolation failure: setActiveTools([]) refuses — the turn is
-		// aborted (fail closed), tools stay exactly as they were.
-		throwNextSetTools = true;
+
+		// (d) Unscoped center run (NOW unset)
 		await center.handler("", cmdCtx);
-		await runner.emit({ type: "before_agent_start", prompt: sentUserMessages[0] ?? "", systemPrompt: [] } as never);
-		out.isolationFailNotice = uiCalls.at(-1);
-		out.abortsAfterIsolationFail = abortCalls;
-		out.toolsAfterIsolationFail = [...activeTools];
-		out.stopAfterIsolationFail = (await stopHandler?.({ type: "session_stop", stop_hook_active: false }, ctx)) ?? null;
-		sentUserMessages.length = 0;
-	}
-	const postsBefore = commandPosts;
-	await center.handler("", cmdCtx);
-	out.firstPrompt = sentUserMessages[0] ?? null;
-	out.toolsAfterCommand = [...activeTools]; // still untouched — the turn has not started
-	await runner.emit({ type: "before_agent_start", prompt: sentUserMessages[0] ?? "", systemPrompt: [] } as never);
-	out.toolsDuringTurn = [...activeTools];
-	out.writeRefusal = await execute({ action: "create_work", title: "must be refused mid-center" });
-	await center.handler("", cmdCtx); // overlap: must not start a second turn
-	out.promptsAfterOverlap = sentUserMessages.length;
-	out.overlapNotice = uiCalls.at(-1);
-	out.stopDuringCenter = (await stopHandler?.({ type: "session_stop", stop_hook_active: false }, ctx)) ?? null;
-	await runner.emit({ type: "agent_end", messages: [] } as never);
-	out.toolsAfterTurn = [...activeTools];
-	out.toolsBefore = toolsBefore;
-	out.postsDuringCenter = commandPosts - postsBefore;
-	if (mode === "center") {
-		// Second run: NOW set + an armed handoff obligation. The centering turn
-		// still suppresses the checkpoint continuation; a normal stop resumes it.
+		out.deliveredUnscoped = deliveredMessages.at(-1);
+		out.toolsAfterCenter = [...activeTools];
+		out.posts = commandPosts - postsBefore;
+		out.prompts = sentUserMessages.length;
+
+		// Second run: NOW set (HOME-1), plan not approved
 		await setNow();
-		await approve(planA);
-		const promptsBefore = sentUserMessages.length;
 		await center.handler("", cmdCtx);
-		out.secondPrompt = sentUserMessages[promptsBefore] ?? null;
-		await runner.emit({ type: "before_agent_start", prompt: sentUserMessages[promptsBefore] ?? "", systemPrompt: [] } as never);
-		out.stopDuringSecondCenter = (await stopHandler?.({ type: "session_stop", stop_hook_active: false }, ctx)) ?? null;
-		await runner.emit({ type: "agent_end", messages: [] } as never);
-		out.stopAfterCenter = (await stopHandler?.({ type: "session_stop", stop_hook_active: false }, ctx)) ?? null;
+		out.deliveredWithNowNoPlan = deliveredMessages.at(-1);
+
+		// Third run: Plan approved
+		await approve(planA);
+		await center.handler("", cmdCtx);
+		out.deliveredWithPlan = deliveredMessages.at(-1);
+
+		// Fourth run: Handoff appended
+		await execute({ action: "append_evidence", work: "HOME-1", kind: "handoff", body: "done / none / resume" });
+		await center.handler("", cmdCtx);
+		out.deliveredWithHandoff = deliveredMessages.at(-1);
 	} else {
+		// Scoped run (projectFilter = "The Bookends")
+		await setNow();
+		const postsBeforeCenter = commandPosts;
+		await center.handler("", cmdCtx);
+		out.posts = commandPosts - postsBeforeCenter;
+		out.deliveredScoped = deliveredMessages.at(-1);
 		out.activityCalls = activityCalls;
+		out.prompts = sentUserMessages.length;
+		out.tools = [...activeTools];
 	}
+	out.toolsBefore = toolsBefore;
 } else if (mode === "center-stale") {
-	// OMP-25 fail closed: a marker naming a nonexistent project must refuse
-	// with one honest error — never widen to the whole workspace.
 	const center = extension.commands.get("center");
 	if (!center) throw new Error("center command missing");
 	await center.handler("", runner.createCommandContext());
 	out.staleNotice = uiCalls.filter(call => call.includes("/center failed")).at(-1) ?? null;
+	out.deliveredCount = deliveredMessages.length;
 	out.prompts = sentUserMessages.length;
 	out.tools = [...activeTools];
+} else if (mode === "triage-questions") {
+	out.createNoQuestion = await execute({ action: "create_work", title: "Needs decision", queue: true, project: "The Bookends" });
+	out.createMultiline = await execute({ action: "create_work", title: "Needs decision", queue: true, question: "line 1\nline 2", project: "The Bookends" });
+	const createValid = await confirmRoundTrip(execute, { action: "create_work", title: "Decision item", queue: true, question: "Should we proceed with option A?", project: "The Bookends" });
+	out.createPreview = createValid.preview;
+	out.createConfirmed = createValid.confirmed;
+	out.createdDescription = items.get("HOME-1")?.revision.description;
+
+	out.queueNoQuestion = await execute({ action: "queue_work", work: "HOME-1" });
+	out.queueMultiline = await execute({ action: "queue_work", work: "HOME-1", question: "line 1\nline 2" });
+	const queueValid = await confirmRoundTrip(execute, { action: "queue_work", work: "HOME-1", question: "Updated decision question?" });
+	out.queuePreview = queueValid.preview;
+	out.queueConfirmed = queueValid.confirmed;
+	out.queuedDescription = items.get("HOME-1")?.revision.description;
+
+	out.waitingOutput = await execute({ action: "waiting" });
 } else if (mode === "footer") {
 	out.initialCalls = [...statusCalls];
 	await setNow();

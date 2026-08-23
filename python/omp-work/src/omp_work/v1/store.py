@@ -33,6 +33,7 @@ def _row_json(row: dict[str, object] | None) -> dict[str, object] | None:
     """One JSON-safe projection for result payloads: UUID→str, datetime→ISO."""
     if row is None:
         return None
+
     def convert(value: object) -> object:
         if isinstance(value, UUID):
             return str(value)
@@ -43,6 +44,9 @@ def _row_json(row: dict[str, object] | None) -> dict[str, object] | None:
         return value
     return {key: convert(value) for key, value in row.items()}
 
+
+def normalize_title(title: str) -> str:
+    return " ".join(title.casefold().split())
 
 def _compose_audit_task(*, plan_receipt_sha256: str, plan_body: str, criteria: list[str], start_commit: str, dirty_paths: list[str], repository: str, final_commit: str, diff_sha256: str, verification_body: str, riders: list[dict[str, object]] | None = None) -> tuple[str, dict[str, str]]:
     """The complete five-section auditor task (OMP-50). Labels and the Final
@@ -261,6 +265,38 @@ class PostgresWorkStore:
         cur.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING", (envelope.workspace_id,))
         cur.execute("SELECT next_alias FROM omp_control.workspaces WHERE workspace_id=%s FOR UPDATE", (envelope.workspace_id,))
         start = int(cur.fetchone()["next_alias"])
+
+        batch_seen: dict[tuple[str | None, str], str] = {}
+        for offset, item in enumerate(payload.items):
+            norm = normalize_title(item.title)
+            bkey = (str(item.project_id) if item.project_id is not None else None, norm)
+            if bkey in batch_seen:
+                matched_key = batch_seen[bkey]
+                raise WorkStoreError("invalid_request", (f'duplicate open title "{item.title.strip()}" matches {matched_key}',))
+            batch_seen[bkey] = f"OMP-{start + offset}"
+
+        cur.execute(
+            """
+            SELECT w.project_id, r.title, a.key
+            FROM omp_work.work_items w
+            JOIN omp_work.work_revisions r ON r.revision_id = w.current_revision_id
+            JOIN omp_work.work_aliases a ON a.work_id = w.work_id
+            WHERE w.workspace_id = %s
+              AND w.state NOT IN ('DONE', 'CANCELED')
+            """,
+            (envelope.workspace_id,),
+        )
+        open_rows = cur.fetchall()
+        for item in payload.items:
+            norm_incoming = normalize_title(item.title)
+            item_proj = str(item.project_id) if item.project_id is not None else None
+            for row in open_rows:
+                row_proj = str(row["project_id"]) if row["project_id"] is not None else None
+                if row_proj == item_proj:
+                    if normalize_title(str(row["title"])) == norm_incoming:
+                        matched_key = str(row["key"])
+                        raise WorkStoreError("invalid_request", (f'duplicate open title "{item.title.strip()}" matches {matched_key}',))
+
         items: list[dict[str, object]] = []
         now = datetime.now(timezone.utc)
         ref_to_work_id: dict[str, UUID] = {}

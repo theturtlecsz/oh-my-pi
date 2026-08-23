@@ -173,21 +173,149 @@ export interface NowRef {
 	project?: string;
 }
 
-/** /center snapshot (OMP-25) — one fresh, bounded, read-only orientation.
- *  Rows are preformatted owner-facing lines (key + title, no bodies); each
- *  section carries its full count so truncation stays honest. */
+export interface CenterCommandRecommendation {
+	command: string;
+	reason: string;
+}
+
+export interface CenterWaitingRow {
+	key: string;
+	question: string;
+}
+
+export interface CenterHiddenRow {
+	key: string;
+	reason: string;
+}
+
+/** /center snapshot (OMP-25 / OMP-107) — presentation-ready deterministic readout. */
 export interface CenterSnapshot {
 	/** Global focus — reported honestly even when it belongs to another project. */
 	now: NowRef | null;
+	/** Scope description for reporting. */
+	scope?: string;
 	/** NOW's own goal progress (counts over its project), when NOW has one. */
 	progress?: { done: number; total: number; onyou: number };
-	/** Open, non-queued work excluding NOW — scoped by projectFilter when given. */
-	ready: { rows: string[]; total: number };
-	/** Owner decision queue (TRIAGE) — scoped by projectFilter when given. */
-	waiting: { rows: string[]; total: number };
-	/** Newest applied receipt/close-proposal/completion metadata, or an honest
-	 *  unavailable reason — the other sections survive an activity failure. */
+	/** 1–3 command recommendations with reasons. */
+	recommendations: CenterCommandRecommendation[];
+	/** Genuine owner-decision rows (TRIAGE with stored question) and total. */
+	waiting: { rows: CenterWaitingRow[]; total: number };
+	/** Hidden rows (blocked work or legacy TRIAGE without question) and total. */
+	hidden: { rows: CenterHiddenRow[]; total: number };
+	/** Newest activity line and total, or an explicit unavailable marker. */
 	activity: { rows: string[]; total: number } | { unavailable: string };
+}
+export const CENTER_READOUT_TYPE = "center-readout";
+
+export const OWNER_QUESTION_HEADING = "## Owner question";
+
+export function extractOwnerQuestion(description?: string): string | undefined {
+	if (!description) return undefined;
+	const match = /(?:^|\n)##\s+Owner question\s*\n([^\n]+)(?:\n|$)/.exec(description);
+	if (!match) return undefined;
+	const line = match[1]?.trim();
+	if (!line || line.startsWith("#") || line.length > 240) return undefined;
+	const afterIdx = match.index + match[0].length;
+	const rest = description.slice(afterIdx);
+	const nextLine = rest.split("\n")[0]?.trim();
+	if (nextLine && !nextLine.startsWith("#")) return undefined;
+	return line;
+}
+
+export function setOwnerQuestion(description: string | undefined, question: string): string {
+	const trimmedQuestion = question.trim();
+	const cleanDesc = (description ?? "").trim();
+	if (!cleanDesc) {
+		return `${OWNER_QUESTION_HEADING}\n${trimmedQuestion}`;
+	}
+	const idx = cleanDesc.indexOf(OWNER_QUESTION_HEADING);
+	if (idx === -1) {
+		return `${cleanDesc}\n\n${OWNER_QUESTION_HEADING}\n${trimmedQuestion}`;
+	}
+	const before = cleanDesc.slice(0, idx).trimEnd();
+	const after = cleanDesc.slice(idx + OWNER_QUESTION_HEADING.length);
+	const nextHeadingMatch = after.search(/\n(?=#{1,6}\s)/);
+	const rest = nextHeadingMatch !== -1 ? after.slice(nextHeadingMatch).trimStart() : "";
+	const parts = [before, `${OWNER_QUESTION_HEADING}\n${trimmedQuestion}`];
+	if (rest) parts.push(rest);
+	return parts.filter(Boolean).join("\n\n");
+}
+
+export function escapeMarkdown(text: string): string {
+	if (!text) return "";
+	const singleLine = text.replace(/[\r\n\t]+/g, " ").trim();
+	return singleLine
+		.replace(/([\\`*_{}[\]<|~#])/g, "\\$1")
+		.replace(/^([-+>])/g, "\\$1")
+		.replace(/^(\d+)\./g, "$1\\.");
+}
+
+export function renderCenterReadout(snapshot: CenterSnapshot): string {
+	const sections: string[] = [];
+
+	// 1. FOCUS
+	const focusLines: string[] = ["# FOCUS"];
+	if (snapshot.now) {
+		const projectPrefix = snapshot.now.project ? `${escapeMarkdown(snapshot.now.project)} · ` : "";
+		focusLines.push(`${projectPrefix}${escapeMarkdown(snapshot.now.key)} ${escapeMarkdown(snapshot.now.title)}`);
+		if (snapshot.progress) {
+			focusLines.push(`${snapshot.progress.done} of ${snapshot.progress.total} pieces done (${snapshot.progress.onyou} on you)`);
+		}
+	} else {
+		focusLines.push("NOW unset — no work item selected");
+	}
+	sections.push(focusLines.join("\n"));
+
+	// 2. DO NEXT
+	const doNextLines: string[] = ["# DO NEXT"];
+	if (snapshot.recommendations.length > 0) {
+		for (const r of snapshot.recommendations) {
+			const sanitizedCmd = r.command.replace(/[`\r\n]+/g, "").trim();
+			doNextLines.push(`- \`${sanitizedCmd}\` — ${escapeMarkdown(r.reason)}`);
+		}
+	} else {
+		doNextLines.push("(none)");
+	}
+	sections.push(doNextLines.join("\n"));
+
+	// 3. WAITING ON YOU
+	const waitingLines: string[] = ["# WAITING ON YOU"];
+	if (snapshot.waiting.rows.length > 0) {
+		for (const r of snapshot.waiting.rows) {
+			waitingLines.push(`- ${escapeMarkdown(r.key)} — ${escapeMarkdown(r.question)}`);
+		}
+	} else {
+		waitingLines.push("(none)");
+	}
+	sections.push(waitingLines.join("\n"));
+
+	// 4. HIDDEN (N)
+	const hiddenLines: string[] = [`# HIDDEN (${snapshot.hidden.total})`];
+	if (snapshot.hidden.rows.length > 0) {
+		for (const r of snapshot.hidden.rows) {
+			hiddenLines.push(`- ${escapeMarkdown(r.key)} — ${escapeMarkdown(r.reason)}`);
+		}
+	} else {
+		hiddenLines.push("(none)");
+	}
+	sections.push(hiddenLines.join("\n"));
+
+	// 5. MOVED (N)
+	if ("unavailable" in snapshot.activity) {
+		sections.push(`# MOVED\nactivity unavailable (${escapeMarkdown(snapshot.activity.unavailable)})`);
+	} else {
+		const movedLines: string[] = [`# MOVED (${snapshot.activity.total})`];
+		if (snapshot.activity.rows.length > 0) {
+			for (const r of snapshot.activity.rows) {
+				movedLines.push(escapeMarkdown(r));
+			}
+		} else {
+			movedLines.push("(none)");
+		}
+		sections.push(movedLines.join("\n"));
+	}
+
+	return sections.join("\n\n");
 }
 
 export interface WorkflowCheckpoint {
@@ -216,7 +344,7 @@ export interface BatchEntry {
 }
 
 export interface CreateBatchInput {
-	parent: { title: string; description?: string; project?: string; queue?: boolean };
+	parent: { title: string; description?: string; project?: string; queue?: boolean; question?: string };
 	entries: BatchEntry[];
 }
 
@@ -322,9 +450,9 @@ export interface WorkflowBackend {
 	/** Returns the issue the plan state lives on; work backend also the planned candidate id. */
 	stampPlan(target: NowRef, stamp: PlanStamp): Promise<{ issue: NowRef; plannedCandidateId?: string }>;
 	appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta): Promise<void>;
-	createIssue(input: { title: string; description?: string; project?: string; queue?: boolean }): Promise<NowRef>;
+	createIssue(input: { title: string; description?: string; project?: string; queue?: boolean; question?: string }): Promise<NowRef>;
 	createBatch(input: CreateBatchInput): Promise<BatchOutcome>;
-	queueIssue(issue: NowRef): Promise<void>;
+	queueIssue(issue: NowRef, question?: string): Promise<void>;
 	proposeClose(issue: NowRef, reason: string | undefined): Promise<void>;
 	reviseWork(issue: NowRef, fields: { title?: string; description?: string }): Promise<void>;
 	recordHealth(project: string, health: "onTrack" | "atRisk" | "offTrack", body: string): Promise<void>;

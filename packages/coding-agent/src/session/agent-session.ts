@@ -5986,8 +5986,37 @@ export class AgentSession {
 	/** Receipt-backed extension delivery (OMP-51): mirrors queueLaunchCompletion —
 	 *  the returned promise settles only after real streaming/idle injection into
 	 *  THIS session (the enqueue-time session id is stamped on the entry). */
-	queueExtensionDelivery(entry: ExtensionDeliveryEntry): Promise<void> {
-		if (this.#isDisposed) return Promise.reject(new Error("Session disposed before extension delivery"));
+	async queueExtensionDelivery(entry: ExtensionDeliveryEntry): Promise<void> {
+		if (this.#isDisposed) throw new Error("Session disposed before extension delivery");
+		if (entry.triggerTurn === false) {
+			if (this.isStreaming) {
+				throw new Error("Cannot deliver display-only extension message while agent is streaming");
+			}
+			const ownerSessionId = this.sessionManager.getSessionId();
+			if (entry.owner !== undefined && entry.owner !== ownerSessionId) {
+				throw new Error("Session switched before extension delivery");
+			}
+			const record: CustomMessage = {
+				role: "custom",
+				customType: entry.customType,
+				content: entry.content,
+				display: entry.display ?? true,
+				details: entry.details,
+				attribution: "agent",
+				timestamp: Date.now(),
+			};
+			this.agent.appendMessage(record);
+			this.sessionManager.appendCustomMessageEntry(
+				record.customType,
+				record.content,
+				record.display,
+				record.details,
+				record.attribution,
+			);
+			await this.#emitSessionEvent({ type: "message_start", message: record });
+			await this.#emitSessionEvent({ type: "message_end", message: record });
+			return;
+		}
 		const stamped = { ...entry, owner: entry.owner ?? this.sessionManager.getSessionId() };
 		const delivered = this.yieldQueue.enqueueWithReceipt<ExtensionDeliveryEntry>(
 			EXTENSION_DELIVERY_MESSAGE_TYPE,

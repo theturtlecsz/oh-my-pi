@@ -18,9 +18,9 @@ Provenance: blueprint HOME-43 (deep-grill session 2026-08-11). This skill replac
 ambiguity score is dead — the stop condition below is structural, not a grade.
 
 Enforcement map (every rule here has a mechanical checkpoint, not a reminder):
-questions → G1–G6 pre-send gate, checked immediately before EVERY AskUserQuestion;
-visible scan → BINDING, rendered before the session's first question,
-lint-checked below;
+questions → host-enforced single-decision gate on `ask` tool calls;
+visible scan → host-enforced mechanical proof: blocks `ask` and publication until
+a standalone tool-free assistant message delivers the three headings in order;
 blueprint → lint gate, checked before ANY ledger write; writes → two-phase preview,
 owner yes required. If a checkpoint fails, fix and re-check — never proceed.
 
@@ -94,16 +94,13 @@ category ("edge cases & failure handling"), never file paths or symbols —
 category names stay internal. The scan renders on every interviewing entry
 seam, even when there is nothing left to ask: a quiet session must be visibly
 deliberate, not silently self-directed. On the existing-plan seam, the draft's
-key decisions the owner never personally ratified are judgment calls and enter
 the asking-you pile as confirm-or-overturn items. Mechanics of "rendered" (obs #122, #137): the scan MUST be a standalone
 assistant message with ZERO tool calls in that turn — the first
-AskUserQuestion may only follow in a later turn; text co-emitted with a tool
-call can be swallowed by the harness and leaves no evidence of rendering.
-If delivery is ever disputed, the wire transcript settles it: grep the main
-transcript (the sibling `<session>.jsonl`, not the session artifact
-directory) for the content in a `role:assistant` TEXT block — recalled
-composition and quote/echo hits in advisor or subagent streams are
-non-evidence. `--publish` skips the
+`ask` question may only follow in a later turn; text co-emitted with a tool
+call is rejected by the host and does not count as delivery.
+The host mechanically blocks `ask` and publication until the tool-free scan
+with `Figured out myself`, `Asking you`, and `Leaving for later` headings is delivered.
+`--publish` skips the
 interview and the scan by definition. There is NO question quota — the rule is
 "facts get looked up, judgment calls get asked" (owner ruling at HOME-108
 execution, 2026-08-13, superseding the floor-count design).

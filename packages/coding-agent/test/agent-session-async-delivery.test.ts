@@ -393,4 +393,160 @@ describe("AgentSession owner-routed async delivery", () => {
 		expect(flushed).toBe(true);
 		expect(vi.getTimerCount()).toBe(baselineTimers + 1);
 	});
+	describe("queueExtensionDelivery triggerTurn: false", () => {
+		it("persists custom message, emits message events, resolves promise, and triggers no model turn", async () => {
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			let promptCalls = 0;
+			const mock = createMockModel({
+				handler: () => {
+					promptCalls++;
+					return { content: ["Done"] };
+				},
+			});
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools: [] },
+				convertToLlm,
+				streamFn: mock.stream,
+			});
+			const authStorage = await AuthStorage.create(":memory:");
+			authStorages.push(authStorage);
+			authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+			const sessionManager = SessionManager.inMemory();
+			session = new AgentSession({
+				agent,
+				sessionManager,
+				settings: Settings.isolated(),
+				modelRegistry: new ModelRegistry(authStorage),
+				agentId: "Main",
+			});
+
+			const emittedEvents: Array<{ type: string; message?: unknown }> = [];
+			session.subscribe(event => {
+				emittedEvents.push(event);
+			});
+
+			await session.queueExtensionDelivery({
+				customType: "center-readout",
+				content: "Read-only summary",
+				details: { readout: "# FOCUS\nAll good" },
+				display: true,
+				triggerTurn: false,
+			});
+
+			expect(promptCalls).toBe(0);
+			const entries = sessionManager.getEntries();
+			const custom = entries.find(e => e.type === "custom_message" && "customType" in e && e.customType === "center-readout");
+			expect(custom).toBeDefined();
+			expect((custom as { content?: string })?.content).toBe("Read-only summary");
+			expect(emittedEvents.some(e => e.type === "message_start")).toBe(true);
+			expect(emittedEvents.some(e => e.type === "message_end")).toBe(true);
+		});
+
+		it("rejects when the session is disposed", async () => {
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools: [] },
+				convertToLlm,
+				streamFn: mock.stream,
+			});
+			const authStorage = await AuthStorage.create(":memory:");
+			authStorages.push(authStorage);
+			authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated(),
+				modelRegistry: new ModelRegistry(authStorage),
+				agentId: "Main",
+			});
+			await session.dispose();
+
+			await expect(
+				session.queueExtensionDelivery({
+					customType: "center-readout",
+					content: "test",
+					triggerTurn: false,
+				}),
+			).rejects.toThrow("Session disposed");
+		});
+
+		it("rejects when owner session id does not match", async () => {
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools: [] },
+				convertToLlm,
+				streamFn: mock.stream,
+			});
+			const authStorage = await AuthStorage.create(":memory:");
+			authStorages.push(authStorage);
+			authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated(),
+				modelRegistry: new ModelRegistry(authStorage),
+				agentId: "Main",
+			});
+
+			await expect(
+				session.queueExtensionDelivery({
+					customType: "center-readout",
+					content: "test",
+					owner: "different-session",
+					triggerTurn: false,
+				}),
+			).rejects.toThrow("Session switched");
+		});
+
+		it("rejects when the agent is streaming", async () => {
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const started = Promise.withResolvers<void>();
+			const gate = Promise.withResolvers<void>();
+			const mock = createMockModel({
+				handler: async () => {
+					started.resolve();
+					await gate.promise;
+					return { content: ["Done"] };
+				},
+			});
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools: [] },
+				convertToLlm,
+				streamFn: mock.stream,
+			});
+			const authStorage = await AuthStorage.create(":memory:");
+			authStorages.push(authStorage);
+			authStorage.setRuntimeApiKey("anthropic", "test-key");
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated(),
+				modelRegistry: new ModelRegistry(authStorage),
+				agentId: "Main",
+			});
+
+			const promptTask = session.prompt("hello");
+			await started.promise;
+			await expect(
+				session.queueExtensionDelivery({
+					customType: "center-readout",
+					content: "test",
+					triggerTurn: false,
+				}),
+			).rejects.toThrow("streaming");
+
+			gate.resolve();
+			await promptTask;
+		});
+	});
 });

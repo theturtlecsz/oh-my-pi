@@ -126,6 +126,59 @@ const ADVISOR_OUTPUT_ONLY_HAZARDS: readonly AdvisorOutputHazard[] = [
 ];
 
 /**
+ * Detects output hazard labels in generated text, optionally subtracting
+ * hazards present in trusted sourceText.
+ */
+export function detectAdvisorOutputHazards(
+	generatedText: string,
+	sourceText = "",
+): string[] {
+	if (!generatedText) return [];
+	const labels: string[] = [];
+	const matchedLabels: string[] = [];
+	for (const hazard of ADVISOR_OUTPUT_ONLY_HAZARDS) {
+		if (!hazard.pattern.test(generatedText)) continue;
+		matchedLabels.push(hazard.label);
+		if (!sourceText || !hazard.pattern.test(sourceText)) labels.push(hazard.label);
+	}
+	// A transcript can quote a destructive command while the advisor turns it
+	// into a new instruction. The output-only override remains sufficient
+	// provenance to quarantine that combination.
+	if (
+		matchedLabels.includes("destructive shell command") &&
+		labels.includes("instruction override") &&
+		!labels.includes("destructive shell command")
+	) {
+		labels.push("destructive shell command");
+	}
+	return labels;
+}
+
+/**
+ * Classifies output hazards in generated text. When strict is true (session ledger),
+ * any matched hazard triggers quarantine. When strict is false (advisor runtime),
+ * quarantine triggers only on destructive commands or >= 3 hazards.
+ */
+export function classifyAdvisorOutputHazards(
+	generatedText: string,
+	options: { sourceText?: string; strict?: boolean } | string = "",
+): string | undefined {
+	const sourceText = typeof options === "string" ? options : (options.sourceText ?? "");
+	const strict = typeof options === "object" ? Boolean(options.strict) : false;
+	const labels = detectAdvisorOutputHazards(generatedText, sourceText);
+	if (strict) {
+		if (labels.length > 0) {
+			return `generated output-only destructive directives: ${labels.join(", ")}`;
+		}
+		return undefined;
+	}
+	if (labels.includes("destructive shell command") || labels.length >= 3) {
+		return `generated output-only destructive directives: ${labels.join(", ")}`;
+	}
+	return undefined;
+}
+
+/**
  * Replaces an advisor assistant turn that requested unavailable tools or generated
  * output-only destructive directives with a sanitized error before dispatch.
  *
@@ -169,26 +222,8 @@ export function quarantineAdvisorUnsafeOutput(
 
 	const generatedText = generatedParts.join("\n");
 	if (generatedText) {
-		const labels: string[] = [];
-		const matchedLabels: string[] = [];
-		for (const hazard of ADVISOR_OUTPUT_ONLY_HAZARDS) {
-			if (!hazard.pattern.test(generatedText)) continue;
-			matchedLabels.push(hazard.label);
-			if (!hazard.pattern.test(sourceText)) labels.push(hazard.label);
-		}
-		// A transcript can quote a destructive command while the advisor turns it
-		// into a new instruction. The output-only override remains sufficient
-		// provenance to quarantine that combination.
-		if (
-			matchedLabels.includes("destructive shell command") &&
-			labels.includes("instruction override") &&
-			!labels.includes("destructive shell command")
-		) {
-			labels.push("destructive shell command");
-		}
-		if (labels.includes("destructive shell command") || labels.length >= 3) {
-			reasons.push(`generated output-only destructive directives: ${labels.join(", ")}`);
-		}
+		const hazardReason = classifyAdvisorOutputHazards(generatedText, sourceText);
+		if (hazardReason) reasons.push(hazardReason);
 	}
 
 	if (reasons.length === 0) return undefined;

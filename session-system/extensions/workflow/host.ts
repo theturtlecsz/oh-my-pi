@@ -13,10 +13,21 @@ import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
-import { discoverAuthStorage, getAgentDir, type ExtensionAPI, type ExtensionContext, type ExtensionModelQuery, type Theme } from "@oh-my-pi/pi-coding-agent";
+import {
+	Container,
+	discoverAuthStorage,
+	getAgentDir,
+	getMarkdownTheme,
+	Markdown,
+	Spacer,
+	Text,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type ExtensionModelQuery,
+	type Theme,
+} from "@oh-my-pi/pi-coding-agent";
 import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import centerPromptTemplate from "./center-prompt.md" with { type: "text" };
 import digestPromptTemplate from "./digest-prompt.md" with { type: "text" };
 import kindDescriptionText from "./kind-description.md" with { type: "text" };
 import lockRefusalText from "./lock-refusal.md" with { type: "text" };
@@ -24,7 +35,9 @@ import sequenceText from "./sequence.md" with { type: "text" };
 import toolDescriptionTemplate from "./tool-description.md" with { type: "text" };
 import {
 	type BackendIssue,
+	BatchPartialError,
 	type CancellationProof,
+	CENTER_READOUT_TYPE,
 	type CenterSnapshot,
 	CLOSEOUT_BOUNDARY,
 	type CloseAttemptOutcome,
@@ -42,6 +55,7 @@ import {
 	type TreeItem,
 	type WorkflowBackend,
 	type WorkStateCarrier,
+	renderCenterReadout,
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
@@ -202,36 +216,6 @@ function sectionItems(content: string, heading: "Approach" | "Verification"): st
 	return items;
 }
 
-/** Deterministic /center prompt — verified snapshot facts + the four-section
- *  contract. The agent writes the orientation; this never does. */
-export function renderCenterPrompt(snapshot: CenterSnapshot, scope: string, takenAt: string): string {
-	const activity = snapshot.activity;
-	return prompt.render(centerPromptTemplate, {
-		takenAt,
-		scope,
-		nowLine: snapshot.now ? `${snapshot.now.project ? `${snapshot.now.project} · ` : ""}${snapshot.now.key} ${snapshot.now.title}` : undefined,
-		progressLine: snapshot.progress ? `${snapshot.progress.done} of ${snapshot.progress.total} pieces done · ${snapshot.progress.onyou} waiting on Chris` : undefined,
-		readyRows: snapshot.ready.rows,
-		readyTotal: snapshot.ready.total,
-		readyMore: Math.max(0, snapshot.ready.total - snapshot.ready.rows.length) || undefined,
-		waitingRows: snapshot.waiting.rows,
-		waitingTotal: snapshot.waiting.total,
-		waitingMore: Math.max(0, snapshot.waiting.total - snapshot.waiting.rows.length) || undefined,
-		...("unavailable" in activity
-			? { activityUnavailable: activity.unavailable }
-			: {
-					activityRows: activity.rows,
-					activityTotal: activity.total,
-					activityMore: Math.max(0, activity.total - activity.rows.length) || undefined,
-				}),
-	});
-}
-
-/** Literal prefix of every rendered centering prompt — before_agent_start
- *  recognizes the centering turn by it. Derived from the template so the
- *  header and the renderer can never drift. */
-const CENTER_PROMPT_HEADER = centerPromptTemplate.slice(0, centerPromptTemplate.indexOf("{{"));
-
 const DIGEST_LABELS = new Set(["PROBLEM", "MAKEUP", "DECISIONS", "BLOCKERS", "ON-YOU", "EVIDENCE", "STATE", "NEXT", "SUGGEST"]);
 
 /** Reads are free at any depth; every other canonical action is a write. */
@@ -248,6 +232,7 @@ interface WorkflowToolParams {
 	body?: string;
 	kind?: EvidenceKind;
 	queue?: boolean;
+	question?: string;
 	batch?: { title: string; description?: string; blocks?: number[] }[];
 	confirm?: boolean;
 	confirmation_id?: string;
@@ -280,6 +265,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 	let digestPending = false;
 	let digestInjectedThisSession = false;
 	let intakeActive = false;
+	let intakeScanRequired = false;
+	let intakeScanDelivered = false;
 	let intakeSelected = false;
 	let planTarget: NowRef | undefined;
 	let summaryAuthorized = false;
@@ -297,29 +284,20 @@ export function createWorkflowHost(cfg: HostConfig) {
 	let closeoutAuthorized = false;
 	const ownerSession = (ctx: { taskDepth?: number } | undefined): boolean => ctx?.taskDepth === 0;
 
-	// OMP-25 /center: one read-only, tool-less orientation turn at a time.
-	// Tool isolation flips INSIDE the centering turn's before_agent_start —
-	// sendUserMessage is fire-and-forget (its async rejection never reaches the
-	// command), so a failed injection must never have touched the tool set.
-	let centerPending = false; // /center sent its prompt; the turn has not started yet
-	let centerActive = false; // the centering turn is running with tools disabled
-	let centerSavedTools: string[] | undefined;
-	/** Restores the exact pre-center tool set — every exit path (agent_end,
-	 *  session switch, shutdown) routes through here. */
-	async function restoreCenterTools(): Promise<void> {
-		centerPending = false;
-		if (!centerActive) return;
-		const saved = centerSavedTools;
-		centerActive = false;
-		centerSavedTools = undefined;
-		if (!saved) return;
-		try {
-			await piRef.setActiveTools(saved);
-		} catch (error) {
-			piRef.logger.warn(`${TOOL_NAME}-now: center tool restore failed`, { error: String(error) });
-		}
+	function hasIntakeScanHeadings(text: string): boolean {
+		const headingRegex = (title: string) =>
+			new RegExp(`(?:^|\\n)\\s*(?:#{1,6}\\s+|\\*\\*|\\*|[-*]\\s+\\*\\*)?\\s*(?:\\d+\\.\\s+)?${title}\\s*(?:\\*\\*|\\*|:)?\\s*(?:\\n|$)`, "i");
+		const m1 = headingRegex("Figured out myself").exec(text);
+		if (!m1) return false;
+		const rest1 = text.slice(m1.index + m1[0].length);
+		const m2 = headingRegex("Asking you").exec(rest1);
+		if (!m2) return false;
+		const rest2 = rest1.slice(m2.index + m2[0].length);
+		const m3 = headingRegex("Leaving for later").exec(rest2);
+		return m3 !== null;
 	}
-
+	let activeCenterRunId: number | null = null;
+	let nextCenterRunId = 1;
 	const pendingNotices: string[] = [];
 
 	function currentNowRef(): NowRef | undefined {
@@ -1054,17 +1032,35 @@ export function createWorkflowHost(cfg: HostConfig) {
 		// shared backend and the same credential path the digest engine uses.
 		registerSessionLedger(pi, { backend, getApiKey: digestApiKey });
 
+		pi.registerMessageRenderer(CENTER_READOUT_TYPE, (message, _options, theme) => {
+			const container = new Container();
+			container.addChild(new Text(theme.fg("accent", "Centering Orientation"), 1, 0));
+			const details = message.details;
+			const displayReadout =
+				details && typeof details === "object" && "readout" in details && typeof details.readout === "string"
+					? details.readout
+					: typeof message.content === "string"
+						? message.content
+						: "";
+			container.addChild(
+				new Markdown(displayReadout, 1, 0, getMarkdownTheme(), {
+					color: (text: string) => theme.fg("customMessageText", text),
+				}),
+			);
+			container.addChild(new Spacer(1));
+			return container;
+		});
+
 		pi.on("session_start", async (_e, ctx) => {
 			preExistingDirtyPaths = dirtyPaths(process.cwd());
 			closeoutAuthorized = false;
 			sessionStartCommit = headCommit(process.cwd());
 			sessionStartedAt = new Date().toISOString();
 			summaryAuthorizationRef = undefined;
-			centerPending = false; // fresh session: no centering turn, tool set comes from init
-			centerActive = false;
-			centerSavedTools = undefined;
 			summaryAuthorized = false;
 			intakeActive = false;
+			intakeScanRequired = false;
+			intakeScanDelivered = false;
 			intakeSelected = false;
 			planTarget = undefined;
 			// OMP-43: only an OWNER lifecycle clears the process-global audit bridge
@@ -1165,10 +1161,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 			sessionStartedAt = new Date().toISOString();
 			summaryAuthorizationRef = undefined;
 			intakeActive = false;
+			intakeScanRequired = false;
+			intakeScanDelivered = false;
 			intakeSelected = false;
 			planTarget = undefined;
 			resetConfirmations({ resetShared: ownerSession(ctx) }); // OMP-43: owner transcripts only — see session_start
-			await restoreCenterTools(); // a switch mid-center must not leak the empty tool set
 			if (event.reason === "resume" || event.reason === "new") {
 				digestPending = true;
 				digestInjectedThisSession = false;
@@ -1178,10 +1175,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 		pi.on("input", async (event, ctx) => {
 			if (!ownerSession(ctx) || event.source === "extension") return undefined;
-			// OMP-25 audit LOW: a lost centering injection must not wedge /center.
-			// Fresh owner input proves no centering turn ever started — drop the
-			// stale pending flag so the next /center runs instead of refusing.
-			if (centerPending && !centerActive) centerPending = false;
 			if (/^\s*\/plan\b/.test(event.text)) {
 				const now = currentNowRef();
 				if (!now) {
@@ -1198,10 +1191,15 @@ export function createWorkflowHost(cfg: HostConfig) {
 		});
 		pi.on("message_start", async (event, ctx) => {
 			if (!ownerSession(ctx)) return;
-			const m = event.message as { role?: string; customType?: string; attribution?: string; details?: { name?: string } };
+			const m = event.message as { role?: string; customType?: string; attribution?: string; details?: { name?: string; args?: string; path?: string } };
 			if (m.role !== "custom" || m.customType !== "skill-prompt" || m.attribution !== "user") return;
 			if (m.details?.name === "intake") {
 				intakeActive = true;
+				intakeSelected = false;
+				const isPublish =
+					typeof m.details?.args === "string" && /(?:^|\s)--publish\b/.test(m.details.args);
+				intakeScanRequired = !isPublish;
+				intakeScanDelivered = false;
 				return;
 			}
 			if (m.details?.name === "summary") {
@@ -1217,38 +1215,47 @@ export function createWorkflowHost(cfg: HostConfig) {
 				await authorizeSummary(ctx);
 			}
 		});
-		pi.on("before_agent_start", async (event, ctx) => {
-			// OMP-25: the centering turn starts here — only NOW do tools flip, so a
-			// lost/failed injection never leaves the session tool-less. Any other
-			// prompt racing ahead clears the pending flag and keeps its tools.
-			if (centerPending || centerActive) {
-				const isCenterTurn = !centerActive && event.prompt.startsWith(CENTER_PROMPT_HEADER);
-				centerPending = false;
-				if (isCenterTurn) {
-					const saved = pi.getActiveTools();
-					try {
-						await pi.setActiveTools([]);
-						centerSavedTools = saved;
-						centerActive = true;
-					} catch (error) {
-						// FAIL CLOSED: mechanical read-only is the contract — a turn
-						// that cannot drop its tools never runs. Abort bails the
-						// pending prompt before it reaches the model.
-						try {
-							await pi.setActiveTools(saved);
-						} catch {
-							/* rollback already handled by the tool registry */
-						}
-						try {
-							ctx.abort();
-							ctx.ui.notify(`/center failed: tool isolation refused (${String(error)}) — turn aborted, nothing sent`, "error");
-						} catch {
-							/* headless */
-						}
-						return;
-					}
+		pi.on("message_end", async (event, ctx) => {
+			if (!ownerSession(ctx)) return;
+			if (event.message?.role !== "assistant") return;
+			if (!intakeActive || !intakeScanRequired || intakeScanDelivered) return;
+			const msg = event.message;
+			if (!msg || typeof msg !== "object" || !("content" in msg) || !Array.isArray(msg.content)) return;
+			const hasToolCalls = msg.content.some((b: unknown) => b && typeof b === "object" && "type" in b && b.type === "toolCall");
+			if (hasToolCalls) return;
+			const textBlocks: string[] = [];
+			for (const b of msg.content) {
+				if (b && typeof b === "object" && "type" in b && b.type === "text" && "text" in b && typeof b.text === "string") {
+					textBlocks.push(b.text);
 				}
 			}
+			const fullText = textBlocks.join("\n");
+			if (hasIntakeScanHeadings(fullText)) {
+				intakeScanDelivered = true;
+			}
+		});
+
+		pi.on("tool_call", async (event, ctx) => {
+			if (!ownerSession(ctx)) return undefined;
+			if (event.toolName === "ask" && intakeActive && intakeScanRequired) {
+				if (!intakeScanDelivered) {
+					return {
+						block: true,
+						reason: "Intake visible scan required before questions: deliver a standalone tool-free assistant message containing 'Figured out myself', 'Asking you', and 'Leaving for later' headings first.",
+					};
+				}
+				const input = event.input;
+				const questions = input && typeof input === "object" && "questions" in input && Array.isArray(input.questions) ? input.questions : undefined;
+				if (!questions || questions.length !== 1) {
+					return {
+						block: true,
+						reason: "Intake questions must contain exactly one decision per dialog.",
+					};
+				}
+			}
+			return undefined;
+		});
+		pi.on("before_agent_start", async (event, ctx) => {
 			const notices = pendingNotices.splice(0).join("\n");
 			if (!digestPending || digestInjectedThisSession) {
 				return notices ? { message: { customType: `${TOOL_NAME}-notice`, content: notices } } : undefined;
@@ -1308,7 +1315,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 			try {
 				// OMP-25: the concise centering orientation is the final turn — no
 				// hidden checkpoint continuation rides on it.
-				if (centerActive) return;
 				if (event.stop_hook_active || !state.executingIssue) return;
 				const reviewOwed = state.obligationReview?.armed && !state.obligationReview.blockedOnce;
 				const handoffOwed = state.obligationHandoff?.armed && !state.obligationHandoff.blockedOnce;
@@ -1332,13 +1338,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 			}
 		});
 
-		pi.on("agent_end", async () => {
-			// OMP-25: the centering turn settled — restore the exact prior tool set.
-			await restoreCenterTools();
-		});
 
 		pi.on("session_shutdown", async () => {
-			await restoreCenterTools();
 			try {
 				if (state.obligationHandoff?.armed || state.obligationReview?.armed) await saveCache();
 			} catch {
@@ -1526,7 +1527,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			},
 		});
 
-		// OMP-25 /center: one fresh, read-only, tool-less orientation turn on demand.
+		// OMP-25 / OMP-107 /center: one fresh, read-only deterministic orientation readout.
 		// Never fires at launch, on a timer, or after another command.
 		pi.registerCommand("center", {
 			description: "Centering orientation: where you are, what's next, what's stuck, what just moved",
@@ -1535,7 +1536,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					ctx.ui.notify("/center takes no arguments", "warning");
 					return;
 				}
-				if (centerPending || centerActive) {
+				if (activeCenterRunId !== null) {
 					ctx.ui.notify("A centering turn is already running — wait for it to finish", "warning");
 					return;
 				}
@@ -1543,33 +1544,41 @@ export function createWorkflowHost(cfg: HostConfig) {
 					ctx.ui.notify("The agent is mid-turn — run /center once it finishes", "warning");
 					return;
 				}
-				let snapshot: CenterSnapshot;
+				const runId = nextCenterRunId++;
+				activeCenterRunId = runId;
+				const capturedSessionId = pi.getSessionId();
 				try {
-					snapshot = await backend.centerSnapshot(projectFilter ?? undefined);
-				} catch (e) {
-					// Tree/focus failure: one honest error beats a stale orientation.
-					ctx.ui.notify(`/center failed: ${String(e)} — no orientation produced`, "error");
-					return;
-				}
-				// Steer-race guard: the snapshot await spans network reads — a user
-				// message submitted meanwhile starts a normal tooled turn, and the
-				// centering prompt would steer into it un-isolated. Refuse instead.
-				if (!ctx.isIdle()) {
-					ctx.ui.notify("A turn started while /center was reading the ledger — run /center again once it finishes", "warning");
-					return;
-				}
-				const scope = projectFilter
-					? `project "${projectFilter}" (${backend.markerFile})`
-					: `the whole workspace (no ${backend.markerFile} scope here)`;
-				// Tools are NOT touched here: the centering turn's own
-				// before_agent_start disables them, so a lost injection leaves the
-				// session exactly as it was.
-				centerPending = true;
-				try {
-					pi.sendUserMessage(renderCenterPrompt(snapshot, scope, `${new Date().toISOString().slice(0, 19)}Z`));
-				} catch (e) {
-					centerPending = false;
-					ctx.ui.notify(`/center failed: ${String(e)} — no orientation produced`, "error");
+					let snapshot: CenterSnapshot;
+					try {
+						snapshot = await backend.centerSnapshot(projectFilter ?? undefined);
+					} catch (e) {
+						if (pi.getSessionId() !== capturedSessionId) return;
+						// Tree/focus failure: one honest error beats a stale orientation.
+						ctx.ui.notify(`/center failed: ${String(e)} — no orientation produced`, "error");
+						return;
+					}
+					if (pi.getSessionId() !== capturedSessionId) return;
+					if (!ctx.isIdle()) {
+						ctx.ui.notify("A turn started while /center was reading the ledger — run /center again once it finishes", "warning");
+						return;
+					}
+					const readout = renderCenterReadout(snapshot);
+					try {
+						await pi.deliverMessage({
+							customType: CENTER_READOUT_TYPE,
+							content: "Owner requested a read-only centering view; no action requested.",
+							details: { readout },
+							display: true,
+							triggerTurn: false,
+						});
+					} catch (e) {
+						if (pi.getSessionId() !== capturedSessionId) return;
+						ctx.ui.notify(`/center failed: ${String(e)} — no orientation produced`, "error");
+					}
+				} finally {
+					if (activeCenterRunId === runId) {
+						activeCenterRunId = null;
+					}
 				}
 			},
 		});
@@ -1626,6 +1635,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				body: z.string().optional().describe("Receipt body, close reason, or one-line update"),
 				kind: kindEnum.optional().describe(KIND_DESCRIPTION),
 				queue: z.boolean().optional().describe(`create_work: also mark ${backend.queueNoun} so the work lands in the owner decision queue`),
+				question: z.string().optional().describe("Owner decision question (max 240 chars, single line) — required when creating a TRIAGE issue (queue:true) or queueing an issue (queue_work)"),
 				batch: z
 					.array(
 						z.object({
@@ -1662,11 +1672,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 				const okText = (text: string, details: Record<string, unknown> = {}) =>
 					finalize({ content: [{ type: "text" as const, text }], details: { success: true, ...details } });
 				if (!(ACTIONS as readonly string[]).includes(params.action)) return deny(`unknown action "${params.action}"`);
-				// OMP-25: a centering turn is mechanically read-only — belt and braces
-				// beside the emptied tool set, in case a queued call slips through.
-				if (centerActive && !READ_ACTIONS.has(action)) {
-					return deny("REFUSED — /center is read-only: no Work Ledger writes during a centering turn.");
-				}
 				try {
 					// HOME-114: wrap-up writes remain host-locked; only /done closes.
 					// This refusal names the lock at any depth — checked first.
@@ -1777,6 +1782,20 @@ export function createWorkflowHost(cfg: HostConfig) {
 							return okText(`${kind} receipt recorded on ${issue.key}`);
 						}
 						case "create_work": {
+							if (intakeActive && intakeScanRequired && !intakeScanDelivered) {
+								return deny(
+									"Intake visible scan required before publication: deliver a standalone tool-free assistant message containing 'Figured out myself', 'Asking you', and 'Leaving for later' headings first.",
+								);
+							}
+							if (params.queue) {
+								if (!params.question || typeof params.question !== "string" || !params.question.trim()) {
+									return deny("question required when creating a TRIAGE issue (queue:true)");
+								}
+								const q = params.question.trim();
+								if (q.includes("\n") || q.length > 240) {
+									return deny("question must be a single line of at most 240 characters");
+								}
+							}
 							if (!params.title) return deny("title required");
 							const selectsNow = intakeActive && !intakeSelected;
 							if (params.batch !== undefined && params.batch.length > 0) {
@@ -1811,8 +1830,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 								if (batchRefusal) return deny(batchRefusal);
 								const edgeLines: string[] = [];
 								for (let k = 0; k < n; k++) for (const j of entries[k]!.blocks ?? []) edgeLines.push(`[${k}] blocks [${j}]`);
+								const queueText = params.queue ? `\n→ + ${backend.queueNoun} on parent\n\nOwner question:\n${params.question?.trim()}` : "";
 								const detail = [
-									`PARENT "${params.title}" → ${target ? `project ${target}` : cfg.teamNoun}${params.queue ? `\n→ + ${backend.queueNoun} on parent` : ""}${selectsNow ? "\n→ becomes NOW" : ""}${params.description ? `\n${params.description.slice(0, 400)}` : ""}`,
+									`PARENT "${params.title}" → ${target ? `project ${target}` : cfg.teamNoun}${queueText}${selectsNow ? "\n→ becomes NOW" : ""}${params.description ? `\n${params.description.slice(0, 400)}` : ""}`,
 									...entries.map((e, k) => `[${k}] "${e.title}"${e.description ? `\n${e.description.slice(0, 200)}` : ""}`),
 									edgeLines.length > 0 ? `edges:\n${edgeLines.join("\n")}` : "edges: none",
 								].join("\n\n");
@@ -1820,12 +1840,17 @@ export function createWorkflowHost(cfg: HostConfig) {
 								if (!gate.approved) return deny(gate.preview);
 								try {
 									const outcome = await backend.createBatch({
-										parent: { title: params.title, ...(params.description ? { description: params.description } : {}), ...(target ? { project: target } : {}), ...(params.queue ? { queue: true } : {}) },
+										parent: { title: params.title, ...(params.description ? { description: params.description } : {}), ...(target ? { project: target } : {}), ...(params.queue ? { queue: true } : {}), ...(params.question ? { question: params.question.trim() } : {}) },
 										entries,
 									});
 									if (selectsNow) {
 										await setNow(outcome.parent, ctx);
 										intakeSelected = true;
+									}
+									if (intakeActive) {
+										intakeActive = false;
+										intakeScanRequired = false;
+										intakeScanDelivered = false;
 									}
 									return okText(`${outcome.text}${selectsNow ? " + parent is NOW" : ""}`, {
 										identifier: outcome.parent.key,
@@ -1856,10 +1881,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const target = fileTarget(params.project);
 							const singleRefusal = unscopedRefusal(target);
 							if (singleRefusal) return deny(singleRefusal);
+							const queueText = params.queue ? `\n→ + ${backend.queueNoun} (lands in your decision queue)\n\nOwner question:\n${params.question?.trim()}` : "";
+							const detail = `"${params.title}"\n→ ${target ? `project ${target}` : cfg.teamNoun}${queueText}${selectsNow ? "\n→ becomes NOW" : ""}\n\n${(params.description ?? "").slice(0, 400)}`;
 							const gate = confirmWrite(
 								"create_work",
 								"Model wants to file a work item",
-								`"${params.title}"\n→ ${target ? `project ${target}` : cfg.teamNoun}${params.queue ? `\n→ + ${backend.queueNoun} (lands in your decision queue)` : ""}${selectsNow ? "\n→ becomes NOW" : ""}\n\n${(params.description ?? "").slice(0, 400)}`,
+								detail,
 								params,
 							);
 							if (!gate.approved) return deny(gate.preview);
@@ -1868,24 +1895,37 @@ export function createWorkflowHost(cfg: HostConfig) {
 								...(params.description ? { description: params.description } : {}),
 								...(target ? { project: target } : {}),
 								...(params.queue ? { queue: true } : {}),
+								...(params.question ? { question: params.question.trim() } : {}),
 							});
 							if (selectsNow) {
 								await setNow(created, ctx);
 								intakeSelected = true;
 							}
+							if (intakeActive) {
+								intakeActive = false;
+								intakeScanRequired = false;
+								intakeScanDelivered = false;
+							}
 							return okText(`created ${created.key}${params.queue ? ` + ${backend.queueNoun}` : ""}${selectsNow ? " + NOW" : ""}`, { identifier: created.key, now: selectsNow });
 						}
 						case "queue_work": {
 							if (!params.work) return deny("work key required");
+							if (!params.question || typeof params.question !== "string" || !params.question.trim()) {
+								return deny("question required for queue_work (single line, max 240 chars)");
+							}
+							const question = params.question.trim();
+							if (question.includes("\n") || question.length > 240) {
+								return deny("question must be a single line of at most 240 characters");
+							}
 							const issue = await backend.findIssue(params.work);
 							const gate = confirmWrite(
 								"queue_work",
 								"Model wants to add an issue to your decision queue",
-								`${issue.key} ${issue.title}\n\nAdds ${backend.queueNoun}. Nothing else changes.`,
+								`${issue.key} ${issue.title}\n\nOwner question:\n${question}\n\nAdds ${backend.queueNoun}. Nothing else changes.`,
 								params,
 							);
 							if (!gate.approved) return deny(gate.preview);
-							await backend.queueIssue(issue);
+							await backend.queueIssue(issue, question);
 							return okText(`${issue.key} → ${backend.queueNoun}`);
 						}
 						case "request_closeout": {

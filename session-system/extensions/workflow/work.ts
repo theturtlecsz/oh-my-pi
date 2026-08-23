@@ -33,12 +33,17 @@ import {
 	type BackendHooks,
 	type BatchOutcome,
 	CandidateDriftError,
+	type CenterCommandRecommendation,
+	type CenterHiddenRow,
 	type CenterSnapshot,
+	type CenterWaitingRow,
 	type CloseAttemptOutcome,
 	type CloseAttemptSession,
 	type CloseEventView,
 	type CreateBatchInput,
 	type EvidenceKind,
+	extractOwnerQuestion,
+	setOwnerQuestion,
 	type EvidenceMeta,
 	type GoalTree,
 	type IssueDetail,
@@ -647,7 +652,10 @@ export function createWorkBackend(
 			const tree = await client.tree();
 			return tree.items
 				.filter(i => !i.archived && i.state === "TRIAGE")
-				.map(i => `${i.alias.key} — ${i.revision.title}`);
+				.map(i => {
+					const q = extractOwnerQuestion(i.revision.description);
+					return `${i.alias.key} — ${q ?? "question not recorded"}`;
+				});
 		},
 
 		async projectTreeLines(): Promise<string[]> {
@@ -660,9 +668,36 @@ export function createWorkBackend(
 		},
 
 		async centerSnapshot(projectFilter?: string): Promise<CenterSnapshot> {
-			// ONE tree read serves focus context, progress, ready, and waiting;
-			// tree/focus failure throws — the host never shows a stale orientation.
-			const [tree, slot] = await Promise.all([client.tree(), client.focus(config.ownerId)]);
+			// ONE concurrent batch of read-only WorkService calls
+			const treePromise = client.tree();
+			const focusPromise = client.focus(config.ownerId);
+			const activityPromise = (async (): Promise<CenterSnapshot["activity"] | undefined> => {
+				if (projectFilter) {
+					const tree = await treePromise;
+					const scopeId = tree.projects.find(p => p.name === projectFilter)?.project_id;
+					if (!scopeId) return undefined;
+					try {
+						const view = await client.activity({ projectId: scopeId, limit: 1 });
+						return {
+							rows: view.events.map(e => `${e.occurred_at.slice(0, 16).replace("T", " ")} ${e.kind} — ${e.key} ${e.title}`),
+							total: view.total,
+						};
+					} catch (error) {
+						return { unavailable: redactSecrets(String(error)) };
+					}
+				}
+				try {
+					const view = await client.activity({ limit: 1 });
+					return {
+						rows: view.events.map(e => `${e.occurred_at.slice(0, 16).replace("T", " ")} ${e.kind} — ${e.key} ${e.title}`),
+						total: view.total,
+					};
+				} catch (error) {
+					return { unavailable: redactSecrets(String(error)) };
+				}
+			})();
+
+			const [tree, slot, activityResult] = await Promise.all([treePromise, focusPromise, activityPromise]);
 			const names = projectNames(tree);
 			const nowItem = slot.work_id ? tree.items.find(i => i.work_id === slot.work_id) : undefined;
 			const now = nowItem ? toRef(nowItem, names) : null;
@@ -672,32 +707,109 @@ export function createWorkBackend(
 				// orientation to the whole workspace under a project-scope banner.
 				throw new Error(`project "${projectFilter}" from ${backend.markerFile} does not exist in the Work Ledger — fix the marker or create the project`);
 			}
+			const activity: CenterSnapshot["activity"] = activityResult ?? { unavailable: "activity unavailable" };
 			let progress: CenterSnapshot["progress"];
-			if (nowItem?.project_id) {
-				const goal = tree.items.filter(i => !i.archived && i.project_id === nowItem.project_id);
+			const targetProjectId = scopeId ?? nowItem?.project_id;
+			if (targetProjectId) {
+				const goal = tree.items.filter(i => !i.archived && i.project_id === targetProjectId);
 				progress = {
 					done: goal.filter(i => i.state === "DONE" || i.state === "CANCELED").length,
 					total: goal.length,
 					onyou: goal.filter(i => i.state === "TRIAGE").length,
 				};
 			}
-			const open = tree.items.filter(i => !i.archived && i.state !== "DONE" && i.state !== "CANCELED" && (!scopeId || i.project_id === scopeId));
-			const readyItems = open.filter(i => i.state !== "TRIAGE" && i.work_id !== slot.work_id);
-			const waitingItems = open.filter(i => i.state === "TRIAGE");
-			const ready = { rows: readyItems.slice(0, CENTER_MAX_ROWS).map(i => `${i.alias.key} ${i.revision.title}`), total: readyItems.length };
-			const waiting = { rows: waitingItems.slice(0, CENTER_MAX_ROWS).map(i => `${i.alias.key} ${i.revision.title}`), total: waitingItems.length };
-			let activity: CenterSnapshot["activity"];
-			try {
-				const view = await client.activity({ ...(scopeId ? { projectId: scopeId } : {}), limit: CENTER_MAX_ROWS });
-				activity = {
-					rows: view.events.map(e => `${e.occurred_at.slice(0, 16)} ${e.kind} — ${e.key} ${e.title}`),
-					total: view.total,
-				};
-			} catch (error) {
-				// Only this section degrades — the other three stay fresh and honest.
-				activity = { unavailable: redactSecrets(String(error)) };
+
+			const openById = new Map(tree.items.filter(i => !i.archived && i.state !== "DONE" && i.state !== "CANCELED").map(i => [i.work_id, i]));
+			const blockedByMap = new Map<string, string>();
+			for (const edge of tree.relations) {
+				if (edge.active && edge.kind === "blocks" && openById.has(edge.source_work_id) && openById.has(edge.target_work_id)) {
+					const blocker = openById.get(edge.source_work_id);
+					if (blocker) blockedByMap.set(edge.target_work_id, blocker.alias.key);
+				}
 			}
-			return { now, ...(progress ? { progress } : {}), ready, waiting, activity };
+
+			const scopedOpen = tree.items.filter(i => !i.archived && i.state !== "DONE" && i.state !== "CANCELED" && (!scopeId || i.project_id === scopeId));
+			const waitingRows: CenterWaitingRow[] = [];
+			const hiddenRows: CenterHiddenRow[] = [];
+			const readyUnblocked: WorkItemView[] = [];
+
+			let nowEligibleForRecommendation = false;
+			if (nowItem) {
+				const isTerminal = nowItem.state === "DONE" || nowItem.state === "CANCELED" || nowItem.archived;
+				if (!isTerminal) {
+					const blockerKey = blockedByMap.get(nowItem.work_id);
+					const inScope = !scopeId || nowItem.project_id === scopeId;
+					if (blockerKey) {
+						if (inScope) hiddenRows.push({ key: nowItem.alias.key, reason: `blocked by ${blockerKey}` });
+					} else if (nowItem.state === "TRIAGE") {
+						const q = extractOwnerQuestion(nowItem.revision.description);
+						if (inScope) {
+							if (q) {
+								waitingRows.push({ key: nowItem.alias.key, question: q });
+							} else {
+								hiddenRows.push({ key: nowItem.alias.key, reason: "question not recorded" });
+							}
+						}
+					} else {
+						nowEligibleForRecommendation = true;
+					}
+				}
+			}
+
+			for (const item of scopedOpen) {
+				if (item.work_id === slot.work_id) continue;
+				const blockerKey = blockedByMap.get(item.work_id);
+				if (blockerKey) {
+					hiddenRows.push({ key: item.alias.key, reason: `blocked by ${blockerKey}` });
+					continue;
+				}
+				if (item.state === "TRIAGE") {
+					const q = extractOwnerQuestion(item.revision.description);
+					if (q) {
+						waitingRows.push({ key: item.alias.key, question: q });
+					} else {
+						hiddenRows.push({ key: item.alias.key, reason: "question not recorded" });
+					}
+				} else {
+					readyUnblocked.push(item);
+				}
+			}
+
+			const recommendations: CenterCommandRecommendation[] = [];
+			if (nowItem && nowEligibleForRecommendation) {
+				const view = await client.workflow(nowItem.alias.key);
+				const hasPlan = view.receipts.some(r => r.kind === "plan" && r.candidate_id === view.item.candidate?.candidate_id);
+				if (!hasPlan || !view.item.candidate) {
+					recommendations.push({ command: "/plan", reason: "no approved plan stamped on current work" });
+				} else {
+					const live = liveAttempt(view);
+					if (live && (live.state === "audited" || live.state === "closeout_requested")) {
+						recommendations.push({ command: "/done", reason: "closeout review complete — ready to close" });
+					} else if (live && (live.state === "audit_ready" || live.state === "active")) {
+						recommendations.push({ command: "/summary", reason: "audited review in progress" });
+					} else if (view.receipts.some(r => r.kind === "handoff" || r.kind === "verification") || view.item.candidate.kind === "final") {
+						recommendations.push({ command: "/summary", reason: "ready for review" });
+					} else {
+						recommendations.push({ command: `continue ${nowItem.alias.key}`, reason: "plan approved — finish execution" });
+					}
+				}
+			}
+
+			for (const item of readyUnblocked) {
+				if (recommendations.length >= 3) break;
+				const projectLabel = item.project_id ? (tree.projects.find(p => p.project_id === item.project_id)?.name ?? "") : "";
+				const reason = projectLabel ? `next unblocked piece in ${projectLabel}` : "next unblocked piece";
+				recommendations.push({ command: `/now ${item.alias.key}`, reason });
+			}
+
+			return {
+				now,
+				...(progress ? { progress } : {}),
+				recommendations,
+				waiting: { rows: waitingRows.slice(0, 8), total: waitingRows.length },
+				hidden: { rows: hiddenRows.slice(0, 8), total: hiddenRows.length },
+				activity,
+			};
 		},
 
 		async setNowRemote(issue: NowRef): Promise<void> {
@@ -752,13 +864,14 @@ export function createWorkBackend(
 			await run("append_evidence", { receipt: await receipt(SERVICE_KIND[kind], issue, body, meta) });
 		},
 
-		async createIssue(input: { title: string; description?: string; project?: string; queue?: boolean }): Promise<NowRef> {
+		async createIssue(input: { title: string; description?: string; project?: string; queue?: boolean; question?: string }): Promise<NowRef> {
+			const description = input.question ? setOwnerQuestion(input.description, input.question) : (input.description ?? "");
 			const result = await run("create_work_batch", {
 				items: [
 					{
 						client_ref: "p",
 						title: input.title,
-						description: input.description ?? "",
+						description,
 						scope: "",
 						acceptance_criteria: [],
 						state: input.queue ? "TRIAGE" : "BACKLOG",
@@ -772,11 +885,14 @@ export function createWorkBackend(
 
 		async createBatch(input: CreateBatchInput): Promise<BatchOutcome> {
 			const projectId = input.parent.project ? await projectIdFor(input.parent.project) : undefined;
+			const parentDescription = input.parent.question
+				? setOwnerQuestion(input.parent.description, input.parent.question)
+				: (input.parent.description ?? "");
 			const items = [
 				{
 					client_ref: "p",
 					title: input.parent.title,
-					description: input.parent.description ?? "",
+					description: parentDescription,
 					scope: "",
 					acceptance_criteria: [] as string[],
 					state: input.parent.queue ? "TRIAGE" : "BACKLOG",
@@ -820,7 +936,14 @@ export function createWorkBackend(
 			};
 		},
 
-		async queueIssue(issue: NowRef): Promise<void> {
+		async queueIssue(issue: NowRef, question?: string): Promise<void> {
+			if (question) {
+				const item = await client.workItem(issue.key);
+				const updatedDesc = setOwnerQuestion(item.revision.description, question);
+				if (updatedDesc !== item.revision.description) {
+					await backend.reviseWork(issue, { description: updatedDesc });
+				}
+			}
 			await run("set_work_state", { work_id: issue.id, state: "TRIAGE" });
 		},
 

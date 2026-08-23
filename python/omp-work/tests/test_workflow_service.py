@@ -65,6 +65,14 @@ def _grant(service, workspace_id) -> None:
         owner.chmod(0o600)
 
 
+def _seed_project(service, workspace_id, project_id, name: str = "Test Project") -> None:
+    with psycopg.connect(**service.config.connection_kwargs("omp_work_app"), autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)", (str(workspace_id), str(OWNER)))
+            cur.execute(
+                "INSERT INTO omp_work.projects(project_id, workspace_id, key, name, kind, provenance) VALUES (%s, %s, %s, %s, %s, %s)",
+                (project_id, workspace_id, f"PROJ-{str(project_id)[:4]}", name, "surface", json.dumps({"source": "test"})),
+            )
 def _owner_headers(workspace_id) -> dict[str, str]:
     return {"Authorization": "Bearer owner-token", "X-OMP-Workspace-ID": str(workspace_id)}
 
@@ -978,3 +986,63 @@ def test_closeout_refused_before_checkpoint_attestation_and_succeeds_after(servi
     # After delivery is attested, request_closeout succeeds
     status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
     assert status == 200 and body["result"]["status"] == "applied", body
+def test_duplicate_title_rejection(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+
+    # Create initial projectless item
+    first = _create(service, workspace_id, "Fix the auth flow")
+    assert first["key"] == "OMP-1"
+
+    # Case & whitespace variation is rejected
+    status, body = _command(service, workspace_id, _batch([{"client_ref": "dup", "title": "  fix   THE  auth flow  "}]))
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+    assert f'duplicate open title "fix   THE  auth flow" matches {first["key"]}' in body["error"]["diagnostics"]
+
+    # Intra-batch duplicate is rejected
+    status, body = _command(
+        service,
+        workspace_id,
+        _batch([
+            {"client_ref": "b1", "title": "Build feature X"},
+            {"client_ref": "b2", "title": "build feature x"},
+        ]),
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+    assert 'duplicate open title "build feature x" matches OMP-2' in body["error"]["diagnostics"]
+
+    # Different projects allow same title
+    proj1 = str(uuid4())
+    proj2 = str(uuid4())
+    _seed_project(service, workspace_id, proj1, "Project 1")
+    _seed_project(service, workspace_id, proj2, "Project 2")
+
+    p1_item = _create(service, workspace_id, "Shared Title", project_id=proj1)
+    p2_item = _create(service, workspace_id, "Shared Title", project_id=proj2)
+    assert p1_item["key"] != p2_item["key"]
+
+    # Duplicate in same project is rejected
+    status, body = _command(service, workspace_id, _batch([{"client_ref": "p1_dup", "title": "shared title", "project_id": proj1}]))
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+    assert f'duplicate open title "shared title" matches {p1_item["key"]}' in body["error"]["diagnostics"]
+
+    # Closed or canceled item's title can be reused
+    cancellable = _create(service, workspace_id, "To be canceled")
+    status, body = _command(service, workspace_id, {"type": "set_work_state", "payload": {"work_id": cancellable["work_id"], "state": "CANCELED"}})
+    assert status == 200, body
+
+    reused = _create(service, workspace_id, "to be canceled")
+    assert reused["key"] != cancellable["key"]
+    # Archived open non-terminal item still blocks duplicate
+    archived_open = _create(service, workspace_id, "Archived but still open")
+    with psycopg.connect(**service.config.connection_kwargs("omp_work_app"), autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)", (str(workspace_id), str(OWNER)))
+            cur.execute("UPDATE omp_work.work_items SET archived = true WHERE work_id = %s", (archived_open["work_id"],))
+    status, body = _command(service, workspace_id, _batch([{"client_ref": "dup_arch", "title": "archived but still open"}]))
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+    assert f'duplicate open title "archived but still open" matches {archived_open["key"]}' in body["error"]["diagnostics"]

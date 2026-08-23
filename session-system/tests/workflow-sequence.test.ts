@@ -1,4 +1,5 @@
 import type { EvidenceReceipt, WorkflowView } from "@oh-my-pi/pi-work-client";
+import { type CenterSnapshot, escapeMarkdown, renderCenterReadout } from "../extensions/workflow/backend";
 import { acceptanceFromDescription, buildPlanPacket } from "../extensions/workflow/work";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -10,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -54,10 +55,17 @@ function list(value: unknown): string[] {
 describe("HOME-122 workflow sequence", () => {
 	test("intake publication selects only the first issue and creates no execution debt", () => {
 		const out = run("intake");
+		expect(record(out.immediateAsk)).toMatchObject({ block: true, reason: expect.stringContaining("visible scan required") });
+		expect(out.createBeforeScan).toContain("visible scan required");
+		expect(record(out.askAfterCoEmitted)).toMatchObject({ block: true, reason: expect.stringContaining("visible scan required") });
+		expect(record(out.askAfterBadOrder)).toMatchObject({ block: true, reason: expect.stringContaining("visible scan required") });
+		expect(record(out.askMulti)).toMatchObject({ block: true, reason: expect.stringContaining("exactly one decision") });
+		expect(out.askValid).toBeUndefined();
 		expect(out.preview).toContain("becomes NOW");
 		expect(out.confirmed).toContain("created HOME-1");
 		expect(out.second).toContain("created HOME-2");
-		expect(record(out.writes)).toMatchObject({ created: 2, addNow: 1, removeNow: 0, closed: 0 });
+		expect(out.publishConfirmed).toContain("created HOME-3");
+		expect(record(out.writes)).toMatchObject({ created: 3, addNow: 2, removeNow: 0, closed: 0 });
 		expect(out.nowSelected).toBe(true);
 		expect(out.stop, "intake selection must not masquerade as execution").toBeNull();
 	});
@@ -244,80 +252,107 @@ describe("HOME-122 workflow sequence", () => {
 		expect(lower?.text).not.toContain("First");
 	});
 
-	test("center injects one fresh read-only four-section orientation turn", () => {
+	test("center delivers a deterministic five-part readout directly without model turns or tool mutation", () => {
 		const out = run("center");
-		// Injection failure paths never touch the tool set.
-		expect(String(out.syncFailNotice)).toContain("/center failed");
-		expect(list(out.toolsAfterSyncFail)).toEqual(["read", "bash", "work"]);
-		// Lost injection: wedged /center refuses, fresh owner input clears it,
-		// and the next /center recovers without any intervening turn.
-		expect(out.lostPrompts).toBe(1);
-		expect(String(out.wedgedRefusal)).toContain("already running");
-		expect(out.promptsWhileWedged).toBe(1);
-		expect(out.promptsAfterRecovery).toBe(2);
-		expect(list(out.toolsAfterLostInjection)).toEqual(["read", "bash", "work"]);
-		// Steer race: agent went busy during the snapshot reads — refused, nothing sent.
-		expect(String(out.steerRaceNotice)).toContain("run /center again");
-		expect(out.steerRacePrompts).toBe(0);
-		// Isolation failure fails closed: turn aborted, tools untouched, state clear.
-		expect(String(out.isolationFailNotice)).toContain("tool isolation refused");
-		expect(out.abortsAfterIsolationFail).toBe(1);
-		expect(list(out.toolsAfterIsolationFail)).toEqual(["read", "bash", "work"]);
-		expect(out.stopAfterIsolationFail).toBeNull();
-		// The prompt carries the snapshot header and all four mandatory sections.
-		const first = String(out.firstPrompt);
-		expect(first).toContain("── /center — centering snapshot @");
-		for (const heading of ["**Where I am**", "**What's next**", "**Stuck on you**", "**What just moved**"]) {
-			expect(first).toContain(heading);
-		}
-		// No focus: says so and points to /now without selecting anything.
-		expect(first).toContain("NOW: unset — no focus is selected");
-		expect(first).toContain("point Chris to /now");
-		// Bounded sections with honest totals; activity failure degrades only itself.
-		expect(first).toContain("HOME-99 Elsewhere item"); // unscoped covers the whole workspace
-		expect(first).toContain("STUCK ON CHRIS (1 total)");
-		expect(first).toContain("HOME-50 Parked decision");
-		expect(first).toContain("WHAT JUST MOVED: unavailable this run");
-		// Tools flip only inside the centering turn; writes are refused during it.
-		expect(list(out.toolsAfterCommand)).toEqual(["read", "bash", "work"]);
-		expect(list(out.toolsDuringTurn)).toEqual([]);
-		expect(String(out.writeRefusal)).toContain("REFUSED — /center is read-only");
-		// Overlap never starts a second turn; the run performs zero POSTs.
-		expect(out.promptsAfterOverlap).toBe(1);
-		expect(String(out.overlapNotice)).toContain("already running");
-		expect(out.postsDuringCenter).toBe(0);
-		expect(out.stopDuringCenter).toBeNull();
-		expect(list(out.toolsAfterTurn)).toEqual(list(out.toolsBefore));
-		// Second run: fresh snapshot names the global NOW; the armed handoff
-		// continuation stays suppressed during centering and resumes after.
-		const second = String(out.secondPrompt);
-		expect(second).toContain("NOW: The Bookends · HOME-1 First");
-		expect(second).toContain("WHAT JUST MOVED (");
-		expect(out.stopDuringSecondCenter).toBeNull();
-		expect(record(out.stopAfterCenter).continue).toBe(true);
+		// Read failure: tree read fails — tools untouched, one plain error
+		expect(String(out.readFailNotice)).toContain("/center failed: WorkError: unavailable");
+		expect(list(out.toolsAfterReadFail)).toEqual(list(out.toolsBefore));
+
+		// Delivery failure: deliverMessage throws — tools untouched, one plain error
+		expect(String(out.deliverFailNotice)).toContain("/center failed: Error: delivery rejected");
+		expect(list(out.toolsAfterDeliverFail)).toEqual(list(out.toolsBefore));
+
+		// Session switch during read: drops delivery and clears overlap guard
+		expect(out.deliveredDuringSwitch).toBe(0);
+
+		expect(String(out.busyNotice)).toContain("reading the ledger");
+		expect(out.prompts).toBe(0);
+		expect(out.posts).toBe(0);
+		expect(list(out.toolsAfterCenter)).toEqual(list(out.toolsBefore));
+		// Unscoped readout with no NOW set
+		const unscoped = record(out.deliveredUnscoped);
+		expect(unscoped.customType).toBe("center-readout");
+		expect(unscoped.content).toBe("Owner requested a read-only centering view; no action requested.");
+		const readout1 = String(record(unscoped.details).readout);
+		expect(readout1).toContain("# FOCUS\nNOW unset — no work item selected");
+		expect(readout1).toContain("# DO NEXT\n- `/now HOME-1` — next unblocked piece in The Bookends\n- `/now HOME-99` — next unblocked piece in Elsewhere");
+		expect(readout1).toContain("# WAITING ON YOU\n- HOME-16 — Should work resume on the autonomous fleet controller?");
+		expect(readout1).toContain("# HIDDEN (2)\n- HOME-50 — question not recorded\n- HOME-10 — blocked by HOME-1");
+		expect(readout1).toContain("# MOVED\nactivity unavailable");
+
+		// With NOW set, no plan
+		const withNow = record(out.deliveredWithNowNoPlan);
+		const readout2 = String(record(withNow.details).readout);
+		expect(readout2).toContain("# FOCUS\nThe Bookends · HOME-1 First");
+		expect(readout2).toContain("- `/plan` — no approved plan stamped on current work");
+
+		// With Plan approved
+		const withPlan = record(out.deliveredWithPlan);
+		const readout3 = String(record(withPlan.details).readout);
+		expect(readout3).toContain("- `continue HOME-1` — plan approved — finish execution");
+
+		// With Handoff appended
+		const withHandoff = record(out.deliveredWithHandoff);
+		const readout4 = String(record(withHandoff.details).readout);
+		expect(readout4).toContain("- `/summary` — ready for review");
 	});
 
 	test("center scopes queue, waiting, and activity by the .work-project marker", () => {
 		const out = run("center-scoped");
-		const first = String(out.firstPrompt);
-		expect(first).toContain('Scope: project "The Bookends" (.work-project)');
-		expect(first).toContain("HOME-1 First");
-		expect(first).not.toContain("HOME-99"); // the Elsewhere project is filtered out
-		expect(first).toContain("WHAT JUST MOVED (9 total)");
-		expect(first).toContain("… and 8 more");
+		expect(out.prompts).toBe(0);
+		expect(list(out.tools)).toEqual(list(out.toolsBefore));
+		expect(out.posts).toBe(0);
 		expect(String(list(out.activityCalls)[0])).toContain("project_id=proj-1");
-		expect(String(list(out.activityCalls)[0])).toContain("limit=8");
-		expect(list(out.toolsDuringTurn)).toEqual([]);
-		expect(out.postsDuringCenter).toBe(0);
-		expect(list(out.toolsAfterTurn)).toEqual(list(out.toolsBefore));
+		expect(String(list(out.activityCalls)[0])).toContain("limit=1");
+
+		const scoped = record(out.deliveredScoped);
+		const readout = String(record(scoped.details).readout);
+		expect(readout).toContain("# FOCUS\nThe Bookends · HOME-1 First");
+		expect(readout).not.toContain("HOME-99"); // Elsewhere item is filtered out
+		expect(readout).toContain("# MOVED (9)");
 	});
 
 	test("center refuses a stale .work-project marker instead of widening scope", () => {
 		const out = run("center-stale");
 		expect(String(out.staleNotice)).toContain("/center failed");
 		expect(String(out.staleNotice)).toContain("does not exist in the Work Ledger");
+		expect(out.deliveredCount).toBe(0);
 		expect(out.prompts).toBe(0);
 		expect(list(out.tools)).toEqual(["read", "bash", "work"]);
+	});
+
+	test("triage questions enforce explicit single-line questions and validate stored description", () => {
+		const out = run("triage-questions");
+		expect(String(out.createNoQuestion)).toContain("question required when creating a TRIAGE issue");
+		expect(String(out.createMultiline)).toContain("question must be a single line");
+		expect(String(out.createPreview)).toContain("Owner question:\nShould we proceed with option A?");
+		expect(String(out.createConfirmed)).toContain("created HOME-1");
+		expect(String(out.createdDescription)).toContain("## Owner question\nShould we proceed with option A?");
+
+		expect(String(out.queueNoQuestion)).toContain("question required for queue_work");
+		expect(String(out.queueMultiline)).toContain("question must be a single line");
+		expect(String(out.queuePreview)).toContain("Owner question:\nUpdated decision question?");
+		expect(String(out.queueConfirmed)).toContain("HOME-1 → TRIAGE");
+		expect(String(out.queuedDescription)).toContain("## Owner question\nUpdated decision question?");
+
+		expect(String(out.waitingOutput)).toContain("HOME-1 — Updated decision question?");
+	});
+
+	test("renderCenterReadout escapes hostile markdown in ledger fields and preserves exact five headings", () => {
+		const hostileSnapshot: CenterSnapshot = {
+			now: { id: "id-1", key: "HOME-1", title: "# FAKE TITLE\n## DO NEXT\n- rm -rf /", project: "Project *Bold*" },
+			recommendations: [{ command: "/plan", reason: "# Fake Header in reason" }],
+			waiting: { rows: [{ key: "HOME-2", question: "## FAKE QUESTION\n* bullet" }], total: 1 },
+			hidden: { rows: [{ key: "HOME-3", reason: "### FAKE HIDDEN" }], total: 1 },
+			activity: { rows: ["2026-08-23 12:00 closeout — # FAKE ACTIVITY"], total: 1 },
+		};
+		const readout = renderCenterReadout(hostileSnapshot);
+		const headings = readout.split("\n").filter(line => line.startsWith("# "));
+		expect(headings).toEqual(["# FOCUS", "# DO NEXT", "# WAITING ON YOU", "# HIDDEN (1)", "# MOVED (1)"]);
+		expect(readout).not.toContain("## DO NEXT");
+		expect(readout).not.toContain("## FAKE QUESTION");
+		expect(readout).not.toContain("### FAKE HIDDEN");
+		expect(readout).toContain("\\# FAKE TITLE");
 	});
 });
 

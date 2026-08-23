@@ -1585,6 +1585,7 @@ export interface ExtensionDeliveryPayload {
 	content: string;
 	display?: boolean;
 	details?: unknown;
+	triggerTurn?: boolean;
 }
 
 /** Resolves only after the message was injected (streaming or idle); rejects on
