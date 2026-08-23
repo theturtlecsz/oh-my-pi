@@ -813,13 +813,23 @@ class PostgresWorkStore:
         payload = envelope.command.payload
         submitted = payload.input
         child_ids = sorted(set(payload.satisfied_work_ids), key=str)
+        cancel_proofs = tuple(payload.cancellations)
+        cancel_ids = [proof.work_id for proof in cancel_proofs]
         if submitted.work_id in child_ids:
             raise WorkStoreError("invalid_request", ("a work item cannot satisfy itself",))
+        if submitted.work_id in cancel_ids:
+            raise WorkStoreError("invalid_request", ("a work item cannot cancel itself in completion",))
+        if len(cancel_ids) != len(set(cancel_ids)):
+            raise WorkStoreError("invalid_request", ("duplicate cancellation target work_id",))
+        if set(child_ids) & set(cancel_ids):
+            raise WorkStoreError("invalid_request", ("work item cannot be both a satisfied child and a cancellation target",))
         cur.execute("SELECT riders FROM omp_work.close_attempts WHERE workspace_id=%s AND work_id=%s AND state = ANY(%s)", (envelope.workspace_id, submitted.work_id, list(_LIVE_STATES)))
         rider_peek = cur.fetchone()
         peeked_rider_ids = [UUID(str(rider["work_id"])) for rider in ((rider_peek["riders"] if rider_peek else None) or [])]
-        all_ids = sorted({submitted.work_id, *child_ids, *peeked_rider_ids}, key=str)
-        cur.execute("SELECT work_id,state,current_revision_id,current_candidate_id,created_at FROM omp_work.work_items WHERE workspace_id=%s AND work_id = ANY(%s) ORDER BY work_id FOR UPDATE", (envelope.workspace_id, [str(work_id) for work_id in all_ids]))
+        if set(peeked_rider_ids) & set(cancel_ids):
+            raise WorkStoreError("invalid_request", ("work item cannot be both a sealed rider and a cancellation target",))
+        all_ids = sorted({submitted.work_id, *child_ids, *peeked_rider_ids, *cancel_ids}, key=str)
+        cur.execute("SELECT work_id,state,archived,current_revision_id,current_candidate_id,created_at FROM omp_work.work_items WHERE workspace_id=%s AND work_id = ANY(%s) ORDER BY work_id FOR UPDATE", (envelope.workspace_id, [str(work_id) for work_id in all_ids]))
         items = {row["work_id"]: row for row in cur.fetchall()}
         item = items.get(submitted.work_id)
         if item is None:
@@ -871,6 +881,15 @@ class PostgresWorkStore:
             if rider_row is None or rider_row["state"] in ("DONE", "CANCELED", "CANCELLED") or rider_row["archived"] or str(rider_row["current_revision_id"]) != str(rider["revision_id"]):
                 return refused("rider_binding_invalid", f"rider {rider_work_id}: no longer open on the sealed revision", ("rerun /summary to re-seal the batch without it",), requires_fresh=True)
         completed_children: list[str] = []
+        for proof in cancel_proofs:
+            target = items.get(proof.work_id)
+            if (
+                target is None
+                or target["archived"]
+                or target["state"] not in ("BACKLOG", "TRIAGE", "READY", "IN_PROGRESS", "REVIEW", "BLOCKED")
+                or target["current_revision_id"] != proof.revision_id
+            ):
+                return refused("cancel_binding_invalid", f"cancellation target {proof.work_id}: no longer open on the submitted revision", ("re-resolve the cancellation batch, then /done again",), requires_fresh=True)
         for child_id in child_ids:
             child = items.get(child_id)
             invalid: str | None = None
@@ -928,8 +947,15 @@ class PostgresWorkStore:
                 raise WorkStoreError("stale_evidence")
             completed_children.append(str(rider["work_id"]))
             self._close_event(cur, envelope, work_id=rider_work_id, attempt_id=live["attempt_id"], event_type="rider_completed", reason_code="rider_completed", reason=f"completed as a sealed rider of work {submitted.work_id}: audited task sha256 {rider_task_sha}, sealed evidence sha256 {rider['evidence_sha256']}, /done authorization {payload.done_authorization_ref}", next_actions=(), remaining_launches=launches, remaining_reports=reports)
+        canceled_work_ids: list[str] = []
+        for proof in cancel_proofs:
+            cur.execute("UPDATE omp_work.work_items SET state='CANCELED',row_version=row_version+1 WHERE workspace_id=%s AND work_id=%s AND state<>'DONE' AND state<>'CANCELED' RETURNING row_version", (envelope.workspace_id, proof.work_id))
+            if cur.fetchone() is None:
+                raise WorkStoreError("stale_evidence")
+            canceled_work_ids.append(str(proof.work_id))
+            self._close_event(cur, envelope, work_id=proof.work_id, attempt_id=live["attempt_id"], event_type="batch_canceled", reason_code="batch_canceled", reason=f"canceled in batch with primary {submitted.work_id}: {proof.reason} (/done authorization {payload.done_authorization_ref})", next_actions=(), remaining_launches=launches, remaining_reports=reports)
         event = self._close_event(cur, envelope, work_id=submitted.work_id, attempt_id=live["attempt_id"], event_type="work_completed", reason_code="work_completed", reason=f"work completed with {len(child_ids)} same-session child(ren) and {len(sealed_riders)} sealed rider(s)", next_actions=(), remaining_launches=launches, remaining_reports=reports)
-        return {"type": "complete_work", "status": "applied", "work_id": str(submitted.work_id), "state": "DONE", "row_version": result["row_version"], "completed_work_ids": completed_children, "event": event}
+        return {"type": "complete_work", "status": "applied", "work_id": str(submitted.work_id), "state": "DONE", "row_version": result["row_version"], "completed_work_ids": completed_children, "canceled_work_ids": canceled_work_ids, "event": event}
 
     def _set_state(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload

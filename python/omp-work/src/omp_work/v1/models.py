@@ -458,12 +458,37 @@ class RequestCloseoutPayload(StrictModel):
     attempt_id: UUID
 
 
+class CancellationProof(StrictModel):
+    """Owner ruling 2026-08-23 (staged cancel batches, OMP-111): one historical work
+    item canceled atomically with the primary's completion."""
+    work_id: UUID
+    revision_id: UUID
+    reason: str = Field(min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def _reason_bounds(self) -> "CancellationProof":
+        if len(self.reason.encode("utf-8")) > 4096:
+            raise ValueError("cancellation reason exceeds 4096 UTF-8 bytes")
+        if "\x00" in self.reason:
+            raise ValueError("cancellation reason must not contain NUL")
+        if not self.reason.strip():
+            raise ValueError("cancellation reason must not be blank")
+        return self
+
+
 class CompleteWorkPayload(StrictModel):
     input: CompletionInput
     attempt_id: UUID
     done_authorization_ref: str = Field(min_length=1)
     satisfied_work_ids: tuple[UUID, ...] = ()
+    cancellations: tuple[CancellationProof, ...] = Field(default=(), max_length=128)
 
+    @model_validator(mode="after")
+    def _cancellations_unique(self) -> "CompleteWorkPayload":
+        ids = [proof.work_id for proof in self.cancellations]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate cancellation work_id")
+        return self
 
 class RiderProof(StrictModel):
     """Owner ruling 2026-08-22 (close asymmetry, OMP-93): one historical work
@@ -839,4 +864,4 @@ class Approval(StrictModel):
     contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_by: Literal["owner"]
     approved_at: datetime
-    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47", "OMP-67", "OMP-93", "OMP-99"]
+    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47", "OMP-67", "OMP-93", "OMP-99", "OMP-106"]

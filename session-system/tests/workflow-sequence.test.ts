@@ -10,7 +10,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "done" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "done" | "done-cancel" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -141,6 +141,17 @@ describe("HOME-122 workflow sequence", () => {
 		expect(String(out.doneAuthorization), "the literal /done mints a fresh single-use authorization").toStartWith("done:");
 		expect(out.now).toBe("NOW unset");
 		expect(record(out.afterSecondDone)).toMatchObject({ closed: 1, removeNow: 1 });
+	});
+
+	test("done with staged cancel batch cancels target atomically and consumes batch file", () => {
+		const out = run("done-cancel");
+		const doneUi = list(out.doneUi);
+		expect(doneUi.some(call => call.includes("close HOME-1 and cancel 1 item(s)?"))).toBe(true);
+		expect(doneUi.some(call => call.includes('HOME-2 — "superseded by HOME-1"'))).toBe(true);
+		expect(doneUi.some(call => call.includes("Cancellation batch SHA-256:"))).toBe(true);
+		expect(out.home2State).toBe("CANCELED");
+		expect(out.batchFileExists).toBe(false);
+		expect(list(out.consumedFiles).length).toBe(1);
 	});
 
 	test("a structured-only /summary recovers from a refused freeze and re-authorizes", () => {

@@ -46,6 +46,7 @@ import {
 	type NowRef,
 	PLAN_PACKET_MAX_BYTES,
 	type PlanPacket,
+	type CancellationProof,
 	type RiderProof,
 	type PlanStamp,
 	type SealedAuditTask,
@@ -866,6 +867,7 @@ export function createWorkBackend(
 			carrier: WorkStateCarrier,
 			hooks: BackendHooks,
 			doneAuthorizationRef?: string,
+			cancellations?: CancellationProof[],
 		): Promise<string> {
 			if (outcome === "canceled") {
 				await run("set_work_state", { work_id: now.id, state: "CANCELED" });
@@ -918,11 +920,13 @@ export function createWorkBackend(
 				attempt_id: attempt.attempt_id,
 				done_authorization_ref: doneAuthorizationRef,
 				...(satisfied.length > 0 ? { satisfied_work_ids: satisfied } : {}),
+				...(cancellations && cancellations.length > 0 ? { cancellations } : {}),
 			});
 			if (result.status === "refused") throw new Error(result.event?.rendered_text ?? "completion refused");
 			await backend.clearNowRemote(now.id);
 			const children = result.status === "applied" && result.completed_work_ids?.length ? ` (+${result.completed_work_ids.length} same-session child(ren))` : "";
-			return `${now.key} done${children} — ${finalCandidate.candidate_sha256.slice(0, 12)} ${push.status === "contained" ? `contained in remote tip ${push.remoteCommit?.slice(0, 12)}` : `pushed${push.status === "remote_commit" ? " (verified on remote)" : ""}`}`;
+			const cancels = result.status === "applied" && result.canceled_work_ids?.length ? ` (+${result.canceled_work_ids.length} canceled)` : "";
+			return `${now.key} done${children}${cancels} — ${finalCandidate.candidate_sha256.slice(0, 12)} ${push.status === "contained" ? `contained in remote tip ${push.remoteCommit?.slice(0, 12)}` : `pushed${push.status === "remote_commit" ? " (verified on remote)" : ""}`}`;
 		},
 
 		async summaryGate(now: NowRef, carrier: WorkStateCarrier, hooks: BackendHooks): Promise<SummaryGateOk | SummaryGateBlocked> {
@@ -1036,6 +1040,35 @@ export function createWorkBackend(
 			return riders;
 		},
 
+		async resolveCancellations(entries: { key: string; reason: string }[], nowKey: string): Promise<CancellationProof[]> {
+			const proofs: CancellationProof[] = [];
+			const seenIds = new Set<string>();
+			for (const entry of entries) {
+				if (!entry?.key || typeof entry.reason !== "string" || !entry.reason.trim()) {
+					throw new Error(`cancel entry for ${entry?.key ?? "(missing key)"} needs a key and non-empty reason`);
+				}
+				if (new TextEncoder().encode(entry.reason).length > 4096) {
+					throw new Error(`cancel entry for ${entry.key} reason exceeds 4096 UTF-8 bytes`);
+				}
+				if (entry.reason.includes("\0")) {
+					throw new Error(`cancel entry for ${entry.key} reason contains NUL`);
+				}
+				const view = await client.workflow(entry.key);
+				if (view.item.work_id === nowKey || view.item.alias.key === nowKey) {
+					throw new Error(`cannot cancel the primary work item (${entry.key}) in its own completion batch`);
+				}
+				if (seenIds.has(view.item.work_id)) {
+					throw new Error(`duplicate cancellation target (${entry.key})`);
+				}
+				seenIds.add(view.item.work_id);
+				if (view.item.state === "DONE" || view.item.state === "CANCELED" || view.item.state === "CANCELLED" || view.item.archived) {
+					throw new Error(`cancellation target ${entry.key} is terminal (${view.item.archived ? "archived" : view.item.state}) — cancellations apply only to open work`);
+				}
+				proofs.push({ work_id: view.item.work_id, revision_id: view.item.revision.revision_id, reason: entry.reason });
+			}
+			return proofs;
+		},
+
 		async sealAuditManifest(now: NowRef): Promise<CloseAttemptOutcome> {
 			const view = await client.workflow(now.key);
 			const attempt = liveAttempt(view);
@@ -1091,14 +1124,14 @@ export function createWorkBackend(
 		async pendingDeliveries(key: string): Promise<CloseEventView[]> {
 			const view = await client.workflow(key);
 			const latestByEvent = new Map<string, string>();
-			for (const delivery of view.checkpoint_deliveries) {
+			for (const delivery of view.checkpoint_deliveries ?? []) {
 				// deliveries arrive ordered by created_at; the highest sequence wins
 				const prior = latestByEvent.get(delivery.event_id);
 				if (prior === undefined || delivery.delivery_sequence >= Number(prior.split(":")[0])) {
 					latestByEvent.set(delivery.event_id, `${delivery.delivery_sequence}:${delivery.status}`);
 				}
 			}
-			return view.close_attempt_events
+			return (view.close_attempt_events ?? [])
 				.filter(event => {
 					if (!event.requires_delivery) return false;
 					const latest = latestByEvent.get(event.event_id);

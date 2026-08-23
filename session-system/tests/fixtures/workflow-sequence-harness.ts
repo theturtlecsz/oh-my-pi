@@ -1,5 +1,6 @@
 // HOME-122 harness: drive the real work-now extension through its public
 // events, command, and tool with a deterministic in-memory WorkService REST API.
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ExtensionRunner, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
@@ -8,7 +9,7 @@ import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "done", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "ledger"];
+const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "done", "done-cancel", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "ledger"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -120,8 +121,20 @@ const initialItem: MockWorkItem = {
 };
 items.set("HOME-1", initialItem);
 items.set("id-1", initialItem);
+if (mode === "done-cancel") {
+	const item2: MockWorkItem = {
+		work_id: "id-2",
+		workspace_id: WORKSPACE_ID,
+		alias: { key: "HOME-2" },
+		revision: { revision_id: "rev-2", title: "Second to cancel", description: "", scope: "", acceptance_criteria: [] },
+		state: "BACKLOG",
+		project_id: "proj-1",
+		candidate: null,
+	};
+	items.set("HOME-2", item2);
+	items.set("id-2", item2);
+}
 if (mode === "center" || mode === "center-scoped") {
-	// A second project's item proves the .work-project filter (scoped mode) and
 	// pads the unscoped READY list.
 	const elsewhere: MockWorkItem = {
 		work_id: "id-x",
@@ -555,10 +568,24 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			}
 			comments.push({ body: "**Owner verdict in session: done**", createdAt: new Date().toISOString() });
 			const event = mockEvent(it.work_id, attempt?.attempt_id ?? null, "work_completed", "work_completed", false);
+			const cancels = (payload.cancellations as Array<{ work_id: string; reason: string }>) ?? [];
+			for (const c of cancels) {
+				const cit = items.get(c.work_id);
+				if (cit) cit.state = "CANCELED";
+			}
 			return new Response(
 				JSON.stringify({
 					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000016" },
-					result: { type: "complete_work", status: "applied", work_id: it.work_id, state: "DONE", row_version: 2, completed_work_ids: (payload.satisfied_work_ids as string[]) ?? [], event },
+					result: {
+						type: "complete_work",
+						status: "applied",
+						work_id: it.work_id,
+						state: "DONE",
+						row_version: 2,
+						completed_work_ids: (payload.satisfied_work_ids as string[]) ?? [],
+						canceled_work_ids: cancels.map(c => c.work_id),
+						event,
+					},
 				}),
 				{ status: 200 },
 			);
@@ -663,8 +690,8 @@ runner.initialize(
 			uiCalls.push(`select:${title}`);
 			return undefined;
 		},
-		confirm: async (title: string) => {
-			uiCalls.push(`confirm:${title}`);
+		confirm: async (title: string, body?: string) => {
+			uiCalls.push(`confirm:${title}${body ? `\n${body}` : ""}`);
 			return true;
 		},
 	} as never,
@@ -1035,6 +1062,51 @@ if (mode === "intake") {
 	// supersedes to keep exactly one live attempt.
 	await runner.emitInput("/summary", undefined, "interactive");
 	out.beginAfterRaw = beginCalls.length;
+} else if (mode === "done-cancel") {
+	await setNow();
+	await approve(planA);
+	await runner.emit(summaryMessage as never);
+	out.verify = await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "tests pass" });
+	const attempt = attempts.at(-1);
+	if (!attempt) throw new Error("no attempt after /summary");
+	attempt.state = "audited";
+	attempt.accepted_report_count = 1;
+	receipts.push({
+		receipt_id: "rec-a",
+		work_id: attempt.work_id,
+		revision_id: attempt.revision_id,
+		candidate_id: attempt.candidate_id,
+		kind: "audit",
+		verdict: "PASS",
+		independent: true,
+		payload: { report: "VERDICT: PASS" },
+		payload_sha256: "0".repeat(64),
+		issuer: "work-service/auditor-settle",
+		issued_at: new Date().toISOString(),
+		candidate_sha256: attempt.candidate_sha256,
+		candidate_commit: attempt.candidate_commit,
+	});
+	out.review = await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "complete" });
+	attempt.state = "closeout_requested";
+	attempt.closeout_requested_at = new Date().toISOString();
+
+	const done = extension.commands.get("done");
+	if (!done) throw new Error("done command missing");
+	const canonical = fs.realpathSync(probe);
+	const cwdHash = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+	const homeDir = process.env.HOME || "/tmp";
+	const batchDir = path.join(homeDir, ".omp", "agent", "work-cancel-batches");
+	fs.mkdirSync(batchDir, { recursive: true, mode: 0o700 });
+	const batchFile = path.join(batchDir, `${cwdHash}.json`);
+	fs.writeFileSync(batchFile, JSON.stringify([{ key: "HOME-2", reason: "superseded by HOME-1" }]), { mode: 0o600 });
+	fs.chmodSync(batchFile, 0o600);
+	uiCalls.length = 0;
+	await done.handler("", runner.createCommandContext());
+	out.doneUi = [...uiCalls];
+	out.doneWrites = { ...writes };
+	out.home2State = items.get("id-2")?.state;
+	out.batchFileExists = fs.existsSync(batchFile);
+	out.consumedFiles = fs.readdirSync(batchDir).filter(f => f.includes(".consumed-"));
 } else if (mode === "ledger") {
 	// OMP-69 smoke: installed shape only — owner agent_start → terminal
 	// agent_end with real work yields exactly one displayed nextTurn message

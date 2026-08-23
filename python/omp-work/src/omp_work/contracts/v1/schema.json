@@ -1249,7 +1249,8 @@
             "OMP-47",
             "OMP-67",
             "OMP-93",
-            "OMP-99"
+            "OMP-99",
+            "OMP-106"
           ],
           "title": "Issue",
           "type": "string"
@@ -2085,6 +2086,35 @@
         "launch_id"
       ],
       "title": "CancelAuditorLaunchPayload",
+      "type": "object"
+    },
+    "CancellationProof": {
+      "additionalProperties": false,
+      "description": "Owner ruling 2026-08-23 (staged cancel batches, OMP-111): one historical work\nitem canceled atomically with the primary's completion.",
+      "properties": {
+        "reason": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "reason"
+      ],
+      "title": "CancellationProof",
       "type": "object"
     },
     "Candidate": {
@@ -3168,6 +3198,35 @@
           "title": "CancelAuditorLaunchPayload",
           "type": "object"
         },
+        "CancellationProof": {
+          "additionalProperties": false,
+          "description": "Owner ruling 2026-08-23 (staged cancel batches, OMP-111): one historical work\nitem canceled atomically with the primary's completion.",
+          "properties": {
+            "reason": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "reason"
+          ],
+          "title": "CancellationProof",
+          "type": "object"
+        },
         "Candidate": {
           "additionalProperties": false,
           "properties": {
@@ -3320,6 +3379,15 @@
               "format": "uuid",
               "title": "Attempt Id",
               "type": "string"
+            },
+            "cancellations": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/CancellationProof"
+              },
+              "maxItems": 128,
+              "title": "Cancellations",
+              "type": "array"
             },
             "done_authorization_ref": {
               "minLength": 1,
@@ -4888,6 +4956,35 @@
     },
     "CompleteWorkCommand": {
       "$defs": {
+        "CancellationProof": {
+          "additionalProperties": false,
+          "description": "Owner ruling 2026-08-23 (staged cancel batches, OMP-111): one historical work\nitem canceled atomically with the primary's completion.",
+          "properties": {
+            "reason": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "reason"
+          ],
+          "title": "CancellationProof",
+          "type": "object"
+        },
         "Candidate": {
           "additionalProperties": false,
           "properties": {
@@ -4956,6 +5053,15 @@
               "format": "uuid",
               "title": "Attempt Id",
               "type": "string"
+            },
+            "cancellations": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/CancellationProof"
+              },
+              "maxItems": 128,
+              "title": "Cancellations",
+              "type": "array"
             },
             "done_authorization_ref": {
               "minLength": 1,
@@ -5200,6 +5306,35 @@
     },
     "CompleteWorkPayload": {
       "$defs": {
+        "CancellationProof": {
+          "additionalProperties": false,
+          "description": "Owner ruling 2026-08-23 (staged cancel batches, OMP-111): one historical work\nitem canceled atomically with the primary's completion.",
+          "properties": {
+            "reason": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "reason"
+          ],
+          "title": "CancellationProof",
+          "type": "object"
+        },
         "Candidate": {
           "additionalProperties": false,
           "properties": {
@@ -5464,6 +5599,15 @@
           "format": "uuid",
           "title": "Attempt Id",
           "type": "string"
+        },
+        "cancellations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CancellationProof"
+          },
+          "maxItems": 128,
+          "title": "Cancellations",
+          "type": "array"
         },
         "done_authorization_ref": {
           "minLength": 1,

@@ -40,7 +40,12 @@ export interface RiderProof {
 	evidence: string;
 }
 
-/** Host-computed identity captured at literal owner /summary (never model text). */
+/** OMP-111: one historical work item canceled atomically with /done. */
+export interface CancellationProof {
+	work_id: string;
+	revision_id: string;
+	reason: string;
+}
 export interface CloseAttemptSession {
 	authorizationRef: string;
 	sessionId: string;
@@ -328,7 +333,18 @@ export interface WorkflowBackend {
 	closeBlocker(now: NowRef, carrier: WorkStateCarrier): Promise<string | null>;
 	/** Full close: push + push receipt + complete_work + clear focus. Returns the
 	 *  one-line result; throws on failure (state left recoverable). */
-	closeWithVerdict(now: NowRef, outcome: "done" | "canceled", reason: string | undefined, carrier: WorkStateCarrier, hooks: BackendHooks, doneAuthorizationRef?: string): Promise<string>;
+	closeWithVerdict(
+		now: NowRef,
+		outcome: "done" | "canceled",
+		reason: string | undefined,
+		carrier: WorkStateCarrier,
+		hooks: BackendHooks,
+		doneAuthorizationRef?: string,
+		cancellations?: CancellationProof[],
+	): Promise<string>;
+	/** Resolve an owner-staged cancel batch ({key, reason} entries) to exact
+	 *  CancellationProof bindings against each item's CURRENT revision. */
+	resolveCancellations(entries: { key: string; reason: string }[], nowKey: string): Promise<CancellationProof[]>;
 	/** Durable pending-operation journal:
 	 *  deliveredOps() lists operation ids whose results have been handed to the
 	 *  host since the last ack; the host passes them to ackOps() at

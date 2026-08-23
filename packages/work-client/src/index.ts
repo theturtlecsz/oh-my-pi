@@ -150,6 +150,12 @@ export type RiderProof = {
 	revision_id: UUID;
 	evidence: string;
 };
+/** OMP-111: one historical work item canceled atomically with /done (owner ruling 2026-08-23). */
+export type CancellationProof = {
+	work_id: UUID;
+	revision_id: UUID;
+	reason: string;
+};
 /** Rider as sealed at begin: title/criteria snapshot + service-computed evidence digest. */
 export type SealedRider = RiderProof & {
 	title: string;
@@ -279,9 +285,9 @@ export type CompleteWorkPayload = {
 	attempt_id: UUID;
 	done_authorization_ref: string;
 	satisfied_work_ids?: UUID[];
+	cancellations?: CancellationProof[];
 };
 export type BeginCloseAttemptPayload = {
-	work_id: UUID;
 	attempt_id: UUID;
 	authorization_ref: string;
 	owner_session_id: string;
@@ -395,6 +401,7 @@ export type CommandResult =
 			state?: string | null;
 			row_version?: number | null;
 			completed_work_ids?: UUID[];
+			canceled_work_ids?: UUID[];
 			event?: CloseAttemptEvent | null;
 	  }
 	| {

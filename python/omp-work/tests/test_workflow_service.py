@@ -220,7 +220,7 @@ def _audited_attempt(service, workspace_id, title: str = "close target") -> tupl
     return item, final, body["result"]["attempt"]
 
 
-def _complete(service, workspace_id, item: dict, final: dict, attempt_id: str, *, done_ref: str | None = None, satisfied: list[str] | None = None, key: str = "OMP-1", operation_id=None) -> tuple[int, dict]:
+def _complete(service, workspace_id, item: dict, final: dict, attempt_id: str, *, done_ref: str | None = None, satisfied: list[str] | None = None, cancellations: list[dict] | None = None, key: str = "OMP-1", operation_id=None) -> tuple[int, dict]:
     workflow = service.client.get(f"/v1/work-items/{key}/workflow", headers=_owner_headers(workspace_id)).json()
     completion = {
         "work_id": item["work_id"],
@@ -234,9 +234,9 @@ def _complete(service, workspace_id, item: dict, final: dict, attempt_id: str, *
         "attempt_id": attempt_id,
         "done_authorization_ref": done_ref or f"done:{uuid4()}",
         **({"satisfied_work_ids": satisfied} if satisfied else {}),
+        **({"cancellations": cancellations} if cancellations else {}),
     }
     return _command(service, workspace_id, {"type": "complete_work", "payload": payload}, operation_id=operation_id)
-
 
 def test_rich_batch_atomicity_rollback_and_replay(service) -> None:
     workspace_id = uuid4()
@@ -701,7 +701,7 @@ def test_stale_service_refuses_writes_and_still_reads(service, monkeypatch: pyte
     assert status == 200
 
 
-def _close_ritual(service, workspace_id, item: dict, final: dict, attempt: dict) -> tuple[int, dict]:
+def _close_ritual(service, workspace_id, item: dict, final: dict, attempt: dict, *, done_ref: str | None = None, cancellations: list[dict] | None = None, operation_id=None) -> tuple[int, dict]:
     """Post-PASS closeout: review receipt, drain, request, push, complete."""
     closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
     status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
@@ -712,8 +712,7 @@ def _close_ritual(service, workspace_id, item: dict, final: dict, attempt: dict)
     push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
     status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
     assert status == 200, body
-    return _complete(service, workspace_id, item, final, attempt["attempt_id"], key=item["key"])
-
+    return _complete(service, workspace_id, item, final, attempt["attempt_id"], done_ref=done_ref, cancellations=cancellations, key=item["key"], operation_id=operation_id)
 
 def test_rider_batch_seals_audits_and_completes_with_primary(service) -> None:
     # OMP-93: riders sealed at begin ride the primary /done; their evidence is
@@ -839,3 +838,66 @@ def test_rider_change_under_same_authorization_refuses_resume(service) -> None:
     status, body = _begin(service, workspace_id, item, authorization_ref=auth, attempt_id=attempt["attempt_id"], identity={"owner_session_started_at": started_at, "diff_sha256": diff_sha, "riders": changed})
     assert status == 200 and body["result"]["status"] == "refused", body
     assert body["result"]["event"]["reason_code"] == "authorization_identity_mismatch"
+
+
+def test_complete_work_with_cancellations_applied_and_events(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id, "primary item")
+    target = _create(service, workspace_id, "target to cancel")
+
+    operation_id = uuid4()
+    done_ref = f"done:{uuid4()}"
+    cancellations = [{"work_id": target["work_id"], "revision_id": target["revision_id"], "reason": "superseded by primary OMP-1"}]
+    status, body = _close_ritual(service, workspace_id, item, final, attempt, done_ref=done_ref, cancellations=cancellations, operation_id=operation_id)
+    assert body["result"]["canceled_work_ids"] == [target["work_id"]]
+
+    # Target is CANCELED
+    target_view = service.client.get(f"/v1/work-items/{target['key']}/workflow", headers=_owner_headers(workspace_id)).json()
+    assert target_view["item"]["state"] == "CANCELED"
+    cancel_events = [e for e in target_view["close_attempt_events"] if e["event_type"] == "batch_canceled"]
+    assert len(cancel_events) == 1
+    assert "superseded by primary OMP-1" in cancel_events[0]["reason"]
+
+    # Operation replay returns identical result
+    status, replay = _complete(service, workspace_id, item, final, attempt["attempt_id"], done_ref=done_ref, cancellations=cancellations, key=item["key"], operation_id=operation_id)
+    assert status == 200 and replay["receipt"]["state"] == "replayed"
+    assert replay["result"]["canceled_work_ids"] == [target["work_id"]]
+
+def test_complete_work_cancellation_refusals_and_rollback(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id, "rollback primary")
+    target = _create(service, workspace_id, "target for rollback")
+    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
+    assert status == 200, body
+    _drain_deliveries(service, workspace_id, key=item["key"])
+    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
+    assert status == 200, body
+
+    # Self-cancellation is invalid
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], cancellations=[{"work_id": item["work_id"], "revision_id": item["revision_id"], "reason": "self"}], key=item["key"])
+    assert status == 400 and body["error"]["code"] == "invalid_request"
+
+    # Duplicate cancellation target is invalid
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], cancellations=[
+        {"work_id": target["work_id"], "revision_id": target["revision_id"], "reason": "r1"},
+        {"work_id": target["work_id"], "revision_id": target["revision_id"], "reason": "r2"},
+    ], key=item["key"])
+    assert status == 400 and body["error"]["code"] == "invalid_request"
+
+    # Drifted revision refuses transaction and leaves all unchanged
+    fake_rev = str(uuid4())
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], cancellations=[{"work_id": target["work_id"], "revision_id": fake_rev, "reason": "stale"}], key=item["key"])
+    assert status == 200 and body["result"]["status"] == "refused"
+    assert body["result"]["event"]["reason_code"] == "cancel_binding_invalid"
+
+    # Primary and target stay open
+    primary_view = service.client.get(f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)).json()
+    assert primary_view["item"]["state"] not in ("DONE", "CANCELED")
+    target_view = service.client.get(f"/v1/work-items/{target['key']}/workflow", headers=_owner_headers(workspace_id)).json()
+    assert target_view["item"]["state"] == "BACKLOG"

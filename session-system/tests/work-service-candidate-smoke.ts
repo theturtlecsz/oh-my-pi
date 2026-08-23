@@ -185,10 +185,14 @@ try {
 	assert.ok(String(out.verification).includes("audit manifest sealed"), "verification append seals the manifest");
 	assert.ok(String(out.audit).includes("the auditor reported PASS"), "settle minted the audit outcome");
 	assert.ok(String(out.closeout).includes("closeout receipt recorded"), "closeout receipt");
+	assert.ok(String(out.closeout).includes("Yield the turn now before the next close step"), "closeout carries queued delivery yield note");
+	assert.ok(String(out.closeout).includes("CLOSE ATTEMPT"), "closeout carries server-rendered checkpoint");
 	assert.ok(String(out.requestCloseout).includes("close"), "closeout intent requested");
 	const notices = (out.doneUi as string[]).join("\n");
 	assert.ok(notices.includes("pushed"), "/done pushed the candidate");
 	assert.ok(notices.includes("done"), "/done completed the work");
+	assert.equal(out.batchFileExists, false, "staged cancel batch was consumed");
+	assert.ok((out.consumedBatchFiles as string[]).length > 0, "consumed cancel batch file archived");
 	assert.ok(String(out.now).includes("NOW unset"), "focus cleared after /done");
 
 	// the freeze actually committed the dirty file as a new candidate commit
@@ -218,6 +222,15 @@ try {
 	assert.equal(view.item.state, "DONE", "item state");
 	assert.equal(view.item.candidate?.kind, "final", "final candidate");
 	assert.equal(view.item.candidate?.commit_sha, headSha, "candidate binds the exact commit");
+
+	// service-side read-back: target was canceled in batch
+	const targetKey = String(out.targetKey);
+	const targetView = (await (await fetch(`${baseUrl}/v1/work-items/${targetKey}/workflow`, { headers })).json()) as {
+		item: { state: string };
+		close_attempt_events: { event_type: string; reason: string }[];
+	};
+	assert.equal(targetView.item.state, "CANCELED", "cancel batch target state is CANCELED");
+	assert.ok(targetView.close_attempt_events.some(e => e.event_type === "batch_canceled"), "batch_canceled event recorded on target");
 	const finalCandidateId = view.item.candidate?.candidate_id;
 	// Completion binds receipts to the FINAL candidate — the planned candidate's
 	// plan receipt is historical; assert the bound set, not the global one.

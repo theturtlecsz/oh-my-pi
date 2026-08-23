@@ -23,11 +23,11 @@ import lockRefusalText from "./lock-refusal.md" with { type: "text" };
 import sequenceText from "./sequence.md" with { type: "text" };
 import toolDescriptionTemplate from "./tool-description.md" with { type: "text" };
 import {
-	BatchPartialError,
-	CLOSEOUT_BOUNDARY,
-	STOP_REMINDER_BOUNDARY,
 	type BackendIssue,
+	type CancellationProof,
 	type CenterSnapshot,
+	CLOSEOUT_BOUNDARY,
+	type CloseAttemptOutcome,
 	type CloseAttemptSession,
 	type EvidenceKind,
 	type EvidenceMeta,
@@ -38,14 +38,22 @@ import {
 	type PlanPacket,
 	type RiderProof,
 	type SealedAuditTask,
+	STOP_REMINDER_BOUNDARY,
 	type TreeItem,
 	type WorkflowBackend,
 	type WorkStateCarrier,
 } from "./backend";
-import { deliverCheckpoint, deliverPendingCheckpoints } from "./checkpoint-delivery";
+import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
 import { dirtyPaths, headCommit, parentCommit, rangeDiffSha256 } from "./git";
-import { consumeStagedRiderBatch, readStagedRiderBatch, type StagedRiderBatch } from "./rider-batch";
+import {
+	consumeStagedCancelBatch,
+	consumeStagedRiderBatch,
+	readStagedCancelBatch,
+	readStagedRiderBatch,
+	type StagedCancelBatch,
+	type StagedRiderBatch,
+} from "./rider-batch";
 import { registerSessionLedger } from "./session-ledger";
 
 /** Tool actions — the canonical action set for the `work` tool. */
@@ -597,6 +605,31 @@ export function createWorkflowHost(cfg: HostConfig) {
 		} catch (error) {
 			ctx.ui.notify(`close attempt not begun — staged rider batch is invalid (${String(error)}); fix or remove ${path}`, "warning");
 			return null; // fail closed: never begin an attempt that silently drops a staged batch
+		}
+	}
+
+	function cancelBatchPath(): string {
+		const canonical = realpathSync(process.cwd());
+		const cwdHash = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+		return join(getAgentDir(), "work-cancel-batches", `${cwdHash}.json`);
+	}
+
+	async function stageCancelBatch(nowKey: string, ctx: ExtensionContext): Promise<{ cancellations: CancellationProof[]; batch: StagedCancelBatch } | undefined | null> {
+		const path = cancelBatchPath();
+		let batch: StagedCancelBatch | null;
+		try {
+			batch = readStagedCancelBatch(path);
+		} catch (error) {
+			ctx.ui.notify(`/done refused — staged cancel batch rejected (${String(error)}); fix or remove ${path}`, "warning");
+			return null;
+		}
+		if (batch === null) return undefined;
+		try {
+			const cancellations = await backend.resolveCancellations(batch.entries, nowKey);
+			return { cancellations, batch };
+		} catch (error) {
+			ctx.ui.notify(`/done refused — staged cancel batch is invalid (${String(error)}); fix or remove ${path}`, "warning");
+			return null;
 		}
 	}
 
@@ -1432,14 +1465,33 @@ export function createWorkflowHost(cfg: HostConfig) {
 						ctx.ui.notify(blocker, "warning");
 						return;
 					}
-					const confirmed = await ctx.ui.confirm(
-						`This is your verdict — close ${now.key}?`,
-						`"${now.title}"\n\nMoves to Done + records the verdict. Not reversible from here.`,
-					);
+					const stagedCancel = await stageCancelBatch(now.key, ctx);
+					if (stagedCancel === null) return;
+
+					let confirmed: boolean;
+					if (stagedCancel) {
+						const cancelLines = stagedCancel.batch.entries.map(e => `  ${e.key} — "${e.reason}"`).join("\n");
+						confirmed = await ctx.ui.confirm(
+							`This is your verdict — close ${now.key} and cancel ${stagedCancel.cancellations.length} item(s)?`,
+							`"${now.title}"\n\nAlso cancel:\n${cancelLines}\n\nCancellation batch SHA-256: ${stagedCancel.batch.digest}\n\nMoves primary to Done and targets to Canceled atomically. Not reversible from here.`,
+						);
+					} else {
+						confirmed = await ctx.ui.confirm(
+							`This is your verdict — close ${now.key}?`,
+							`"${now.title}"\n\nMoves to Done + records the verdict. Not reversible from here.`,
+						);
+					}
 					if (!confirmed) return;
 					// OMP-47: the LITERAL /done mints a fresh single-use authorization —
 					// the service refuses reuse and refuses the /summary reference.
-					const line = await backend.closeWithVerdict(now, "done", undefined, carrier(), hooksFor(ctx), `done:${randomUUID()}`);
+					const line = await backend.closeWithVerdict(now, "done", undefined, carrier(), hooksFor(ctx), `done:${randomUUID()}`, stagedCancel?.cancellations);
+					if (stagedCancel) {
+						try {
+							consumeStagedCancelBatch(stagedCancel.batch, "consumed");
+						} catch (error) {
+							pendingNotices.push(`[${TOOL_NAME}] cancellations WERE applied, but archiving the cancel batch file failed (${String(error)}) — remove ${stagedCancel.batch.path} manually before the next /done`);
+						}
+					}
 					try {
 						await backend.clearNowRemote(now.id);
 					} catch (e) {
@@ -1708,14 +1760,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 								try {
 									const sealed = await backend.sealAuditManifest(issue);
 									if (sealed.event.requiresDelivery) {
-										try {
-											await deliverCheckpoint(pi, backend, sealed.event);
-										} catch (error) {
-											pendingNotices.push(`[${TOOL_NAME}] seal checkpoint delivery failed (${String(error)}) — it retries at the next owner session start`);
-										}
+										queueCheckpointDelivery(pi, backend, sealed.event, notice => {
+											pendingNotices.push(`[${TOOL_NAME}] seal checkpoint delivery failed (${notice}) — it retries at the next owner session start`);
+										});
 									}
 									if (sealed.status === "applied") {
-										return okText(`${kind} receipt recorded on ${issue.key}; audit manifest sealed — read the AUDIT TASK from work get_work and spawn ONE auditor with those exact bytes`);
+										const eventText = sealed.event?.renderedText ? `\n\n${sealed.event.renderedText}` : "";
+										return okText(`${kind} receipt recorded on ${issue.key}; audit manifest sealed — read the AUDIT TASK from work get_work and spawn ONE auditor with those exact bytes. Yield the turn now before the next close step.${eventText}`);
 									}
 									return okText(`${kind} receipt recorded on ${issue.key}; manifest not sealed — ${sealed.event.reasonCode}: ${sealed.event.renderedText}`);
 								} catch (error) {
@@ -1723,10 +1774,15 @@ export function createWorkflowHost(cfg: HostConfig) {
 								}
 							}
 							if (kind === backend.reviewKind && ownerSession(ctx)) {
-								// OMP-51: the review checkpoint the service minted must reach the
-								// owner and be attested before request_closeout can succeed.
-								const pass = await deliverPendingCheckpoints(pi, backend, issue.key);
-								pendingNotices.push(...pass.notices.map(notice => `[${TOOL_NAME}] ${notice}`));
+								// OMP-51/OMP-97: the review checkpoint the service minted must reach the
+								// owner and be attested before request_closeout can succeed. Queued delivery
+								// avoids turn-yield deadlock in tool handlers.
+								const queued = await queuePendingCheckpointDeliveries(pi, backend, issue.key, notice => {
+									pendingNotices.push(`[${TOOL_NAME}] ${notice}`);
+								});
+								const yieldNote = queued.events.length > 0 ? " Yield the turn now before the next close step." : "";
+								const eventText = queued.events.length > 0 ? `\n\n${queued.events.map(e => e.renderedText).join("\n\n")}` : "";
+								return okText(`${kind} receipt recorded on ${issue.key}.${yieldNote}${eventText}`);
 							}
 							return okText(`${kind} receipt recorded on ${issue.key}`);
 						}

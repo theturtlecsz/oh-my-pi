@@ -108,8 +108,8 @@ class CompleteWorkResult(StrictModel):
     state: str | None = None
     row_version: int | None = None
     completed_work_ids: tuple[UUID, ...] = ()
+    canceled_work_ids: tuple[UUID, ...] = ()
     event: CloseAttemptEvent | None = None
-
 
 class RelationResult(StrictModel):
     type: Literal["put_relation", "remove_relation"]

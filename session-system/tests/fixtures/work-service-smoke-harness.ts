@@ -5,6 +5,7 @@
 // Sequence: intake create → plan stamp → dirty file → /summary (freeze +
 // finalize) → bookends auditor → verification → audit → closeout receipts →
 // request_closeout → /done (push to the bare remote + complete_work).
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
@@ -207,16 +208,37 @@ const settle = (await runner.emitToolResult({
 } as never)) as { content?: Array<{ type: string; text?: string }> } | undefined;
 out.audit = (settle?.content ?? []).map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
 
-// 8. closeout review receipt (delivered checkpoint), then the owner close request.
+// 8. closeout review receipt (queued checkpoint delivery), then the owner close request.
 out.closeout = await execute({ action: "append_evidence", work: key, kind: "closeout", body: "session review: candidate smoke completed" });
 
-// 8. owner close request, then /done (preflight → verdict → push → complete).
+// 8b. create a second item to cancel via staged cancel batch
+const targetCreate = await confirmRoundTrip(execute, {
+	action: "create_work",
+	title: "Item to cancel in batch",
+	project: "Smoke Project",
+});
+const targetMatch = /(?:created|becomes NOW)\s+(HOME-\d+|OMP-\d+)/.exec(targetCreate.confirmed) ?? /(HOME-\d+|OMP-\d+)/.exec(targetCreate.confirmed);
+if (!targetMatch?.[1]) throw new Error(`could not parse created target key from: ${targetCreate.confirmed}`);
+const targetKey = targetMatch[1];
+const canonical = fs.realpathSync(probe);
+const cwdHash = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+const homeDir = process.env.HOME || "/tmp";
+const batchDir = path.join(homeDir, ".omp", "agent", "work-cancel-batches");
+fs.mkdirSync(batchDir, { recursive: true, mode: 0o700 });
+const batchFile = path.join(batchDir, `${cwdHash}.json`);
+fs.writeFileSync(batchFile, JSON.stringify([{ key: targetKey, reason: "superseded by candidate smoke" }]), { mode: 0o600 });
+fs.chmodSync(batchFile, 0o600);
+
+// 9. owner close request, then /done (preflight → verdict with cancel batch → push → complete).
 const close = await confirmRoundTrip(execute, { action: "request_closeout", work: key, body: "smoke complete" });
 out.requestCloseout = close.confirmed;
 const done = extension.commands.get("done");
 if (!done) throw new Error("done command missing");
 await done.handler("", runner.createCommandContext());
 out.doneUi = uiCalls;
+out.targetKey = targetKey;
+out.batchFileExists = fs.existsSync(batchFile);
+out.consumedBatchFiles = fs.readdirSync(batchDir).filter(f => f.includes(".consumed-"));
 out.now = await execute({ action: "my_now" });
 out.fetchUrls = fetchUrls;
 
