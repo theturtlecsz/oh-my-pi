@@ -5525,7 +5525,11 @@ export class AgentSession {
 			let baseXdevCatalogDelivered = true;
 			// Emit before_agent_start extension event
 			const result = this.#extensionRunner
-				? await this.#extensionRunner.emitBeforeAgentStart(expandedText, options?.images, beforeAgentStartSystemPrompt)
+				? await this.#extensionRunner.emitBeforeAgentStart(
+						expandedText,
+						options?.images,
+						beforeAgentStartSystemPrompt,
+					)
 				: undefined;
 			// A newer abort/prompt cycle started during the hook await: return
 			// BEFORE consuming queued nextTurn messages, so anything queued for
