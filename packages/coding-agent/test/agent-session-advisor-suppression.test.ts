@@ -190,7 +190,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 						{
 							type: "toolCall",
 							name: "advise",
-							arguments: { note: "Fixture verdict confirmed", severity },
+							arguments: { note: "Fixture verdict confirmed", severity, category: "semantic-concern" },
 						},
 					],
 				},
