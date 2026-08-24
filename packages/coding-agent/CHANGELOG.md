@@ -7,10 +7,12 @@
 - Added `taskDepth` to `ExtensionContext`, letting extensions distinguish the owner-facing main session (0) from model-spawned subagent sessions (>0) — e.g. to restrict owner-only authorization flows to the main session.
 - Added a cancellable `plan_approved` extension event that both interactive and ACP hosts await before an approved plan can leave plan mode and execute.
 - Added an `inline` placement option to `ExtensionUIContext.setStatus` (`{ placement: "inline" }`) that renders a status in the main status line beside the path/branch segments; inline statuses truncate and disappear before any configured segment shrinks or drops. Footer placement remains the default.
+- Added stable, read-only `InputEvent.originalText` so extensions can distinguish pipeline-ingress input from text rewritten by earlier input handlers.
 
 ### Fixed
 
 - Fixed the legacy pi extension loader misclassifying CommonJS modules served behind import-only package export conditions as ESM, which dropped their named exports at link time (e.g. `pi-bro`'s `defuddle/node` dependency).
+- Fixed `/skill:summary` bypassing the pre-stream closeout authorization used by `/summary`, which made candidate confirmation fail and then falsely reported that the owner had not entered `/summary`.
 
 ## [17.3.2] - 2026-08-13
 

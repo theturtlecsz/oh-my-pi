@@ -80,7 +80,7 @@ if (mode === "legacy-host") {
 	} as unknown as ExtensionContext;
 	await ext.handlers.get("session_start")?.[0]?.({}, bareCtx);
 	await attempt("before", bareCtx);
-	await ext.handlers.get("input")?.[0]?.({ type: "input", text: "/summary", source: "interactive" }, bareCtx);
+	await ext.handlers.get("input")?.[0]?.({ type: "input", text: "/summary", originalText: "/summary", source: "interactive" }, bareCtx);
 	await ext.handlers.get("message_start")?.[0]?.({ type: "message_start", message: skillPromptMessage }, bareCtx);
 	await ext.commands.get("done")?.handler("", bareCtx);
 	await attempt("afterAttempts", bareCtx);
@@ -145,6 +145,8 @@ if (mode === "legacy-host") {
 		await runner.emit({ type: "message_start", message: pastedMarkerMessage } as never);
 		await attempt("afterPaste", ctx);
 		await runner.emit({ type: "message_start", message: skillPromptMessage } as never);
+		await attempt("afterStructured", ctx);
+		await runner.emitInput("/skill:summary", undefined, "interactive");
 		await attempt("afterUnlock", ctx);
 	} else {
 		// "done" (depth 0, no NOW) and "forged-subagent" (depth 1, NOW restored) drive the

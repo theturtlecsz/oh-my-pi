@@ -57,10 +57,11 @@ describe("HOME-114 closeout lock (host-enforced)", () => {
 		expect(out.afterSwitch, "session switch must re-lock").toContain(LOCK);
 	});
 
-	test("structured skill-prompt unlocks; pasted marker text does not", () => {
+	test("owner-typed /skill:summary unlocks; structured and pasted messages do not", () => {
 		const out = run("skill");
 		expect(out.before).toContain(LOCK);
 		expect(out.afterPaste).toContain(LOCK);
+		expect(out.afterStructured).toContain(LOCK);
 		expect(out.afterUnlock).not.toContain(LOCK);
 		expect(out.afterUnlock).toContain("CONFIRM REQUIRED");
 	});

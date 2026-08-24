@@ -875,10 +875,12 @@ export interface UserPythonEvent {
 // Input Events
 // ============================================================================
 
-/** Fired when the user submits input (interactive mode only). */
+/** Fired when input enters the extension transform pipeline. */
 export interface InputEvent {
 	type: "input";
 	text: string;
+	/** Input-pipeline ingress text before any extension handler transforms. */
+	readonly originalText: string;
 	images?: ImageContent[];
 	source: "interactive" | "rpc" | "extension";
 }

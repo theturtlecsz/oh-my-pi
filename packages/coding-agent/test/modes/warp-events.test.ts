@@ -323,7 +323,7 @@ describe("Warp CLI-agent events", () => {
 
 		// Early queued input must not overwrite the current response's query.
 		messageStart(userMessageStart("prompt A"));
-		input?.({ type: "input", text: "prompt B", source: "interactive" });
+		input?.({ type: "input", text: "prompt B", originalText: "prompt B", source: "interactive" });
 		agentEnd({
 			type: "agent_end",
 			messages: [{ role: "assistant", content: [{ type: "text", text: "answer A" }] } as never],

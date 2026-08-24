@@ -132,8 +132,9 @@ out.plan = planResult === undefined ? "stamped" : planResult;
 // 3. work happens: a dirty file the freeze must pick up.
 fs.writeFileSync(path.join(probe, "smoke.txt"), "candidate payload\n");
 
-// 4. owner-entered /summary (production shape: structured skill-prompt only):
-// gate → freeze → finalize_candidate.
+// 4. owner-entered /skill:summary authorizes on trusted raw input before its
+// structured prompt starts.
+await runner.emitInput("/skill:summary", undefined, "interactive");
 await runner.emit(summaryMessage as never);
 
 // 5. OMP-38: rebuild the auditor task from the ledger's PLAN PACKET — no

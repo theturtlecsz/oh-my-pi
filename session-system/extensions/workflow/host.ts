@@ -270,6 +270,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 	let intakeSelected = false;
 	let planTarget: NowRef | undefined;
 	let summaryAuthorized = false;
+	let summaryBlockReason: string | undefined;
 	let preExistingDirtyPaths: string[] = [];
 	// OMP-47: owner-session identity for close attempts. The start commit is
 	// captured at session start; the authorization references are host-minted at
@@ -614,25 +615,34 @@ export function createWorkflowHost(cfg: HostConfig) {
 	 *  identity field is host-computed; the service refuses with a typed event. */
 	async function beginAttempt(now: NowRef, ctx: ExtensionContext, auditBaseCommit?: string, auditBaseDirtyPaths?: readonly string[]): Promise<boolean> {
 		const commitSha = carrier().commitSha;
-		if (!commitSha) return false; // nothing finalized — begin waits for the next /summary after /plan
+		if (!commitSha) {
+			summaryBlockReason = "the candidate was not finalized";
+			return false;
+		}
 		const legacyPlan = auditBaseCommit === undefined;
 		const startCommit = auditBaseCommit ?? parentCommit(process.cwd(), commitSha);
 		if (!startCommit) {
+			summaryBlockReason = "no audit base commit was available";
 			ctx.ui.notify("close attempt not begun — no audit base commit (outside a git repo?); /done will refuse", "warning");
 			return false;
 		}
 		if (auditBaseDirtyPaths === undefined && !legacyPlan) {
+			summaryBlockReason = "the approved plan has no audit-base dirty-path snapshot";
 			ctx.ui.notify("close attempt not begun — no audit-base dirty-path snapshot; restamp with /plan", "warning");
 			return false;
 		}
 		const diffSha256 = rangeDiffSha256(process.cwd(), startCommit, commitSha);
 		if (!diffSha256) {
+			summaryBlockReason = `the ${startCommit.slice(0, 12)}..${commitSha.slice(0, 12)} audit diff could not be hashed`;
 			ctx.ui.notify(`close attempt not begun — could not hash the ${startCommit.slice(0, 12)}..${commitSha.slice(0, 12)} diff; /done will refuse`, "warning");
 			return false;
 		}
 		summaryAuthorizationRef ??= `summary:${randomUUID()}`;
 		const staged = await stageRiders(ctx);
-		if (staged === null) return false;
+		if (staged === null) {
+			summaryBlockReason = "the staged rider batch was rejected";
+			return false;
+		}
 		const session: CloseAttemptSession = {
 			authorizationRef: summaryAuthorizationRef,
 			sessionId: piRef.getSessionId(),
@@ -658,6 +668,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			}
 		}
 		if (outcome.status === "refused") {
+			summaryBlockReason = `the ledger refused the close attempt (${outcome.event.reasonCode})`;
 			ctx.ui.notify(`close attempt refused: ${outcome.event.reasonCode}`, "warning");
 		}
 		if (outcome.event.requiresDelivery) {
@@ -673,6 +684,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 	async function authorizeSummary(ctx: ExtensionContext): Promise<void> {
 		// Review writes stay locked until a close attempt is actually live: a
 		// refused begin must not arm verification evidence (OMP-127).
+		summaryBlockReason = undefined;
 		summaryAuthorized = false;
 		closeoutAuthorized = true;
 		// A literal /summary mints a FRESH authorization: the service supersedes
@@ -680,17 +692,20 @@ export function createWorkflowHost(cfg: HostConfig) {
 		summaryAuthorizationRef = `summary:${randomUUID()}`;
 		const now = currentNowRef();
 		if (!now) {
+			summaryBlockReason = "no NOW item is selected";
 			ctx.ui.notify("No NOW is selected. Review can run, but /done stays blocked; run /intake first.", "warning");
 			return;
 		}
 		try {
 			const gate = await backend.summaryGate(now, carrier(), hooksFor(ctx));
 			if (!gate.ok) {
+				summaryBlockReason = gate.reason;
 				ctx.ui.notify(gate.reason, "warning");
 				return;
 			}
 			mergeCarrier(gate.carrier);
 			if (gate.warning) {
+				summaryBlockReason = gate.warning;
 				ctx.ui.notify(gate.warning, "warning");
 				persistSession();
 				await saveCache();
@@ -700,7 +715,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 				footer(ctx);
 				return;
 			}
-			if (!gate.planHash) return;
+			if (!gate.planHash) {
+				summaryBlockReason = "the approved plan hash is missing";
+				return;
+			}
 			if (!(await beginAttempt(now, ctx, gate.auditBaseCommit, gate.auditBaseDirtyPaths))) return;
 			summaryAuthorized = true;
 			state.executingIssue = gate.issue;
@@ -711,6 +729,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			recordDeliveredOutcome(`summary gate passed for ${now.key} — candidate finalized, awaiting verdict`);
 			footer(ctx);
 		} catch (error) {
+			summaryBlockReason = `workflow state could not be loaded (${String(error)})`;
 			ctx.ui.notify(`Could not load ${now.key} workflow state (${String(error)}). Review can run, but /done stays blocked.`, "warning");
 		}
 	}
@@ -1070,6 +1089,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			sessionStartedAt = new Date().toISOString();
 			summaryAuthorizationRef = undefined;
 			summaryAuthorized = false;
+			summaryBlockReason = undefined;
 			intakeActive = false;
 			intakeScanRequired = false;
 			intakeScanDelivered = false;
@@ -1169,6 +1189,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			preExistingDirtyPaths = dirtyPaths(process.cwd());
 			closeoutAuthorized = false; // authorization never crosses transcripts
 			summaryAuthorized = false;
+			summaryBlockReason = undefined;
 			sessionStartCommit = headCommit(process.cwd());
 			sessionStartedAt = new Date().toISOString();
 			summaryAuthorizationRef = undefined;
@@ -1187,7 +1208,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 		pi.on("input", async (event, ctx) => {
 			if (!ownerSession(ctx) || event.source === "extension") return undefined;
-			if (/^\s*\/plan\b/.test(event.text)) {
+			if (/^\s*\/plan\b/.test(event.originalText)) {
 				const now = currentNowRef();
 				if (!now) {
 					ctx.ui.notify("Run /intake first, or choose an issue with /now.", "warning");
@@ -1195,10 +1216,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 				}
 				planTarget = now;
 			}
-			// A LITERAL owner /summary always re-authorizes: the service supersedes
-			// any prior non-terminal attempt under the fresh authorization (OMP-47).
-			if (/^\s*\/summary\b/.test(event.text)) await authorizeSummary(ctx);
-			else if (/^\s*\/done\b/.test(event.text)) closeoutAuthorized = true;
+			// Exact normalized owner /summary and /skill:summary commands re-authorize
+			// before prompt expansion or streaming (OMP-47).
+			if (event.originalText === "/summary" || event.originalText === "/skill:summary") await authorizeSummary(ctx);
+			else if (event.originalText === "/done") closeoutAuthorized = true;
 			return undefined;
 		});
 		pi.on("message_start", async (event, ctx) => {
@@ -1213,18 +1234,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 				intakeScanRequired = !isPublish;
 				intakeScanDelivered = false;
 				return;
-			}
-			if (m.details?.name === "summary") {
-				// Every host-observed literal /summary re-authorizes, on EITHER
-				// channel (Sol review, HOME-131): the production client delivers
-				// /summary as a structured skill-prompt only, and a guarded call
-				// here once no-opped every retry after a refused freeze — a
-				// deadlock only a session restart escaped. If a client ever
-				// delivers one command on both channels, the second authorization
-				// costs one benign supersede: the service keeps exactly one live
-				// attempt (test_duplicate_begins_one_live_attempt) and the begin
-				// checkpoint delivers immediately.
-				await authorizeSummary(ctx);
 			}
 		});
 		pi.on("message_end", async (event, ctx) => {
@@ -1762,9 +1771,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 								return deny(`Run /plan first; ${params.work} has no current approved plan.`);
 							}
 							// Close-ritual kinds (everything but the execution handoff and a
-							// same-session child receipt) require an owner-entered /summary.
+							// same-session child receipt) require a completed owner /summary.
 							if (kind !== "handoff" && kind !== "same_session_found_fixed" && !summaryAuthorized) {
-								return deny(`REFUSED — ${kind} evidence is a close-ritual write; it requires Chris to literally enter /summary in this owner session.`);
+								const reason = summaryBlockReason
+									? `/summary was recognized but did not complete: ${summaryBlockReason}`
+									: "Chris must literally enter /summary in this owner session";
+								return deny(`REFUSED — ${kind} evidence is a close-ritual write; ${reason}.`);
 							}
 							const issue = workflow?.issue ?? (await backend.findIssue(params.work));
 							const meta: EvidenceMeta = { ...(workflow?.plan ? { planHash: workflow.plan.hash } : {}) };

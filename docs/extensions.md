@@ -243,7 +243,7 @@ Cancelable pre-events:
 
 ### Prompt and turn lifecycle
 
-- `input`
+- `input` — each handler receives the current transformed `text` and stable `originalText` captured at pipeline ingress after caller normalization
 - `before_agent_start`
 - `before_provider_request` (may replace provider request payload)
 - `after_provider_response`

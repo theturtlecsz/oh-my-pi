@@ -3476,12 +3476,21 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("input attachment transforms", () => {
-		const inputRunner = (handler: (event: InputEvent) => InputEventResult): ExtensionRunner => {
+		const inputRunner = (...handlers: Array<(event: InputEvent) => InputEventResult>): ExtensionRunner => {
 			const extensionPath = path.join(extensionsDir, "input-transform.ts");
 			const extension: Extension = {
 				path: extensionPath,
 				resolvedPath: extensionPath,
-				handlers: new Map([["input", [async (...args: unknown[]) => handler(args[0] as InputEvent)]]]),
+				handlers: new Map([
+					[
+						"input",
+						handlers.map(
+							handler =>
+								async (...args: unknown[]) =>
+									handler(args[0] as InputEvent),
+						),
+					],
+				]),
 				tools: new Map(),
 				assistantThinkingRenderers: [],
 				messageRenderers: new Map(),
@@ -3504,6 +3513,26 @@ describe("ExtensionRunner", () => {
 			const image: ImageContent = { type: "image", mimeType: "image/png", data: "aW1hZ2U=" };
 
 			expect(await runner.emitInput("rewrite me", [image], "interactive")).toEqual({ text: "REWRITE ME" });
+		});
+
+		it("keeps original text immutable across chained transforms", async () => {
+			const seen: Array<[string, string]> = [];
+			const runner = inputRunner(
+				event => {
+					seen.push([event.text, event.originalText]);
+					return { text: "/skill:summary" };
+				},
+				event => {
+					seen.push([event.text, event.originalText]);
+					return {};
+				},
+			);
+
+			expect(await runner.emitInput("/unrelated", undefined, "interactive")).toEqual({ text: "/skill:summary" });
+			expect(seen).toEqual([
+				["/unrelated", "/unrelated"],
+				["/skill:summary", "/unrelated"],
+			]);
 		});
 	});
 });

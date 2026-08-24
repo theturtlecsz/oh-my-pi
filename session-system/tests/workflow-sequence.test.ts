@@ -110,7 +110,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(list(out.planReceiptTargetsAfterClear), "no stamp lands after /now clear").toEqual(["id-2"]);
 	});
 
-	test("summary requires a current plan and structured owner invocation", () => {
+	test("summary requires a current plan and literal owner invocation", () => {
 		const out = run("summary");
 		expect(out.noPlanNotice).toContain("No plan is stamped on this work");
 		expect(out.noPlanReview).toContain("Run /plan first");
@@ -143,8 +143,8 @@ describe("HOME-122 workflow sequence", () => {
 		// First /summary: exactly one begin, refused with no attempt — verification
 		// stays locked and persists no receipt.
 		expect(out.beginCallsAfterFirst, "first /summary issued exactly one begin").toBe(1);
-		expect(out.firstVerify, "a refused begin must not arm verification evidence").toContain(
-			"requires Chris to literally enter /summary",
+		expect(out.firstVerify, "a refused begin must name the actual recognized /summary failure").toContain(
+			"/summary was recognized but did not complete: the ledger refused the close attempt (plan_receipt_missing)",
 		);
 		expect(out.verificationReceiptsAfterFirst, "no verification receipt persisted after the refused begin").toBe(0);
 		// Second /summary in the same session recovers: a second begin applies and
@@ -212,15 +212,14 @@ describe("HOME-122 workflow sequence", () => {
 		expect(record(out.doneWrites)).toMatchObject({ closed: 0, canceled: 0 });
 	});
 
-	test("a structured-only /summary recovers from a refused freeze and re-authorizes", () => {
+	test("a literal /skill:summary recovers from a refused freeze and re-authorizes", () => {
 		const out = run("summary-reauth");
 		expect(out.beginAfterRefused, "a refused freeze begins nothing").toBe(0);
-		// The state that used to deadlock: authorized, no begun attempt. The
-		// SAME structured channel must recover after remediation — no raw
-		// input event, no session restart.
-		expect(out.beginAfterStructuredRetry, "structured retry begins a fresh attempt").toBe(1);
+		// The state that used to deadlock: recognized invocation, no begun attempt.
+		// Another literal /skill:summary must recover after remediation.
+		expect(out.beginAfterSkillRetry, "literal retry begins a fresh attempt").toBe(1);
 		expect(out.beginAfterUnrelated, "unrelated owner messages never authorize").toBe(1);
-		// The raw channel also re-authorizes; the service supersedes to keep
+		// The /summary alias also re-authorizes; the service supersedes to keep
 		// exactly one live attempt.
 		expect(out.beginAfterRaw, "raw /summary re-authorizes").toBe(2);
 	});
@@ -256,6 +255,9 @@ describe("HOME-122 workflow sequence", () => {
 		// Pre-summary close-ritual writes are refused.
 		expect(out.unauthorized, "audit is a close-ritual kind").toContain("literally enter /summary");
 		// The literal /summary began ONE ledger attempt with host-computed identity.
+		expect(out.beginCallsAfterNearMiss, "similarly prefixed skills do not authorize closeout").toBe(0);
+		expect(out.beginCallsAfterRewrite, "input rewrites cannot mint closeout authority").toBe(0);
+		expect(out.beginCallsBeforeSummaryMessage, "/skill:summary authorizes before prompt streaming").toBe(1);
 		expect(out.beginCalls).toBe(1);
 		expect(record(out.beginSession)).toEqual({ hasStartCommit: true, hasDiffSha: true, hasAuthorization: true });
 		// Verification append sealed the manifest; get_work renders the exact task.
