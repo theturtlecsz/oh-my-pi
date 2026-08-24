@@ -76,6 +76,23 @@ describe("resolveActiveRepoContext", () => {
 		await expectResolvers(cwd, expected);
 	});
 
+	it("ignores a HEAD-less .git marker instead of treating cwd as inside a repository", async () => {
+		const cwd = path.join(tempRoot, "workspace");
+		// Stray empty .git directory (debris, failed init cleanup): git itself
+		// rejects it, so the resolver must skip it rather than stop the walk.
+		fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
+		const repoRoot = path.join(cwd, "repo");
+		createGitDirectory(repoRoot);
+
+		const expected = {
+			cwd,
+			repoRoot,
+			relativeRepoRoot: "repo",
+			source: "single-direct-child-repo",
+		} satisfies ActiveRepoContext;
+		await expectResolvers(cwd, expected);
+	});
+
 	itWithSymlinkPrivilege("treats a direct child symlink to a repository directory as that child", async () => {
 		const cwd = path.join(tempRoot, "workspace");
 		const targetRoot = path.join(tempRoot, "target-repo");

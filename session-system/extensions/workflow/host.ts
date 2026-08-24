@@ -577,7 +577,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if (!yes) {
 				consumeStagedRiderBatch(batch, "declined");
 				ctx.ui.notify("rider batch declined — archived, no riders sealed", "info");
-				return undefined;
+				// Fail closed: a canceled batch aborts the begin so summary writes
+				// are not armed on a riderless attempt the owner did not approve.
+				return null;
 			}
 			// NOT consumed yet: the file is archived only after the service applies
 			// the begin — a refusal must leave the approved batch staged.
@@ -610,27 +612,27 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 	/** OMP-47: bind this literal /summary to a ledger-owned close attempt. Every
 	 *  identity field is host-computed; the service refuses with a typed event. */
-	async function beginAttempt(now: NowRef, ctx: ExtensionContext, auditBaseCommit?: string, auditBaseDirtyPaths?: readonly string[]): Promise<void> {
+	async function beginAttempt(now: NowRef, ctx: ExtensionContext, auditBaseCommit?: string, auditBaseDirtyPaths?: readonly string[]): Promise<boolean> {
 		const commitSha = carrier().commitSha;
-		if (!commitSha) return; // nothing finalized — begin waits for the next /summary after /plan
+		if (!commitSha) return false; // nothing finalized — begin waits for the next /summary after /plan
 		const legacyPlan = auditBaseCommit === undefined;
 		const startCommit = auditBaseCommit ?? parentCommit(process.cwd(), commitSha);
 		if (!startCommit) {
 			ctx.ui.notify("close attempt not begun — no audit base commit (outside a git repo?); /done will refuse", "warning");
-			return;
+			return false;
 		}
 		if (auditBaseDirtyPaths === undefined && !legacyPlan) {
 			ctx.ui.notify("close attempt not begun — no audit-base dirty-path snapshot; restamp with /plan", "warning");
-			return;
+			return false;
 		}
 		const diffSha256 = rangeDiffSha256(process.cwd(), startCommit, commitSha);
 		if (!diffSha256) {
 			ctx.ui.notify(`close attempt not begun — could not hash the ${startCommit.slice(0, 12)}..${commitSha.slice(0, 12)} diff; /done will refuse`, "warning");
-			return;
+			return false;
 		}
 		summaryAuthorizationRef ??= `summary:${randomUUID()}`;
 		const staged = await stageRiders(ctx);
-		if (staged === null) return;
+		if (staged === null) return false;
 		const session: CloseAttemptSession = {
 			authorizationRef: summaryAuthorizationRef,
 			sessionId: piRef.getSessionId(),
@@ -665,10 +667,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 				pendingNotices.push(`[${TOOL_NAME}] close-attempt checkpoint delivery failed (${String(error)}) — it retries at the next owner session start`);
 			}
 		}
+		return outcome.status === "applied";
 	}
 
 	async function authorizeSummary(ctx: ExtensionContext): Promise<void> {
-		summaryAuthorized = true;
+		// Review writes stay locked until a close attempt is actually live: a
+		// refused begin must not arm verification evidence (OMP-127).
+		summaryAuthorized = false;
 		closeoutAuthorized = true;
 		// A literal /summary mints a FRESH authorization: the service supersedes
 		// any prior non-terminal attempt under it (OMP-47).
@@ -685,7 +690,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 				return;
 			}
 			mergeCarrier(gate.carrier);
-			await beginAttempt(now, ctx, gate.auditBaseCommit, gate.auditBaseDirtyPaths);
 			if (gate.warning) {
 				ctx.ui.notify(gate.warning, "warning");
 				persistSession();
@@ -697,6 +701,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 				return;
 			}
 			if (!gate.planHash) return;
+			if (!(await beginAttempt(now, ctx, gate.auditBaseCommit, gate.auditBaseDirtyPaths))) return;
+			summaryAuthorized = true;
 			state.executingIssue = gate.issue;
 			state.approvedPlan = { hash: gate.planHash, at: Date.now() };
 			state.obligationReview = { armed: true, blockedOnce: false };
@@ -1686,9 +1692,23 @@ export function createWorkflowHost(cfg: HostConfig) {
 					}
 					// Review provenance refusal names /summary at any depth — checked
 					// before the depth guard so a forged subagent summary gets the
-					// informative refusal, not a generic one.
+					// informative refusal, not a generic one. An OWNER session with no
+					// approved plan falls through to the case body's "Run /plan first"
+					// (OMP-127: a failed gate leaves summaryAuthorized false).
 					if (action === "append_evidence" && params.kind === backend.reviewKind && !summaryAuthorized) {
-						return deny("REFUSED — a closeout review receipt requires Chris to literally enter /summary in this owner session.");
+						// Owner + no approved plan → fall through to "Run /plan first".
+						// A failed lookup stays false: fail closed with the refusal.
+						let planGuidance = false;
+						if (ownerSession(ctx) && params.work) {
+							try {
+								planGuidance = !((await backend.workflowState(params.work))?.plan);
+							} catch {
+								// fail closed below
+							}
+						}
+						if (!planGuidance) {
+							return deny("REFUSED — a closeout review receipt requires Chris to literally enter /summary in this owner session.");
+						}
 					}
 					// Plan §3: depth > 0 receives the candidate projection only — every
 					// write is rejected before transport, centrally.

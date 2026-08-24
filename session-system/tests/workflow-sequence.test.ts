@@ -11,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -136,6 +136,21 @@ describe("HOME-122 workflow sequence", () => {
 		// any switch) must leave the owner's shared transcript ref untouched.
 		expect(record(out.lifecycleAfterStart)).toEqual({ transcriptChanged: false });
 		expect(record(out.lifecycleAfterSwitch)).toEqual({ transcriptChanged: false });
+	});
+
+	test("refused close-attempt begin keeps review writes locked until a later /summary applies one", () => {
+		const out = run("summary-begin-refused");
+		// First /summary: exactly one begin, refused with no attempt — verification
+		// stays locked and persists no receipt.
+		expect(out.beginCallsAfterFirst, "first /summary issued exactly one begin").toBe(1);
+		expect(out.firstVerify, "a refused begin must not arm verification evidence").toContain(
+			"requires Chris to literally enter /summary",
+		);
+		expect(out.verificationReceiptsAfterFirst, "no verification receipt persisted after the refused begin").toBe(0);
+		// Second /summary in the same session recovers: a second begin applies and
+		// verification seals the audit manifest.
+		expect(out.beginCallsAfterSecond, "second /summary issued a second begin").toBe(2);
+		expect(out.secondVerify).toContain("audit manifest sealed");
 	});
 
 	test("get_work and write previews retain complete descriptions", () => {

@@ -97,7 +97,9 @@ mod tests {
 	async fn quiet_suppresses_matching_output() {
 		let mut child = matching_process();
 		let pid = child.id();
-		let (result, output) = execute(vec!["-q".into(), "-p".into(), pid.to_string()]).await;
+		// `--quiet` is the portable spelling: procps pgrep has no short `-q`
+		// (macOS does), so the parser mirrors that split.
+		let (result, output) = execute(vec!["--quiet".into(), "-p".into(), pid.to_string()]).await;
 		child.kill().expect("kill matching process");
 		child.wait().expect("reap matching process");
 		assert_eq!(u8::from(result.exit_code), 0);

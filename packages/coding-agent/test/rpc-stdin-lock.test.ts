@@ -9,6 +9,9 @@ async function expectRpcOwnsStdin(): Promise<void> {
 		[
 			"bun",
 			cliPath,
+			// Ambient extension discovery can log to stdout, which is the JSONL
+			// transport; explicit --extension paths still load (OMP-127).
+			"--no-extensions",
 			"--extension",
 			extensionPath,
 			"--mode",

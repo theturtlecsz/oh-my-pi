@@ -318,6 +318,10 @@ describe.skipIf(!hasPtyHarness)("interactive startup changelog PTY smoke", () =>
 						stderr: "pipe",
 						env: {
 							...process.env,
+							// The gate exports PI_TEST_RUNTIME=1; a production CLI inheriting
+							// it treats the PTY as headless, never resumes stdin, and exits
+							// 0 before the timeout. This child IS the production smoke target.
+							PI_TEST_RUNTIME: "0",
 							HOME: root,
 							XDG_CONFIG_HOME: path.join(root, "xdg-config"),
 							XDG_STATE_HOME: path.join(root, "xdg-state"),

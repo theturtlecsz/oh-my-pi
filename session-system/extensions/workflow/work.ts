@@ -177,6 +177,17 @@ export function planHash(receiptRow: EvidenceReceipt): string {
 	return typeof stamped === "string" && /^[0-9a-f]{64}$/.test(stamped) ? stamped : receiptRow.payload_sha256;
 }
 
+/** Split a same-session receipt body into its finding and verification texts
+ *  (OMP-52): the model writes `## Finding` and `## Verification` sections. */
+export function sameSessionSections(body: string): { finding: string; verification: string } | null {
+	// `\Z` is not a JavaScript end anchor (it is a literal "z" under /i);
+	// `(?![\s\S])` asserts true end-of-input.
+	const finding = /^##\s+Finding\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/im.exec(body);
+	const verification = /^##\s+Verification\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/im.exec(body);
+	if (!finding?.[1]?.trim() || !verification?.[1]?.trim()) return null;
+	return { finding: finding[1].trim(), verification: verification[1].trim() };
+}
+
 /** Render cost of one packet line as get_work emits it ("- " + text + "\n") —
  *  the cap sizes what the owner-facing render actually costs, so a flood of
  *  tiny/empty criteria cannot slip under a bytes-only sum. */
@@ -297,15 +308,6 @@ export function createWorkBackend(
 		const hit = tree.projects.find(p => p.name === name);
 		if (!hit) throw new Error(`Work Ledger has no project named "${name}" — create it first`);
 		return hit.project_id;
-	}
-
-	/** Split a same-session receipt body into its finding and verification texts
-	 *  (OMP-52): the model writes `## Finding` and `## Verification` sections. */
-	function sameSessionSections(body: string): { finding: string; verification: string } | null {
-		const finding = /^##\s+Finding\s*$([\s\S]*?)(?=^##\s|\Z)/im.exec(body);
-		const verification = /^##\s+Verification\s*$([\s\S]*?)(?=^##\s|\Z)/im.exec(body);
-		if (!finding?.[1]?.trim() || !verification?.[1]?.trim()) return null;
-		return { finding: finding[1].trim(), verification: verification[1].trim() };
 	}
 
 	async function receipt(kind: ServiceEvidenceKind, issue: NowRef, body: string, _meta?: EvidenceMeta): Promise<EvidenceReceipt> {

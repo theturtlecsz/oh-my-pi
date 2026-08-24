@@ -118,22 +118,48 @@ describe("RpcClient lifecycle (issue #4079 B)", () => {
 	}, 20_000);
 
 	test("start() may be retried after a failed start (child is cleaned up on failure)", async () => {
-		const env: Record<string, string> = {
-			MOCK_RPC_EXIT_BEFORE_READY: "17",
-			MOCK_RPC_EXIT_STDERR: "fixture startup failed",
-		};
-		using client = new RpcClient({
-			cliPath: MOCK_AGENT,
-			env,
-			terminationGraceMs: 10,
+		// Deterministic process double: stdout closes before "ready" so startup
+		// fails without OS scheduling; cleanup must kill the child exactly once.
+		let killCalls = 0;
+		const stdout = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.close();
+			},
 		});
+		const fakeChild = {
+			stdout,
+			stdin: {
+				write() {
+					return 0;
+				},
+				flush() {
+					return 0;
+				},
+			},
+			exited: Promise.resolve(17),
+			peekStderr() {
+				return "fixture startup failed";
+			},
+			kill() {
+				killCalls += 1;
+			},
+		};
+		const spawn = spyOn(ptree, "spawn").mockImplementation(
+			() => fakeChild as unknown as ReturnType<typeof ptree.spawn>,
+		);
 
-		await expect(client.start()).rejects.toThrow("fixture startup failed");
+		using client = new RpcClient({ cliPath: MOCK_AGENT, terminationGraceMs: 10 });
+		try {
+			await expect(client.start()).rejects.toThrow("fixture startup failed");
+			expect(killCalls).toBe(1);
+		} finally {
+			spawn.mockRestore();
+		}
 
 		// Before the fix, #process stayed set after the failed spawn so the
 		// second start() rejected with "Client already started". A successful
-		// retry proves both the child and the client lifecycle state were reset.
-		delete env.MOCK_RPC_EXIT_BEFORE_READY;
+		// retry on the same instance proves both the child and the client
+		// lifecycle state were reset.
 		await client.start();
 		await client.stop();
 	}, 10_000);

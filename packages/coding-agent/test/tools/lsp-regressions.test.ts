@@ -1837,6 +1837,9 @@ describe("lsp regressions", () => {
 		const originalPlatform = process.platform;
 		Object.defineProperty(process, "platform", { value: "win32", configurable: true, writable: true });
 		const whichSpy = vi.spyOn(Bun, "which").mockReturnValue(null);
+		// Ambient user-level lsp.json must not override root markers (OMP-127).
+		const fakeHome = TempDir.createSync("@omp-lsp-fake-home-");
+		vi.spyOn(os, "homedir").mockReturnValue(fakeHome.path());
 
 		try {
 			const cases: Array<{ marker: string; server: string; binary: string }> = [
@@ -1863,6 +1866,7 @@ describe("lsp regressions", () => {
 		} finally {
 			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true, writable: true });
 			vi.restoreAllMocks();
+			fakeHome.removeSync();
 		}
 	});
 

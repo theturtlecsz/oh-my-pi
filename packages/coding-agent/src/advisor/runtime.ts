@@ -129,10 +129,7 @@ const ADVISOR_OUTPUT_ONLY_HAZARDS: readonly AdvisorOutputHazard[] = [
  * Detects output hazard labels in generated text, optionally subtracting
  * hazards present in trusted sourceText.
  */
-export function detectAdvisorOutputHazards(
-	generatedText: string,
-	sourceText = "",
-): string[] {
+export function detectAdvisorOutputHazards(generatedText: string, sourceText = ""): string[] {
 	if (!generatedText) return [];
 	const labels: string[] = [];
 	const matchedLabels: string[] = [];

@@ -9,7 +9,7 @@ import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions"];
+const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -460,6 +460,12 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 		if (cmdType === "begin_close_attempt") {
 			beginCalls.push(payload);
 			const it = items.get(payload.work_id as string) ?? initialItem;
+			// OMP-127: the first begin of this mode is refused with no attempt —
+			// the host must keep review writes locked until a begin applies.
+			if (mode === "summary-begin-refused" && beginCalls.length === 1) {
+				const event = mockEvent(it.work_id, null, "close_attempt_refused", "plan_receipt_missing", true);
+				return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-begin-${eventSeq}` }, result: { type: "begin_close_attempt", status: "refused", attempt: null, event } }), { status: 200 });
+			}
 			if (!it.candidate || !("commit_sha" in it.candidate) || !(it.candidate as { commit_sha?: string }).commit_sha) {
 				const event = mockEvent(it.work_id, null, "close_attempt_refused", "candidate_not_final", true);
 				return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-begin-${eventSeq}` }, result: { type: "begin_close_attempt", status: "refused", attempt: null, event } }), { status: 200 });
@@ -1017,6 +1023,18 @@ if (mode === "intake") {
 		out.beginCalls = beginCalls.length;
 	}
 	out.uiCalls = uiCalls;
+} else if (mode === "summary-begin-refused") {
+	// OMP-127 fail-closed: a refused close-attempt begin keeps review writes
+	// locked; a second literal /summary in the same session recovers.
+	await setNow();
+	await approve(planA);
+	await runner.emit(summaryMessage as never);
+	out.beginCallsAfterFirst = beginCalls.length;
+	out.firstVerify = await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "bun test → pass" });
+	out.verificationReceiptsAfterFirst = receipts.filter(receipt => receipt.kind === "verification").length;
+	await runner.emit(summaryMessage as never);
+	out.beginCallsAfterSecond = beginCalls.length;
+	out.secondVerify = await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "bun test → pass" });
 } else if (mode === "restore") {
 	out.now = await execute({ action: "my_now" });
 } else if (mode === "center" || mode === "center-scoped") {

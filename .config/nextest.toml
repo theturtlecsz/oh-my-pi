@@ -1,0 +1,9 @@
+# Nextest profile overrides.
+#
+# The jobspec-pipeline kill test exercises process-group job control with
+# self-stopping children; concurrent Rust tests that signal process groups
+# interfere with its stop notification, so it runs with exclusive access to
+# the test harness (OMP-127).
+[[profile.default.overrides]]
+filter = 'test(kill_builtin_signals_every_process_in_a_jobspec_pipeline)'
+threads-required = "num-test-threads"

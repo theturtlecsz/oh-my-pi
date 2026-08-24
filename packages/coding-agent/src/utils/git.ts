@@ -798,6 +798,9 @@ async function primaryRootFromRepository(repository: GitRepository): Promise<str
 function resolveRepoFromEntrySync(repoRoot: string, gitEntryPath: string, entryType: EntryType): GitRepository | null {
 	const gitDir = resolveGitDirSync(gitEntryPath, entryType);
 	if (!gitDir) return null;
+	// A `.git` marker whose git dir has no HEAD is not a repository (stray or
+	// partially removed) — git itself rejects it. Keep walking to a real ancestor.
+	if (getEntryTypeSync(path.join(gitDir, "HEAD")) !== "file") return null;
 	return {
 		commonDir: resolveCommonDirSync(gitDir),
 		gitDir,
@@ -814,6 +817,9 @@ async function resolveRepoFromEntry(
 ): Promise<GitRepository | null> {
 	const gitDir = await resolveGitDir(gitEntryPath, entryType);
 	if (!gitDir) return null;
+	// A `.git` marker whose git dir has no HEAD is not a repository (stray or
+	// partially removed) — git itself rejects it. Keep walking to a real ancestor.
+	if ((await getEntryType(path.join(gitDir, "HEAD"))) !== "file") return null;
 	return {
 		commonDir: await resolveCommonDir(gitDir),
 		gitDir,

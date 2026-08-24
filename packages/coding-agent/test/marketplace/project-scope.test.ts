@@ -84,6 +84,9 @@ describe("resolveActiveProjectRegistryPath", () => {
 		fs.mkdirSync(path.join(tmpDir, ".git"), { recursive: true });
 		const cwd = path.join(tmpDir, "sub");
 		fs.mkdirSync(cwd, { recursive: true });
+		// Bound the ancestor walk at the fixture root: ambient config dirs above
+		// it (e.g. a stray /tmp/.omp) must not win pass 1 (OMP-127).
+		vi.spyOn(os, "homedir").mockReturnValue(path.dirname(tmpDir));
 
 		const result = await resolveActiveProjectRegistryPath(cwd);
 

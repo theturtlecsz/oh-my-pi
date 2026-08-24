@@ -323,6 +323,9 @@ describe("RPC fast mode with unsupported Fireworks model and priority tier", () 
 		client = new RpcClient({
 			cliPath: path.join(import.meta.dir, "..", "src", "cli.ts"),
 			cwd: path.join(import.meta.dir, ".."),
+			// Hermetic child: ambient user extensions may log to stdout, which is
+			// the JSONL transport — discovery must stay disabled (OMP-127).
+			args: ["--no-extensions"],
 			env: {
 				PI_CODING_AGENT_DIR: sessionDir,
 				FIREWORKS_API_KEY: "test-fireworks-key",
