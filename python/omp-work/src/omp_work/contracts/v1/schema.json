@@ -1250,7 +1250,9 @@
             "OMP-67",
             "OMP-93",
             "OMP-99",
-            "OMP-106"
+            "OMP-106",
+            "OMP-123",
+            "OMP-124"
           ],
           "title": "Issue",
           "type": "string"

@@ -370,17 +370,17 @@ class PostgresWorkStore:
         item = cur.fetchone()
         if not item or item["current_revision_id"] != receipt.revision_id:
             raise WorkStoreError("stale_evidence")
+        event = None
         if receipt.kind.value == "plan":
             if not receipt.candidate_sha256:
                 raise WorkStoreError("stale_evidence")
-            current_candidate_id = item["current_candidate_id"]
-            if current_candidate_id is not None:
-                cur.execute("SELECT kind FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s", (envelope.workspace_id, current_candidate_id))
-                current = cur.fetchone()
-                cur.execute("SELECT verdict FROM omp_evidence.receipts WHERE workspace_id=%s AND candidate_id=%s AND kind='audit' ORDER BY issued_at DESC, receipt_id DESC LIMIT 1", (envelope.workspace_id, current_candidate_id))
-                latest_audit = cur.fetchone()
-                if current is None or current["kind"] != "final" or latest_audit is None or latest_audit["verdict"] not in ("NEEDS_FIX", "BLOCKED"):
-                    raise WorkStoreError("stale_evidence")
+            # OMP-124: an owner-approved plan always mints a new planned
+            # candidate on the same revision. Any in-motion close attempt is
+            # superseded by the new plan; the failed-audit prerequisite is gone.
+            live = self._live_attempt(cur, envelope.workspace_id, receipt.work_id)
+            if live is not None:
+                self._transition_attempt(cur, envelope.workspace_id, live["attempt_id"], "state='superseded', terminal_reason='superseded_by_new_plan', in_flight_launch_id=NULL")
+                event = self._close_event(cur, envelope, work_id=receipt.work_id, attempt_id=live["attempt_id"], event_type="attempt_superseded", reason_code="superseded_by_new_plan", reason="a new owner-approved plan replaced this attempt", next_actions=("continue under the new plan", "/summary to begin a fresh attempt"), remaining_launches=self._budget(live)[0], remaining_reports=self._budget(live)[1], requires_delivery=True)
             cur.execute("INSERT INTO omp_work.candidates(candidate_id,workspace_id,work_id,revision_id,candidate_sha256,commit_sha,allocated_at) VALUES(%s,%s,%s,%s,%s,%s,%s)", (receipt.candidate_id, envelope.workspace_id, receipt.work_id, receipt.revision_id, receipt.candidate_sha256, receipt.candidate_commit, receipt.issued_at))
             cur.execute("UPDATE omp_work.work_items SET current_candidate_id=%s WHERE work_id=%s", (receipt.candidate_id, receipt.work_id))
         elif receipt.kind.value == "audit":
@@ -415,7 +415,6 @@ class PostgresWorkStore:
                 and (receipt.candidate_sha256 != candidate["candidate_sha256"] or receipt.candidate_commit != candidate["commit_sha"])
             ):
                 raise WorkStoreError("stale_evidence")
-        event = None
         if receipt.kind.value == "closeout":
             # OMP-47/OMP-51: the review is validated against the audited live
             # attempt BEFORE any insert — never an orphan review receipt.

@@ -79,9 +79,9 @@ const ctx = {
 	},
 } as unknown as ExtensionContext;
 
-const sessionStart = ext.handlers.get("session_start")?.[0];
-if (!sessionStart) throw new Error("session_start handler missing");
-await sessionStart({}, ctx);
+const sessionStarts = ext.handlers.get("session_start") ?? [];
+if (sessionStarts.length === 0) throw new Error("session_start handler missing");
+for (const handler of sessionStarts) await handler({}, ctx);
 
 const tool = ext.tools.get("work");
 if (!tool) throw new Error("work tool missing");

@@ -477,6 +477,75 @@ def test_reserve_mismatch_burns_nothing_and_budget_exhausts(service) -> None:
     assert body["result"]["attempt"]["launch_count"] == 0
 
 
+def test_raw_auditor_wrapper_settles_to_pass_receipt(service) -> None:
+    # OMP-123: the task tool yield payload produces {"raw": "VERDICT: ..."}
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "raw wrapper target")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    task_sha = seal["manifest"]["task_sha256"]
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    launch_id = body["result"]["launch"]["launch_id"]
+    # Test exact serialized raw payload (including pretty-printed formatting)
+    raw_payload = json.dumps({"raw": PASS_REPORT}, indent=2)
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, raw_payload)
+    assert status == 200 and body["result"]["status"] == "applied" and body["result"]["verdict"] == "PASS", body
+    assert body["result"]["attempt"]["state"] == "audited"
+    view = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    audits = [receipt for receipt in view["receipts"] if receipt["kind"] == "audit"]
+    assert len(audits) == 1 and audits[0]["independent"] is True and audits[0]["verdict"] == "PASS"
+    assert audits[0]["issuer"] == "work-service/auditor-settle"
+    assert audits[0]["payload"]["report"] == PASS_REPORT
+
+
+def test_raw_auditor_wrapper_refusals_and_budget(service) -> None:
+    # OMP-123: ambiguous or malformed raw wrappers refuse with standard budget burn
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "raw wrapper refusal target")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    final = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, item)
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    task_sha = seal["manifest"]["task_sha256"]
+
+    # Launch 1: ambiguous raw + report keys refuses as report_wrapper_invalid
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    assert status == 200 and body["result"]["status"] == "applied"
+    launch_1 = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_1, json.dumps({"raw": PASS_REPORT, "report": PASS_REPORT}))
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "report_wrapper_invalid"
+    assert body["result"]["attempt"]["state"] == "audit_ready" and body["result"]["attempt"]["launch_count"] == 1
+
+    # Launch 2: non-string raw payload refuses as report_wrapper_invalid
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    launch_2 = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_2, json.dumps({"raw": 12345}))
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "report_wrapper_invalid"
+    assert body["result"]["attempt"]["state"] == "audit_ready" and body["result"]["attempt"]["launch_count"] == 2
+
+    # Launch 3: verdict mismatch with raw payload burns the third launch to budget_exhausted
+    status, body = _reserve(service, workspace_id, attempt["attempt_id"], task_sha)
+    launch_3 = body["result"]["launch"]["launch_id"]
+    status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_3, json.dumps({"verdict": "NEEDS_FIX", "raw": PASS_REPORT}))
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "report_wrapper_verdict_mismatch"
+    assert body["result"]["attempt"]["state"] == "budget_exhausted"
+    assert body["result"]["event"]["requires_fresh_authorization"] is True
+
+    # No audit receipts were minted
+    view = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    assert [receipt for receipt in view["receipts"] if receipt["kind"] == "audit"] == []
+
 def test_candidate_mutation_before_settle_supersedes_without_receipt(service) -> None:
     # Scenarios: stale report / mutation before receipt commit — drift at settle
     # supersedes the attempt and inserts NO audit receipt.
@@ -492,15 +561,21 @@ def test_candidate_mutation_before_settle_supersedes_without_receipt(service) ->
     status, body = _reserve(service, workspace_id, attempt["attempt_id"], seal["manifest"]["task_sha256"])
     launch_id = body["result"]["launch"]["launch_id"]
 
-    # Mutate the candidate while the auditor "runs": NEEDS_FIX audit + replan + refinalize.
+    # Mutate the candidate while the auditor "runs": the item's current
+    # candidate pointer moves under the frozen attempt identity. OMP-124: a
+    # replan now supersedes the attempt at stamp time and candidate rows are
+    # immutable, so the settle-time drift path is exercised by a direct
+    # pointer move instead of replan + refinalize.
+    moved_candidate = uuid4()
     with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as connection:
         connection.execute(
-            "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,issued_at,issuer,candidate_sha256,candidate_commit,verdict,independent) VALUES(%s,%s,%s,%s,%s,'audit','{}','%s',now(),'test',%s,%s,'NEEDS_FIX',true)" % ("%s", "%s", "%s", "%s", "%s", sha256({}), "%s", "%s"),
-            (uuid4(), workspace_id, item["work_id"], item["revision_id"], final["candidate_id"], final["candidate_sha256"], final["commit_sha"]),
+            "INSERT INTO omp_work.candidates(candidate_id,workspace_id,work_id,revision_id,candidate_sha256,commit_sha,allocated_at) VALUES(%s,%s,%s,%s,%s,%s,now())",
+            (moved_candidate, workspace_id, item["work_id"], item["revision_id"], secrets.token_hex(32), "f" * 40),
         )
-    replan = _plan(service, workspace_id, item)
-    status, body = _finalize(service, workspace_id, item, replan["candidate_id"])
-    assert status == 200, body
+        connection.execute(
+            "UPDATE omp_work.work_items SET current_candidate_id=%s WHERE work_id=%s",
+            (moved_candidate, item["work_id"]),
+        )
 
     status, body = _settle(service, workspace_id, attempt["attempt_id"], launch_id, PASS_REPORT)
     assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "candidate_drift"
@@ -551,6 +626,106 @@ def test_duplicate_begins_one_live_attempt(service) -> None:
     # A terminal attempt's authorization can never be reused.
     status, body = _begin(service, workspace_id, item, authorization_ref=ref)
     assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "authorization_exhausted"
+
+
+def test_replan_lands_on_unaudited_final_candidate(service) -> None:
+    # OMP-124: an owner-approved plan always mints a new planned candidate on
+    # the same revision — no failed-audit prerequisite, no stale_evidence.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "replan target")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    # The final candidate carries NO audit — the old gate refused this 409.
+    replan = _plan(service, workspace_id, item)
+    assert replan["candidate_id"] != final["candidate_id"]
+    workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    assert workflow["item"]["candidate"]["candidate_id"] == replan["candidate_id"]
+    assert workflow["close_attempt_events"] == []
+
+
+def test_replan_supersedes_live_attempt(service) -> None:
+    # OMP-124: a replan supersedes the in-motion close attempt with the typed
+    # terminal reason and preserves the one-live-attempt invariant.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "replan supersede target")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied"
+    old_attempt = body["result"]["attempt"]
+    replan = _plan(service, workspace_id, item)
+    assert replan["candidate_id"] != plan["candidate_id"]
+    workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    live = [attempt for attempt in workflow["close_attempts"] if attempt["state"] in ("active", "audit_ready", "auditor_in_flight", "audited", "closeout_requested")]
+    assert live == []
+    superseded = [attempt for attempt in workflow["close_attempts"] if attempt["state"] == "superseded"]
+    assert len(superseded) == 1 and superseded[0]["attempt_id"] == old_attempt["attempt_id"]
+    assert superseded[0]["terminal_reason"] == "superseded_by_new_plan"
+    events = [event for event in workflow["close_attempt_events"] if event["event_type"] == "attempt_superseded"]
+    assert len(events) == 1
+    assert events[0]["reason_code"] == "superseded_by_new_plan" and events[0]["requires_delivery"] is True
+    # Finalize the new plan and begin again: exactly one live attempt survives.
+    status, body = _finalize(service, workspace_id, item, replan["candidate_id"])
+    assert status == 200, body
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied"
+    workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    live = [attempt for attempt in workflow["close_attempts"] if attempt["state"] in ("active", "audit_ready", "auditor_in_flight", "audited", "closeout_requested")]
+    assert len(live) == 1 and live[0]["attempt_id"] != old_attempt["attempt_id"]
+
+
+def test_replan_supersedes_in_flight_attempt_after_revision_clear(service) -> None:
+    # OMP-124 (Sol-xhigh escalation review): supersession is unconditional — a
+    # live attempt is superseded even when a revision change has cleared the
+    # item's current candidate, and its in-flight launch is orphaned.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "revise-clear supersede target")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied"
+    old_attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, old_attempt)
+    status, body = _reserve(service, workspace_id, old_attempt["attempt_id"], seal["manifest"]["task_sha256"])
+    assert status == 200 and body["result"]["status"] == "applied"
+    launch_id = body["result"]["launch"]["launch_id"]
+    # Revision change clears current_candidate_id; the live attempt survives.
+    new_revision_id = uuid4()
+    revision = {
+        "revision_id": str(new_revision_id),
+        "work_id": item["work_id"],
+        "revision_number": 2,
+        "title": "revise-clear supersede target",
+        "description": "revised",
+        "scope": "",
+        "acceptance_criteria": [],
+        "content_sha256": sha256({"title": "revise-clear supersede target", "description": "revised"}),
+        "created_by": "owner",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    status, body = _command(service, workspace_id, {"type": "revise_work", "payload": {"work_id": item["work_id"], "expected_revision_id": item["revision_id"], "revision": revision}})
+    assert status == 200 and body["result"]["changed"] is True, body
+    replan = _plan(service, workspace_id, {"work_id": item["work_id"], "revision_id": str(new_revision_id)})
+    workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    assert workflow["item"]["candidate"]["candidate_id"] == replan["candidate_id"]
+    superseded = [attempt for attempt in workflow["close_attempts"] if attempt["state"] == "superseded"]
+    assert len(superseded) == 1 and superseded[0]["attempt_id"] == old_attempt["attempt_id"]
+    assert superseded[0]["terminal_reason"] == "superseded_by_new_plan"
+    assert superseded[0]["in_flight_launch_id"] is None
+    events = [event for event in workflow["close_attempt_events"] if event["event_type"] == "attempt_superseded"]
+    assert len(events) == 1 and events[0]["reason_code"] == "superseded_by_new_plan"
+    # The orphaned launch can never settle.
+    status, body = _settle(service, workspace_id, old_attempt["attempt_id"], launch_id, PASS_REPORT)
+    assert status == 200 and body["result"]["status"] == "refused"
+    assert body["result"]["event"]["reason_code"] == "launch_not_in_flight"
 
 
 def test_remediation_required_blocks_closeout_until_fresh_summary(service) -> None:

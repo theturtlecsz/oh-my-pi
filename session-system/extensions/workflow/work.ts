@@ -1056,6 +1056,14 @@ export function createWorkBackend(
 			const item = await client.workItem(now.key);
 			const current = item.candidate;
 			if (current?.kind === "final" && current.commit_sha) {
+				const head = headCommit(hooks.cwd);
+				if (!head || head !== current.commit_sha) {
+					const observed = head ? head.slice(0, 12) : "unreadable";
+					return {
+						ok: false,
+						reason: `candidate drift: Work Ledger has finalized candidate ${current.commit_sha.slice(0, 12)} (${current.commit_sha}), but git HEAD is ${observed} (${head ?? "missing"}). Restore the frozen commit or stamp and freeze a fresh candidate through owner-entered /plan and /summary.`,
+					};
+				}
 				const push = await pushAndRecordCandidate(now, current.commit_sha, hooks);
 				if (push.status === "not_pushed") {
 					return {

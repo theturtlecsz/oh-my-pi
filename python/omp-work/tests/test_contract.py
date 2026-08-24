@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
 import json
+import os
 import shutil
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -11,10 +14,10 @@ import pytest
 import urllib.error
 
 import omp_work
-from omp_work.v1.models import Anomaly, Candidate, CloseAttempt, CommandEnvelope, CompletionInput, CutoverManifest, EvidenceKind, EvidenceReceipt, RelationEdge, RelationKind, WorkAlias
+import omp_work.__main__
+from omp_work.v1.models import Anomaly, Approval, Candidate, CloseAttempt, CommandEnvelope, CompletionInput, CutoverManifest, EvidenceKind, EvidenceReceipt, RelationEdge, RelationKind, WorkAlias
 from omp_work.v1.canonical import command_sha256
 from omp_work.v1.semantics import completion_blockers, normalize_auditor_report, replay_decision, revision_decision, validate_cutover_manifest, would_create_cycle
-
 
 NOW = datetime(2026, 8, 15, tzinfo=UTC)
 WORK = UUID("00000000-0000-7000-8000-000000000001")
@@ -170,6 +173,12 @@ def test_auditor_report_normalizes_one_serialized_report_wrapper() -> None:
     report = "VERDICT: PASS\nFINDINGS\nnone\nACCEPTANCE COVERAGE\ncovered\nOUT OF SCOPE\nnone\nCHECKS RUN\npytest\nREMAINING QUESTIONS\nnone"
     assert normalize_auditor_report(json.dumps({"report": report})) == (report, "PASS")
     assert normalize_auditor_report(json.dumps({"report": json.dumps({"report": report})}))[1] == "report_wrapper_nested"
+    # OMP-123: raw wrapper from task tool yield payload.
+    assert normalize_auditor_report({"raw": report}) == (report, "PASS")
+    assert normalize_auditor_report(json.dumps({"raw": report})) == (report, "PASS")
+    assert normalize_auditor_report(json.dumps({"raw": report}, indent=2)) == (report, "PASS")
+    assert normalize_auditor_report(json.dumps({"raw": json.dumps({"report": report})}))[1] == "report_wrapper_nested"
+    assert normalize_auditor_report(json.dumps({"raw": json.dumps({"raw": report})}))[1] == "report_wrapper_nested"
 
 
 def test_auditor_report_normalizes_verdict_and_report_wrapper() -> None:
@@ -188,7 +197,14 @@ def test_auditor_report_normalizes_verdict_and_report_wrapper() -> None:
     assert normalize_auditor_report(json.dumps({"verdict": None, "report": report})) == (None, "report_wrapper_invalid")
     assert normalize_auditor_report(json.dumps({"verdict": "PASS", "extra": "x", "report": report})) == (None, "report_wrapper_invalid")
     assert normalize_auditor_report(json.dumps({"report": report, "text": report})) == (None, "report_wrapper_invalid")
-    # A task-tool error hand-carried as the payload must stay a refusal.
+    assert normalize_auditor_report(json.dumps({"raw": report, "report": report})) == (None, "report_wrapper_invalid")
+    assert normalize_auditor_report(json.dumps({"raw": report, "text": report})) == (None, "report_wrapper_invalid")
+    assert normalize_auditor_report(json.dumps({"raw": None})) == (None, "report_wrapper_invalid")
+    assert normalize_auditor_report(json.dumps({"raw": 123})) == (None, "report_wrapper_invalid")
+    assert normalize_auditor_report(json.dumps({"raw": {"report": report}})) == (None, "report_wrapper_invalid")
+    assert normalize_auditor_report({"verdict": "PASS", "raw": report}) == (report, "PASS")
+    assert normalize_auditor_report(json.dumps({"verdict": "PASS", "raw": report})) == (report, "PASS")
+    assert normalize_auditor_report(json.dumps({"verdict": "NEEDS_FIX", "raw": report})) == (None, "report_wrapper_verdict_mismatch")
     assert normalize_auditor_report("Missing `context`. Provide the shared background for this batch.") == (None, "verdict_missing")
     # Strict-parse successes route through the wrapper parser: a decoded
     # top-level non-object is a malformed wrapper (plan: non-object decoded
@@ -256,6 +272,150 @@ def test_bundle_approval_and_tamper_detection(tmp_path: Path, monkeypatch: pytes
     with pytest.raises(ValueError, match="approval hash mismatch"):
         omp_work.validate_bundle(require_approval=True)
 
+
+def _setup_contract_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    package_root = tmp_path / "omp-work"
+    shutil.copytree(Path(__file__).parents[1], package_root)
+    contract_dir = package_root / "src/omp_work/contracts/v1"
+    monkeypatch.setattr(omp_work, "_contract_dir", lambda: contract_dir)
+    monkeypatch.setattr(omp_work.__main__, "_contract_dir", lambda: contract_dir)
+    return contract_dir
+
+
+def test_approve_refuses_non_tty_and_preserves_sentinel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contract_dir = _setup_contract_env(tmp_path, monkeypatch)
+    approval_path = contract_dir / "approval.json"
+    sentinel = b'{"sentinel": true}\n'
+    approval_path.write_bytes(sentinel)
+    fake_stdin = io.StringIO("any\n")
+    monkeypatch.setattr(fake_stdin, "isatty", lambda: False)
+    monkeypatch.setattr(sys, "stdin", fake_stdin)
+    monkeypatch.setattr(sys, "argv", ["omp-work", "approve", "--issue", "HOME-142"])
+    with pytest.raises(SystemExit) as exc:
+        omp_work.__main__.main()
+    assert str(exc.value) == "owner approval requires an interactive terminal"
+    assert approval_path.read_bytes() == sentinel
+
+
+def test_approve_refuses_disallowed_issue_and_preserves_sentinel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contract_dir = _setup_contract_env(tmp_path, monkeypatch)
+    approval_path = contract_dir / "approval.json"
+    sentinel = b'{"sentinel": true}\n'
+    approval_path.write_bytes(sentinel)
+    fake_stdin = io.StringIO("any\n")
+    monkeypatch.setattr(fake_stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys, "stdin", fake_stdin)
+    monkeypatch.setattr(sys, "argv", ["omp-work", "approve", "--issue", "INVALID-999"])
+    with pytest.raises(SystemExit) as exc:
+        omp_work.__main__.main()
+    assert str(exc.value) == "approval issue is not allowed by the current contract"
+    assert approval_path.read_bytes() == sentinel
+
+
+def test_approve_refuses_digest_mismatch_and_preserves_sentinel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contract_dir = _setup_contract_env(tmp_path, monkeypatch)
+    approval_path = contract_dir / "approval.json"
+    sentinel = b'{"sentinel": true}\n'
+    approval_path.write_bytes(sentinel)
+    fake_stdin = io.StringIO("wrong-hash\n")
+    monkeypatch.setattr(fake_stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys, "stdin", fake_stdin)
+    monkeypatch.setattr(sys, "argv", ["omp-work", "approve", "--issue", "HOME-142"])
+    with pytest.raises(SystemExit) as exc:
+        omp_work.__main__.main()
+    assert str(exc.value) == "approval digest mismatch"
+    assert approval_path.read_bytes() == sentinel
+
+
+def test_approve_refuses_contract_changed_and_preserves_sentinel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contract_dir = _setup_contract_env(tmp_path, monkeypatch)
+    approval_path = contract_dir / "approval.json"
+    sentinel = b'{"sentinel": true}\n'
+    approval_path.write_bytes(sentinel)
+    digest = omp_work.contract_sha256()
+    fake_stdin = io.StringIO(f"{digest}\n")
+    monkeypatch.setattr(fake_stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys, "stdin", fake_stdin)
+    monkeypatch.setattr(sys, "argv", ["omp-work", "approve", "--issue", "HOME-142"])
+    call_count = 0
+    orig_hash = omp_work.contract_sha256
+    def flaky_hash() -> str:
+        nonlocal call_count
+        call_count += 1
+        return orig_hash() if call_count == 1 else "f" * 64
+    monkeypatch.setattr(omp_work.__main__, "contract_sha256", flaky_hash)
+    with pytest.raises(SystemExit) as exc:
+        omp_work.__main__.main()
+    assert str(exc.value) == "contract changed during approval"
+    assert approval_path.read_bytes() == sentinel
+
+
+def test_approve_restores_prior_bytes_on_validation_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contract_dir = _setup_contract_env(tmp_path, monkeypatch)
+    approval_path = contract_dir / "approval.json"
+    sentinel = b'{"sentinel": true}\n'
+    approval_path.write_bytes(sentinel)
+    digest = omp_work.contract_sha256()
+    fake_stdin = io.StringIO(f"{digest}\n")
+    monkeypatch.setattr(fake_stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys, "stdin", fake_stdin)
+    monkeypatch.setattr(sys, "argv", ["omp-work", "approve", "--issue", "HOME-142"])
+    def failing_validate(*, require_approval: bool = True) -> None:
+        raise ValueError("simulated validation failure")
+    monkeypatch.setattr(omp_work.__main__, "validate_bundle", failing_validate)
+    with pytest.raises(SystemExit) as exc:
+        omp_work.__main__.main()
+    assert str(exc.value) == "simulated validation failure"
+    assert approval_path.read_bytes() == sentinel
+
+
+def test_approve_removes_new_file_on_validation_failure_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    contract_dir = _setup_contract_env(tmp_path, monkeypatch)
+    approval_path = contract_dir / "approval.json"
+    if approval_path.exists():
+        approval_path.unlink()
+    digest = omp_work.contract_sha256()
+    fake_stdin = io.StringIO(f"{digest}\n")
+    monkeypatch.setattr(fake_stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys, "stdin", fake_stdin)
+    monkeypatch.setattr(sys, "argv", ["omp-work", "approve", "--issue", "HOME-142"])
+    def failing_validate(*, require_approval: bool = True) -> None:
+        raise ValueError("simulated validation failure")
+    monkeypatch.setattr(omp_work.__main__, "validate_bundle", failing_validate)
+    with pytest.raises(SystemExit) as exc:
+        omp_work.__main__.main()
+    assert str(exc.value) == "simulated validation failure"
+    assert not approval_path.exists()
+
+
+def test_approve_succeeds_interactively_and_validates_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    contract_dir = _setup_contract_env(tmp_path, monkeypatch)
+    approval_path = contract_dir / "approval.json"
+    if approval_path.exists():
+        approval_path.unlink()
+    digest = omp_work.contract_sha256()
+    fake_stdin = io.StringIO(f"{digest}\n")
+    monkeypatch.setattr(fake_stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys, "stdin", fake_stdin)
+    monkeypatch.setattr(sys, "argv", ["omp-work", "approve", "--issue", "HOME-142"])
+    omp_work.__main__.main()
+    captured = capsys.readouterr()
+    assert digest in captured.out
+    assert f'"issue": "HOME-142"' in captured.out
+    assert "Type the full contract SHA-256 to approve: " in captured.out
+    assert f"approved {digest} for HOME-142" in captured.out
+    assert approval_path.is_file()
+    approval_text = approval_path.read_text()
+    assert approval_text.endswith("\n")
+    approval_data = json.loads(approval_text)
+    assert approval_data["contract_version"] == omp_work.CONTRACT_VERSION
+    assert approval_data["contract_sha256"] == digest
+    assert approval_data["approved_by"] == "owner"
+    assert approval_data["issue"] == "HOME-142"
+    # Verify parseable with Approval model
+    Approval.model_validate_json(approval_text)
+    # Verify passes validate_bundle
+    omp_work.validate_bundle(require_approval=True)
 
 def test_planned_candidate_and_missing_closeout_evidence_block_completion() -> None:
     receipts = (receipt(EvidenceKind.PLAN), receipt(EvidenceKind.VERIFICATION), receipt(EvidenceKind.AUDIT, independent=True, verdict="PASS"), receipt(EvidenceKind.PUSH, remote_commit="c" * 40))

@@ -26,3 +26,4 @@
 ### Fixed
 
 - Cutover status now reports the persisted first-mutation request, the database rejects unpaired first-mutation stamps on every write path, and the recovery runbook covers deadline overruns and failed Linear credential revocation.
+- OMP-123: Normalized `{"raw": report}` as a direct auditor transport envelope at the WorkService settle boundary, supporting task tool terminal yield payloads without loosening validation rules.

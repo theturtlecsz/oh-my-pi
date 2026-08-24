@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
@@ -10,8 +13,8 @@ from . import CONTRACT_VERSION, _contract_dir, contract_sha256, generate_api_sch
 from .operations.config import OperationsConfig
 from .operations import cli as operations_cli
 from .operations.database import collect_health
+from .v1.models import Approval
 from .v1.server import create_app
-
 _SAFE_OPERATION_ERRORS = {
     "artifact cryptography failed",
     "pagination_count_hash_gap",
@@ -25,6 +28,56 @@ _SAFE_OPERATION_ERRORS = {
 }
 
 
+def _approve(issue: str) -> None:
+    if not sys.stdin.isatty():
+        raise SystemExit("owner approval requires an interactive terminal")
+    digest = contract_sha256()
+    now = datetime.now(timezone.utc)
+    approved_at = now.isoformat()
+    payload = {
+        "contract_version": CONTRACT_VERSION,
+        "contract_sha256": digest,
+        "approved_by": "owner",
+        "approved_at": approved_at,
+        "issue": issue,
+    }
+    try:
+        Approval.model_validate(payload)
+    except Exception:
+        raise SystemExit("approval issue is not allowed by the current contract")
+    content = json.dumps(payload) + "\n"
+    print(digest)
+    print(content, end="")
+    try:
+        entered = input("Type the full contract SHA-256 to approve: ")
+    except (EOFError, KeyboardInterrupt):
+        raise SystemExit("approval digest mismatch")
+    if entered != digest:
+        raise SystemExit("approval digest mismatch")
+    second_digest = contract_sha256()
+    if second_digest != digest:
+        raise SystemExit("contract changed during approval")
+    approval_path = _contract_dir() / "approval.json"
+    prior_bytes = approval_path.read_bytes() if approval_path.exists() else None
+    temp_path = approval_path.with_suffix(f".tmp.{os.getpid()}")
+    try:
+        temp_path.write_text(content)
+        os.replace(temp_path, approval_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+    try:
+        validate_bundle(require_approval=True)
+    except Exception as error:
+        if prior_bytes is not None:
+            temp_restore = approval_path.with_suffix(f".restore.{os.getpid()}")
+            temp_restore.write_bytes(prior_bytes)
+            os.replace(temp_restore, approval_path)
+        else:
+            approval_path.unlink(missing_ok=True)
+        raise SystemExit(str(error)) from error
+    print(f"approved {digest} for {issue}")
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m omp_work")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -33,6 +86,8 @@ def main() -> None:
     schema.add_argument("--api", action="store_true")
     schema.add_argument("--write", action="store_true")
     subcommands.add_parser("hash")
+    approve = subcommands.add_parser("approve")
+    approve.add_argument("--issue", required=True)
     validate = subcommands.add_parser("validate")
     validate.add_argument("--require-approval", action="store_true")
     ops = subcommands.add_parser("ops")
@@ -68,6 +123,9 @@ def main() -> None:
         return
     if args.command == "hash":
         print(contract_sha256())
+        return
+    if args.command == "approve":
+        _approve(args.issue)
         return
     try:
         validate_bundle(require_approval=args.require_approval)

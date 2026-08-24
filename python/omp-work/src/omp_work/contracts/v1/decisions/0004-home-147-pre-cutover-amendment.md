@@ -24,9 +24,10 @@ Changes:
 4. `finalize_candidate` (scope `work.approve`) names the planned candidate it
    finalizes, inserts a second immutable candidate of kind `final` bound to
    the exact full-length commit, derives the plan receipt onto it, and
-   atomically advances `current_candidate_id`. A negative latest audit
-   (NEEDS_FIX or BLOCKED) on a final candidate permits a new planned-candidate
-   attempt on the same revision; revision changes still clear the current
+   atomically advances `current_candidate_id`. An owner-approved plan always
+   permits a new planned candidate on the same revision (OMP-124); a live
+   close attempt is superseded with terminal reason
+   `superseded_by_new_plan`. Revision changes still clear the current
    candidate and stale every old receipt. Completion requires a final
    candidate with a non-null full object ID and a push receipt in one of two
    exclusive shapes (OMP-99, incident 2026-08-22): exact — `remote_commit`

@@ -9,7 +9,7 @@ import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions"];
+const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -133,6 +133,20 @@ if (mode === "done-cancel" || mode === "done-cancel-decline") {
 	};
 	items.set("HOME-2", item2);
 	items.set("id-2", item2);
+}
+if (mode === "plan-now-change") {
+	// OMP-124: a second open item the owner switches NOW to mid-plan.
+	const second: MockWorkItem = {
+		work_id: "id-2",
+		workspace_id: WORKSPACE_ID,
+		alias: { key: "HOME-2" },
+		revision: { revision_id: "rev-2", title: "Second", description: "", scope: "", acceptance_criteria: [] },
+		state: "BACKLOG",
+		project_id: "proj-1",
+		candidate: null,
+	};
+	items.set("HOME-2", second);
+	items.set("id-2", second);
 }
 if (mode === "center" || mode === "center-scoped") {
 	// pads the unscoped READY list.
@@ -956,6 +970,24 @@ if (mode === "intake") {
 	await runner.emit({ type: "turn_end" } as never);
 	out.statusAfterHandoff = statuses.at(-1);
 	out.stopAfterHandoff = (await stopHandler?.({ type: "session_stop", stop_hook_active: false }, ctx)) ?? null;
+} else if (mode === "plan-now-change") {
+	// OMP-124: NOW switched after /plan entry must move the approval target.
+	await setNow(); // HOME-1
+	out.planCapture = await runner.emitInput("/plan", undefined, "interactive"); // binds planTarget to HOME-1
+	const switchTrip = await confirmRoundTrip(execute, { action: "set_now", work: "HOME-2" });
+	out.switchConfirmed = switchTrip.confirmed;
+	out.approved = await approve(planA);
+	out.home1Candidate = items.get("id-1")?.candidate ?? null;
+	out.home2Candidate = items.get("id-2")?.candidate ?? null;
+	out.planReceiptTargets = receipts.filter(r => r.kind === "plan").map(r => String(r.work_id));
+	// Sibling: /now clear (localClear) must also drop a captured plan target —
+	// approval then falls back to the empty current NOW and refuses.
+	out.planCapture2 = await runner.emitInput("/plan", undefined, "interactive"); // rebinds to HOME-2
+	const nowCommand = extension.commands.get("now");
+	if (!nowCommand) throw new Error("now command missing");
+	await nowCommand.handler("clear", runner.createCommandContext());
+	out.clearedApprove = await approve(planA);
+	out.planReceiptTargetsAfterClear = receipts.filter(r => r.kind === "plan").map(r => String(r.work_id));
 } else if (mode === "summary" || mode === "summary-subagent") {
 	out.lifecycleAfterStart = lifecycleAfterStart;
 	if (mode === "summary-subagent") {
@@ -1253,6 +1285,34 @@ if (mode === "intake") {
 	// supersedes to keep exactly one live attempt.
 	await runner.emitInput("/summary", undefined, "interactive");
 	out.beginAfterRaw = beginCalls.length;
+} else if (mode === "summary-stale-final") {
+	await setNow();
+	await approve(planA);
+	fs.writeFileSync(path.join(probe, "work.txt"), "candidate work\n");
+	await runner.emit(summaryMessage as never);
+	const initialFrozen = (items.get("HOME-1") ?? initialItem).candidate;
+	const commitA = initialFrozen?.commit_sha;
+	const beginCallsBeforeDrift = beginCalls.length;
+	const pushReceiptsBeforeDrift = receipts.filter(receipt => receipt.kind === "push").length;
+
+	// Simulate commit B (e.g. manual amend or separate commit that moves HEAD away from candidate commit A)
+	fs.writeFileSync(path.join(probe, "extra.txt"), "drifted commit\n");
+	Bun.spawnSync(["git", "add", "extra.txt"], { cwd: probe });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "drifted commit B"], { cwd: probe });
+	const commitB = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+
+	// Invoke summary again
+	await runner.emit(summaryMessage as never);
+
+	out.commitA = commitA;
+	out.commitB = commitB;
+	out.beginCallsBeforeDrift = beginCallsBeforeDrift;
+	out.beginCallsAfterDrift = beginCalls.length;
+	out.pushReceiptsBeforeDrift = pushReceiptsBeforeDrift;
+	out.pushReceiptsAfterDrift = receipts.filter(receipt => receipt.kind === "push").length;
+	out.driftNotice = uiCalls.at(-1) ?? null;
+	out.headAfterDriftSummary = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	out.dirtyAfterDriftSummary = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: probe }).stdout.toString().trim();
 } else if (mode === "done-cancel" || mode === "done-cancel-decline") {
 	await setNow();
 	await approve(planA);

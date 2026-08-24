@@ -14,6 +14,14 @@ uv run --project python/omp-work omp-work ops health --json
 
 ## Contract changes
 
+Contract approval requires explicit owner attestation via the interactive CLI:
+
+```sh
+uv run --project python/omp-work omp-work approve --issue <work-key>
+```
+
+This must be run by the owner in an interactive terminal after reviewing the printed digest and exact prospective JSON payload. Redirected or non-interactive input is refused, and agents must never mint `approval.json` from chat scope.
+
 After owner approval is present, register compatibility before service restart:
 
 ```sh

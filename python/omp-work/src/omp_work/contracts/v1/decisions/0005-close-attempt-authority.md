@@ -14,8 +14,8 @@ gate booleans, the process-global audit bridge, the stop-hook reminder, and
    `omp_work.close_attempts` (`intent_id` → `attempt_id`); completed records
    survive verbatim; every pending owner decision maps to
    `closeout_requested` with `authorization_kind="legacy"`. No pending row is
-   silently superseded by migration — only a new literal owner `/summary`
-   supersedes a non-terminal attempt.
+   silently superseded by migration — only a new literal owner `/summary` or
+   an owner-approved `/plan` (OMP-124) supersedes a non-terminal attempt.
 2. **Immutable identity.** An attempt binds work, revision, plan receipt,
    finalized candidate (id/SHA-256/commit), owner session (id/start
    time/start commit), repository, range-diff SHA-256, starting dirty paths,
@@ -45,9 +45,11 @@ gate booleans, the process-global audit bridge, the stop-hook reminder, and
    launch rows retain reservation history while `cancelled_launch_count`
    separates physical reservations from budget-consuming launches.
    Settlement (`settle_auditor_launch`) owns transport normalization — raw
-   canonical text, one direct `{"report"}`/`{"text"}` object, one JSON string
-   encoding that direct object, or one bare `<output>` wrapper; nested wrappers
-   remain refused. The direct object may carry one optional string `"verdict"`
+   canonical text, one direct `{"report"}`/`{"text"}`/`{"raw"}` object
+   (identifying `raw` as the task tool's terminal yield body rather than a general
+   recursive envelope), one JSON string encoding that direct object, or one bare
+   `<output>` wrapper; nested wrappers remain refused. The direct object may carry
+   one optional string `"verdict"`
    key (OMP-67, incident 2026-08-21): it is decoration, never authority — a
    value contradicting the report's own VERDICT line refuses as
    `report_wrapper_verdict_mismatch` before section validation, and a present

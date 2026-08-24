@@ -471,8 +471,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 	async function setNow(issue: NowRef, ctx: ExtensionContext) {
 		await backend.setNowRemote(issue);
 		// the opaque carrier belongs to the previous NOW (Work binds it to a
-		// candidate commit) — never let it leak across a switch.
-		if (state.issueId !== issue.id) state.carrier = undefined;
+		// candidate commit) — never let it leak across a switch. The captured
+		// plan approval target is likewise bound to the NOW at plan entry
+		// (OMP-124): a switch discards it, and approval re-resolves the new NOW.
+		if (state.issueId !== issue.id) {
+			state.carrier = undefined;
+			planTarget = undefined;
+		}
 		state.issueId = issue.id;
 		state.identifier = issue.key;
 		state.title = issue.title;
@@ -504,6 +509,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		state.issueId = state.identifier = state.title = state.project = undefined;
 		state.setAt = undefined;
 		state.carrier = undefined;
+		planTarget = undefined; // no latent approval target survives a NOW clear (OMP-124)
 		void saveCache();
 		persistSession();
 		footer(ctx);

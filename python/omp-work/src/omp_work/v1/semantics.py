@@ -104,8 +104,8 @@ def _unwrap_object(decoded: object) -> tuple[str, str | None] | tuple[None, str]
     if not isinstance(decoded, dict):
         return None, "report_wrapper_invalid"
     keys = set(decoded)
-    body_keys = keys & {"report", "text"}
-    if len(body_keys) != 1 or not keys <= {"report", "text", "verdict"}:
+    body_keys = keys & {"report", "text", "raw"}
+    if len(body_keys) != 1 or not keys <= {"report", "text", "raw", "verdict"}:
         return None, "report_wrapper_invalid"
     body_key = body_keys.pop()
     if not isinstance(decoded[body_key], str):

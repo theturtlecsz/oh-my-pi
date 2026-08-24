@@ -11,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -94,6 +94,20 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.handoff).toContain("handoff receipt recorded on HOME-1");
 		expect(out.statusAfterHandoff).not.toContain("⚠");
 		expect(out.stopAfterHandoff).toBeNull();
+	});
+
+	test("plan approval follows changed NOW", () => {
+		const out = run("plan-now-change");
+		expect(out.switchConfirmed).toContain("NOW → HOME-2");
+		expect(record(out.approved).cancel).toBe(false);
+		expect(out.home1Candidate, "HOME-1 must receive zero plan stamps after NOW changes").toBeNull();
+		expect(record(out.home2Candidate).candidate_id, "the new NOW receives exactly one stamp").toBeDefined();
+		expect(list(out.planReceiptTargets)).toEqual(["id-2"]);
+		expect(record(out.clearedApprove), "a cleared NOW leaves no latent approval target").toMatchObject({
+			cancel: true,
+			reason: "Run /intake first, or choose an issue with /now.",
+		});
+		expect(list(out.planReceiptTargetsAfterClear), "no stamp lands after /now clear").toEqual(["id-2"]);
 	});
 
 	test("summary requires a current plan and structured owner invocation", () => {
@@ -205,6 +219,21 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.beginAfterPushRetry, "the frozen candidate retries without another freeze").toBe(1);
 		expect(out.pushReceiptsAfterRetry).toBe(1);
 		expect(out.remoteCommit).toBe(out.candidateCommit);
+	});
+
+	test("summary refuses when finalized candidate commit diverges from git HEAD", () => {
+		const out = run("summary-stale-final");
+		expect(out.commitA).toBeTruthy();
+		expect(out.commitB).toBeTruthy();
+		expect(out.commitA).not.toBe(out.commitB);
+		expect(out.driftNotice).toContain("candidate drift");
+		expect(out.driftNotice).toContain(String(out.commitA).slice(0, 12));
+		expect(out.driftNotice).toContain(String(out.commitB).slice(0, 12));
+		expect(out.driftNotice).toContain("Restore the frozen commit or stamp and freeze a fresh candidate through owner-entered /plan and /summary");
+		expect(out.beginCallsAfterDrift, "drifted candidate begins no new close attempt").toBe(out.beginCallsBeforeDrift);
+		expect(out.pushReceiptsAfterDrift, "drifted candidate mints no push receipt").toBe(out.pushReceiptsBeforeDrift);
+		expect(out.headAfterDriftSummary, "drifted summary mutates no HEAD commit").toBe(out.commitB);
+		expect(out.dirtyAfterDriftSummary, "drifted summary mutates no working tree").toBe("");
 	});
 
 	test("the ledger-sealed audit task drives one exact-byte bounded launch", () => {
