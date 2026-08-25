@@ -15,7 +15,7 @@ from omp_work.integration.importer import TRANSFORMATION_VERSION
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import migration_set_sha256
 from omp_work.operations.fingerprints import code_fingerprint, config_fingerprint, transform_sha256
-from .canonical import canonical_json, command_sha256, sha256, text_sha256
+from .canonical import canonical_json, close_attempt_identity_sha256, command_sha256, sha256, text_sha256
 from .models import Candidate, CloseAttemptState, CommandEnvelope, CompletionInput, EvidenceReceipt, LIVE_CLOSE_ATTEMPT_STATES, MAX_ACCEPTED_REPORTS, MAX_AUDITOR_LAUNCHES, OperationReceipt, OperationState, RelationEdge, SameSessionFoundFixedPayload
 from .semantics import completion_blockers, normalize_auditor_report, validate_cutover_manifest, would_create_cycle
 
@@ -26,7 +26,7 @@ _LAUNCH_FIELDS = "launch_id,attempt_id,manifest_id,launch_number,task_sha256,too
 _EVENT_FIELDS = "event_id,sequence,work_id,attempt_id,launch_id,event_type,reason_code,reason,legal_next_actions,remaining_launches,remaining_reports,requires_fresh_authorization,rendered_text,rendered_sha256,requires_delivery,created_at"
 _DELIVERY_FIELDS = "delivery_id,event_id,delivery_sequence,owner_session_id,rendered_sha256,status,authorization_ref,created_at"
 _LIVE_STATES = tuple(sorted(state.value for state in LIVE_CLOSE_ATTEMPT_STATES))
-_CLOSE_COMMANDS = {"begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "cancel_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery"}
+_CLOSE_COMMANDS = {"begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "cancel_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery", "record_closeout_review"}
 
 
 def _row_json(row: dict[str, object] | None) -> dict[str, object] | None:
@@ -103,8 +103,8 @@ def _acceptance_from_markdown(text: str) -> list[str]:
 
 # /center recent-activity projection (OMP-25): applied domain events that mean
 # "something moved" — receipts, close proposals, completions. Metadata only.
-_ACTIVITY_EVENT_TYPES = ("append_evidence", "request_closeout", "complete_work")
-_ACTIVITY_EVENT_KINDS = {"request_closeout": "close_proposed", "complete_work": "completed"}
+_ACTIVITY_EVENT_TYPES = ("append_evidence", "record_closeout_review", "complete_work")
+_ACTIVITY_EVENT_KINDS = {"record_closeout_review": "close_proposed", "complete_work": "completed"}
 
 
 class WorkStore(Protocol):
@@ -202,8 +202,8 @@ class PostgresWorkStore:
                     result = self._settle_auditor_launch(cur, envelope)
                 elif command.type == "attest_checkpoint_delivery":
                     result = self._attest_checkpoint_delivery(cur, envelope)
-                elif command.type == "request_closeout":
-                    result = self._request_closeout(cur, envelope)
+                elif command.type == "record_closeout_review":
+                    result = self._record_closeout_review(cur, envelope)
                 elif command.type == "complete_work":
                     result = self._complete_work(cur, envelope)
                 elif command.type == "activate_cutover":
@@ -416,17 +416,9 @@ class PostgresWorkStore:
             ):
                 raise WorkStoreError("stale_evidence")
         if receipt.kind.value == "closeout":
-            # OMP-47/OMP-51: the review is validated against the audited live
-            # attempt BEFORE any insert — never an orphan review receipt.
-            live = self._live_attempt(cur, envelope.workspace_id, receipt.work_id)
-            if live is None or live["state"] != "audited" or live["candidate_id"] != receipt.candidate_id:
-                raise WorkStoreError("stale_evidence", ("a closeout review requires the audited live close attempt on this candidate",))
-            event = self._close_event(cur, envelope, work_id=receipt.work_id, attempt_id=live["attempt_id"], event_type="closeout_review_recorded", reason_code="closeout_review_recorded", reason="the /summary closeout review is recorded; deliver this checkpoint to the owner, then request_closeout", next_actions=("deliver this checkpoint", "request_closeout"), remaining_launches=self._budget(live)[0], remaining_reports=self._budget(live)[1], requires_delivery=True)
+            raise WorkStoreError("invalid_request", ("generic append_evidence rejects closeout reviews; use record_closeout_review under work.close",))
         cur.execute("INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (receipt.receipt_id, envelope.workspace_id, receipt.work_id, receipt.revision_id, receipt.candidate_id, receipt.kind.value, canonical_json(receipt.payload), receipt.payload_sha256, receipt.artifact_sha256, receipt.issuer, receipt.issued_at, receipt.candidate_sha256, receipt.candidate_commit, receipt.verdict, receipt.independent, receipt.remote_ref, receipt.remote_commit))
-        result: dict[str, object] = {"type": "append_evidence", "receipt": receipt.model_dump(mode="json")}
-        if event is not None:
-            result["event"] = event
-        return result
+        return {"type": "append_evidence", "receipt": receipt.model_dump(mode="json")}
 
     def _finalize_candidate(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
@@ -484,7 +476,7 @@ class PostgresWorkStore:
         FOR UPDATE would be refused outright); every path that swaps the item's
         current_revision/current_candidate pointers locks the item row first,
         so plain reads under that lock are stable."""
-        cur.execute("SELECT work_id,state,current_revision_id,current_candidate_id,created_at FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s FOR UPDATE", (workspace_id, work_id))
+        cur.execute("SELECT work_id,state,current_revision_id,current_candidate_id,archived,created_at FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s FOR UPDATE", (workspace_id, work_id))
         item = cur.fetchone()
         if item is None:
             raise WorkStoreError("invalid_request", ("unknown work item",))
@@ -547,6 +539,9 @@ class PostgresWorkStore:
 
     def _begin_close_attempt(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
+        # Transaction-scoped advisory lock derived from (workspace_id, authorization_ref)
+        # serializes same-token requests before any work-row locks.
+        cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"close_auth:{envelope.workspace_id}:{payload.authorization_ref}",))
         # One global lock order (sorted work_id) across every close command that
         # touches multiple items — prevents deadlock between concurrent closes.
         involved = sorted({payload.work_id, *(rider.work_id for rider in payload.riders)}, key=str)
@@ -566,6 +561,9 @@ class PostgresWorkStore:
         plan = cur.fetchone()
         if plan is None:
             return refused("plan_receipt_missing", "the finalized candidate carries no plan receipt", ("/plan to stamp the approved plan", "rerun /summary"))
+
+        live = self._live_attempt(cur, envelope.workspace_id, payload.work_id)
+
         # OMP-93 riders: sealed at begin, exact-revision-bound, evidence hashed
         # by the service. Sorted by work_id for deterministic lock order.
         sealed_riders: list[dict[str, object]] = []
@@ -586,39 +584,181 @@ class PostgresWorkStore:
             cur.execute("SELECT criterion FROM omp_work.acceptance_criteria WHERE workspace_id=%s AND revision_id=%s ORDER BY position", (envelope.workspace_id, rider.revision_id))
             rider_criteria = [criteria_row["criterion"] for criteria_row in cur.fetchall()] or _acceptance_from_markdown(row["description"] if isinstance(row["description"], str) else "")
             sealed_riders.append({"work_id": rider_id, "revision_id": str(rider.revision_id), "title": row["title"], "criteria": rider_criteria, "evidence": rider.evidence, "evidence_sha256": text_sha256(rider.evidence)})
-        live = self._live_attempt(cur, envelope.workspace_id, payload.work_id)
-        if live is not None and live["authorization_ref"] == payload.authorization_ref:
-            same_identity = (
-                live["attempt_id"] == payload.attempt_id
-                and live["candidate_id"] == candidate["candidate_id"]
-                and live["plan_receipt_id"] == plan["receipt_id"]
-                and live["owner_session_id"] == payload.owner_session_id
-                and live["owner_session_started_at"] == payload.owner_session_started_at
-                and live["owner_session_start_commit"] == payload.owner_session_start_commit
-                and live["repository"] == payload.repository
-                and live["diff_sha256"] == payload.diff_sha256
-                and tuple(live["starting_dirty_paths"] or ()) == tuple(payload.starting_dirty_paths)
-                and [(rider["work_id"], rider["revision_id"], rider["evidence"]) for rider in (live["riders"] or [])]
-                    == [(str(rider.work_id), str(rider.revision_id), rider.evidence) for rider in sorted(payload.riders, key=lambda proof: str(proof.work_id))]
+
+        if not payload.riders and live is not None and live.get("riders"):
+            sealed_riders = list(live["riders"])
+
+        incoming_identity = close_attempt_identity_sha256(
+            work_id=payload.work_id,
+            revision_id=item["current_revision_id"],
+            candidate_id=candidate["candidate_id"],
+            candidate_sha256=candidate["candidate_sha256"],
+            candidate_commit=candidate["commit_sha"],
+            plan_receipt_id=plan["receipt_id"],
+            repository=payload.repository,
+            diff_sha256=payload.diff_sha256,
+            starting_dirty_paths=payload.starting_dirty_paths,
+            sealed_riders=sealed_riders,
+        )
+
+        # 4. Check durable authorization_uses ledger
+        cur.execute(
+            "SELECT use_kind, attempt_id, identity_sha256, outcome "
+            "FROM omp_work.authorization_uses WHERE workspace_id=%s AND authorization_ref=%s",
+            (envelope.workspace_id, payload.authorization_ref),
+        )
+        use_row = cur.fetchone()
+        if use_row is not None:
+            if use_row["identity_sha256"] == incoming_identity:
+                return use_row["outcome"]
+            return refused(
+                "authorization_reuse_conflict",
+                "this authorization was already used for different attempt identity",
+                ("enter /summary again for a fresh authorization",),
+                requires_fresh=True,
             )
-            if same_identity:
-                event = self._close_event(cur, envelope, work_id=payload.work_id, attempt_id=live["attempt_id"], event_type="attempt_resumed", reason_code="attempt_resumed", reason="this /summary authorization already owns the live close attempt", next_actions=("continue the close ritual",), remaining_launches=self._budget(live)[0], remaining_reports=self._budget(live)[1])
-                return {"type": "begin_close_attempt", "status": "applied", "attempt": _row_json(live), "event": event}
-            return refused("authorization_identity_mismatch", "this authorization already owns an attempt bound to different identity", ("rerun /summary to start a fresh attempt",), attempt=live, requires_fresh=True)
-        cur.execute("SELECT 1 FROM omp_work.close_attempts WHERE workspace_id=%s AND authorization_kind='summary' AND authorization_ref=%s", (envelope.workspace_id, payload.authorization_ref))
-        if cur.fetchone() is not None:
-            return refused("authorization_exhausted", "this /summary authorization was already consumed by a terminal attempt", ("enter /summary again for a fresh attempt",), requires_fresh=True)
+
+        # 5. Check if authorization_ref was already consumed in close_attempts
+        cur.execute(
+            "SELECT attempt_id, state FROM omp_work.close_attempts WHERE workspace_id=%s AND authorization_kind='summary' AND authorization_ref=%s",
+            (envelope.workspace_id, payload.authorization_ref),
+        )
+        existing_attempt_with_auth = cur.fetchone()
+
+        # 6. Terminal work items cannot start or resume attempts
+        if item["state"] in ("DONE", "CANCELED", "CANCELLED") or item["archived"]:
+            return refused(
+                "work_terminal",
+                f"work item is terminal ({'archived' if item['archived'] else item['state']})",
+                ("/now to select open work",),
+                requires_fresh=True,
+            )
+
+        # 7. Resolve live attempt
         if live is not None:
-            self._transition_attempt(cur, envelope.workspace_id, live["attempt_id"], "state='superseded', terminal_reason='superseded_by_new_summary', in_flight_launch_id=NULL")
-            self._close_event(cur, envelope, work_id=payload.work_id, attempt_id=live["attempt_id"], event_type="attempt_superseded", reason_code="superseded_by_new_summary", reason="a new literal owner /summary replaced this attempt", next_actions=("continue with the fresh attempt",), remaining_launches=self._budget(live)[0], remaining_reports=self._budget(live)[1], requires_delivery=True)
+            live_identity = close_attempt_identity_sha256(
+                work_id=live["work_id"],
+                revision_id=live["revision_id"],
+                candidate_id=live["candidate_id"],
+                candidate_sha256=live["candidate_sha256"],
+                candidate_commit=live["candidate_commit"],
+                plan_receipt_id=live["plan_receipt_id"],
+                repository=live["repository"],
+                diff_sha256=live["diff_sha256"],
+                starting_dirty_paths=live["starting_dirty_paths"] or (),
+                sealed_riders=live["riders"] or [],
+            )
+            if live_identity == incoming_identity:
+                event = self._close_event(
+                    cur,
+                    envelope,
+                    work_id=payload.work_id,
+                    attempt_id=live["attempt_id"],
+                    event_type="attempt_resumed",
+                    reason_code="attempt_resumed",
+                    reason="this /summary authorization resumes the live close attempt",
+                    next_actions=("continue the close ritual",),
+                    remaining_launches=self._budget(live)[0],
+                    remaining_reports=self._budget(live)[1],
+                    requires_delivery=True,
+                )
+                outcome = {"type": "begin_close_attempt", "status": "applied", "attempt": _row_json(live), "event": event}
+                cur.execute(
+                    "INSERT INTO omp_work.authorization_uses(workspace_id, authorization_ref, use_kind, attempt_id, identity_sha256, owner_session_id, outcome, event_id)"
+                    " VALUES(%s, %s, 'resume', %s, %s, %s, %s, %s)",
+                    (envelope.workspace_id, payload.authorization_ref, live["attempt_id"], incoming_identity, payload.owner_session_id, json.dumps(outcome), event["event_id"]),
+                )
+                return outcome
+
+            if existing_attempt_with_auth is not None:
+                return refused(
+                    "authorization_exhausted",
+                    "this /summary authorization was already consumed by a terminal attempt",
+                    ("enter /summary again for a fresh attempt",),
+                    requires_fresh=True,
+                )
+
+            if live["state"] in ("audited", "closeout_requested"):
+                return refused(
+                    "finished_attempt_identity_mismatch",
+                    f"the live attempt is already {live['state']} and cannot be superseded by a mismatched /summary",
+                    ("/plan to explicitly replan before closing",),
+                    attempt=live,
+                    requires_fresh=True,
+                )
+
+            self._transition_attempt(
+                cur,
+                envelope.workspace_id,
+                live["attempt_id"],
+                "state='superseded', terminal_reason='superseded_by_new_summary', in_flight_launch_id=NULL",
+            )
+            self._close_event(
+                cur,
+                envelope,
+                work_id=payload.work_id,
+                attempt_id=live["attempt_id"],
+                event_type="attempt_superseded",
+                reason_code="superseded_by_new_summary",
+                reason="a new literal owner /summary replaced this attempt",
+                next_actions=("continue with the fresh attempt",),
+                remaining_launches=self._budget(live)[0],
+                remaining_reports=self._budget(live)[1],
+                requires_delivery=True,
+            )
+
+        # 8. Begin fresh attempt
+        if existing_attempt_with_auth is not None:
+            return refused(
+                "authorization_exhausted",
+                "this /summary authorization was already consumed by a terminal attempt",
+                ("enter /summary again for a fresh attempt",),
+                requires_fresh=True,
+            )
+
         cur.execute(
             "INSERT INTO omp_work.close_attempts(attempt_id,workspace_id,work_id,revision_id,candidate_id,plan_receipt_id,candidate_sha256,candidate_commit,owner_session_id,owner_session_started_at,owner_session_start_commit,repository,diff_sha256,starting_dirty_paths,authorization_kind,authorization_ref,state,riders)"
             f" VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'summary',%s,'active',%s) RETURNING {_ATTEMPT_FIELDS}",
-            (payload.attempt_id, envelope.workspace_id, payload.work_id, item["current_revision_id"], candidate["candidate_id"], plan["receipt_id"], candidate["candidate_sha256"], candidate["commit_sha"], payload.owner_session_id, payload.owner_session_started_at, payload.owner_session_start_commit, payload.repository, payload.diff_sha256, list(payload.starting_dirty_paths), payload.authorization_ref, json.dumps(sealed_riders)),
+            (
+                payload.attempt_id,
+                envelope.workspace_id,
+                payload.work_id,
+                item["current_revision_id"],
+                candidate["candidate_id"],
+                plan["receipt_id"],
+                candidate["candidate_sha256"],
+                candidate["commit_sha"],
+                payload.owner_session_id,
+                payload.owner_session_started_at,
+                payload.owner_session_start_commit,
+                payload.repository,
+                payload.diff_sha256,
+                list(payload.starting_dirty_paths),
+                payload.authorization_ref,
+                json.dumps(sealed_riders),
+            ),
         )
         attempt = cur.fetchone()
-        event = self._close_event(cur, envelope, work_id=payload.work_id, attempt_id=payload.attempt_id, event_type="attempt_begun", reason_code="attempt_begun", reason="close attempt bound to the finalized candidate and plan receipt", next_actions=("append verification evidence", "seal_audit_manifest"), remaining_launches=MAX_AUDITOR_LAUNCHES, remaining_reports=MAX_ACCEPTED_REPORTS)
-        return {"type": "begin_close_attempt", "status": "applied", "attempt": _row_json(attempt), "event": event}
+        event = self._close_event(
+            cur,
+            envelope,
+            work_id=payload.work_id,
+            attempt_id=payload.attempt_id,
+            event_type="attempt_begun",
+            reason_code="attempt_begun",
+            reason="close attempt bound to the finalized candidate and plan receipt",
+            next_actions=("append verification evidence", "seal_audit_manifest"),
+            remaining_launches=MAX_AUDITOR_LAUNCHES,
+            remaining_reports=MAX_ACCEPTED_REPORTS,
+            requires_delivery=True,
+        )
+        outcome = {"type": "begin_close_attempt", "status": "applied", "attempt": _row_json(attempt), "event": event}
+        cur.execute(
+            "INSERT INTO omp_work.authorization_uses(workspace_id, authorization_ref, use_kind, attempt_id, identity_sha256, owner_session_id, outcome, event_id)"
+            " VALUES(%s, %s, 'begin', %s, %s, %s, %s, %s)",
+            (envelope.workspace_id, payload.authorization_ref, payload.attempt_id, incoming_identity, payload.owner_session_id, json.dumps(outcome), event["event_id"]),
+        )
+        return outcome
 
     def _seal_audit_manifest(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
@@ -773,7 +913,7 @@ class PostgresWorkStore:
         else:
             attempt = self._transition_attempt(cur, envelope.workspace_id, attempt["attempt_id"], "state=%s, accepted_report_count=accepted_report_count+1, in_flight_launch_id=NULL", (new_state,))
         launches, reports = self._budget(attempt)
-        next_actions = {"PASS": ("append the closeout review", "request_closeout"), "NEEDS_FIX": ("fix the findings", "enter /summary again for a fresh attempt"), "BLOCKED": ("resolve the blocker", "enter /summary again for a fresh attempt")}[verdict]
+        next_actions = {"PASS": ("record the closeout review", "owner /done closes"), "NEEDS_FIX": ("fix the findings", "enter /summary again for a fresh attempt"), "BLOCKED": ("resolve the blocker", "enter /summary again for a fresh attempt")}[verdict]
         event = self._close_event(cur, envelope, work_id=attempt["work_id"], attempt_id=attempt["attempt_id"], launch_id=payload.launch_id, event_type="auditor_launch_settled", reason_code=f"verdict_{verdict.lower()}", reason=f"the auditor reported {verdict}; the exact report is the attempt's audit receipt", next_actions=next_actions, remaining_launches=launches, remaining_reports=reports, requires_fresh_authorization=verdict != "PASS", requires_delivery=True)
         receipt_json = {
             "receipt_id": str(receipt_id), "work_id": str(attempt["work_id"]), "revision_id": str(attempt["revision_id"]), "candidate_id": str(attempt["candidate_id"]),
@@ -818,31 +958,101 @@ class PostgresWorkStore:
         event = self._close_event(cur, envelope, work_id=target["work_id"], attempt_id=target["attempt_id"], event_type="checkpoint_delivery_recorded", reason_code=f"delivery_{payload.status}", reason=f"delivery of event {target['event_type']} recorded as {payload.status}", next_actions=("retry at next owner session start", "owner waiver via the work tool") if payload.status == "failed" else ("continue",), remaining_launches=launches, remaining_reports=reports)
         return {"type": "attest_checkpoint_delivery", "status": "applied", "delivery": _row_json(delivery), "event": event}
 
-    def _request_closeout(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
+    def _record_closeout_review(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
+        receipt = payload.receipt
+        if receipt.kind.value != "closeout":
+            raise WorkStoreError("invalid_request", ("record_closeout_review requires kind='closeout'",))
+        if sha256(receipt.payload) != receipt.payload_sha256:
+            raise WorkStoreError("invalid_request", ("payload_sha256 does not match the canonical payload body",))
+
         item, attempt = self._lock_attempt_chain(cur, envelope.workspace_id, payload.attempt_id)
-        if attempt["work_id"] != payload.work_id:
-            raise WorkStoreError("invalid_request", ("attempt does not belong to this work item",))
+        if attempt["work_id"] != receipt.work_id:
+            raise WorkStoreError("invalid_request", ("receipt work_id does not match attempt work_id",))
+
         launches, reports = self._budget(attempt)
 
         def refused(reason_code: str, reason: str, next_actions: tuple[str, ...], *, requires_fresh: bool = False) -> dict[str, object]:
-            event = self._close_event(cur, envelope, work_id=attempt["work_id"], attempt_id=attempt["attempt_id"], event_type="close_attempt_refused", reason_code=reason_code, reason=reason, next_actions=next_actions, remaining_launches=launches, remaining_reports=reports, requires_fresh_authorization=requires_fresh)
-            return {"type": "request_closeout", "status": "refused", "attempt": _row_json(attempt), "event": event}
+            event = self._close_event(cur, envelope, work_id=attempt["work_id"], attempt_id=attempt["attempt_id"], event_type="close_attempt_refused", reason_code=reason_code, reason=reason, next_actions=next_actions, remaining_launches=launches, remaining_reports=reports, requires_fresh_authorization=requires_fresh, requires_delivery=True)
+            return {"type": "record_closeout_review", "status": "refused", "receipt": receipt.model_dump(mode="json"), "attempt": _row_json(attempt), "event": event}
 
+        # 1. Validate authorization_uses row exists, targets attempt_id, and matches live attempt/work
+        cur.execute(
+            "SELECT use_kind, attempt_id, identity_sha256 FROM omp_work.authorization_uses WHERE workspace_id=%s AND authorization_ref=%s",
+            (envelope.workspace_id, payload.authorization_ref),
+        )
+        auth_use = cur.fetchone()
+        if auth_use is None or auth_use["attempt_id"] != payload.attempt_id:
+            return refused("authorization_invalid", "authorization_ref does not target this close attempt", ("rerun /summary to obtain valid authorization",), requires_fresh=True)
+
+        # 2. Check if already closeout_requested with the current receipt (idempotent recovery)
         if attempt["state"] == "closeout_requested":
-            event = self._close_event(cur, envelope, work_id=attempt["work_id"], attempt_id=attempt["attempt_id"], event_type="closeout_requested", reason_code="already_requested", reason="closeout is already requested on this attempt", next_actions=("owner /done closes",), remaining_launches=launches, remaining_reports=reports)
-            return {"type": "request_closeout", "status": "applied", "attempt": _row_json(attempt), "event": event}
+            cur.execute(f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND work_id=%s AND candidate_id=%s AND kind='closeout' ORDER BY issued_at DESC, receipt_id DESC LIMIT 1", (envelope.workspace_id, attempt["work_id"], attempt["candidate_id"]))
+            existing_receipt = cur.fetchone()
+            if existing_receipt is not None:
+                cur.execute(f"SELECT {_EVENT_FIELDS} FROM omp_work.close_attempt_events WHERE workspace_id=%s AND attempt_id=%s AND event_type='closeout_review_recorded' ORDER BY sequence DESC LIMIT 1", (envelope.workspace_id, attempt["attempt_id"]))
+                existing_event = cur.fetchone()
+                if existing_event is not None:
+                    event_dict = dict(existing_event)
+                    event_dict["event_id"] = str(event_dict["event_id"])
+                    event_dict["sequence"] = int(event_dict["sequence"])
+                    event_dict["work_id"] = str(event_dict["work_id"])
+                    event_dict["attempt_id"] = str(event_dict["attempt_id"])
+                    event_dict["launch_id"] = str(event_dict["launch_id"]) if event_dict.get("launch_id") else None
+                    event_dict["legal_next_actions"] = list(event_dict.get("legal_next_actions") or [])
+                    event_dict["created_at"] = event_dict["created_at"].isoformat() if isinstance(event_dict["created_at"], datetime) else str(event_dict["created_at"])
+                    return {"type": "record_closeout_review", "status": "applied", "receipt": _row_json(existing_receipt), "attempt": _row_json(attempt), "event": event_dict}
+            return refused("already_requested", "closeout is already requested on this attempt", ("owner /done closes",))
+
+        # 3. Require state audited
         if attempt["state"] != "audited":
             fresh = attempt["state"] not in _LIVE_STATES
-            return refused("attempt_not_audited", f"the attempt is {attempt['state']}; closeout requires a current PASS audit", ("complete the audit first",) if not fresh else ("enter /summary again for a fresh attempt",), requires_fresh=fresh)
+            return refused("attempt_not_audited", f"the attempt is {attempt['state']}; closeout review requires an audited attempt", ("complete the audit first",) if not fresh else ("enter /summary again for a fresh attempt",), requires_fresh=fresh)
+
+        # 4. Require exact revision/candidate binding
+        if item["current_revision_id"] != receipt.revision_id or item["current_candidate_id"] != receipt.candidate_id or attempt["revision_id"] != receipt.revision_id or attempt["candidate_id"] != receipt.candidate_id:
+            return refused("stale_evidence", "closeout review must match the work item's current revision and candidate", ("re-read the work item and rerun /summary",), requires_fresh=True)
+
+        # 5. Check candidate drift
         if self._attempt_drifted(item, attempt):
             return refused("candidate_drift", "the live candidate no longer matches the attempt's bound identity", ("rerun /summary to freeze and bind the current candidate",), requires_fresh=True)
+
+        # 6. Require current PASS audit
+        cur.execute(f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND work_id=%s AND candidate_id=%s AND kind='audit' AND verdict='PASS' ORDER BY issued_at DESC, receipt_id DESC LIMIT 1", (envelope.workspace_id, attempt["work_id"], attempt["candidate_id"]))
+        audit = cur.fetchone()
+        if audit is None:
+            return refused("audit_missing", "closeout review requires a current PASS audit receipt", ("run the auditor task first",))
+
+        # 7. Check pending checkpoint deliveries
         pending = self._pending_delivery_count(cur, envelope.workspace_id, attempt["work_id"])
         if pending:
-            return refused("delivery_pending", f"{pending} close-attempt event(s) still owe an owner delivery", ("deliver the pending checkpoints (or owner-waive a failed one)", "then request_closeout again"))
+            return refused("delivery_pending", f"{pending} close-attempt event(s) still owe an owner delivery", ("deliver the pending checkpoints (or owner-waive a failed one)", "then record the closeout review again"))
+
+        # 8. Insert closeout receipt
+        cur.execute(
+            "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit)"
+            " VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (receipt.receipt_id, envelope.workspace_id, receipt.work_id, receipt.revision_id, receipt.candidate_id, receipt.kind.value, canonical_json(receipt.payload), receipt.payload_sha256, receipt.artifact_sha256, receipt.issuer, receipt.issued_at, receipt.candidate_sha256, receipt.candidate_commit, receipt.verdict, receipt.independent, receipt.remote_ref, receipt.remote_commit),
+        )
+
+        # 9. Transition attempt to closeout_requested
         attempt = self._transition_attempt(cur, envelope.workspace_id, attempt["attempt_id"], "state='closeout_requested', closeout_requested_at=clock_timestamp()")
-        event = self._close_event(cur, envelope, work_id=attempt["work_id"], attempt_id=attempt["attempt_id"], event_type="closeout_requested", reason_code="closeout_requested", reason="closeout recorded; only owner-entered /done completes", next_actions=("owner /done closes",), remaining_launches=launches, remaining_reports=reports)
-        return {"type": "request_closeout", "status": "applied", "attempt": _row_json(attempt), "event": event}
+
+        # 10. Record closeout_review_recorded event
+        event = self._close_event(
+            cur,
+            envelope,
+            work_id=attempt["work_id"],
+            attempt_id=attempt["attempt_id"],
+            event_type="closeout_review_recorded",
+            reason_code="closeout_review_recorded",
+            reason="the /summary closeout review is recorded; owner /done closes",
+            next_actions=("owner /done closes",),
+            remaining_launches=launches,
+            remaining_reports=reports,
+            requires_delivery=True,
+        )
+        return {"type": "record_closeout_review", "status": "applied", "receipt": receipt.model_dump(mode="json"), "attempt": _row_json(attempt), "event": event}
 
     def _complete_work(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload

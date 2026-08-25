@@ -50,22 +50,13 @@ Perform in order:
    attempt honestly: record the findings in the review, file the fixes, and
    stop — the next owner-entered /summary starts a fresh bounded attempt.
 
-5. **Closeout review** — call the workflow tool exactly once with
+5. **Closeout review (PASS only)** — call the workflow tool exactly once with
    `action:"append_evidence"`, `kind:"closeout"`, and the review `body`. The
    body carries all technical evidence from SECTION 1 plus the complete
    next-session state and loop charter from SECTION 2 — never a second
    handoff comment or a PROMPT-*.md file. The service accepts it only against
-   the audited attempt and mints a review checkpoint; the host delivers that
-   checkpoint to the owner and attests the delivery. Require `success:true`.
-
-6. **Request the close (PASS only)** — after the review checkpoint is
-   delivered, run the routine self-confirmed `request_closeout` on the
-   reviewed item (OMP-23 handshake: preview, verify, confirm in the same
-   turn). The service refuses it while the attempt is not audited or any
-   checkpoint delivery is still owed — a `delivery_pending` refusal means
-   deliver or owner-waive (`action:"waive_delivery"`, visible two-phase)
-   first. On a non-PASS attempt there is nothing to request: end blocked,
-   honestly.
-
+   the audited attempt, atomically records the review receipt, and transitions
+   the attempt to `closeout_requested`; the host delivers the review checkpoint
+   to the owner and attests the delivery. Require `success:true`.
 Leave NOW unchanged. The owner's `/done` — and only that — completes the
 attempt, the work item, and any validated same-session children.

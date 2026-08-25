@@ -39,6 +39,7 @@ import {
 	type CenterWaitingRow,
 	type CloseAttemptOutcome,
 	type CloseAttemptSession,
+	type CloseAttemptSnapshot,
 	type CloseEventView,
 	type CreateBatchInput,
 	type EvidenceKind,
@@ -71,6 +72,33 @@ const DRAIN_MAX_QUEUE = 8;
 const DRAIN_MAX_AGE_DAYS = 14;
 /** /center row bound — matches the existing queue digest bound (DRAIN_MAX_QUEUE). */
 const CENTER_MAX_ROWS = 8;
+
+function attemptNextAction(state: string): string {
+	switch (state) {
+		case "active":
+			return "append verification evidence, then seal the audit manifest with /summary";
+		case "audit_ready":
+			return "spawn ONE auditor task with the sealed body";
+		case "auditor_in_flight":
+			return "auditor launch in flight — wait for settlement";
+		case "audited":
+			return "PASS audit saved; enter /summary to resume close review";
+		case "closeout_requested":
+			return "owner /done closes";
+		case "remediation_required":
+			return "remediation required — enter /summary for a fresh attempt";
+		case "blocked":
+			return "attempt blocked — resolve blocker and enter /summary for a fresh attempt";
+		case "budget_exhausted":
+			return "attempt budget exhausted — enter /summary for a fresh attempt";
+		case "superseded":
+			return "attempt superseded — enter /summary for a fresh attempt";
+		case "completed":
+			return "attempt completed";
+		default:
+			return "continue workflow";
+	}
+}
 const ISSUER = "session-system/work-now";
 const NO_SURFACE = "(no surface)";
 
@@ -438,7 +466,7 @@ export function createWorkBackend(
 		}
 		const attempt = liveAttempt(view);
 		if (!attempt || attempt.state !== "closeout_requested" || attempt.candidate_id !== candidate.candidate_id) {
-			return "no requested close attempt on this candidate — complete /summary (through request_closeout) before /done";
+			return "no requested close attempt on this candidate — complete /summary close review before /done";
 		}
 		return null;
 	}
@@ -525,12 +553,30 @@ export function createWorkBackend(
 					.filter(e => e.active && e.kind === kind && (mine === "source" ? e.source_work_id : e.target_work_id) === view.item.work_id)
 					.map(e => keyOf.get(mine === "source" ? e.target_work_id : e.source_work_id) ?? "?");
 			const packet = buildPlanPacket(view);
-			const attempt = liveAttempt(view);
+			const attempt = liveAttempt(view) ?? (view.close_attempts ?? []).slice().sort((a, b) => b.requested_at.localeCompare(a.requested_at))[0];
 			const manifest = view.audit_manifest;
+			const hasManifest = !!(attempt && manifest && manifest.attempt_id === attempt.attempt_id);
+			const isLaunchable = !!(attempt && attempt.state === "audit_ready" && hasManifest);
 			const auditTask: SealedAuditTask | undefined =
 				attempt && manifest && manifest.attempt_id === attempt.attempt_id
 					? { attemptId: attempt.attempt_id, attemptState: attempt.state, taskBody: manifest.task_body, taskSha256: manifest.task_sha256 }
 					: undefined;
+			const remainingLaunches = attempt ? 3 - (attempt.launch_count - attempt.cancelled_launch_count) : 3;
+			const remainingReports = attempt ? 2 - attempt.accepted_report_count : 2;
+			const attemptSnapshot: CloseAttemptSnapshot | undefined = attempt
+				? {
+						attemptId: attempt.attempt_id,
+						state: attempt.state,
+						...(attempt.candidate_id ? { candidateId: attempt.candidate_id } : {}),
+						...(attempt.candidate_sha256 ? { candidateSha: attempt.candidate_sha256 } : {}),
+						...(attempt.candidate_commit ? { candidateCommit: attempt.candidate_commit } : {}),
+						remainingLaunches,
+						remainingReports,
+						hasManifest,
+						isLaunchable,
+						nextAction: attemptNextAction(attempt.state),
+					}
+				: undefined;
 			return {
 				title: view.item.revision.title,
 				state: view.item.state,
@@ -546,6 +592,7 @@ export function createWorkBackend(
 				digestPacket: linesOf(view) || "no receipts yet",
 				...(packet ? { planPacket: packet } : {}),
 				...(auditTask ? { auditTask } : {}),
+				...(attemptSnapshot ? { attemptSnapshot } : {}),
 			};
 		},
 
@@ -602,13 +649,46 @@ export function createWorkBackend(
 				? Math.max(...queue.map(i => Math.floor((Date.now() - Date.parse(i.revision.created_at)) / 86_400_000)))
 				: 0;
 			const listed = queue.slice(0, 8).map(i => i.alias.key).join(" ");
-			return [
+			const extraLines: string[] = [
 				`IN FLIGHT: ${inflight ? `${inflight.alias.key} ${inflight.revision.title}` : "none"}`,
 				`NEEDS CHRIS (${queue.length}${queue.length ? `, oldest ${oldestDays}d` : ""}): ${listed || "empty"}`,
 				...(queue.length > DRAIN_MAX_QUEUE || oldestDays > DRAIN_MAX_AGE_DAYS
 					? [`DRAIN RULE TRIPPED: queue ${queue.length} deep / oldest ${oldestDays}d — surface the 3 oldest to Chris for rulings this session.`]
 					: []),
 			];
+			if (inflight) {
+				const view = await client.workflow(inflight.alias.key);
+				const attempt = liveAttempt(view);
+				const pending = await backend.pendingDeliveries(inflight.alias.key);
+				if (pending.length > 0) {
+					extraLines.push(`CHECKPOINT DELIVERY PENDING (${pending.length}): /done remains blocked until delivered or owner-waived.`);
+				}
+				if (attempt) {
+					switch (attempt.state) {
+						case "active":
+							extraLines.push("CLOSE ATTEMPT: active — close ritual started; enter /summary to resume verification/sealing");
+							break;
+						case "audit_ready":
+							extraLines.push("CLOSE ATTEMPT: audit_ready — sealed audit ready; enter /summary to resume the auditor step");
+							break;
+						case "auditor_in_flight":
+							extraLines.push("CLOSE ATTEMPT: auditor_in_flight — auditor launch is in flight; do not launch another; recover/settle that launch");
+							break;
+						case "audited":
+							extraLines.push("CLOSE ATTEMPT: audited — PASS audit saved; enter /summary to resume close review—nothing will be erased");
+							break;
+						case "closeout_requested":
+							extraLines.push("CLOSE ATTEMPT: closeout_requested — close review saved; enter /done");
+							break;
+					}
+				} else {
+					const terminal = (view.close_attempts ?? []).slice().sort((a, b) => b.requested_at.localeCompare(a.requested_at))[0];
+					if (terminal && ["remediation_required", "blocked", "budget_exhausted"].includes(terminal.state)) {
+						extraLines.push(`CLOSE ATTEMPT: ${terminal.state} (${terminal.terminal_reason ?? "terminal"}) — enter /summary for a fresh attempt`);
+					}
+				}
+			}
+			return extraLines;
 		},
 
 		async statusLines(now: NowRef | null): Promise<string[]> {
@@ -785,11 +865,13 @@ export function createWorkBackend(
 					recommendations.push({ command: "/plan", reason: "no approved plan stamped on current work" });
 				} else {
 					const live = liveAttempt(view);
-					if (live && (live.state === "audited" || live.state === "closeout_requested")) {
+					if (live && live.state === "closeout_requested") {
 						recommendations.push({ command: "/done", reason: "closeout review complete — ready to close" });
-					} else if (live && (live.state === "audit_ready" || live.state === "active")) {
+					} else if (live && live.state === "audited") {
+						recommendations.push({ command: "/summary", reason: "PASS audit saved — resume close review" });
+					} else if (live && (live.state === "audit_ready" || live.state === "active" || live.state === "auditor_in_flight")) {
 						recommendations.push({ command: "/summary", reason: "audited review in progress" });
-					} else if (view.receipts.some(r => r.kind === "handoff" || r.kind === "verification") || view.item.candidate.kind === "final") {
+					} else if (view.receipts.some(r => r.kind === "handoff" || r.kind === "verification") || view.item.candidate?.kind === "final") {
 						recommendations.push({ command: "/summary", reason: "ready for review" });
 					} else {
 						recommendations.push({ command: `continue ${nowItem.alias.key}`, reason: "plan approved — finish execution" });
@@ -862,8 +944,24 @@ export function createWorkBackend(
 			return { issue: target, plannedCandidateId: candidateId };
 		},
 
-		async appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta): Promise<void> {
-			await run("append_evidence", { receipt: await receipt(SERVICE_KIND[kind], issue, body, meta) });
+		async appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta, authorizationRef?: string): Promise<CloseAttemptOutcome | void> {
+			const r = await receipt(SERVICE_KIND[kind], issue, body, meta);
+			if (kind === "closeout") {
+				const view = await client.workflow(issue.key);
+				const attempt = liveAttempt(view);
+				if (!attempt) throw new Error(`${issue.key} has no live close attempt — run /summary first`);
+				if (!authorizationRef) throw new Error("closeout review requires summary authorization reference");
+				const result = await run("record_closeout_review", {
+					receipt: r,
+					attempt_id: attempt.attempt_id,
+					authorization_ref: authorizationRef,
+				});
+				if (result.status === "refused") {
+					throw new Error(result.event.rendered_text);
+				}
+				return outcomeOf(result);
+			}
+			await run("append_evidence", { receipt: r });
 		},
 
 		async createIssue(input: { title: string; description?: string; project?: string; queue?: boolean; question?: string }): Promise<NowRef> {
@@ -947,13 +1045,6 @@ export function createWorkBackend(
 				}
 			}
 			await run("set_work_state", { work_id: issue.id, state: "TRIAGE" });
-		},
-
-		async proposeClose(issue: NowRef): Promise<void> {
-			const attempt = liveAttempt(await client.workflow(issue.key));
-			if (!attempt) throw new Error(`${issue.key} has no live close attempt — run /summary first`);
-			const result = await run("request_closeout", { work_id: issue.id, attempt_id: attempt.attempt_id });
-			if (result.status === "refused") throw new Error(result.event.rendered_text);
 		},
 
 		async reviseWork(issue: NowRef, fields: { title?: string; description?: string }): Promise<void> {

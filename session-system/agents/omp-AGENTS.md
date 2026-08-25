@@ -66,10 +66,7 @@ agent completes it itself, in the same turn:
 
 Routine means exactly these operations: `create_work` when filing a stray
 finding/capture, `revise_work` when recording an already-decided
-bookkeeping correction, `record_health`, and `request_closeout`.
-`request_closeout` records a proposal only and still requires the existing
-owner-entered `/summary` or `/done` host authorization.
-
+bookkeeping correction, and `record_health`.
 Everything else stays visibly owner-confirmed: formal `/intake`
 publication, `queue_work`, `set_now`, `cancel_work`, the `/summary`
 candidate-freeze dialog, and the `/done` close verdict. If a proposed

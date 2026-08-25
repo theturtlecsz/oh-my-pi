@@ -6,10 +6,10 @@ import * as path from "node:path";
 import { ExtensionRunner, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { confirmRoundTrip } from "./two-phase";
 import { currentTranscriptRef } from "../../extensions/workflow/transcript";
-
+import { createWorkBackend } from "../../extensions/workflow/work";
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions"];
+const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -470,13 +470,18 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 				const event = mockEvent(it.work_id, null, "close_attempt_refused", "candidate_not_final", true);
 				return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-begin-${eventSeq}` }, result: { type: "begin_close_attempt", status: "refused", attempt: null, event } }), { status: 200 });
 			}
+			const candidate = it.candidate as { candidate_id: string; candidate_sha256: string; commit_sha?: string };
+			const live = attempts.find(a => ["active", "audit_ready", "auditor_in_flight", "audited", "closeout_requested"].includes(a.state));
+			if (live && live.candidate_id === candidate.candidate_id) {
+				const event = mockEvent(it.work_id, live.attempt_id, "attempt_resumed", "attempt_resumed", false);
+				return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-begin-${eventSeq}` }, result: { type: "begin_close_attempt", status: "applied", attempt: live, event } }), { status: 200 });
+			}
 			for (const attempt of attempts) {
-				if (["active", "audit_ready", "auditor_in_flight", "audited", "closeout_requested"].includes(attempt.state)) {
+				if (["active", "audit_ready", "auditor_in_flight"].includes(attempt.state)) {
 					attempt.state = "superseded";
 					attempt.terminal_reason = "superseded_by_new_summary";
 				}
 			}
-			const candidate = it.candidate as { candidate_id: string; candidate_sha256: string; commit_sha?: string };
 			const attempt: MockAttempt = {
 				attempt_id: payload.attempt_id as string,
 				work_id: it.work_id,
@@ -630,16 +635,19 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			const event = mockEvent(target.work_id as string, (target.attempt_id as string) ?? null, "checkpoint_delivery_recorded", `delivery_${payload.status}`, false);
 			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-att-${eventSeq}` }, result: { type: "attest_checkpoint_delivery", status: "applied", delivery: deliveries.at(-1), event } }), { status: 200 });
 		}
-		if (cmdType === "request_closeout") {
+		if (cmdType === "record_closeout_review") {
 			const attempt = attempts.find(a => a.attempt_id === payload.attempt_id);
-			if (!attempt) throw new Error("request_closeout without attempt");
+			if (!attempt) throw new Error("record_closeout_review without attempt");
+			const receipt = payload.receipt as Record<string, unknown>;
+			receipts.push(receipt);
+			comments.push({ body: `**Session review**\n- Plan SHA-256: \`${(receipt.payload as Record<string, unknown>)?.plan_sha256 ?? (receipt.payload as Record<string, unknown>)?.body ?? ""}\``, createdAt: new Date().toISOString() });
 			attempt.state = "closeout_requested";
 			attempt.closeout_requested_at = new Date().toISOString();
-			const event = mockEvent(attempt.work_id, attempt.attempt_id, "closeout_requested", "closeout_requested", false);
+			const event = mockEvent(attempt.work_id, attempt.attempt_id, "closeout_review_recorded", "closeout_review_recorded", true);
 			return new Response(
 				JSON.stringify({
 					receipt: { state: "applied", operation_id: "00000000-0000-7000-8000-000000000015" },
-					result: { type: "request_closeout", status: "applied", attempt, event },
+					result: { type: "record_closeout_review", status: "applied", receipt, attempt, event },
 				}),
 				{ status: 200 },
 			);
@@ -1047,6 +1055,126 @@ if (mode === "intake") {
 	out.secondVerify = await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "bun test → pass" });
 } else if (mode === "restore") {
 	out.now = await execute({ action: "my_now" });
+} else if (mode === "omp140-audit-states") {
+	await setNow();
+	out.noAttemptGetWork = await execute({ action: "get_work", work: "HOME-1" });
+	await approve(planA);
+	await enterSummary();
+	out.activeGetWork = await execute({ action: "get_work", work: "HOME-1" });
+	await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "bun test → pass" });
+	out.auditReadyGetWork = await execute({ action: "get_work", work: "HOME-1" });
+	const attempt = attempts[0]!;
+	const manifest = manifests[0]!;
+	await globalThis.fetch("http://127.0.0.1:54322/v1/commands", {
+		method: "POST",
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE_ID,
+			operation_id: "00000000-0000-7000-8000-000000000010",
+			request_id: "00000000-0000-7000-8000-000000000011",
+			correlation_id: "00000000-0000-7000-8000-000000000012",
+			command: {
+				type: "reserve_auditor_launch",
+				payload: { attempt_id: attempt.attempt_id, task_sha256: manifest.task_sha256, tool_call_id: "call-1" },
+			},
+		}),
+	});
+	await globalThis.fetch("http://127.0.0.1:54322/v1/commands", {
+		method: "POST",
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE_ID,
+			operation_id: "00000000-0000-7000-8000-000000000013",
+			request_id: "00000000-0000-7000-8000-000000000014",
+			correlation_id: "00000000-0000-7000-8000-000000000015",
+			command: {
+				type: "settle_auditor_launch",
+				payload: { attempt_id: attempt.attempt_id, launch_id: "launch-1", transport_payload: "VERDICT: PASS\nFINDINGS\nnone\nACCEPTANCE COVERAGE\nall\nOUT OF SCOPE\nnone\nCHECKS RUN\nall\nREMAINING QUESTIONS\nnone" },
+			},
+		}),
+	});
+	out.auditedGetWork = await execute({ action: "get_work", work: "HOME-1" });
+	await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "review body" });
+	out.closeoutRequestedGetWork = await execute({ action: "get_work", work: "HOME-1" });
+} else if (mode === "omp140-restart-flow") {
+	await setNow();
+	await approve(planA);
+	await enterSummary();
+	await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "bun test → pass" });
+	const attempt = attempts[0]!;
+	const manifest = manifests[0]!;
+	await globalThis.fetch("http://127.0.0.1:54322/v1/commands", {
+		method: "POST",
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE_ID,
+			operation_id: "00000000-0000-7000-8000-000000000010",
+			request_id: "00000000-0000-7000-8000-000000000011",
+			correlation_id: "00000000-0000-7000-8000-000000000012",
+			command: {
+				type: "reserve_auditor_launch",
+				payload: { attempt_id: attempt.attempt_id, task_sha256: manifest.task_sha256, tool_call_id: "call-1" },
+			},
+		}),
+	});
+	await globalThis.fetch("http://127.0.0.1:54322/v1/commands", {
+		method: "POST",
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE_ID,
+			operation_id: "00000000-0000-7000-8000-000000000013",
+			request_id: "00000000-0000-7000-8000-000000000014",
+			correlation_id: "00000000-0000-7000-8000-000000000015",
+			command: {
+				type: "settle_auditor_launch",
+				payload: { attempt_id: attempt.attempt_id, launch_id: "launch-1", transport_payload: "VERDICT: PASS\nFINDINGS\nnone\nACCEPTANCE COVERAGE\nall\nOUT OF SCOPE\nnone\nCHECKS RUN\nall\nREMAINING QUESTIONS\nnone" },
+			},
+		}),
+	});
+	// Emulate fresh session 2 (attempt is audited)
+	await runner.emit({ type: "session_switch", reason: "new" } as never);
+	currentSessionId = "session-2";
+	await runner.emit({ type: "session_start" } as never);
+	const testBackend = createWorkBackend({ baseUrl: "http://127.0.0.1:54322", workspaceId: WORKSPACE_ID, ownerId: OWNER_ID }, () => "test-token");
+	out.session2Extras = await testBackend.digestExtras();
+	out.session2Center = await testBackend.centerSnapshot();
+	await enterSummary();
+	out.beginCallsAfterResume = beginCalls.length;
+	out.session2Review = await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "session 2 review" });
+	out.attemptStateAfterReview = attempts[0]?.state;
+	// Emulate fresh session 3 (attempt is closeout_requested)
+	await runner.emit({ type: "session_switch", reason: "new" } as never);
+	currentSessionId = "session-3";
+	await runner.emit({ type: "session_start" } as never);
+	out.session3Extras = await testBackend.digestExtras();
+	out.session3Center = await testBackend.centerSnapshot();
+	const done = extension.commands.get("done");
+	if (!done) throw new Error("done command missing");
+	await done.handler("", runner.createCommandContext());
+	out.doneState = items.get("id-1")?.state;
+} else if (mode === "omp140-failed-checkpoint") {
+	await setNow();
+	await approve(planA);
+	await enterSummary();
+	closeEvents.push({
+		event_id: "event-failed-del",
+		workspace_id: WORKSPACE_ID,
+		work_id: "id-1",
+		attempt_id: "att-1",
+		event_type: "closeout_review_recorded",
+		reason_code: "closeout_review_recorded",
+		reason: "review recorded",
+		legal_next_actions: ["owner /done closes"],
+		remaining_launches: 3,
+		remaining_reports: 2,
+		requires_fresh_authorization: false,
+		rendered_text: "failed event",
+		rendered_sha256: "0".repeat(64),
+		requires_delivery: true,
+		created_at: new Date().toISOString(),
+	});
+	const testBackend = createWorkBackend({ baseUrl: "http://127.0.0.1:54322", workspaceId: WORKSPACE_ID, ownerId: OWNER_ID }, () => "test-token");
+	out.extrasWithPending = await testBackend.digestExtras();
 } else if (mode === "center" || mode === "center-scoped") {
 	const center = extension.commands.get("center");
 	if (!center) throw new Error("center command missing");

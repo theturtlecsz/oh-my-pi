@@ -230,9 +230,7 @@ const batchFile = path.join(batchDir, `${cwdHash}.json`);
 fs.writeFileSync(batchFile, JSON.stringify([{ key: targetKey, reason: "superseded by candidate smoke" }]), { mode: 0o600 });
 fs.chmodSync(batchFile, 0o600);
 
-// 9. owner close request, then /done (preflight → verdict with cancel batch → push → complete).
-const close = await confirmRoundTrip(execute, { action: "request_closeout", work: key, body: "smoke complete" });
-out.requestCloseout = close.confirmed;
+// 9. /done (preflight → verdict with cancel batch → push → complete).
 const done = extension.commands.get("done");
 if (!done) throw new Error("done command missing");
 await done.handler("", runner.createCommandContext());

@@ -25,7 +25,7 @@ class WorkError(Exception):
 class WorkService:
     _scopes = {
         "create_work_batch": "work.mutate", "revise_work": "work.mutate", "set_work_state": "work.mutate", "put_relation": "work.mutate", "remove_relation": "work.mutate", "set_focus": "work.mutate", "clear_focus": "work.mutate", "record_project_health": "work.mutate",
-        "append_evidence": "work.approve", "finalize_candidate": "work.approve", "begin_close_attempt": "work.close", "seal_audit_manifest": "work.close", "reserve_auditor_launch": "work.close", "cancel_auditor_launch": "work.close", "settle_auditor_launch": "work.close", "attest_checkpoint_delivery": "work.close", "request_closeout": "work.close", "complete_work": "work.close", "stage_import_batch": "work.import", "promote_import_batch": "work.import", "activate_cutover": "work.operate", "attest_cutover_plan": "work.operate",
+        "append_evidence": "work.approve", "finalize_candidate": "work.approve", "begin_close_attempt": "work.close", "seal_audit_manifest": "work.close", "reserve_auditor_launch": "work.close", "cancel_auditor_launch": "work.close", "settle_auditor_launch": "work.close", "attest_checkpoint_delivery": "work.close", "record_closeout_review": "work.close", "complete_work": "work.close", "stage_import_batch": "work.import", "promote_import_batch": "work.import", "activate_cutover": "work.operate", "attest_cutover_plan": "work.operate",
     }
 
     def __init__(self, store: WorkStore) -> None:

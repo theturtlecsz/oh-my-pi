@@ -453,10 +453,10 @@ class FinalizeCandidatePayload(StrictModel):
     commit_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
-class RequestCloseoutPayload(StrictModel):
-    work_id: UUID
+class RecordCloseoutReviewPayload(StrictModel):
+    receipt: EvidenceReceipt
     attempt_id: UUID
-
+    authorization_ref: str = Field(min_length=1)
 
 class CancellationProof(StrictModel):
     """Owner ruling 2026-08-23 (staged cancel batches, OMP-111): one historical work
@@ -653,10 +653,9 @@ class FinalizeCandidateCommand(StrictModel):
     payload: FinalizeCandidatePayload
 
 
-class RequestCloseoutCommand(StrictModel):
-    type: Literal["request_closeout"]
-    payload: RequestCloseoutPayload
-
+class RecordCloseoutReviewCommand(StrictModel):
+    type: Literal["record_closeout_review"]
+    payload: RecordCloseoutReviewPayload
 
 class CompleteWorkCommand(StrictModel):
     type: Literal["complete_work"]
@@ -718,7 +717,7 @@ class AttestCutoverPlanCommand(StrictModel):
 
 
 Command = Annotated[
-    CreateWorkBatchCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | FinalizeCandidateCommand | BeginCloseAttemptCommand | SealAuditManifestCommand | ReserveAuditorLaunchCommand | CancelAuditorLaunchCommand | SettleAuditorLaunchCommand | AttestCheckpointDeliveryCommand | RequestCloseoutCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand | AttestCutoverPlanCommand,
+    CreateWorkBatchCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | FinalizeCandidateCommand | BeginCloseAttemptCommand | SealAuditManifestCommand | ReserveAuditorLaunchCommand | CancelAuditorLaunchCommand | SettleAuditorLaunchCommand | AttestCheckpointDeliveryCommand | RecordCloseoutReviewCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand | AttestCutoverPlanCommand,
     Field(discriminator="type"),
 ]
 
@@ -737,7 +736,7 @@ class WorkflowMapping(StrictModel):
     capture: Literal["create_work_batch"] = Field(alias="/capture")
     plan: Literal["candidate allocation plus plan evidence"] = Field(alias="/plan")
     now: Literal["focus reads/set/clear"] = Field(alias="/now")
-    summary: Literal["close attempt: finalize, seal manifest, bounded audit, review, closeout request"] = Field(alias="/summary")
+    summary: Literal["close attempt: finalize, seal manifest, bounded audit, closeout review"] = Field(alias="/summary")
     done: Literal["complete_work"] = Field(alias="/done")
 
 
@@ -864,4 +863,4 @@ class Approval(StrictModel):
     contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_by: Literal["owner"]
     approved_at: datetime
-    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47", "OMP-67", "OMP-93", "OMP-99", "OMP-106", "OMP-123", "OMP-124"]
+    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47", "OMP-67", "OMP-93", "OMP-99", "OMP-106", "OMP-123", "OMP-124", "OMP-140"]

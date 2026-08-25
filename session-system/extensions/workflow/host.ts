@@ -42,6 +42,7 @@ import {
 	CLOSEOUT_BOUNDARY,
 	type CloseAttemptOutcome,
 	type CloseAttemptSession,
+	type CloseAttemptSnapshot,
 	type EvidenceKind,
 	type EvidenceMeta,
 	type GoalTree,
@@ -85,14 +86,13 @@ export type CanonicalAction =
 	| "revise_work"
 	| "set_now"
 	| "record_health"
-	| "request_closeout"
 	| "waive_delivery"
 	| "cancel_work";
 
 const ACTIONS = [
 	"get_work", "tree", "waiting", "my_now", "status",
 	"append_evidence", "create_work", "queue_work", "revise_work",
-	"set_now", "record_health", "request_closeout", "waive_delivery", "cancel_work",
+	"set_now", "record_health", "waive_delivery", "cancel_work",
 ] as const;
 const ACTION_ENUM: [string, ...string[]] = [...ACTIONS];
 const TOOL_NAME = "work";
@@ -193,14 +193,25 @@ export function renderPlanPacket(packet: PlanPacket | undefined): string[] {
 /** OMP-50 get_work tail: the sealed auditor task, byte-for-byte, never truncated.
  *  The model copies THIS body into the one auditor task — no transcript reads,
  *  no reconstruction; the service refuses any launch whose bytes differ. */
-export function renderAuditTask(task: SealedAuditTask | undefined): string[] {
-	if (!task) return ["AUDIT TASK: none sealed — /summary (begin attempt) + verification evidence seal it"];
-	return [
-		`AUDIT TASK (sealed, attempt ${task.attemptId}, state ${task.attemptState}) — spawn ONE auditor task whose text is EXACTLY the body below, byte-for-byte; task sha256 ${task.taskSha256}:`,
-		"----- SEALED AUDITOR TASK BEGIN -----",
-		task.taskBody,
-		"----- SEALED AUDITOR TASK END -----",
-	];
+export function renderAuditTask(task: SealedAuditTask | undefined, attempt?: CloseAttemptSnapshot): string[] {
+	if (!attempt) {
+		return ["AUDIT TASK: no attempt — owner /summary must begin one"];
+	}
+	if (attempt.state === "active") {
+		return ["AUDIT TASK: attempt active (unsealed) — append verification and seal the manifest with /summary; do not spawn"];
+	}
+	if (attempt.state === "audit_ready" && task && task.attemptId === attempt.attemptId) {
+		return [
+			`AUDIT TASK (sealed, attempt ${task.attemptId}, state ${task.attemptState}) — spawn ONE auditor task whose text is EXACTLY the body below, byte-for-byte; task sha256 ${task.taskSha256}:`,
+			"----- SEALED AUDITOR TASK BEGIN -----",
+			task.taskBody,
+			"----- SEALED AUDITOR TASK END -----",
+		];
+	}
+	if (["auditor_in_flight", "audited", "closeout_requested", "remediation_required", "blocked", "budget_exhausted", "superseded", "completed"].includes(attempt.state)) {
+		return [`AUDIT TASK: attempt ${attempt.state} (${attempt.nextAction}) — do not spawn`];
+	}
+	return [`AUDIT TASK: integrity error (attempt ${attempt.state}) — state invariant violated; do not spawn`];
 }
 
 function sectionItems(content: string, heading: "Approach" | "Verification"): string[] {
@@ -1696,7 +1707,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				try {
 					// HOME-114: wrap-up writes remain host-locked; only /done closes.
 					// This refusal names the lock at any depth — checked first.
-					if ((action === "record_health" || action === "request_closeout" || action === "waive_delivery" || action === "cancel_work") && !closeoutAuthorized) {
+					if ((action === "record_health" || action === "waive_delivery" || action === "cancel_work") && !closeoutAuthorized) {
 						return deny(LOCK_REFUSAL);
 					}
 					// Review provenance refusal names /summary at any depth — checked
@@ -1758,7 +1769,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 									`state: ${i.state} · project: ${i.project ?? "none"} · labels: ${i.labels.join(",") || "none"}`,
 									i.description ?? "",
 									...renderPlanPacket(i.planPacket),
-									...renderAuditTask(i.auditTask),
+									...renderAuditTask(i.auditTask, i.attemptSnapshot),
 								].join("\n"),
 							);
 						}
@@ -1781,7 +1792,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const issue = workflow?.issue ?? (await backend.findIssue(params.work));
 							const meta: EvidenceMeta = { ...(workflow?.plan ? { planHash: workflow.plan.hash } : {}) };
 							try {
-								await backend.appendEvidence(issue, kind, params.body, meta);
+								await backend.appendEvidence(issue, kind, params.body, meta, summaryAuthorizationRef);
 							} catch (error) {
 								return deny(`${String(error)} on ${issue.key} — workflow state unchanged`);
 							}
@@ -1808,7 +1819,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 							if (kind === backend.reviewKind && ownerSession(ctx)) {
 								// OMP-51/OMP-97: the review checkpoint the service minted must reach the
-								// owner and be attested before request_closeout can succeed. Queued delivery
+								// owner and be attested before /done can succeed. Queued delivery
 								// avoids turn-yield deadlock in tool handlers.
 								const queued = await queuePendingCheckpointDeliveries(pi, backend, issue.key, notice => {
 									pendingNotices.push(`[${TOOL_NAME}] ${notice}`);
@@ -1965,19 +1976,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (!gate.approved) return deny(gate.preview);
 							await backend.queueIssue(issue, question);
 							return okText(`${issue.key} → ${backend.queueNoun}`);
-						}
-						case "request_closeout": {
-							if (!params.work) return deny("work key required");
-							const issue = await backend.findIssue(params.work);
-							const gate = confirmWrite(
-								"request_closeout",
-								"Model wants to propose a close",
-								`${issue.key} ${issue.title}\nReason: ${params.body ?? "(none given)"}\n\nRecords the proposal + adds ${backend.queueNoun}. Does NOT close.`,
-								params,
-							);
-							if (!gate.approved) return deny(gate.preview);
-							await backend.proposeClose(issue, params.body);
-							return okText(`close proposed on ${issue.key} — owner verdict closes`);
 						}
 						case "waive_delivery": {
 							// OMP-51: an owner-visible two-phase waiver for ONE failed pending

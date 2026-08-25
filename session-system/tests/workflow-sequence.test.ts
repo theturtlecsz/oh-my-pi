@@ -11,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -411,6 +411,47 @@ describe("HOME-122 workflow sequence", () => {
 		expect(readout).not.toContain("## FAKE QUESTION");
 		expect(readout).not.toContain("### FAKE HIDDEN");
 		expect(readout).toContain("\\# FAKE TITLE");
+	});
+
+	test("get_work renders exhaustive audit task states without ambiguous placeholder (OMP-140)", () => {
+		const out = run("omp140-audit-states");
+		expect(String(out.noAttemptGetWork)).toContain("AUDIT TASK: no attempt — owner /summary must begin one");
+		expect(String(out.activeGetWork)).toContain("AUDIT TASK: attempt active (unsealed) — append verification and seal the manifest with /summary; do not spawn");
+		expect(String(out.auditReadyGetWork)).toContain("AUDIT TASK (sealed, attempt");
+		expect(String(out.auditReadyGetWork)).toContain("spawn ONE auditor task whose text is EXACTLY the body below");
+		expect(String(out.auditedGetWork)).toContain("AUDIT TASK: attempt audited (PASS audit saved; enter /summary to resume close review) — do not spawn");
+		expect(String(out.closeoutRequestedGetWork)).toContain("AUDIT TASK: attempt closeout_requested (owner /done closes) — do not spawn");
+	});
+
+	test("audited attempt survives restart, resumes cleanly without audit duplication, and enables fresh-session /done (OMP-140)", () => {
+		const out = run("omp140-restart-flow");
+		// Session 2 start: digestExtras and centerSnapshot reflect WorkService audited state
+		const session2Extras = list(out.session2Extras);
+		expect(session2Extras.some(l => l.includes("CLOSE ATTEMPT: audited — PASS audit saved; enter /summary to resume close review—nothing will be erased"))).toBe(true);
+		const session2Center = record(out.session2Center);
+		const recs2 = session2Center.recommendations as Array<{ command: string; reason: string }>;
+		expect(recs2.some(r => r.command === "/summary" && r.reason.includes("PASS audit saved"))).toBe(true);
+
+		// Resuming /summary under session 2 re-authorizes cleanly and records closeout review
+		expect(out.beginCallsAfterResume).toBe(2);
+		expect(String(out.session2Review)).toContain("closeout receipt recorded on HOME-1");
+		expect(out.attemptStateAfterReview).toBe("closeout_requested");
+
+		// Session 3 start: digestExtras and centerSnapshot reflect closeout_requested state
+		const session3Extras = list(out.session3Extras);
+		expect(session3Extras.some(l => l.includes("CLOSE ATTEMPT: closeout_requested — close review saved; enter /done"))).toBe(true);
+		const session3Center = record(out.session3Center);
+		const recs3 = session3Center.recommendations as Array<{ command: string; reason: string }>;
+		expect(recs3.some(r => r.command === "/done" && r.reason.includes("closeout review complete"))).toBe(true);
+
+		// Fresh-session /done completes the work item directly
+		expect(out.doneState).toBe("DONE");
+	});
+
+	test("pending checkpoint delivery blocks /done and renders honest bookend guidance (OMP-140)", () => {
+		const out = run("omp140-failed-checkpoint");
+		const extras = list(out.extrasWithPending);
+		expect(extras.some(l => l.includes("CHECKPOINT DELIVERY PENDING (1): /done remains blocked until delivered or owner-waived."))).toBe(true);
 	});
 });
 

@@ -22,8 +22,8 @@ order:
    write SECTION 1: THE SESSION.
 3. `references/ledger-close.md` — the ordered close ritual: health, triage,
    verification (which seals the audit manifest), the ONE reserved auditor
-   task built from `work get_work`'s sealed AUDIT TASK, the closeout review
-   and its delivered checkpoint, and the routine `request_closeout` on PASS.
+   task built from `work get_work`'s sealed AUDIT TASK, and the closeout review
+   which atomically records the review and requests closeout once delivered.
 4. `references/loop-charter.md` — SECTION 2: NEXT SESSION, the standing loop
    prompt.
 

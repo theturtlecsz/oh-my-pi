@@ -1252,7 +1252,8 @@
             "OMP-99",
             "OMP-106",
             "OMP-123",
-            "OMP-124"
+            "OMP-124",
+            "OMP-140"
           ],
           "title": "Issue",
           "type": "string"
@@ -4243,6 +4244,50 @@
           "title": "ReconciliationHashes",
           "type": "object"
         },
+        "RecordCloseoutReviewCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RecordCloseoutReviewPayload"
+            },
+            "type": {
+              "const": "record_closeout_review",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RecordCloseoutReviewCommand",
+          "type": "object"
+        },
+        "RecordCloseoutReviewPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "authorization_ref": {
+              "minLength": 1,
+              "title": "Authorization Ref",
+              "type": "string"
+            },
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            }
+          },
+          "required": [
+            "receipt",
+            "attempt_id",
+            "authorization_ref"
+          ],
+          "title": "RecordCloseoutReviewPayload",
+          "type": "object"
+        },
         "RecordProjectHealthCommand": {
           "additionalProperties": false,
           "properties": {
@@ -4363,46 +4408,6 @@
             "relation"
           ],
           "title": "RemoveRelationPayload",
-          "type": "object"
-        },
-        "RequestCloseoutCommand": {
-          "additionalProperties": false,
-          "properties": {
-            "payload": {
-              "$ref": "#/$defs/RequestCloseoutPayload"
-            },
-            "type": {
-              "const": "request_closeout",
-              "title": "Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "payload"
-          ],
-          "title": "RequestCloseoutCommand",
-          "type": "object"
-        },
-        "RequestCloseoutPayload": {
-          "additionalProperties": false,
-          "properties": {
-            "attempt_id": {
-              "format": "uuid",
-              "title": "Attempt Id",
-              "type": "string"
-            },
-            "work_id": {
-              "format": "uuid",
-              "title": "Work Id",
-              "type": "string"
-            }
-          },
-          "required": [
-            "work_id",
-            "attempt_id"
-          ],
-          "title": "RequestCloseoutPayload",
           "type": "object"
         },
         "ReserveAuditorLaunchCommand": {
@@ -4822,9 +4827,9 @@
               "finalize_candidate": "#/$defs/FinalizeCandidateCommand",
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
               "put_relation": "#/$defs/PutRelationCommand",
+              "record_closeout_review": "#/$defs/RecordCloseoutReviewCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
               "remove_relation": "#/$defs/RemoveRelationCommand",
-              "request_closeout": "#/$defs/RequestCloseoutCommand",
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
               "revise_work": "#/$defs/ReviseWorkCommand",
               "seal_audit_manifest": "#/$defs/SealAuditManifestCommand",
@@ -4882,7 +4887,7 @@
               "$ref": "#/$defs/AttestCheckpointDeliveryCommand"
             },
             {
-              "$ref": "#/$defs/RequestCloseoutCommand"
+              "$ref": "#/$defs/RecordCloseoutReviewCommand"
             },
             {
               "$ref": "#/$defs/CompleteWorkCommand"
@@ -6147,7 +6152,7 @@
               "type": "string"
             },
             "/summary": {
-              "const": "close attempt: finalize, seal manifest, bounded audit, review, closeout request",
+              "const": "close attempt: finalize, seal manifest, bounded audit, closeout review",
               "title": "/Summary",
               "type": "string"
             }
@@ -8394,6 +8399,395 @@
       "title": "ReconciliationHashes",
       "type": "object"
     },
+    "RecordCloseoutReviewCommand": {
+      "$defs": {
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout",
+            "handoff",
+            "same_session_found_fixed"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        },
+        "RecordCloseoutReviewPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "authorization_ref": {
+              "minLength": 1,
+              "title": "Authorization Ref",
+              "type": "string"
+            },
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            }
+          },
+          "required": [
+            "receipt",
+            "attempt_id",
+            "authorization_ref"
+          ],
+          "title": "RecordCloseoutReviewPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RecordCloseoutReviewPayload"
+        },
+        "type": {
+          "const": "record_closeout_review",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RecordCloseoutReviewCommand",
+      "type": "object"
+    },
+    "RecordCloseoutReviewPayload": {
+      "$defs": {
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout",
+            "handoff",
+            "same_session_found_fixed"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "authorization_ref": {
+          "minLength": 1,
+          "title": "Authorization Ref",
+          "type": "string"
+        },
+        "receipt": {
+          "$ref": "#/$defs/EvidenceReceipt"
+        }
+      },
+      "required": [
+        "receipt",
+        "attempt_id",
+        "authorization_ref"
+      ],
+      "title": "RecordCloseoutReviewPayload",
+      "type": "object"
+    },
     "RecordProjectHealthCommand": {
       "$defs": {
         "RecordProjectHealthPayload": {
@@ -8686,69 +9080,6 @@
         "relation"
       ],
       "title": "RemoveRelationPayload",
-      "type": "object"
-    },
-    "RequestCloseoutCommand": {
-      "$defs": {
-        "RequestCloseoutPayload": {
-          "additionalProperties": false,
-          "properties": {
-            "attempt_id": {
-              "format": "uuid",
-              "title": "Attempt Id",
-              "type": "string"
-            },
-            "work_id": {
-              "format": "uuid",
-              "title": "Work Id",
-              "type": "string"
-            }
-          },
-          "required": [
-            "work_id",
-            "attempt_id"
-          ],
-          "title": "RequestCloseoutPayload",
-          "type": "object"
-        }
-      },
-      "additionalProperties": false,
-      "properties": {
-        "payload": {
-          "$ref": "#/$defs/RequestCloseoutPayload"
-        },
-        "type": {
-          "const": "request_closeout",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "payload"
-      ],
-      "title": "RequestCloseoutCommand",
-      "type": "object"
-    },
-    "RequestCloseoutPayload": {
-      "additionalProperties": false,
-      "properties": {
-        "attempt_id": {
-          "format": "uuid",
-          "title": "Attempt Id",
-          "type": "string"
-        },
-        "work_id": {
-          "format": "uuid",
-          "title": "Work Id",
-          "type": "string"
-        }
-      },
-      "required": [
-        "work_id",
-        "attempt_id"
-      ],
-      "title": "RequestCloseoutPayload",
       "type": "object"
     },
     "ReserveAuditorLaunchCommand": {
@@ -9913,7 +10244,7 @@
           "type": "string"
         },
         "/summary": {
-          "const": "close attempt: finalize, seal manifest, bounded audit, review, closeout request",
+          "const": "close attempt: finalize, seal manifest, bounded audit, closeout review",
           "title": "/Summary",
           "type": "string"
         }

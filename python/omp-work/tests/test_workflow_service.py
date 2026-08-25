@@ -135,7 +135,7 @@ def _finalize(service, workspace_id, item: dict, planned_id: str, *, commit: str
     return _command(service, workspace_id, {"type": "finalize_candidate", "payload": payload})
 
 
-def _begin(service, workspace_id, item: dict, *, authorization_ref: str | None = None, attempt_id=None, identity: dict | None = None) -> tuple[int, dict]:
+def _begin(service, workspace_id, item: dict, *, authorization_ref: str | None = None, attempt_id=None, identity: dict | None = None, operation_id=None) -> tuple[int, dict]:
     payload = {
         "work_id": item["work_id"],
         "attempt_id": str(attempt_id or uuid4()),
@@ -148,7 +148,7 @@ def _begin(service, workspace_id, item: dict, *, authorization_ref: str | None =
         "starting_dirty_paths": [],
         **(identity or {}),
     }
-    return _command(service, workspace_id, {"type": "begin_close_attempt", "payload": payload})
+    return _command(service, workspace_id, {"type": "begin_close_attempt", "payload": payload}, operation_id=operation_id)
 
 
 def _verify_and_seal(service, workspace_id, item: dict, final: dict, attempt: dict) -> dict:
@@ -228,6 +228,22 @@ def _audited_attempt(service, workspace_id, title: str = "close target") -> tupl
     return item, final, body["result"]["attempt"]
 
 
+
+def _record_review(service, workspace_id, item: dict, final: dict, attempt: dict, *, authorization_ref: str | None = None, operation_id=None) -> tuple[int, dict]:
+    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
+    return _command(
+        service,
+        workspace_id,
+        {
+            "type": "record_closeout_review",
+            "payload": {
+                "receipt": closeout,
+                "attempt_id": attempt["attempt_id"],
+                "authorization_ref": authorization_ref or attempt["authorization_ref"],
+            },
+        },
+        operation_id=operation_id,
+    )
 def _complete(service, workspace_id, item: dict, final: dict, attempt_id: str, *, done_ref: str | None = None, satisfied: list[str] | None = None, cancellations: list[dict] | None = None, key: str = "OMP-1", operation_id=None) -> tuple[int, dict]:
     workflow = service.client.get(f"/v1/work-items/{key}/workflow", headers=_owner_headers(workspace_id)).json()
     completion = {
@@ -293,11 +309,11 @@ def test_begin_refuses_without_final_candidate_or_plan(service) -> None:
     forged = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "audit", independent=True, verdict="PASS", **binding)
     status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": forged}})
     assert status == 400 and body["error"]["code"] == "invalid_request"
-    # request_closeout without an audited attempt refuses too.
+    # record_closeout_review without an audited attempt refuses too.
     status, body = _begin(service, workspace_id, item)
     assert status == 200 and body["result"]["status"] == "applied"
     attempt = body["result"]["attempt"]
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    status, body = _record_review(service, workspace_id, item, {"candidate_id": str(uuid4())}, attempt)
     assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "attempt_not_audited"
 
 
@@ -368,20 +384,22 @@ def test_sealed_manifest_and_full_pass_flow_to_done(service) -> None:
     assert len(audits) == 1 and audits[0]["independent"] is True and audits[0]["verdict"] == "PASS"
     assert audits[0]["issuer"] == "work-service/auditor-settle"
     assert audits[0]["payload"]["report"] == PASS_REPORT
-    # Closeout review requires the audited attempt and mints a deliverable checkpoint.
-    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
-    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
-    assert status == 200 and body["result"].get("event", {}).get("event_type") == "closeout_review_recorded", body
-    # request_closeout refuses while deliveries are pending, then applies.
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    # Closeout review requires the audited attempt and atomically transitions to closeout_requested.
+    # It refuses if deliveries are pending.
+    status, body = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "delivery_pending"
     _drain_deliveries(service, workspace_id)
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    status, body = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and body["result"]["status"] == "applied" and body["result"]["attempt"]["state"] == "closeout_requested", body
+    assert body["result"]["event"]["event_type"] == "closeout_review_recorded"
+    # Replay of record_closeout_review is idempotent applied
+    status, replay = _record_review(service, workspace_id, item, final, attempt)
+    assert status == 200 and replay["result"]["status"] == "applied" and replay["result"]["attempt"]["state"] == "closeout_requested"
     # Completion needs the push receipt and a fresh /done authorization.
     push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
     status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
     assert status == 200
+    _drain_deliveries(service, workspace_id)
     status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], done_ref=attempt["authorization_ref"])
     assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "done_authorization_not_fresh"
     operation_id = uuid4()
@@ -392,11 +410,8 @@ def test_sealed_manifest_and_full_pass_flow_to_done(service) -> None:
     assert status == 200 and replay["receipt"]["state"] == "replayed" and replay["result"] == body["result"]
     # A REUSED done authorization on new work refuses.
     item2, final2, attempt2 = _audited_attempt(service, workspace_id, "second")
-    closeout2 = _receipt(item2["work_id"], item2["revision_id"], final2["candidate_id"], "closeout")
-    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout2}})
-    assert status == 200
     _drain_deliveries(service, workspace_id, key="OMP-2")
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item2["work_id"], "attempt_id": attempt2["attempt_id"]}})
+    status, body = _record_review(service, workspace_id, item2, final2, attempt2)
     assert status == 200 and body["result"]["status"] == "applied"
     push2 = _receipt(item2["work_id"], item2["revision_id"], final2["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final2["commit_sha"])
     status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push2}})
@@ -411,12 +426,10 @@ def test_containment_push_receipt_completes_to_done(service) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)
     item, final, attempt = _audited_attempt(service, workspace_id)
-    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
-    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
-    assert status == 200
     _drain_deliveries(service, workspace_id)
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    status, body = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and body["result"]["status"] == "applied", body
+    _drain_deliveries(service, workspace_id)
     tip = "a" * 40 if final["commit_sha"] != "a" * 40 else "b" * 40
     push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=tip, candidate_commit=final["commit_sha"])
     status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
@@ -605,16 +618,15 @@ def test_duplicate_begins_one_live_attempt(service) -> None:
     status, body = _begin(service, workspace_id, item, authorization_ref=ref, identity=identity)
     assert status == 200 and body["result"]["status"] == "applied"
     first = body["result"]["attempt"]
-    # Identical authorization AND identity: idempotent resume of the same attempt.
-    status, body = _begin(service, workspace_id, item, authorization_ref=ref, identity=identity)
+    # Identical authorization under a DIFFERENT operation_id: returns stored outcome byte-for-byte.
+    status, body = _begin(service, workspace_id, item, authorization_ref=ref, identity=identity, operation_id=uuid4())
     assert status == 200 and body["result"]["status"] == "applied"
     assert body["result"]["attempt"]["attempt_id"] == first["attempt_id"]
-    assert body["result"]["event"]["event_type"] == "attempt_resumed"
-    # Same authorization but drifted identity (fresh attempt_id/diff): typed
-    # refusal, no silent rebind.
-    status, body = _begin(service, workspace_id, item, authorization_ref=ref)
+    # Same authorization but drifted identity (diff_sha256 changed): returns authorization_reuse_conflict
+    status, body = _begin(service, workspace_id, item, authorization_ref=ref, identity={"diff_sha256": secrets.token_hex(32)})
     assert status == 200 and body["result"]["status"] == "refused"
-    assert body["result"]["event"]["reason_code"] == "authorization_identity_mismatch"
+    assert body["result"]["event"]["reason_code"] == "authorization_reuse_conflict"
+    # Fresh authorization against unfinished attempt supersedes it and starts a fresh attempt.
     status, body = _begin(service, workspace_id, item)
     assert status == 200 and body["result"]["status"] == "applied"
     assert body["result"]["attempt"]["attempt_id"] != first["attempt_id"]
@@ -625,7 +637,7 @@ def test_duplicate_begins_one_live_attempt(service) -> None:
     assert len(superseded) == 1 and superseded[0]["terminal_reason"] == "superseded_by_new_summary"
     # A terminal attempt's authorization can never be reused.
     status, body = _begin(service, workspace_id, item, authorization_ref=ref)
-    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "authorization_exhausted"
+    assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "authorization_reuse_conflict"
 
 
 def test_replan_lands_on_unaudited_final_candidate(service) -> None:
@@ -746,7 +758,7 @@ def test_remediation_required_blocks_closeout_until_fresh_summary(service) -> No
     assert status == 200 and body["result"]["status"] == "applied" and body["result"]["verdict"] == "NEEDS_FIX"
     assert body["result"]["attempt"]["state"] == "remediation_required"
     assert body["result"]["event"]["requires_fresh_authorization"] is True
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    status, body = _record_review(service, workspace_id, item, {"candidate_id": str(uuid4())}, attempt)
     assert status == 200 and body["result"]["status"] == "refused"
     assert body["result"]["event"]["reason_code"] == "attempt_not_audited"
     assert body["result"]["event"]["requires_fresh_authorization"] is True
@@ -789,18 +801,17 @@ def test_same_session_child_completion_valid_and_invalid(service) -> None:
     status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": bad}})
     assert status == 409 and body["error"]["code"] == "stale_evidence"
     # Close ritual on the parent.
-    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
-    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
-    assert status == 200
     _drain_deliveries(service, workspace_id)
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    status, body = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and body["result"]["status"] == "applied", body
     push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
     status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
     assert status == 200
+    _drain_deliveries(service, workspace_id)
     # Invalid child (no receipt) refuses the WHOLE completion — nothing moves.
     status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], satisfied=[child["work_id"], stray["work_id"]])
     assert status == 200 and body["result"]["status"] == "refused" and body["result"]["event"]["reason_code"] == "child_receipt_invalid"
+    assert "no same_session_found_fixed receipt" in body["result"]["event"]["reason"]
     tree = service.client.get(f"/v1/workspaces/{workspace_id}/tree", headers=_owner_headers(workspace_id)).json()
     states = {entry["alias"]["key"]: entry["state"] for entry in tree["items"]}
     assert states["OMP-1"] != "DONE" and states["OMP-2"] != "DONE"
@@ -885,13 +896,11 @@ def test_stale_service_refuses_writes_and_still_reads(service, monkeypatch: pyte
 
 
 def _close_ritual(service, workspace_id, item: dict, final: dict, attempt: dict, *, done_ref: str | None = None, cancellations: list[dict] | None = None, operation_id=None) -> tuple[int, dict]:
-    """Post-PASS closeout: review receipt, drain, request, push, complete."""
-    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
-    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
-    assert status == 200, body
+    """Post-PASS closeout: record closeout review, drain, push, complete."""
     _drain_deliveries(service, workspace_id, key=item["key"])
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    status, body = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and body["result"]["status"] == "applied", body
+    _drain_deliveries(service, workspace_id, key=item["key"])
     push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
     status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
     assert status == 200, body
@@ -1013,14 +1022,14 @@ def test_rider_change_under_same_authorization_refuses_resume(service) -> None:
     status, body = _begin(service, workspace_id, item, authorization_ref=auth, identity={"owner_session_started_at": started_at, "diff_sha256": diff_sha, "riders": riders})
     assert status == 200 and body["result"]["status"] == "applied", body
     attempt = body["result"]["attempt"]
-    # Identical payload resumes.
+    # Replaying identical authorization returns stored begin outcome.
     status, body = _begin(service, workspace_id, item, authorization_ref=auth, attempt_id=attempt["attempt_id"], identity={"owner_session_started_at": started_at, "diff_sha256": diff_sha, "riders": riders})
-    assert status == 200 and body["result"]["event"]["event_type"] == "attempt_resumed", body
-    # Changed rider evidence under the same authorization refuses.
+    assert status == 200 and body["result"]["event"]["event_type"] == "attempt_begun", body
+    # Changed rider evidence under the same authorization refuses with reuse conflict.
     changed = [{"work_id": rider["work_id"], "revision_id": rider["revision_id"], "evidence": "probe: tampered"}]
     status, body = _begin(service, workspace_id, item, authorization_ref=auth, attempt_id=attempt["attempt_id"], identity={"owner_session_started_at": started_at, "diff_sha256": diff_sha, "riders": changed})
     assert status == 200 and body["result"]["status"] == "refused", body
-    assert body["result"]["event"]["reason_code"] == "authorization_identity_mismatch"
+    assert body["result"]["event"]["reason_code"] == "authorization_reuse_conflict"
 
 
 def test_complete_work_with_cancellations_applied_and_events(service) -> None:
@@ -1052,16 +1061,13 @@ def test_complete_work_cancellation_refusals_and_rollback(service) -> None:
     _grant(service, workspace_id)
     item, final, attempt = _audited_attempt(service, workspace_id, "rollback primary")
     target = _create(service, workspace_id, "target for rollback")
-    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
-    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
-    assert status == 200, body
     _drain_deliveries(service, workspace_id, key=item["key"])
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    status, body = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and body["result"]["status"] == "applied", body
     push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
     status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
     assert status == 200, body
-
+    _drain_deliveries(service, workspace_id, key=item["key"])
     # Self-cancellation is invalid
     status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], cancellations=[{"work_id": item["work_id"], "revision_id": item["revision_id"], "reason": "self"}], key=item["key"])
     assert status == 400 and body["error"]["code"] == "invalid_request"
@@ -1078,6 +1084,7 @@ def test_complete_work_cancellation_refusals_and_rollback(service) -> None:
     status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], cancellations=[{"work_id": target["work_id"], "revision_id": fake_rev, "reason": "stale"}], key=item["key"])
     assert status == 200 and body["result"]["status"] == "refused"
     assert body["result"]["event"]["reason_code"] == "cancel_binding_invalid"
+    assert "no longer open on the submitted revision" in body["result"]["event"]["reason"]
 
     # Already-terminal target refuses transaction with cancel_binding_invalid
     terminal_target = _create(service, workspace_id, "terminal target")
@@ -1086,7 +1093,6 @@ def test_complete_work_cancellation_refusals_and_rollback(service) -> None:
     status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], cancellations=[{"work_id": terminal_target["work_id"], "revision_id": terminal_target["revision_id"], "reason": "already canceled"}], key=item["key"])
     assert status == 200 and body["result"]["status"] == "refused"
     assert body["result"]["event"]["reason_code"] == "cancel_binding_invalid"
-
     # Primary and target stay open
     primary_view = service.client.get(f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)).json()
     assert primary_view["item"]["state"] not in ("DONE", "CANCELED")
@@ -1146,22 +1152,105 @@ def test_closeout_refused_before_checkpoint_attestation_and_succeeds_after(servi
     workspace_id = uuid4()
     _grant(service, workspace_id)
     item, final, attempt = _audited_attempt(service, workspace_id, "gated item")
-    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
-    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": closeout}})
-    assert status == 200, body
 
-    # Before delivery is attested, request_closeout is refused with delivery_pending
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    # Before delivery is attested, record_closeout_review is refused with delivery_pending
+    status, body = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and body["result"]["status"] == "refused", body
     assert body["result"]["event"]["reason_code"] == "delivery_pending"
 
-    # Attest the delivery
-    _drain_deliveries(service, workspace_id, key=item["key"])
+    # Attest pending deliveries
+    _drain_deliveries(service, workspace_id)
 
-    # After delivery is attested, request_closeout succeeds
-    status, body = _command(service, workspace_id, {"type": "request_closeout", "payload": {"work_id": item["work_id"], "attempt_id": attempt["attempt_id"]}})
+    # After delivery is attested, record_closeout_review succeeds and atomically transitions attempt to closeout_requested
+    status, body = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and body["result"]["status"] == "applied", body
-def test_duplicate_title_rejection(service) -> None:
+    assert body["result"]["attempt"]["state"] == "closeout_requested"
+
+
+def test_summary_authorization_resume_audited_and_closeout_requested(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id, "resume audited")
+
+    # A new authorization token with matching identity resumes the audited attempt
+    new_auth = f"summary:{uuid4()}"
+    status, body = _begin(service, workspace_id, item, authorization_ref=new_auth, identity={"diff_sha256": attempt["diff_sha256"]})
+    assert status == 200 and body["result"]["status"] == "applied"
+    resumed = body["result"]["attempt"]
+    assert resumed["attempt_id"] == attempt["attempt_id"]
+    assert resumed["state"] == "audited"
+    assert body["result"]["event"]["event_type"] == "attempt_resumed"
+
+    # Mismatched identity against audited attempt refuses finished_attempt_identity_mismatch and does NOT supersede
+    mismatched_auth = f"summary:{uuid4()}"
+    status, body = _begin(service, workspace_id, item, authorization_ref=mismatched_auth, identity={"diff_sha256": secrets.token_hex(32)})
+    assert status == 200 and body["result"]["status"] == "refused"
+    assert body["result"]["event"]["reason_code"] == "finished_attempt_identity_mismatch"
+
+    view = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    live = [a for a in view["close_attempts"] if a["state"] in ("active", "audit_ready", "auditor_in_flight", "audited", "closeout_requested")]
+    assert len(live) == 1 and live[0]["attempt_id"] == attempt["attempt_id"] and live[0]["state"] == "audited"
+
+    # Advance to closeout_requested
+    _drain_deliveries(service, workspace_id)
+    status, body = _record_review(service, workspace_id, item, final, attempt, authorization_ref=new_auth)
+    assert status == 200 and body["result"]["status"] == "applied"
+    assert body["result"]["attempt"]["state"] == "closeout_requested"
+
+    # A fresh authorization token against closeout_requested attempt resumes without demoting state
+    fresh_auth = f"summary:{uuid4()}"
+    status, body = _begin(service, workspace_id, item, authorization_ref=fresh_auth, identity={"diff_sha256": attempt["diff_sha256"]})
+    assert status == 200 and body["result"]["status"] == "applied"
+    assert body["result"]["attempt"]["attempt_id"] == attempt["attempt_id"]
+    assert body["result"]["attempt"]["state"] == "closeout_requested"
+    assert body["result"]["event"]["event_type"] == "attempt_resumed"
+
+    # Mismatched identity against closeout_requested also refuses finished_attempt_identity_mismatch
+    status, body = _begin(service, workspace_id, item, authorization_ref=f"summary:{uuid4()}", identity={"diff_sha256": secrets.token_hex(32)})
+    assert status == 200 and body["result"]["status"] == "refused"
+    assert body["result"]["event"]["reason_code"] == "finished_attempt_identity_mismatch"
+
+
+def test_resume_with_omitted_riders_retains_sealed_riders(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    rider = _create(service, workspace_id, "rider for omit test")
+    item = _create(service, workspace_id, "primary for omit test")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    initial_auth = f"summary:{uuid4()}"
+    riders = [{"work_id": rider["work_id"], "revision_id": rider["revision_id"], "evidence": "probe: sealed"}]
+    status, body = _begin(service, workspace_id, item, authorization_ref=initial_auth, identity={"riders": riders})
+    assert status == 200 and body["result"]["status"] == "applied"
+    attempt = body["result"]["attempt"]
+    assert len(attempt["riders"]) == 1
+
+    # Resume with empty riders list retains the sealed riders
+    resume_auth = f"summary:{uuid4()}"
+    status, body = _begin(service, workspace_id, item, authorization_ref=resume_auth, identity={"diff_sha256": attempt["diff_sha256"], "riders": []})
+    assert status == 200 and body["result"]["status"] == "applied"
+    assert body["result"]["attempt"]["attempt_id"] == attempt["attempt_id"]
+    assert len(body["result"]["attempt"]["riders"]) == 1
+    assert body["result"]["event"]["event_type"] == "attempt_resumed"
+
+
+def test_terminal_work_authorization_refused(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id, "terminal work item")
+    status, body = _close_ritual(service, workspace_id, item, final, attempt)
+    assert status == 200 and body["result"]["state"] == "DONE"
+
+    # A fresh authorization token against completed work refuses work_terminal
+    fresh_auth = f"summary:{uuid4()}"
+    status, body = _begin(service, workspace_id, item, authorization_ref=fresh_auth)
+    assert status == 200 and body["result"]["status"] == "refused"
+    assert body["result"]["event"]["reason_code"] == "work_terminal"
+
+    # A replayed authorization token returns stored outcome without mutating
+    status, body = _begin(service, workspace_id, item, authorization_ref=attempt["authorization_ref"], identity={"diff_sha256": attempt["diff_sha256"]})
+    assert status == 200 and body["result"]["status"] == "applied"
     workspace_id = uuid4()
     _grant(service, workspace_id)
 

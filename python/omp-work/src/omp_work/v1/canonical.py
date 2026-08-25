@@ -4,12 +4,12 @@ import hashlib
 import json
 import re
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from .models import CommandEnvelope
-
 CANDIDATE_HASH_ALGORITHM = "work.omp.dev/v1/candidate-sha256"
 _COMMIT_SHA_PATTERN = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
@@ -57,4 +57,42 @@ def command_sha256(envelope: CommandEnvelope) -> str:
         "api_version": envelope.api_version,
         "workspace_id": str(envelope.workspace_id),
         "command": envelope.command.model_dump(mode="json"),
+    })
+
+
+def close_attempt_identity_sha256(
+    *,
+    work_id: str | UUID,
+    revision_id: str | UUID,
+    candidate_id: str | UUID,
+    candidate_sha256: str,
+    candidate_commit: str,
+    plan_receipt_id: str | UUID,
+    repository: str,
+    diff_sha256: str,
+    starting_dirty_paths: Iterable[str],
+    sealed_riders: Iterable[dict[str, object]],
+) -> str:
+    """Canonical close attempt resume identity (OMP-140)."""
+    rider_snapshots = [
+        {
+            "work_id": str(r["work_id"]),
+            "revision_id": str(r["revision_id"]),
+            "title": str(r["title"]),
+            "criteria": list(r.get("criteria") or []),
+            "evidence_sha256": str(r["evidence_sha256"]),
+        }
+        for r in sorted(sealed_riders, key=lambda r: str(r["work_id"]))
+    ]
+    return sha256({
+        "work_id": str(work_id),
+        "revision_id": str(revision_id),
+        "candidate_id": str(candidate_id),
+        "candidate_sha256": str(candidate_sha256),
+        "candidate_commit": str(candidate_commit),
+        "plan_receipt_id": str(plan_receipt_id),
+        "repository": str(repository),
+        "diff_sha256": str(diff_sha256),
+        "starting_dirty_paths": list(starting_dirty_paths),
+        "riders": rider_snapshots,
     })

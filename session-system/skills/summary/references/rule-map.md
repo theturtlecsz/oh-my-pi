@@ -15,7 +15,7 @@ policy. Nothing was dropped silently.
 | Report shape validation (VERDICT first line, five sections, JSON shapes) | WorkService `normalize_auditor_report` (`semantics.py`) with stable refusal codes; tested in `test_workflow_service.py` |
 | "A gate refusal outranks reminder text" (obs #142) | Retained policy (`ledger-close.md`) — refusals are now typed events with legal next actions |
 | Host adds the `Session review` prefix and plan hash; require success:true | Unchanged host behavior; review append additionally requires the audited live attempt and mints a delivered checkpoint (`store.py` closeout branch) |
-| Closeout request after review | `request_closeout` requires `attempt_id`, an audited attempt, and zero pending deliveries; still routine self-confirmed after literal /summary (OMP-23) |
+| Closeout review | `record_closeout_review` requires `attempt_id`, an audited attempt, valid authorization, and zero pending deliveries; atomically transitions to `closeout_requested` |
 | /done closes; /summary never does | Unchanged (HOME-114 host lock); `complete_work` additionally requires a fresh single-use /done authorization reference |
 | Stop-hook budget prose ("one replacement per attempt…") | Deleted from prompts; the service refuses over-budget spawns with the remaining counts in the event |
 | Command hygiene, obs #141/#131/#99 grounding rules | Retained policy (`session-review.md`) |

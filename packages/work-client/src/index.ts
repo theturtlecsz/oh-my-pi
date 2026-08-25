@@ -272,7 +272,7 @@ export type FinalizeCandidatePayload = {
 	candidate_sha256: string;
 	commit_sha: string;
 };
-export type RequestCloseoutPayload = { work_id: UUID; attempt_id: UUID };
+export type RecordCloseoutReviewPayload = { receipt: EvidenceReceipt; attempt_id: UUID; authorization_ref: string };
 export type CompletionInput = {
 	work_id: UUID;
 	current_revision_id: UUID;
@@ -376,7 +376,7 @@ export type Command =
 	| { type: "cancel_auditor_launch"; payload: CancelAuditorLaunchPayload }
 	| { type: "settle_auditor_launch"; payload: SettleAuditorLaunchPayload }
 	| { type: "attest_checkpoint_delivery"; payload: AttestCheckpointDeliveryPayload }
-	| { type: "request_closeout"; payload: RequestCloseoutPayload }
+	| { type: "record_closeout_review"; payload: RecordCloseoutReviewPayload }
 	| { type: "complete_work"; payload: CompleteWorkPayload }
 	| { type: "record_project_health"; payload: RecordProjectHealthPayload }
 	| { type: "activate_cutover"; payload: ActivateCutoverPayload };
@@ -433,8 +433,9 @@ export type CommandResult =
 			event: CloseAttemptEvent;
 	  }
 	| {
-			type: "request_closeout";
+			type: "record_closeout_review";
 			status: "applied" | "refused";
+			receipt?: EvidenceReceipt | null;
 			attempt?: CloseAttempt | null;
 			event: CloseAttemptEvent;
 	  }

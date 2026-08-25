@@ -19,7 +19,7 @@ export const PLAN_APPROVED_PREFIX = "**Plan approved**";
 export const EXECUTION_HANDOFF_PREFIX = "**Execution handoff**";
 export const SESSION_REVIEW_PREFIX = "**Session review**";
 export const CLOSEOUT_LOCK_REFUSAL =
-	"REFUSED — closeout lock (HOME-114): no owner-entered /summary or /done this session. record_health, request_closeout, and cancel_work are wrap-up writes; they unlock only when Chris literally enters /summary or /done. If he wants this write, he must enter one of those commands himself — do not retry on your own.";
+	"REFUSED — closeout lock (HOME-114): no owner-entered /summary or /done this session. record_health and cancel_work are wrap-up writes; they unlock only when Chris literally enters /summary or /done. If he wants this write, he must enter one of those commands himself — do not retry on your own.";
 
 /** One explicit ceiling on the get_work PLAN PACKET (plan body + acceptance
  *  criteria bytes). Over it, the packet says so and audit spawn is refused —
@@ -131,6 +131,19 @@ export interface MapSurface {
 	waiting: number;
 }
 
+export interface CloseAttemptSnapshot {
+	attemptId: string;
+	state: string;
+	candidateId?: string;
+	candidateSha?: string;
+	candidateCommit?: string;
+	remainingLaunches: number;
+	remainingReports: number;
+	hasManifest: boolean;
+	isLaunchable: boolean;
+	nextAction: string;
+}
+
 export interface IssueDetail {
 	title: string;
 	state: string;
@@ -148,6 +161,8 @@ export interface IssueDetail {
 	planPacket?: PlanPacket;
 	/** OMP-50: the sealed auditor task, rendered byte-for-byte once it exists. */
 	auditTask?: SealedAuditTask;
+	/** OMP-140: attempt state snapshot from WorkService workflow data. */
+	attemptSnapshot?: CloseAttemptSnapshot;
 }
 
 export interface TreeItem {
@@ -449,11 +464,10 @@ export interface WorkflowBackend {
 	clearNowRemote(issueId: string | undefined): Promise<void>; // throws → host warns, clears locally
 	/** Returns the issue the plan state lives on; work backend also the planned candidate id. */
 	stampPlan(target: NowRef, stamp: PlanStamp): Promise<{ issue: NowRef; plannedCandidateId?: string }>;
-	appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta): Promise<void>;
+	appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta, authorizationRef?: string): Promise<CloseAttemptOutcome | void>;
 	createIssue(input: { title: string; description?: string; project?: string; queue?: boolean; question?: string }): Promise<NowRef>;
 	createBatch(input: CreateBatchInput): Promise<BatchOutcome>;
 	queueIssue(issue: NowRef, question?: string): Promise<void>;
-	proposeClose(issue: NowRef, reason: string | undefined): Promise<void>;
 	reviseWork(issue: NowRef, fields: { title?: string; description?: string }): Promise<void>;
 	recordHealth(project: string, health: "onTrack" | "atRisk" | "offTrack"): Promise<void>;
 

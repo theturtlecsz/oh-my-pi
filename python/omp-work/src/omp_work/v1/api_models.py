@@ -144,9 +144,10 @@ class HealthView(StrictModel):
     alerts: tuple[str, ...] = ()
 
 
-class CloseoutResult(StrictModel):
-    type: Literal["request_closeout"]
+class RecordCloseoutReviewResult(StrictModel):
+    type: Literal["record_closeout_review"]
     status: Literal["applied", "refused"]
+    receipt: EvidenceReceipt | None = None
     attempt: CloseAttempt | None = None
     event: CloseAttemptEvent
 
@@ -180,7 +181,7 @@ class AuthorityView(StrictModel):
 
 
 CommandResult = Annotated[
-    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | CompleteWorkResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseAttemptResult | CloseoutResult | ProjectHealthResult | ActivateCutoverResult | AttestCutoverPlanResult,
+    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | CompleteWorkResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseAttemptResult | RecordCloseoutReviewResult | ProjectHealthResult | ActivateCutoverResult | AttestCutoverPlanResult,
     Field(discriminator="type"),
 ]
 

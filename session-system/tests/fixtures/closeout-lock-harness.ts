@@ -135,7 +135,6 @@ if (mode === "legacy-host") {
 	await attempt("before", ctx);
 	if (mode === "input") {
 		// Full locked-action coverage on the pristine instance.
-		await attemptAction("before_request_closeout", { action: "request_closeout", work: "HOME-1", body: "b" }, ctx);
 		await attemptAction("before_cancel_work", { action: "cancel_work", work: "HOME-1" }, ctx);
 		await runner.emitInput("/summary", undefined, "interactive");
 		await attempt("afterUnlock", ctx);

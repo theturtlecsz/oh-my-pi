@@ -16,14 +16,21 @@ gate booleans, the process-global audit bridge, the stop-hook reminder, and
    `closeout_requested` with `authorization_kind="legacy"`. No pending row is
    silently superseded by migration — only a new literal owner `/summary` or
    an owner-approved `/plan` (OMP-124) supersedes a non-terminal attempt.
-2. **Immutable identity.** An attempt binds work, revision, plan receipt,
-   finalized candidate (id/SHA-256/commit), owner session (id/start
-   time/start commit), repository, range-diff SHA-256, starting dirty paths,
-   and the authorization reference. A trigger enforces identity immutability,
-   the legal transition table, monotonic counters, and terminal-row
-   immutability. One partial unique index keeps exactly one live attempt per
-   work item across `active`, `audit_ready`, `auditor_in_flight`, `audited`,
-   and `closeout_requested`.
+2. **Immutable identity and durable authorization (OMP-140).** An attempt binds
+   work, revision, plan receipt, finalized candidate (id/SHA-256/commit),
+   owner session (id/start time/start commit), repository, range-diff SHA-256,
+   starting dirty paths, sealed riders (OMP-93), and the authorization reference.
+   Authorizations are recorded in `omp_work.authorization_uses`. Matching
+   canonical resume identity resumes the live attempt without state demotion or
+   erasing audits; same-token replay returns the stored outcome without mutation;
+   same token with changed identity refuses `authorization_reuse_conflict`.
+   Identity mismatch against an `audited` or `closeout_requested` attempt refuses
+   `finished_attempt_identity_mismatch` and never supersedes; unfinished attempts
+   (`active`, `audit_ready`, `auditor_in_flight`) supersede on mismatch.
+   A trigger enforces identity immutability, the legal transition table, monotonic
+   counters, and terminal-row immutability. One partial unique index keeps exactly
+   one live attempt per work item across `active`, `audit_ready`, `auditor_in_flight`,
+   `audited`, and `closeout_requested`.
 3. **States.** Non-terminal: active → audit_ready → auditor_in_flight →
    audited → closeout_requested. A completed invocation with no accepted
    report burns its launch and returns auditor_in_flight → audit_ready. A host
@@ -67,14 +74,18 @@ gate booleans, the process-global audit bridge, the stop-hook reminder, and
    unidentifiable aggregates, envelope/scope failures, and post-mutation
    invariant violations (which roll back).
 7. **Receipted delivery.** Events with `requires_delivery` block
-   `request_closeout` and `complete_work` until an append-only
+   `record_closeout_review` and `complete_work` until an append-only
    `checkpoint_deliveries` row records `delivered` (or an owner-authorized
    `waived` over a `failed` one) — computed per work item, so superseded
    attempts cannot strand owner-visible debt.
-8. **Completion.** `request_closeout` requires the audited live attempt;
-   `complete_work` requires `attempt_id`, a fresh single-use `/done`
-   authorization reference, and completes attempt + work (+ validated
-   same-session children, decision OMP-52) atomically.
+8. **Completion.** Closeout review (`record_closeout_review`, OMP-140) requires
+   the audited live attempt, valid authorization targeting the attempt, exact
+   revision/candidate binding, no candidate drift, current PASS audit, and zero
+   pending deliveries, recording the closeout review and transitioning the attempt
+   to `closeout_requested` atomically in one transaction; generic `append_evidence`
+   rejects kind `closeout`. `complete_work` requires `attempt_id`, a fresh
+   single-use `/done` authorization reference, and completes attempt + work
+   (+ validated same-session children, decision OMP-52) atomically.
 
 ## Consequences
 
