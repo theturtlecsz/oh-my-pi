@@ -684,7 +684,11 @@ export function createWorkBackend(
 				} else {
 					const terminal = (view.close_attempts ?? []).slice().sort((a, b) => b.requested_at.localeCompare(a.requested_at))[0];
 					if (terminal && ["remediation_required", "blocked", "budget_exhausted"].includes(terminal.state)) {
-						extraLines.push(`CLOSE ATTEMPT: ${terminal.state} (${terminal.terminal_reason ?? "terminal"}) — enter /summary for a fresh attempt`);
+						const terminalEvent = (view.close_attempt_events ?? [])
+							.filter(e => e.attempt_id === terminal.attempt_id && (e.event_type === "auditor_launch_settled" || (e.event_type === "close_attempt_refused" && (e.reason_code === "budget_exhausted" || e.reason_code === "auditor_budget_exhausted"))))
+							.sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
+						const nextAction = terminalEvent?.legal_next_actions?.[0] ?? "enter /summary for a fresh attempt";
+						extraLines.push(`CLOSE ATTEMPT: ${terminal.state} (${terminal.terminal_reason ?? "terminal"}) — ${nextAction}`);
 					}
 				}
 			}

@@ -9,7 +9,7 @@ import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 import { createWorkBackend } from "../../extensions/workflow/work";
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint"];
+const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -67,7 +67,7 @@ const beginCalls: Array<Record<string, unknown>> = [];
 const settleCalls: Array<Record<string, unknown>> = [];
 const cancelCalls: Array<Record<string, unknown>> = [];
 const attestCalls: Array<Record<string, unknown>> = [];
-function mockEvent(workId: string, attemptId: string | null, eventType: string, reasonCode: string, requiresDelivery: boolean): Record<string, unknown> {
+function mockEvent(workId: string, attemptId: string | null, eventType: string, reasonCode: string, requiresDelivery: boolean, legalNextActions: string[] = []): Record<string, unknown> {
 	eventSeq += 1;
 	const rendered = `CLOSE ATTEMPT — ${eventType}\n${reasonCode}: mock`;
 	const event = {
@@ -79,7 +79,7 @@ function mockEvent(workId: string, attemptId: string | null, eventType: string, 
 		event_type: eventType,
 		reason_code: reasonCode,
 		reason: "mock",
-		legal_next_actions: [],
+		legal_next_actions: legalNextActions,
 		remaining_launches: 3,
 		remaining_reports: 2,
 		requires_fresh_authorization: false,
@@ -607,6 +607,12 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			attempt.accepted_report_count += 1;
 			attempt.state = verdict === "PASS" ? "audited" : verdict === "NEEDS_FIX" ? "remediation_required" : "blocked";
 			if (verdict !== "PASS") attempt.terminal_reason = verdict === "NEEDS_FIX" ? "needs_fix" : "auditor_blocked";
+			const actions = verdict === "PASS"
+				? ["record the closeout review", "owner /done closes"]
+				: verdict === "NEEDS_FIX"
+					? ["fix the findings", "enter /summary again for a fresh attempt"]
+					: ["resolve the blocker", "enter /summary again for a fresh attempt"];
+			const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_settled", `verdict_${verdict.toLowerCase()}`, true, actions);
 			const receipt = {
 				receipt_id: `rec-audit-${eventSeq}`,
 				work_id: attempt.work_id,
@@ -624,7 +630,6 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			};
 			receipts.push(receipt);
 			comments.push({ body: text.trim(), createdAt: new Date().toISOString() });
-			const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_settled", `verdict_${verdict.toLowerCase()}`, true);
 			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-set-${eventSeq}` }, result: { type: "settle_auditor_launch", status: "applied", attempt, receipt, verdict, event } }), { status: 200 });
 		}
 		if (cmdType === "attest_checkpoint_delivery") {
@@ -1175,6 +1180,90 @@ if (mode === "intake") {
 	});
 	const testBackend = createWorkBackend({ baseUrl: "http://127.0.0.1:54322", workspaceId: WORKSPACE_ID, ownerId: OWNER_ID }, () => "test-token");
 	out.extrasWithPending = await testBackend.digestExtras();
+} else if (mode === "omp140-terminal-guidance") {
+	await setNow();
+	attempts.length = 0;
+	closeEvents.length = 0;
+	const remediationAttempt: MockAttempt = {
+		attempt_id: "att-remediation",
+		work_id: "id-1",
+		revision_id: "rev-1",
+		candidate_id: "cand-1",
+		plan_receipt_id: "plan-1",
+		candidate_sha256: "0".repeat(64),
+		candidate_commit: "0".repeat(40),
+		owner_session_id: "s1",
+		owner_session_started_at: new Date().toISOString(),
+		owner_session_start_commit: "0".repeat(40),
+		repository: "/repo",
+		diff_sha256: "0".repeat(64),
+		starting_dirty_paths: [],
+		authorization_kind: "summary",
+		authorization_ref: "summary:auth-r",
+		launch_count: 1,
+		cancelled_launch_count: 0,
+		accepted_report_count: 1,
+		in_flight_launch_id: null,
+		state: "remediation_required",
+		terminal_reason: "needs_fix",
+		requested_at: new Date().toISOString(),
+		closeout_requested_at: null,
+		completed_at: null,
+		completion_authorization_ref: null,
+	};
+	attempts.push(remediationAttempt);
+	mockEvent("id-1", "att-remediation", "auditor_launch_settled", "verdict_needs_fix", false, ["fix the findings", "enter /summary again for a fresh attempt"]);
+	const testBackend = createWorkBackend({ baseUrl: "http://127.0.0.1:54322", workspaceId: WORKSPACE_ID, ownerId: OWNER_ID }, () => "test-token");
+	out.terminalExtras = await testBackend.digestExtras();
+	// Test budget_exhausted attempt with close_attempt_refused reason_code="budget_exhausted"
+	attempts.length = 0;
+	closeEvents.length = 0;
+	const budgetAttempt: MockAttempt = {
+		attempt_id: "att-budget",
+		work_id: "id-1",
+		revision_id: "rev-1",
+		candidate_id: "cand-1",
+		plan_receipt_id: "plan-1",
+		candidate_sha256: "0".repeat(64),
+		candidate_commit: "0".repeat(40),
+		owner_session_id: "s1",
+		owner_session_started_at: new Date().toISOString(),
+		owner_session_start_commit: "0".repeat(40),
+		repository: "/repo",
+		diff_sha256: "0".repeat(64),
+		starting_dirty_paths: [],
+		authorization_kind: "summary",
+		authorization_ref: "summary:auth-b",
+		launch_count: 3,
+		cancelled_launch_count: 0,
+		accepted_report_count: 0,
+		in_flight_launch_id: null,
+		state: "budget_exhausted",
+		terminal_reason: "auditor_budget_exhausted",
+		requested_at: new Date().toISOString(),
+		closeout_requested_at: null,
+		completed_at: null,
+		completion_authorization_ref: null,
+	};
+	attempts.push(budgetAttempt);
+	closeEvents.push({
+		event_id: "event-budget-refusal",
+		workspace_id: WORKSPACE_ID,
+		work_id: "id-1",
+		attempt_id: "att-budget",
+		event_type: "close_attempt_refused",
+		reason_code: "budget_exhausted",
+		reason: "the auditor budget for this attempt is exhausted",
+		legal_next_actions: ["enter /summary again for a fresh bounded attempt"],
+		remaining_launches: 0,
+		remaining_reports: 2,
+		requires_fresh_authorization: true,
+		rendered_text: "budget exhausted text",
+		rendered_sha256: "0".repeat(64),
+		requires_delivery: true,
+		created_at: new Date().toISOString(),
+	});
+	out.budgetExtras = await testBackend.digestExtras();
 } else if (mode === "center" || mode === "center-scoped") {
 	const center = extension.commands.get("center");
 	if (!center) throw new Error("center command missing");
@@ -1336,6 +1425,9 @@ if (mode === "intake") {
 	} as never);
 	out.wrongBlocked = wrong && typeof wrong === "object" && "block" in wrong ? Boolean(wrong.block) : false;
 	out.wrongReason = wrong && typeof wrong === "object" && "reason" in wrong ? String(wrong.reason) : "";
+	out.wrongRefusalDelivered = deliveredMessages.some(
+		m => m.customType === "close-attempt-checkpoint" && typeof m.content === "string" && m.content.includes("manifest_task_mismatch")
+	);
 	out.launchCountAfterWrong = attempts.at(-1)?.launch_count ?? -1;
 	// outputSchema is refused.
 	const schema = await runner.emitToolCall({

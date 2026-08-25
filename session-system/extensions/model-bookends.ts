@@ -160,6 +160,7 @@ export default function modelBookends(pi: ExtensionAPI) {
 			// task must be refused before spawn — with zero slot burn.
 			const outcome = await svc.reserveAuditorLaunch(now.key, sha256Hex(auditor.task), event.toolCallId);
 			if (outcome.status === "refused" || !outcome.launchId) {
+				if (outcome.event?.requiresDelivery) queueCheckpointDelivery(pi, svc, outcome.event);
 				return { block: true, reason: `Audit gate refused by the ledger:\n${outcome.event.renderedText}` };
 			}
 			gate.inflight = { toolCallId: event.toolCallId, launchId: outcome.launchId, key: now.key };

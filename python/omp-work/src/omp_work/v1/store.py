@@ -989,7 +989,7 @@ class PostgresWorkStore:
         if attempt["state"] == "closeout_requested":
             cur.execute(f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND work_id=%s AND candidate_id=%s AND kind='closeout' ORDER BY issued_at DESC, receipt_id DESC LIMIT 1", (envelope.workspace_id, attempt["work_id"], attempt["candidate_id"]))
             existing_receipt = cur.fetchone()
-            if existing_receipt is not None:
+            if existing_receipt is not None and existing_receipt["payload_sha256"] == receipt.payload_sha256:
                 cur.execute(f"SELECT {_EVENT_FIELDS} FROM omp_work.close_attempt_events WHERE workspace_id=%s AND attempt_id=%s AND event_type='closeout_review_recorded' ORDER BY sequence DESC LIMIT 1", (envelope.workspace_id, attempt["attempt_id"]))
                 existing_event = cur.fetchone()
                 if existing_event is not None:

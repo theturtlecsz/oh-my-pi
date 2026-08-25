@@ -229,8 +229,8 @@ def _audited_attempt(service, workspace_id, title: str = "close target") -> tupl
 
 
 
-def _record_review(service, workspace_id, item: dict, final: dict, attempt: dict, *, authorization_ref: str | None = None, operation_id=None) -> tuple[int, dict]:
-    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout")
+def _record_review(service, workspace_id, item: dict, final: dict, attempt: dict, *, authorization_ref: str | None = None, operation_id=None, review_body: dict | None = None) -> tuple[int, dict]:
+    closeout = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "closeout", body=review_body)
     return _command(
         service,
         workspace_id,
@@ -244,6 +244,8 @@ def _record_review(service, workspace_id, item: dict, final: dict, attempt: dict
         },
         operation_id=operation_id,
     )
+
+
 def _complete(service, workspace_id, item: dict, final: dict, attempt_id: str, *, done_ref: str | None = None, satisfied: list[str] | None = None, cancellations: list[dict] | None = None, key: str = "OMP-1", operation_id=None) -> tuple[int, dict]:
     workflow = service.client.get(f"/v1/work-items/{key}/workflow", headers=_owner_headers(workspace_id)).json()
     completion = {
@@ -395,7 +397,12 @@ def test_sealed_manifest_and_full_pass_flow_to_done(service) -> None:
     # Replay of record_closeout_review is idempotent applied
     status, replay = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and replay["result"]["status"] == "applied" and replay["result"]["attempt"]["state"] == "closeout_requested"
-    # Completion needs the push receipt and a fresh /done authorization.
+    # A different review body on already closeout_requested refuses typed already_requested
+    status, diff_body = _record_review(service, workspace_id, item, final, attempt, review_body={"body": "different closeout review"}, operation_id=uuid4())
+    assert status == 200 and diff_body["result"]["status"] == "refused" and diff_body["result"]["event"]["reason_code"] == "already_requested"
+    view = service.client.get("/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)).json()
+    closeouts = [receipt for receipt in view["receipts"] if receipt["kind"] == "closeout"]
+    assert len(closeouts) == 1 and closeouts[0]["payload"] == {"body": "closeout evidence body"}
     push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
     status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
     assert status == 200
@@ -742,7 +749,7 @@ def test_replan_supersedes_in_flight_attempt_after_revision_clear(service) -> No
 
 def test_remediation_required_blocks_closeout_until_fresh_summary(service) -> None:
     # Scenario: closeout after remediation — NEEDS_FIX terminal state refuses
-    # request_closeout with a fresh-authorization requirement.
+    # record_closeout_review with a fresh-authorization requirement.
     workspace_id = uuid4()
     _grant(service, workspace_id)
     item = _create(service, workspace_id, "remediation")
@@ -1251,6 +1258,9 @@ def test_terminal_work_authorization_refused(service) -> None:
     # A replayed authorization token returns stored outcome without mutating
     status, body = _begin(service, workspace_id, item, authorization_ref=attempt["authorization_ref"], identity={"diff_sha256": attempt["diff_sha256"]})
     assert status == 200 and body["result"]["status"] == "applied"
+
+
+def test_duplicate_title_rejection(service) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)
 

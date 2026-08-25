@@ -11,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -268,6 +268,7 @@ describe("HOME-122 workflow sequence", () => {
 		// Changed bytes refuse BEFORE spawn with zero slot burn; schema refused.
 		expect(out.wrongBlocked).toBe(true);
 		expect(String(out.wrongReason)).toContain("manifest_task_mismatch");
+		expect(out.wrongRefusalDelivered).toBe(true);
 		expect(out.launchCountAfterWrong).toBe(0);
 		expect(out.schemaBlocked).toBe(true);
 		// A pre-start Task failure cancels its reservation and preserves budget.
@@ -452,6 +453,14 @@ describe("HOME-122 workflow sequence", () => {
 		const out = run("omp140-failed-checkpoint");
 		const extras = list(out.extrasWithPending);
 		expect(extras.some(l => l.includes("CHECKPOINT DELIVERY PENDING (1): /done remains blocked until delivered or owner-waived."))).toBe(true);
+	});
+
+	test("terminal guidance persists across checkpoint deliveries and refusals (OMP-140)", () => {
+		const out = run("omp140-terminal-guidance");
+		const extras = list(out.terminalExtras);
+		expect(extras.some(l => l.includes("CLOSE ATTEMPT: remediation_required (needs_fix) — fix the findings"))).toBe(true);
+		const budgetExtras = list(out.budgetExtras);
+		expect(budgetExtras.some(l => l.includes("CLOSE ATTEMPT: budget_exhausted (auditor_budget_exhausted) — enter /summary again for a fresh bounded attempt"))).toBe(true);
 	});
 });
 

@@ -698,8 +698,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 		summaryBlockReason = undefined;
 		summaryAuthorized = false;
 		closeoutAuthorized = true;
-		// A literal /summary mints a FRESH authorization: the service supersedes
-		// any prior non-terminal attempt under it (OMP-47).
+		// A literal /summary mints a fresh authorization: the service
+		// atomically begins, resumes, or refuses under it (OMP-140).
 		summaryAuthorizationRef = `summary:${randomUUID()}`;
 		const now = currentNowRef();
 		if (!now) {

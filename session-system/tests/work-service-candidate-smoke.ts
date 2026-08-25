@@ -160,15 +160,69 @@ try {
 		await Bun.sleep(500);
 	}
 
-	// drive the real extensions in a child with isolated env
-	const child = Bun.spawnSync([process.execPath, path.join(import.meta.dir, "fixtures/work-service-smoke-harness.ts"), probe], {
-		cwd: probe,
-		env: { ...process.env, HOME: home, XDG_CONFIG_HOME: xdg },
-	});
-	if (child.exitCode !== 0) throw new Error(`harness failed: ${child.stderr.toString()}`);
-	const out = JSON.parse(child.stdout.toString()) as Record<string, unknown>;
-	if (process.env.SMOKE_DEBUG) console.error(JSON.stringify(out, null, 1));
-	const key = String(out.key);
+	const token = (JSON.parse(fs.readFileSync(path.join(xdg, "omp/work-ledger/capabilities/owner.json"), "utf8")) as { token: string }).token;
+	const headers = { authorization: `Bearer ${token}`, "X-OMP-Workspace-ID": WORKSPACE };
+
+	const runHarness = (phase: "audit" | "closeout" | "done", phaseKey?: string) => {
+		const args = [path.join(import.meta.dir, "fixtures/work-service-smoke-harness.ts"), probe, phase];
+		if (phaseKey) args.push(phaseKey);
+		const child = Bun.spawnSync([process.execPath, ...args], {
+			cwd: probe,
+			env: { ...process.env, HOME: home, XDG_CONFIG_HOME: xdg },
+		});
+		if (child.exitCode !== 0) throw new Error(`harness phase "${phase}" failed:\n${child.stderr.toString()}`);
+		const parsed = JSON.parse(child.stdout.toString()) as Record<string, unknown>;
+		if (process.env.SMOKE_DEBUG) console.error(`PHASE ${phase} STDERR:`, child.stderr.toString(), `\nPHASE ${phase} STDOUT:`, JSON.stringify(parsed, null, 1));
+		return parsed;
+	};
+
+	// Phase 1: audit (fresh process)
+	const auditOut = runHarness("audit");
+	const key = String(auditOut.key);
+	const auditWorkflow = (await (await fetch(`${baseUrl}/v1/work-items/${key}/workflow`, { headers })).json()) as {
+		close_attempts: { attempt_id: string; state: string }[];
+		receipts: { kind: string; verdict?: string }[];
+	};
+	const liveAudited = (auditWorkflow.close_attempts ?? []).filter(a => a.state === "audited");
+	assert.equal(liveAudited.length, 1, "exactly one live audited attempt");
+	const auditedAttemptId = liveAudited[0].attempt_id;
+	const auditReceipts = (auditWorkflow.receipts ?? []).filter(r => r.kind === "audit");
+	assert.equal(auditReceipts.length, 1, "exactly one audit receipt");
+	assert.equal(auditReceipts[0].verdict, "PASS", "audit receipt verdict is PASS");
+
+	// Phase 2: closeout (fresh process restart, resumes attempt)
+	const closeoutOut = runHarness("closeout", key);
+	const closeoutWorkflow = (await (await fetch(`${baseUrl}/v1/work-items/${key}/workflow`, { headers })).json()) as {
+		close_attempts: { attempt_id: string; state: string }[];
+		close_attempt_events: { event_type: string; reason_code?: string; reason?: string }[];
+		receipts: { kind: string }[];
+	};
+	const closeoutAttempt = (closeoutWorkflow.close_attempts ?? []).find(a => a.attempt_id === auditedAttemptId);
+	assert.equal(closeoutAttempt?.state, "closeout_requested", "same attempt transitioned to closeout_requested");
+	const closeoutReceipts = (closeoutWorkflow.receipts ?? []).filter(r => r.kind === "closeout");
+	assert.equal(closeoutReceipts.length, 1, "exactly one closeout receipt exists");
+	assert.ok(
+		!(closeoutWorkflow.close_attempt_events ?? []).some(e => e.reason_code === "superseded_by_new_summary" || e.reason === "superseded_by_new_summary"),
+		"no attempt superseded on resume",
+	);
+
+	// Phase 3: done (fresh process restart, closes work)
+	const doneOut = runHarness("done", key);
+	const doneWorkflow = (await (await fetch(`${baseUrl}/v1/work-items/${key}/workflow`, { headers })).json()) as {
+		item: { state: string };
+		close_attempts: { attempt_id: string; state: string }[];
+	};
+	const doneAttempt = (doneWorkflow.close_attempts ?? []).find(a => a.attempt_id === auditedAttemptId);
+	assert.equal(doneAttempt?.state, "completed", "same attempt transitioned to completed");
+	assert.equal(doneWorkflow.item.state, "DONE", "item is DONE");
+
+	const out: Record<string, unknown> = { ...auditOut, ...closeoutOut, ...doneOut };
+	const urls = [
+		...((auditOut.fetchUrls as string[]) ?? []),
+		...((closeoutOut.fetchUrls as string[]) ?? []),
+		...((doneOut.fetchUrls as string[]) ?? []),
+	];
+	out.fetchUrls = urls;
 	assert.match(key, /^(HOME|OMP)-\d+$/, "captured item key");
 	assert.ok(String(out.firstScreen).length > 0 && !String(out.firstScreen).includes("error"), "first screen renders");
 	assert.ok(String(out.captured).includes("Captured →"), "/capture filed the item");
@@ -187,7 +241,6 @@ try {
 	assert.ok(String(out.closeout).includes("closeout receipt recorded"), "closeout receipt");
 	assert.ok(String(out.closeout).includes("Yield the turn now before the next close step"), "closeout carries queued delivery yield note");
 	assert.ok(String(out.closeout).includes("CLOSE ATTEMPT"), "closeout carries server-rendered checkpoint");
-	assert.ok(String(out.requestCloseout).includes("close"), "closeout intent requested");
 	const notices = (out.doneUi as string[]).join("\n");
 	assert.ok(notices.includes("pushed"), "/done pushed the candidate");
 	assert.ok(notices.includes("done"), "/done completed the work");
@@ -208,13 +261,10 @@ try {
 	assert.equal(remoteSha, headSha, "remote ref resolves to the candidate commit");
 
 	// network guard: the backend never crossed the loopback boundary
-	const urls = out.fetchUrls as string[];
 	assert.ok(urls.length > 0, "backend made requests");
 	assert.ok(urls.every(url => ["127.0.0.1", "::1", "localhost", "[::1]"].includes(new URL(url).hostname)), `loopback only, saw: ${urls.join(", ")}`);
 
 	// service-side read-back: closed done with the receipts bound
-	const token = (JSON.parse(fs.readFileSync(path.join(xdg, "omp/work-ledger/capabilities/owner.json"), "utf8")) as { token: string }).token;
-	const headers = { authorization: `Bearer ${token}`, "X-OMP-Workspace-ID": WORKSPACE };
 	const view = (await (await fetch(`${baseUrl}/v1/work-items/${key}/workflow`, { headers })).json()) as {
 		item: { state: string; candidate: { kind: string; commit_sha: string; candidate_id: string } | null };
 		receipts: { kind: string; candidate_id: string; remote_commit: string | null; candidate_commit: string | null }[];
