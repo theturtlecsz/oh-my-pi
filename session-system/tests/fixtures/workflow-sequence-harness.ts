@@ -9,7 +9,7 @@ import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 import { createWorkBackend } from "../../extensions/workflow/work";
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
+const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "summary-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -26,8 +26,8 @@ const OWNER_ID = "00000000-0000-7000-8000-000000000002";
 const issue = { id: "id-1", identifier: "HOME-1", title: "First", project: undefined as { name: string } | undefined };
 const comments: Comment[] = [];
 const writes = { created: 0, addNow: 0, removeNow: 0, closed: 0, canceled: 0 };
-let nowSelected = mode === "restore";
-let nowId: string | null = mode === "restore" ? "id-1" : null;
+let nowSelected = mode === "restore" || mode === "now-canceled";
+let nowId: string | null = mode === "restore" ? "id-1" : mode === "now-canceled" ? "id-2" : null;
 let slotVersion = 1;
 const receipts: Array<Record<string, unknown>> = [];
 interface MockAttempt {
@@ -67,6 +67,7 @@ const beginCalls: Array<Record<string, unknown>> = [];
 const settleCalls: Array<Record<string, unknown>> = [];
 const cancelCalls: Array<Record<string, unknown>> = [];
 const attestCalls: Array<Record<string, unknown>> = [];
+const sscCalls: Array<Record<string, unknown>> = [];
 function mockEvent(workId: string, attemptId: string | null, eventType: string, reasonCode: string, requiresDelivery: boolean, legalNextActions: string[] = []): Record<string, unknown> {
 	eventSeq += 1;
 	const rendered = `CLOSE ATTEMPT — ${eventType}\n${reasonCode}: mock`;
@@ -133,6 +134,21 @@ if (mode === "done-cancel" || mode === "done-cancel-decline") {
 	};
 	items.set("HOME-2", item2);
 	items.set("id-2", item2);
+}
+// Owner ruling 2026-08-25: closed work never becomes or stays NOW. The mode
+// starts with the focus slot pointing at a CANCELED item.
+if (mode === "now-canceled") {
+	const canceledItem: MockWorkItem = {
+		work_id: "id-2",
+		workspace_id: WORKSPACE_ID,
+		alias: { key: "HOME-2" },
+		revision: { revision_id: "rev-2", title: "Second, canceled", description: "", scope: "", acceptance_criteria: [] },
+		state: "CANCELED",
+		project_id: "proj-1",
+		candidate: null,
+	};
+	items.set("HOME-2", canceledItem);
+	items.set("id-2", canceledItem);
 }
 if (mode === "plan-now-change") {
 	// OMP-124: a second open item the owner switches NOW to mid-plan.
@@ -206,12 +222,14 @@ const activityCalls: string[] = [];
 // The first six activity reads fail in unscoped center mode (the failure
 // scenarios each take a snapshot before the real first run) — proves the
 // fourth section degrades honestly while the other three survive.
+const commandTypes: string[] = [];
 let activityFailuresLeft = mode === "center" ? 6 : 0;
 let idle = true;
 let busyDuringSnapshot = false;
 let throwNextTree = false;
 let switchSessionOnNextTree = false;
 let throwNextDeliverMessage = false;
+let throwNextWorkflowRead = false;
 globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string }) => {
 	const u = String(url);
 	const method = init?.method ?? "GET";
@@ -275,6 +293,10 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 		return new Response(JSON.stringify({ workspace_id: WORKSPACE_ID, total: scoped ? 9 : events.length, events }), { status: 200 });
 	}
 	if (u.endsWith("/workflow")) {
+		if (throwNextWorkflowRead) {
+			throwNextWorkflowRead = false;
+			return new Response(JSON.stringify({ error: "injected workflow read failure" }), { status: 500 });
+		}
 		const key = u.split("/v1/work-items/")[1]?.split("/")[0] ?? "HOME-1";
 		const it = items.get(key) ?? initialItem;
 		const plan = receipts.filter(r => r.kind === "plan").at(-1) as Record<string, unknown> | undefined;
@@ -309,6 +331,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 	}
 	if (method === "POST" && u.endsWith("/v1/commands")) {
 		commandPosts++;
+		commandTypes.push(JSON.parse(init?.body ?? "{}")?.command?.type ?? "unknown");
 		const env = JSON.parse(init?.body ?? "{}") as { command: { type: string; payload: Record<string, unknown> } };
 		const cmdType = env.command?.type;
 		const payload = env.command?.payload ?? {};
@@ -457,12 +480,33 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 				{ status: 200 },
 			);
 		}
+		if (cmdType === "create_same_session_child") {
+			sscCalls.push(payload);
+			const parentAttempt = attempts.find(a => a.attempt_id === payload.attempt_id);
+			if (!parentAttempt) throw new Error("mock: create_same_session_child without live attempt");
+			const inputItem = payload.item;
+			const clientRef = inputItem && typeof inputItem === "object" && "client_ref" in inputItem ? String(inputItem.client_ref) : "c";
+			const childItem = { client_ref: clientRef, work_id: "id-child-1", revision_id: "rev-child-1", key: "HOME-77", state: "BACKLOG", row_version: 1 };
+			const receipt = {
+				receipt_id: "rec-ssc-1",
+				work_id: childItem.work_id,
+				revision_id: childItem.revision_id,
+				candidate_id: parentAttempt.candidate_id,
+				kind: "same_session_found_fixed",
+				payload: { attempt_id: parentAttempt.attempt_id, owner_session_id: payload.owner_session_id, base_commit: parentAttempt.owner_session_start_commit, fix_commit: parentAttempt.candidate_commit, candidate_sha256: parentAttempt.candidate_sha256, finding: payload.finding, verification: payload.verification },
+				payload_sha256: "1".repeat(64),
+				issuer: "service",
+				issued_at: new Date().toISOString(),
+				independent: false,
+			};
+			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-ssc-${sscCalls.length}` }, result: { type: "create_same_session_child", item: childItem, receipt } }), { status: 200 });
+		}
 		if (cmdType === "begin_close_attempt") {
 			beginCalls.push(payload);
 			const it = items.get(payload.work_id as string) ?? initialItem;
 			// OMP-127: the first begin of this mode is refused with no attempt —
 			// the host must keep review writes locked until a begin applies.
-			if (mode === "summary-begin-refused" && beginCalls.length === 1) {
+			if ((mode === "summary-begin-refused" || mode === "summary-refusal-durable") && beginCalls.length === 1) {
 				const event = mockEvent(it.work_id, null, "close_attempt_refused", "plan_receipt_missing", true);
 				return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-begin-${eventSeq}` }, result: { type: "begin_close_attempt", status: "refused", attempt: null, event } }), { status: 200 });
 			}
@@ -1058,8 +1102,96 @@ if (mode === "intake") {
 	await enterSummary();
 	out.beginCallsAfterSecond = beginCalls.length;
 	out.secondVerify = await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "bun test → pass" });
+} else if (mode === "summary-refusal-durable") {
+	// OMP-137: a refused begin persists its COMPLETE typed reason; a fresh
+	// session surfaces it as one pending notice; a successful retry clears it.
+	// session-ledger also registers before_agent_start; drain EVERY handler and
+	// keep the first returned message (the workflow notice/digest injection).
+	const beforeAgentHandlers = extension.handlers.get("before_agent_start") ?? [];
+	const drain = async () => {
+		for (const handler of beforeAgentHandlers) {
+			const result = (await handler({ type: "before_agent_start" } as never, ctx)) as { message?: { content?: string } } | undefined;
+			if (result?.message?.content) return result.message.content;
+		}
+		return "";
+	};
+	await setNow();
+	await approve(planA);
+	await enterSummary(); // begin #1 → typed service refusal
+	out.beginCallsAfterFirst = beginCalls.length;
+	await runner.emit({ type: "session_switch", reason: "new" } as never);
+	currentSessionId = "session-2";
+	await runner.emit({ type: "session_start" } as never);
+	out.noticeAfterRestart = await drain();
+	await enterSummary(); // begin #2 applies — the refusal is resolved
+	out.beginCallsAfterRetry = beginCalls.length;
+	await runner.emit({ type: "session_switch", reason: "new" } as never);
+	currentSessionId = "session-3";
+	await runner.emit({ type: "session_start" } as never);
+	out.noticeAfterRetry = await drain();
+} else if (mode === "stop-continuation-states") {
+	// OMP-134: the closeout continuation is emitted ONLY from live ledger state —
+	// audited fires exactly once with the service event; every other state and an
+	// unreadable workflow emit nothing and stay retryable.
+	await setNow();
+	await approve(planA);
+	await enterSummary(); // begin applies → attempt active, review obligation armed
+	const stopHandler = extension.handlers.get("session_stop")?.[0];
+	const stop = async () => (await stopHandler?.({ type: "session_stop", stop_hook_active: false } as never, ctx)) ?? null;
+	const attempt = attempts[0];
+	if (!attempt) throw new Error("no attempt after summary");
+	out.stopWhileActive = await stop();
+	attempt.state = "audit_ready";
+	out.stopWhileAuditReady = await stop();
+	attempt.state = "auditor_in_flight";
+	out.stopWhileInFlight = await stop();
+	attempt.state = "audited";
+	mockEvent("id-1", attempt.attempt_id, "auditor_launch_settled", "verdict_pass", false, ["enter /summary to resume close review"]);
+	throwNextWorkflowRead = true;
+	out.stopWhileUnreadable = await stop();
+	out.stopWhenAudited = await stop();
+	out.stopAfterFired = await stop();
+} else if (mode === "atomic-child") {
+	// OMP-139: the atomic same-session filing — unsupported authority fields
+	// refuse BEFORE any preview; one confirmed filing emits exactly one command.
+	await setNow();
+	await approve(planA);
+	await enterSummary(); // live attempt so the filing has a binding target
+	const body = "## Finding\nbug found in-session\n\n## Verification\nfix proven in-session";
+	const base = { action: "create_work", work: "HOME-1", kind: "same_session_found_fixed", title: "atomic child", body };
+	const postsBefore = commandPosts;
+	const uiBefore = uiCalls.length;
+	out.rejectBatch = await execute({ ...base, batch: [{ title: "extra" }] });
+	out.rejectQueue = await execute({ ...base, queue: true });
+	out.rejectQuestion = await execute({ ...base, question: "why?" });
+	out.rejectProject = await execute({ ...base, project: "The Bookends" });
+	out.rejectKind = await execute({ ...base, kind: "handoff" });
+	out.rejectNoWork = await execute({ action: "create_work", kind: "same_session_found_fixed", title: "atomic child", body });
+	out.rejectNoBody = await execute({ action: "create_work", work: "HOME-1", kind: "same_session_found_fixed", title: "atomic child" });
+	out.rejectHalfSections = await execute({ ...base, body: "## Finding\nonly finding" });
+	out.postsDuringRejections = commandPosts - postsBefore;
+	out.rejectionCommandTypes = commandTypes.slice(postsBefore);
+	out.sscCallsAfterRejections = sscCalls.length;
+	out.confirmUiDuringRejections = uiCalls.slice(uiBefore).filter(call => call.startsWith("confirm:")).length;
+	const round = await confirmRoundTrip(execute, base);
+	out.preview = round.preview;
+	out.confirmed = round.confirmed;
+	out.sscCallsAfterConfirm = sscCalls.length;
+	out.sscPayload = sscCalls[0] ?? null;
 } else if (mode === "restore") {
 	out.now = await execute({ action: "my_now" });
+} else if (mode === "now-canceled") {
+	// Restore: session start reconciled against a slot pointing at canceled work.
+	out.now = await execute({ action: "my_now" });
+	// set_now on a canceled key must refuse before any owner prompt or focus write.
+	out.refusal = await execute({ action: "set_now", work: "HOME-2" });
+	// The literal keyed /now command has no pre-gate — it must hit the shared
+	// setNow guard and surface the refusal through its own catch.
+	const nowCommand = extension.commands.get("now");
+	if (!nowCommand) throw new Error("now command missing");
+	await nowCommand.handler("HOME-2", ctx);
+	out.nowCommandNotices = uiCalls.filter(call => call.startsWith("notify:/now failed")).join(" | ");
+	out.addNowWrites = writes.addNow;
 } else if (mode === "omp140-audit-states") {
 	await setNow();
 	out.noAttemptGetWork = await execute({ action: "get_work", work: "HOME-1" });

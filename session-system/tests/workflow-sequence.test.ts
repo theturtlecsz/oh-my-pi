@@ -11,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "summary-refusal-durable" | "stop-continuation-states" | "atomic-child" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "now-canceled" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -153,6 +153,65 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.secondVerify).toContain("audit manifest sealed");
 	});
 
+	test("a summary refusal survives a fresh session and clears after a successful retry (OMP-137)", () => {
+		const out = run("summary-refusal-durable");
+		expect(out.beginCallsAfterFirst, "first /summary issued exactly one begin").toBe(1);
+		// Fresh session: the persisted refusal re-enters model context with the
+		// COMPLETE service-rendered event text, not a paraphrase.
+		expect(String(out.noticeAfterRestart)).toContain("The last /summary on HOME-1 was refused and is still unresolved");
+		expect(String(out.noticeAfterRestart)).toContain("plan_receipt_missing: mock");
+		// Successful retry resolves it: the next fresh session carries no refusal notice.
+		expect(out.beginCallsAfterRetry, "retry /summary issued a second begin").toBe(2);
+		expect(String(out.noticeAfterRetry)).not.toContain("was refused and is still unresolved");
+	});
+
+	test("the closeout continuation fires only from a live audited attempt (OMP-134)", () => {
+		const out = run("stop-continuation-states");
+		// active / audit_ready / auditor_in_flight: no continuation, obligation
+		// stays armed and unblocked for a later valid audited state.
+		expect(out.stopWhileActive).toBeNull();
+		expect(out.stopWhileAuditReady).toBeNull();
+		expect(out.stopWhileInFlight).toBeNull();
+		// An unreadable workflow stays silent and retryable.
+		expect(out.stopWhileUnreadable).toBeNull();
+		// audited: exactly one continuation carrying the service-rendered event.
+		const fired = record(out.stopWhenAudited);
+		expect(fired.continue).toBe(true);
+		expect(String(fired.additionalContext)).toContain('kind:"closeout"');
+		expect(String(fired.additionalContext)).toContain("auditor_launch_settled");
+		expect(out.stopAfterFired).toBeNull();
+	});
+
+	test("the atomic same-session filing refuses authority fields pre-preview and lands one command (OMP-139)", () => {
+		const out = run("atomic-child");
+		// Unsupported authority fields are refused BEFORE any preview or write.
+		expect(String(out.rejectBatch)).toContain("rejects batch");
+		expect(String(out.rejectQueue)).toContain("rejects queue");
+		expect(String(out.rejectQuestion)).toContain("rejects question");
+		expect(String(out.rejectProject)).toContain("rejects project");
+		expect(String(out.rejectKind)).toContain("atomic same-session form");
+		expect(String(out.rejectNoWork)).toContain("existing parent key");
+		expect(String(out.rejectNoBody)).toContain("## Finding");
+		expect(String(out.rejectHalfSections)).toContain("## Finding");
+		expect(out.postsDuringRejections, "no service command during rejections").toBe(0);
+		expect(out.sscCallsAfterRejections).toBe(0);
+		expect(out.confirmUiDuringRejections, "no confirm dialog during rejections").toBe(0);
+		// Two-phase preview names parent, child title, finding, and verification.
+		expect(String(out.preview)).toContain("CONFIRM REQUIRED");
+		expect(String(out.preview)).toContain("HOME-1");
+		expect(String(out.preview)).toContain('"atomic child"');
+		expect(String(out.preview)).toContain("bug found in-session");
+		expect(String(out.preview)).toContain("fix proven in-session");
+		// One confirmed filing emits exactly one service command.
+		expect(String(out.confirmed)).toContain("created HOME-77 as a same-session child of HOME-1");
+		expect(out.sscCallsAfterConfirm).toBe(1);
+		const payload = record(out.sscPayload);
+		expect(payload.parent_work_id).toBe("id-1");
+		expect(payload.owner_session_id).toBe("session-test");
+		expect(payload.finding).toBe("bug found in-session");
+		expect(payload.verification).toBe("fix proven in-session");
+	});
+
 	test("get_work and write previews retain complete descriptions", () => {
 		const out = run("descriptions");
 		expect(out.getWork).toContain("GET_WORK_SENTINEL");
@@ -168,6 +227,17 @@ describe("HOME-122 workflow sequence", () => {
 	test("fresh sessions restore the backend focus without a local cache", () => {
 		const out = run("restore");
 		expect(out.now).toContain("HOME-1 First");
+	});
+
+	test("closed work never becomes or stays NOW (owner ruling 2026-08-25)", () => {
+		const out = run("now-canceled");
+		// A focus slot left pointing at canceled work is never resurrected.
+		expect(out.now).toBe("NOW unset");
+		// set_now on a canceled key refuses before any owner prompt or focus write.
+		expect(String(out.refusal)).toContain("can't be NOW");
+		// The literal keyed /now command hits the shared setNow guard.
+		expect(String(out.nowCommandNotices)).toContain("can't be NOW");
+		expect(out.addNowWrites).toBe(0);
 	});
 
 	test("done refuses early, then closes reviewed NOW once and reaches commit step", () => {

@@ -2812,6 +2812,30 @@
           "title": "CompleteWorkResult",
           "type": "object"
         },
+        "CreateSameSessionChildResult": {
+          "additionalProperties": false,
+          "description": "OMP-139: the atomic filing returns the created child and its minted receipt.",
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/CreatedWorkItem"
+            },
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "create_same_session_child",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "item",
+            "receipt"
+          ],
+          "title": "CreateSameSessionChildResult",
+          "type": "object"
+        },
         "CreateWorkBatchResult": {
           "additionalProperties": false,
           "properties": {
@@ -3462,6 +3486,7 @@
               "cancel_auditor_launch": "#/$defs/CloseAttemptResult",
               "clear_focus": "#/$defs/FocusResult",
               "complete_work": "#/$defs/CompleteWorkResult",
+              "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
               "finalize_candidate": "#/$defs/FinalizeCandidateResult",
               "put_relation": "#/$defs/RelationResult",
@@ -3480,6 +3505,9 @@
           "oneOf": [
             {
               "$ref": "#/$defs/CreateWorkBatchResult"
+            },
+            {
+              "$ref": "#/$defs/CreateSameSessionChildResult"
             },
             {
               "$ref": "#/$defs/ReviseWorkResult"
@@ -3735,6 +3763,231 @@
         "work_id"
       ],
       "title": "CompleteWorkResult",
+      "type": "object"
+    },
+    "CreateSameSessionChildResult": {
+      "$defs": {
+        "CreatedWorkItem": {
+          "additionalProperties": false,
+          "properties": {
+            "client_ref": {
+              "title": "Client Ref",
+              "type": "string"
+            },
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "row_version": {
+              "title": "Row Version",
+              "type": "integer"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "client_ref",
+            "work_id",
+            "revision_id",
+            "key",
+            "state",
+            "row_version"
+          ],
+          "title": "CreatedWorkItem",
+          "type": "object"
+        },
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout",
+            "handoff",
+            "same_session_found_fixed"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "OMP-139: the atomic filing returns the created child and its minted receipt.",
+      "properties": {
+        "item": {
+          "$ref": "#/$defs/CreatedWorkItem"
+        },
+        "receipt": {
+          "$ref": "#/$defs/EvidenceReceipt"
+        },
+        "type": {
+          "const": "create_same_session_child",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "item",
+        "receipt"
+      ],
+      "title": "CreateSameSessionChildResult",
       "type": "object"
     },
     "CreateWorkBatchResult": {
@@ -6460,6 +6713,30 @@
           "title": "CompleteWorkResult",
           "type": "object"
         },
+        "CreateSameSessionChildResult": {
+          "additionalProperties": false,
+          "description": "OMP-139: the atomic filing returns the created child and its minted receipt.",
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/CreatedWorkItem"
+            },
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "create_same_session_child",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "item",
+            "receipt"
+          ],
+          "title": "CreateSameSessionChildResult",
+          "type": "object"
+        },
         "CreateWorkBatchResult": {
           "additionalProperties": false,
           "properties": {
@@ -7126,6 +7403,7 @@
                   "cancel_auditor_launch": "#/$defs/CloseAttemptResult",
                   "clear_focus": "#/$defs/FocusResult",
                   "complete_work": "#/$defs/CompleteWorkResult",
+                  "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
                   "finalize_candidate": "#/$defs/FinalizeCandidateResult",
                   "put_relation": "#/$defs/RelationResult",
@@ -7144,6 +7422,9 @@
               "oneOf": [
                 {
                   "$ref": "#/$defs/CreateWorkBatchResult"
+                },
+                {
+                  "$ref": "#/$defs/CreateSameSessionChildResult"
                 },
                 {
                   "$ref": "#/$defs/ReviseWorkResult"

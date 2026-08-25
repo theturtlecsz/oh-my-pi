@@ -1253,7 +1253,8 @@
             "OMP-106",
             "OMP-123",
             "OMP-124",
-            "OMP-140"
+            "OMP-140",
+            "OMP-147"
           ],
           "title": "Issue",
           "type": "string"
@@ -3481,6 +3482,69 @@
           "title": "CreateBatchRelation",
           "type": "object"
         },
+        "CreateSameSessionChildCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/CreateSameSessionChildPayload"
+            },
+            "type": {
+              "const": "create_same_session_child",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "CreateSameSessionChildCommand",
+          "type": "object"
+        },
+        "CreateSameSessionChildPayload": {
+          "additionalProperties": false,
+          "description": "OMP-139: one atomic same-session found-and-fixed filing \u2014 the BACKLOG\nchild, its active child\u2192parent edge, and the typed same_session_found_fixed\nreceipt bound to the live attempt's identity land in ONE serializable\ntransaction or not at all.",
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "finding": {
+              "minLength": 1,
+              "title": "Finding",
+              "type": "string"
+            },
+            "item": {
+              "$ref": "#/$defs/CreateWorkInput"
+            },
+            "owner_session_id": {
+              "minLength": 1,
+              "title": "Owner Session Id",
+              "type": "string"
+            },
+            "parent_work_id": {
+              "format": "uuid",
+              "title": "Parent Work Id",
+              "type": "string"
+            },
+            "verification": {
+              "minLength": 1,
+              "title": "Verification",
+              "type": "string"
+            }
+          },
+          "required": [
+            "parent_work_id",
+            "attempt_id",
+            "owner_session_id",
+            "item",
+            "finding",
+            "verification"
+          ],
+          "title": "CreateSameSessionChildPayload",
+          "type": "object"
+        },
         "CreateWorkBatchCommand": {
           "additionalProperties": false,
           "properties": {
@@ -4823,6 +4887,7 @@
               "cancel_auditor_launch": "#/$defs/CancelAuditorLaunchCommand",
               "clear_focus": "#/$defs/ClearFocusCommand",
               "complete_work": "#/$defs/CompleteWorkCommand",
+              "create_same_session_child": "#/$defs/CreateSameSessionChildCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
               "finalize_candidate": "#/$defs/FinalizeCandidateCommand",
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
@@ -4843,6 +4908,9 @@
           "oneOf": [
             {
               "$ref": "#/$defs/CreateWorkBatchCommand"
+            },
+            {
+              "$ref": "#/$defs/CreateSameSessionChildCommand"
             },
             {
               "$ref": "#/$defs/ReviseWorkCommand"
@@ -6706,6 +6774,235 @@
         "kind"
       ],
       "title": "CreateBatchRelation",
+      "type": "object"
+    },
+    "CreateSameSessionChildCommand": {
+      "$defs": {
+        "CreateSameSessionChildPayload": {
+          "additionalProperties": false,
+          "description": "OMP-139: one atomic same-session found-and-fixed filing \u2014 the BACKLOG\nchild, its active child\u2192parent edge, and the typed same_session_found_fixed\nreceipt bound to the live attempt's identity land in ONE serializable\ntransaction or not at all.",
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "finding": {
+              "minLength": 1,
+              "title": "Finding",
+              "type": "string"
+            },
+            "item": {
+              "$ref": "#/$defs/CreateWorkInput"
+            },
+            "owner_session_id": {
+              "minLength": 1,
+              "title": "Owner Session Id",
+              "type": "string"
+            },
+            "parent_work_id": {
+              "format": "uuid",
+              "title": "Parent Work Id",
+              "type": "string"
+            },
+            "verification": {
+              "minLength": 1,
+              "title": "Verification",
+              "type": "string"
+            }
+          },
+          "required": [
+            "parent_work_id",
+            "attempt_id",
+            "owner_session_id",
+            "item",
+            "finding",
+            "verification"
+          ],
+          "title": "CreateSameSessionChildPayload",
+          "type": "object"
+        },
+        "CreateWorkInput": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "client_ref": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._-]+$",
+              "title": "Client Ref",
+              "type": "string"
+            },
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "scope": {
+              "default": "",
+              "title": "Scope",
+              "type": "string"
+            },
+            "state": {
+              "default": "BACKLOG",
+              "title": "State",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "client_ref",
+            "title"
+          ],
+          "title": "CreateWorkInput",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CreateSameSessionChildPayload"
+        },
+        "type": {
+          "const": "create_same_session_child",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "CreateSameSessionChildCommand",
+      "type": "object"
+    },
+    "CreateSameSessionChildPayload": {
+      "$defs": {
+        "CreateWorkInput": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "client_ref": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._-]+$",
+              "title": "Client Ref",
+              "type": "string"
+            },
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "scope": {
+              "default": "",
+              "title": "Scope",
+              "type": "string"
+            },
+            "state": {
+              "default": "BACKLOG",
+              "title": "State",
+              "type": "string"
+            },
+            "title": {
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "client_ref",
+            "title"
+          ],
+          "title": "CreateWorkInput",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "OMP-139: one atomic same-session found-and-fixed filing \u2014 the BACKLOG\nchild, its active child\u2192parent edge, and the typed same_session_found_fixed\nreceipt bound to the live attempt's identity land in ONE serializable\ntransaction or not at all.",
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "finding": {
+          "minLength": 1,
+          "title": "Finding",
+          "type": "string"
+        },
+        "item": {
+          "$ref": "#/$defs/CreateWorkInput"
+        },
+        "owner_session_id": {
+          "minLength": 1,
+          "title": "Owner Session Id",
+          "type": "string"
+        },
+        "parent_work_id": {
+          "format": "uuid",
+          "title": "Parent Work Id",
+          "type": "string"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parent_work_id",
+        "attempt_id",
+        "owner_session_id",
+        "item",
+        "finding",
+        "verification"
+      ],
+      "title": "CreateSameSessionChildPayload",
       "type": "object"
     },
     "CreateWorkBatchCommand": {

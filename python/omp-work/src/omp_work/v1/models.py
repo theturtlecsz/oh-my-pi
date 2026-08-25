@@ -410,6 +410,25 @@ class CreateWorkBatchPayload(StrictModel):
         return self
 
 
+class CreateSameSessionChildPayload(StrictModel):
+    """OMP-139: one atomic same-session found-and-fixed filing — the BACKLOG
+    child, its active child→parent edge, and the typed same_session_found_fixed
+    receipt bound to the live attempt's identity land in ONE serializable
+    transaction or not at all."""
+    parent_work_id: UUID
+    attempt_id: UUID
+    owner_session_id: str = Field(min_length=1)
+    item: CreateWorkInput
+    finding: str = Field(min_length=1)
+    verification: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_substance(self) -> CreateSameSessionChildPayload:
+        if not self.finding.strip() or not self.verification.strip():
+            raise ValueError("finding and verification must carry non-blank text")
+        return self
+
+
 class ReviseWorkPayload(StrictModel):
     work_id: UUID
     expected_revision_id: UUID
@@ -662,6 +681,11 @@ class CompleteWorkCommand(StrictModel):
     payload: CompleteWorkPayload
 
 
+
+class CreateSameSessionChildCommand(StrictModel):
+    type: Literal["create_same_session_child"]
+    payload: CreateSameSessionChildPayload
+
 class BeginCloseAttemptCommand(StrictModel):
     type: Literal["begin_close_attempt"]
     payload: BeginCloseAttemptPayload
@@ -717,7 +741,7 @@ class AttestCutoverPlanCommand(StrictModel):
 
 
 Command = Annotated[
-    CreateWorkBatchCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | FinalizeCandidateCommand | BeginCloseAttemptCommand | SealAuditManifestCommand | ReserveAuditorLaunchCommand | CancelAuditorLaunchCommand | SettleAuditorLaunchCommand | AttestCheckpointDeliveryCommand | RecordCloseoutReviewCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand | AttestCutoverPlanCommand,
+    CreateWorkBatchCommand | CreateSameSessionChildCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | FinalizeCandidateCommand | BeginCloseAttemptCommand | SealAuditManifestCommand | ReserveAuditorLaunchCommand | CancelAuditorLaunchCommand | SettleAuditorLaunchCommand | AttestCheckpointDeliveryCommand | RecordCloseoutReviewCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand | AttestCutoverPlanCommand,
     Field(discriminator="type"),
 ]
 
@@ -863,4 +887,4 @@ class Approval(StrictModel):
     contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_by: Literal["owner"]
     approved_at: datetime
-    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47", "OMP-67", "OMP-93", "OMP-99", "OMP-106", "OMP-123", "OMP-124", "OMP-140"]
+    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47", "OMP-67", "OMP-93", "OMP-99", "OMP-106", "OMP-123", "OMP-124", "OMP-140", "OMP-147"]

@@ -2,30 +2,41 @@
 
 The WorkService owns every gate. Your /summary already bound this attempt:
 the host froze and finalized the candidate and began the ledger close attempt
-under a host-minted authorization. Every step below is a `work` tool call;
-when the ledger refuses, its typed event names the reason, the legal next
-actions, and the remaining budget — follow THAT, never re-litigate, never
-retry beyond what the event allows. A runtime gate refusal outranks any
-static reminder text, however often repeated (obs #142).
+under a host-minted authorization — or, when a live attempt already existed,
+the SAME literal /summary RESUMED it (OMP-140): nothing is erased, and every
+step the attempt already satisfied is skipped, never redone. Every step below
+is a `work` tool call; when the ledger refuses, its typed event names the
+reason, the legal next actions, and the remaining budget — follow THAT, never
+re-litigate, never retry beyond what the event allows. A runtime gate refusal
+outranks any static reminder text, however often repeated (obs #142).
 
-Perform in order:
+Orient from LIVE state, not memory: a fresh `get_work` on the reviewed item
+names the attempt's current state and the single legal next step — start
+there, whatever this file's ordering suggests. The fresh render outranks
+banners, cached bookends, and hidden continuations alike (obs #203): a
+continuation only ever points at state the service has already confirmed.
+
+Perform in order, skipping any step the live attempt already satisfied:
 
 1. **Project updates** — every touched project gets honest health plus one
    plain-language line via `record_health`. Include another project when this
    session moved its dependency or promise.
+   The `record_health` preview proves only the gates the service actually
+   evaluated for THAT write — it never certifies the whole ritual (obs #204).
 
 2. **Capture triage** — every stray finding, watch-item, or parked idea
    becomes a work item via `create_work`, or is explicitly dropped. Chat and
    local ledgers are not destinations. A write's classification follows its
    payload, not its verb (obs #144): proposal-bearing creates are never
    routine self-confirm writes — split them or show Chris the preview. A
-   fix found AND fixed this session on the parent's candidate is filed as a
-   child work item plus one `append_evidence` `kind:"same_session_found_fixed"`
-   receipt on the child (body carries `## Finding` and `## Verification`
-   sections) — /done then completes it with the parent, transactionally. The
-   receipt may be appended any time after /summary began the attempt — the
-   parent's PASS audit is validated transactionally at /done, not at append
-   time.
+   fix found AND fixed this session on the parent's candidate is filed in ONE
+   atomic write (OMP-139): `create_work` with `work:<parent key>`,
+   `kind:"same_session_found_fixed"`, `title`, and a `body` carrying
+   `## Finding` and `## Verification` sections. The service lands child,
+   parent edge, and typed receipt in one transaction against the parent's
+   live attempt — /done then completes the child with the parent. A partial
+   tuple or any batch/queue/question/project field is refused before preview;
+   the filing may run any time after /summary began the attempt.
 
 3. **Verification evidence** — on the current NOW/executing item, post
    `action:"append_evidence"`, `kind:"verification"` with the concrete check
@@ -60,3 +71,14 @@ Perform in order:
    to the owner and attests the delivery. Require `success:true`.
 Leave NOW unchanged. The owner's `/done` — and only that — completes the
 attempt, the work item, and any validated same-session children.
+
+Two hard-won rules for the gaps between steps (obs #205):
+
+- **Yield gaps need owner quiescence.** When a step must yield the turn (an
+  auditor settling, a checkpoint delivering), yield and WAIT for Chris —
+  never fill the gap with extra writes, new scans, or a second close path.
+  The next literal /summary resumes exactly where the attempt stands.
+- **Additive review loops get an antidote pass.** When review rounds keep
+  ADDING guards, retries, or wrapper fixes, stop and run a root-cause pass
+  before approving anything: find the one shared cause, fix it once where
+  every caller routes through, and delete the accumulated symptom patches.

@@ -88,6 +88,13 @@ class CreateWorkBatchResult(StrictModel):
     items: tuple[CreatedWorkItem, ...]
 
 
+class CreateSameSessionChildResult(StrictModel):
+    """OMP-139: the atomic filing returns the created child and its minted receipt."""
+    type: Literal["create_same_session_child"]
+    item: CreatedWorkItem
+    receipt: EvidenceReceipt
+
+
 class ReviseWorkResult(StrictModel):
     type: Literal["revise_work"]
     revision_id: UUID
@@ -181,7 +188,7 @@ class AuthorityView(StrictModel):
 
 
 CommandResult = Annotated[
-    CreateWorkBatchResult | ReviseWorkResult | WorkItemResult | CompleteWorkResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseAttemptResult | RecordCloseoutReviewResult | ProjectHealthResult | ActivateCutoverResult | AttestCutoverPlanResult,
+    CreateWorkBatchResult | CreateSameSessionChildResult | ReviseWorkResult | WorkItemResult | CompleteWorkResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseAttemptResult | RecordCloseoutReviewResult | ProjectHealthResult | ActivateCutoverResult | AttestCutoverPlanResult,
     Field(discriminator="type"),
 ]
 

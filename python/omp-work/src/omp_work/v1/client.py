@@ -7,6 +7,8 @@ from uuid import UUID
 
 import httpx
 
+from omp_work import contract_sha256
+
 from .api_models import CommandResponse, StoredOperationView, WorkItemView, WorkflowView, WorkspaceTree
 from .models import CommandEnvelope, FocusSlot
 from .service import WorkError
@@ -18,6 +20,9 @@ class WorkClient:
             raise ValueError("unsafe bearer file permissions")
         self._workspace_id = workspace_id
         self._token = json.loads(bearer_file.read_text())["token"]
+        # OMP-143: the digest this process loaded, captured once — a stale
+        # process keeps its stale digest and gets the typed restart refusal.
+        self._contract_sha256 = contract_sha256()
         self._client = httpx.Client(base_url=base_url, timeout=timeout)
 
     def execute(self, envelope: CommandEnvelope) -> CommandResponse:
@@ -51,7 +56,13 @@ class WorkClient:
         self._client.close()
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._token}", "X-OMP-Workspace-ID": str(self._workspace_id)}
+        # OMP-143 fail-first handshake: the digest this process loaded; the
+        # service refuses any mismatch with typed `contract_mismatch`.
+        return {
+            "Authorization": f"Bearer {self._token}",
+            "X-OMP-Workspace-ID": str(self._workspace_id),
+            "X-OMP-Contract-SHA256": self._contract_sha256,
+        }
 
     @staticmethod
     def _raise(response: httpx.Response) -> None:

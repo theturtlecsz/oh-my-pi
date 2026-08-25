@@ -35,7 +35,5 @@ export default function workNow(pi: ExtensionAPI) {
 		teamNoun: "the ledger",
 		entryType: "work-now",
 		acceptEntry: data => data.backend === "work",
-		reviewCheckpointHint:
-			"The body carries the closeout review; the fresh auditor's report is already on the ledger as the attempt's service-minted audit receipt.",
 	})(pi);
 }

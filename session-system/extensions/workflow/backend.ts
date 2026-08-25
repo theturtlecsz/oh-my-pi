@@ -186,6 +186,21 @@ export interface NowRef {
 	key: string;
 	title: string;
 	project?: string;
+	/** Ledger state at lookup time (backend-filled refs only; host-built refs omit it). */
+	state?: string;
+	archived?: boolean;
+}
+
+/** Owner ruling 2026-08-25: closed work never becomes or stays NOW.
+ *  Plain-words refusal for terminal refs; null = fine to focus.
+ *  Refs without state (picker rows, fresh creates) are open by construction. */
+export function nowRefusal(ref: NowRef): string | null {
+	if (ref.archived) return `${ref.key} is archived — closed work can't be NOW`;
+	const state = ref.state?.toUpperCase();
+	if (state === "DONE" || state === "CANCELED" || state === "CANCELLED") {
+		return `${ref.key} is ${state.toLowerCase()} — closed work can't be NOW (/now lists only open work)`;
+	}
+	return null;
 }
 
 export interface CenterCommandRecommendation {
@@ -338,6 +353,10 @@ export interface WorkflowCheckpoint {
 	plan?: { hash: string; at: string };
 	handoff?: { at: string };
 	review?: { hash: string; at: string };
+	/** OMP-134/OMP-137: live close-attempt state plus the newest
+	 *  service-rendered event text for that attempt — the host emits closeout
+	 *  continuations from THIS, never from a hardcoded receipt claim. */
+	closeAttempt?: { state: string; latestEventText?: string };
 }
 
 export interface PlanStamp {
@@ -376,6 +395,16 @@ export interface BatchOutcome {
  *  minted ONLY by the service's settle transaction (OMP-47) and never appended
  *  through this surface. */
 export type EvidenceKind = "handoff" | "verification" | "closeout" | "same_session_found_fixed";
+/** Split a same-session receipt body into its finding and verification texts
+ *  (OMP-52): the model writes `## Finding` and `## Verification` sections. */
+export function sameSessionSections(body: string): { finding: string; verification: string } | null {
+	// `\Z` is not a JavaScript end anchor (it is a literal "z" under /i);
+	// `(?![\s\S])` asserts true end-of-input.
+	const finding = /^##\s+Finding\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/im.exec(body);
+	const verification = /^##\s+Verification\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/im.exec(body);
+	if (!finding?.[1]?.trim() || !verification?.[1]?.trim()) return null;
+	return { finding: finding[1].trim(), verification: verification[1].trim() };
+}
 
 export interface EvidenceMeta {
 	planHash?: string;
@@ -467,6 +496,19 @@ export interface WorkflowBackend {
 	appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta, authorizationRef?: string): Promise<CloseAttemptOutcome | void>;
 	createIssue(input: { title: string; description?: string; project?: string; queue?: boolean; question?: string }): Promise<NowRef>;
 	createBatch(input: CreateBatchInput): Promise<BatchOutcome>;
+	/** OMP-139: one atomic same-session found-and-fixed filing — the BACKLOG
+	 *  child (inheriting the parent's project), its child→parent edge, and the
+	 *  typed same_session_found_fixed receipt bound to the parent's LIVE attempt
+	 *  land in ONE service transaction or not at all. ownerSessionId must be the
+	 *  current owner session; the service refuses a mismatch. */
+	createSameSessionChild(input: {
+		parentKey: string;
+		ownerSessionId: string;
+		title: string;
+		description?: string;
+		finding: string;
+		verification: string;
+	}): Promise<NowRef>;
 	queueIssue(issue: NowRef, question?: string): Promise<void>;
 	reviseWork(issue: NowRef, fields: { title?: string; description?: string }): Promise<void>;
 	recordHealth(project: string, health: "onTrack" | "atRisk" | "offTrack"): Promise<void>;

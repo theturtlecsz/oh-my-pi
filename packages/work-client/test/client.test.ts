@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { payloadHash, WorkClient, WorkError } from "../src/index";
+import { payloadHash, WORK_CONTRACT_SHA256, WorkClient, WorkError } from "../src/index";
 
 const ENV = {
 	api_version: "work.omp.dev/v1" as const,
@@ -39,6 +39,9 @@ test("sends the fixed command surface and decodes replay", async () => {
 	expect(request?.url).toBe("http://127.0.0.1:54322/v1/commands");
 	expect(request?.headers.get("authorization")).toBe("Bearer token");
 	expect(request?.headers.get("x-omp-workspace-id")).toBe(ENV.workspace_id);
+	// OMP-143: every authenticated call carries the loaded contract digest.
+	expect(request?.headers.get("x-omp-contract-sha256")).toBe(WORK_CONTRACT_SHA256);
+	expect(WORK_CONTRACT_SHA256).toMatch(/^[0-9a-f]{64}$/);
 	expect(result.receipt.state).toBe("replayed");
 	if (result.result.type !== "set_work_state") throw new Error("wrong result variant");
 	expect(result.result.row_version).toBe(2);
@@ -67,6 +70,37 @@ test("surfaces service errors redacted", async () => {
 	expect((err as WorkError).code).toBe("idempotency_conflict");
 	expect((err as WorkError).status).toBe(409);
 	expect(String(err)).not.toContain("abcdef1234567890abcdef1234567890");
+});
+
+test("contract_mismatch diagnostics survive redaction into the WorkError text", async () => {
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async () =>
+			Response.json(
+				{
+					error: {
+						code: "contract_mismatch",
+						request_id: null,
+						correlation_id: null,
+						diagnostics: [
+							"host contract digest: missing",
+							`service contract digest: ${"a".repeat(64)}`,
+							"restart the OMP session",
+						],
+					},
+				},
+				{ status: 409 },
+			),
+	);
+	const err = await client.tree().catch(e => e);
+	expect(err).toBeInstanceOf(WorkError);
+	expect((err as WorkError).code).toBe("contract_mismatch");
+	expect((err as WorkError).status).toBe(409);
+	expect(String(err)).toContain("host contract digest: missing");
+	expect(String(err)).toContain(`service contract digest: ${"a".repeat(64)}`);
+	expect(String(err)).toContain("restart the OMP session");
 });
 
 test("health probes never require a bearer", async () => {

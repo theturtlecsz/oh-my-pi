@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from omp_work import contract_sha256
 from omp_work.operations.config import OperationsConfig
 from pg_native import native_postgres, seed_authority
 from omp_work.operations.database import bootstrap
@@ -48,12 +49,12 @@ def test_loopback_service_replays_real_postgres_commands_and_enforces_capabiliti
         client = TestClient(create_app(config, capabilities_dir=capabilities))
         command = CreateWorkBatchCommand(type="create_work_batch", payload=CreateWorkBatchPayload(items=(CreateWorkInput(client_ref="a", title="first"), CreateWorkInput(client_ref="b", title="second"))))
         envelope = CommandEnvelope(api_version="work.omp.dev/v1", workspace_id=workspace_id, operation_id=operation_id, request_id=uuid4(), correlation_id=uuid4(), command=command)
-        headers = {"Authorization": "Bearer owner-token", "X-OMP-Workspace-ID": str(workspace_id)}
+        headers = {"Authorization": "Bearer owner-token", "X-OMP-Workspace-ID": str(workspace_id), "X-OMP-Contract-SHA256": contract_sha256()}
         created = client.post("/v1/commands", headers=headers, json=envelope.model_dump(mode="json"))
         assert created.status_code == 200
         replay = client.post("/v1/commands", headers=headers, json=envelope.model_copy(update={"request_id": uuid4()}).model_dump(mode="json"))
         assert replay.status_code == 200 and replay.json()["receipt"]["state"] == "replayed"
         key = created.json()["result"]["items"][0]["key"]
         assert client.get(f"/v1/work-items/{key}", headers=headers).status_code == 200
-        assert client.post("/v1/commands", headers={"Authorization": "Bearer reader-token"}, json=envelope.model_dump(mode="json")).status_code == 403
-        assert client.get(f"/v1/work-items/{key}", headers={"Authorization": "Bearer owner-token", "X-OMP-Workspace-ID": str(uuid4())}).status_code == 403
+        assert client.post("/v1/commands", headers={"Authorization": "Bearer reader-token", "X-OMP-Contract-SHA256": contract_sha256()}, json=envelope.model_dump(mode="json")).status_code == 403
+        assert client.get(f"/v1/work-items/{key}", headers={"Authorization": "Bearer owner-token", "X-OMP-Workspace-ID": str(uuid4()), "X-OMP-Contract-SHA256": contract_sha256()}).status_code == 403

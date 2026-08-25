@@ -185,7 +185,11 @@ describe("AgentSession plan-mode convergence", () => {
 			advisorResponses: [
 				{
 					content: [
-						{ type: "toolCall", name: "advise", arguments: { note: "tighten the plan", severity: "concern", category: "semantic-concern" } },
+						{
+							type: "toolCall",
+							name: "advise",
+							arguments: { note: "tighten the plan", severity: "concern", category: "semantic-concern" },
+						},
 					],
 				},
 			],

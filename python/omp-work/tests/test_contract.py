@@ -499,3 +499,18 @@ def test_credentials_init_is_idempotent(tmp_path: Path) -> None:
     assert credentials_init(config) == first
     workspace_id, actor_id = first
     assert config.workspace_id() == workspace_id and config.actor_id() == actor_id
+
+
+def test_ts_contract_constant_matches_owner_approval() -> None:
+    """OMP-136/OMP-147: the generated TS constant, the live contract digest, and
+    the owner-approved approval.json must agree — a drifted constant ships a
+    host that the service will (correctly) refuse."""
+    import re
+
+    ts_path = Path(__file__).parents[3] / "packages" / "work-client" / "src" / "contract.ts"
+    match = re.search(r'WORK_CONTRACT_SHA256 = "([0-9a-f]{64})"', ts_path.read_text())
+    assert match, "contract.ts must export a 64-hex WORK_CONTRACT_SHA256 literal"
+    literal = match.group(1)
+    assert literal == omp_work.contract_sha256(), "contract.ts literal must equal the live contract digest"
+    approval = json.loads((Path(omp_work._contract_dir()) / "approval.json").read_text())
+    assert literal == approval["contract_sha256"], "contract.ts literal must equal the owner-approved digest"

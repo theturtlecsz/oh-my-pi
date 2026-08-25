@@ -24,13 +24,13 @@ _READS = frozenset({
 _ERROR_CODES = frozenset({
     "invalid_request", "unauthenticated", "forbidden", "approval_required", "revision_conflict",
     "idempotency_conflict", "relation_cycle", "focus_conflict", "stale_evidence", "completion_blocked",
-    "cutover_invariant", "unavailable",
+    "contract_mismatch", "cutover_invariant", "unavailable",
 })
 _SCOPES = frozenset({
     "work.read", "work.candidate.read", "work.mutate", "work.approve", "work.close", "work.import", "work.operate",
 })
 _COMMAND_TYPES = frozenset({
-    "create_work_batch", "revise_work", "set_work_state", "put_relation", "remove_relation", "set_focus",
+    "create_work_batch", "create_same_session_child", "revise_work", "set_work_state", "put_relation", "remove_relation", "set_focus",
     "clear_focus", "append_evidence", "finalize_candidate", "begin_close_attempt", "seal_audit_manifest",
     "reserve_auditor_launch", "cancel_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery", "record_closeout_review",
     "complete_work", "record_project_health",

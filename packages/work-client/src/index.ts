@@ -3,6 +3,9 @@
  * service (work.omp.dev/v1). Types mirror python/omp-work/src/omp_work/v1/
  * models.py + api_models.py one-for-one; the service is the authority.
  */
+import { WORK_CONTRACT_SHA256 } from "./contract";
+
+export { WORK_CONTRACT_SHA256 } from "./contract";
 
 export type UUID = string;
 
@@ -257,6 +260,16 @@ export type CreateWorkInput = {
 };
 export type CreateBatchRelation = { source_ref: string; target_ref: string; kind: RelationKind };
 export type CreateWorkBatchPayload = { items: CreateWorkInput[]; relations?: CreateBatchRelation[] };
+/** OMP-139: one atomic same-session found-and-fixed filing — child, parent
+ *  edge, and typed receipt land in one serializable service transaction. */
+export type CreateSameSessionChildPayload = {
+	parent_work_id: UUID;
+	attempt_id: UUID;
+	owner_session_id: string;
+	item: CreateWorkInput;
+	finding: string;
+	verification: string;
+};
 export type ReviseWorkPayload = { work_id: UUID; expected_revision_id: UUID; revision: WorkRevision };
 export type SetWorkStatePayload = { work_id: UUID; state: string };
 export type PutRelationPayload = { relation: RelationEdge };
@@ -362,6 +375,7 @@ export type ActivateCutoverPayload = { manifest: CutoverManifest };
 
 export type Command =
 	| { type: "create_work_batch"; payload: CreateWorkBatchPayload }
+	| { type: "create_same_session_child"; payload: CreateSameSessionChildPayload }
 	| { type: "revise_work"; payload: ReviseWorkPayload }
 	| { type: "set_work_state"; payload: SetWorkStatePayload }
 	| { type: "put_relation"; payload: PutRelationPayload }
@@ -393,6 +407,7 @@ export type CreatedWorkItem = {
 };
 export type CommandResult =
 	| { type: "create_work_batch"; items: CreatedWorkItem[] }
+	| { type: "create_same_session_child"; item: CreatedWorkItem; receipt: EvidenceReceipt }
 	| { type: "revise_work"; revision_id: UUID; changed: boolean }
 	| { type: "set_work_state"; work_id: UUID; state: string; row_version: number }
 	| {
@@ -535,10 +550,17 @@ export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promi
 /** Error text is for notices/status lines: bearer material and absolute paths
  *  are stripped before it ever reaches the TUI. */
 function redact(text: string): string {
-	return text
-		.replace(/Bearer\s+\S+/gi, "Bearer …")
-		.replace(/[A-Za-z0-9_-]{32,}/g, m => (/^[0-9a-f-]{36}$/.test(m) ? m : "…"))
-		.replace(/\/home\/[^\s"']+/g, "~");
+	return (
+		text
+			.replace(/Bearer\s+\S+/gi, "Bearer …")
+			// UUIDs and bare 40/64-hex content digests (commit SHAs, contract and
+			// candidate hashes) are identities, not secrets — they survive so
+			// contract_mismatch diagnostics stay actionable (OMP-143).
+			.replace(/[A-Za-z0-9_-]{32,}/g, m =>
+				/^[0-9a-f-]{36}$/.test(m) || /^[0-9a-f]{40}$/.test(m) || /^[0-9a-f]{64}$/.test(m) ? m : "…",
+			)
+			.replace(/\/home\/[^\s"']+/g, "~")
+	);
 }
 
 export class WorkError extends Error {
@@ -567,6 +589,9 @@ export class WorkClient {
 		return {
 			Authorization: `Bearer ${token}`,
 			"X-OMP-Workspace-ID": this.workspaceId,
+			// OMP-143 fail-first handshake: the digest this binary loaded; the
+			// service refuses any mismatch with typed `contract_mismatch`.
+			"X-OMP-Contract-SHA256": WORK_CONTRACT_SHA256,
 			"Content-Type": "application/json",
 		};
 	}

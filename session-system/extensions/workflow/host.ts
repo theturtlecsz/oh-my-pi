@@ -49,12 +49,15 @@ import {
 	type IssueDetail,
 	type MapSurface,
 	type NowRef,
+	nowRefusal,
+	sameSessionSections,
 	type PlanPacket,
 	type RiderProof,
 	type SealedAuditTask,
 	STOP_REMINDER_BOUNDARY,
 	type TreeItem,
 	type WorkflowBackend,
+	type WorkflowCheckpoint,
 	type WorkStateCarrier,
 	renderCenterReadout,
 } from "./backend";
@@ -115,8 +118,6 @@ export interface HostConfig {
 	entryType: string;
 	/** Accept a persisted session entry as this backend's NOW state. */
 	acceptEntry(data: Record<string, unknown>): boolean;
-	/** Stop-hook continuation hint for the closeout checkpoint (body guidance). */
-	reviewCheckpointHint: string;
 }
 interface HostNowState {
 	issueId?: string;
@@ -130,6 +131,12 @@ interface HostNowState {
 	approvedPlan?: { hash: string; at: number };
 	obligationHandoff?: { armed: boolean; blockedOnce: boolean };
 	obligationReview?: { armed: boolean; blockedOnce: boolean };
+	/** OMP-137: the last /summary refusal, durable across sessions. Recorded on
+	 *  every gate/warning/begin block with the complete typed reason; surfaced
+	 *  as one pending notice at the next owner session_start while it still
+	 *  targets the current NOW; cleared only by a successful begin/resume or a
+	 *  NOW switch/clear. */
+	summaryRefusal?: { issueId: string; key: string; reason: string; at: number };
 	/** Opaque backend carrier (work: candidate ids/shas); persisted verbatim. */
 	carrier?: unknown;
 }
@@ -417,8 +424,17 @@ export function createWorkflowHost(cfg: HostConfig) {
 			approvedPlan: state.approvedPlan,
 			obligationHandoff: state.obligationHandoff,
 			obligationReview: state.obligationReview,
+			summaryRefusal: state.summaryRefusal,
 			carrier: state.carrier,
 		});
+	}
+
+	/** OMP-137: durably record a /summary refusal against the NOW it targeted.
+	 *  Persistence is awaited so the reason survives an immediate process exit. */
+	async function recordSummaryRefusal(now: NowRef, reason: string): Promise<void> {
+		state.summaryRefusal = { issueId: now.id, key: now.key, reason, at: Date.now() };
+		persistSession();
+		await saveCache();
 	}
 
 	// ---- HOME-122 workflow carrier ----
@@ -481,6 +497,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 	}
 
 	async function setNow(issue: NowRef, ctx: ExtensionContext) {
+		// Closed work never becomes NOW (owner ruling 2026-08-25). Backend-looked-up
+		// refs carry state; the /now picker and fresh creates are open by construction.
+		const refusal = nowRefusal(issue);
+		if (refusal) throw new Error(refusal);
 		await backend.setNowRemote(issue);
 		// the opaque carrier belongs to the previous NOW (Work binds it to a
 		// candidate commit) — never let it leak across a switch. The captured
@@ -489,6 +509,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		if (state.issueId !== issue.id) {
 			state.carrier = undefined;
 			planTarget = undefined;
+			state.summaryRefusal = undefined; // OMP-137: refusal is bound to the previous NOW
 		}
 		state.issueId = issue.id;
 		state.identifier = issue.key;
@@ -522,6 +543,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		state.setAt = undefined;
 		state.carrier = undefined;
 		planTarget = undefined; // no latent approval target survives a NOW clear (OMP-124)
+		state.summaryRefusal = undefined; // OMP-137: a NOW clear resolves the refusal notice
 		void saveCache();
 		persistSession();
 		footer(ctx);
@@ -628,23 +650,27 @@ export function createWorkflowHost(cfg: HostConfig) {
 		const commitSha = carrier().commitSha;
 		if (!commitSha) {
 			summaryBlockReason = "the candidate was not finalized";
+			await recordSummaryRefusal(now, "the candidate was not finalized");
 			return false;
 		}
 		const legacyPlan = auditBaseCommit === undefined;
 		const startCommit = auditBaseCommit ?? parentCommit(process.cwd(), commitSha);
 		if (!startCommit) {
 			summaryBlockReason = "no audit base commit was available";
+			await recordSummaryRefusal(now, "no audit base commit was available (outside a git repo?)");
 			ctx.ui.notify("close attempt not begun — no audit base commit (outside a git repo?); /done will refuse", "warning");
 			return false;
 		}
 		if (auditBaseDirtyPaths === undefined && !legacyPlan) {
 			summaryBlockReason = "the approved plan has no audit-base dirty-path snapshot";
+			await recordSummaryRefusal(now, "the approved plan has no audit-base dirty-path snapshot; restamp with /plan");
 			ctx.ui.notify("close attempt not begun — no audit-base dirty-path snapshot; restamp with /plan", "warning");
 			return false;
 		}
 		const diffSha256 = rangeDiffSha256(process.cwd(), startCommit, commitSha);
 		if (!diffSha256) {
 			summaryBlockReason = `the ${startCommit.slice(0, 12)}..${commitSha.slice(0, 12)} audit diff could not be hashed`;
+			await recordSummaryRefusal(now, `the ${startCommit.slice(0, 12)}..${commitSha.slice(0, 12)} audit diff could not be hashed`);
 			ctx.ui.notify(`close attempt not begun — could not hash the ${startCommit.slice(0, 12)}..${commitSha.slice(0, 12)} diff; /done will refuse`, "warning");
 			return false;
 		}
@@ -652,6 +678,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		const staged = await stageRiders(ctx);
 		if (staged === null) {
 			summaryBlockReason = "the staged rider batch was rejected";
+			await recordSummaryRefusal(now, "the staged rider batch was rejected — fix or remove it before the next /summary");
 			return false;
 		}
 		const session: CloseAttemptSession = {
@@ -680,6 +707,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 		}
 		if (outcome.status === "refused") {
 			summaryBlockReason = `the ledger refused the close attempt (${outcome.event.reasonCode})`;
+			// OMP-137: persist the COMPLETE service-rendered event text, not a summary.
+			await recordSummaryRefusal(now, outcome.event.renderedText);
 			ctx.ui.notify(`close attempt refused: ${outcome.event.reasonCode}`, "warning");
 		}
 		if (outcome.event.requiresDelivery) {
@@ -711,12 +740,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 			const gate = await backend.summaryGate(now, carrier(), hooksFor(ctx));
 			if (!gate.ok) {
 				summaryBlockReason = gate.reason;
+				await recordSummaryRefusal(now, gate.reason);
 				ctx.ui.notify(gate.reason, "warning");
 				return;
 			}
 			mergeCarrier(gate.carrier);
 			if (gate.warning) {
 				summaryBlockReason = gate.warning;
+				await recordSummaryRefusal(now, gate.warning);
 				ctx.ui.notify(gate.warning, "warning");
 				persistSession();
 				await saveCache();
@@ -728,10 +759,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 			}
 			if (!gate.planHash) {
 				summaryBlockReason = "the approved plan hash is missing";
+				await recordSummaryRefusal(now, "the approved plan hash is missing");
 				return;
 			}
 			if (!(await beginAttempt(now, ctx, gate.auditBaseCommit, gate.auditBaseDirtyPaths))) return;
 			summaryAuthorized = true;
+			state.summaryRefusal = undefined; // OMP-137: a successful begin/resume resolves the refusal
 			state.executingIssue = gate.issue;
 			state.approvedPlan = { hash: gate.planHash, at: Date.now() };
 			state.obligationReview = { armed: true, blockedOnce: false };
@@ -741,6 +774,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			footer(ctx);
 		} catch (error) {
 			summaryBlockReason = `workflow state could not be loaded (${String(error)})`;
+			await recordSummaryRefusal(now, `workflow state could not be loaded (${String(error)})`);
 			ctx.ui.notify(`Could not load ${now.key} workflow state (${String(error)}). Review can run, but /done stays blocked.`, "warning");
 		}
 	}
@@ -1136,6 +1170,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					state.approvedPlan = undefined;
 					state.obligationHandoff = undefined;
 					state.obligationReview = undefined;
+					state.summaryRefusal = undefined; // OMP-137: refusal was bound to the previous NOW
 					state.treeCounts = undefined;
 					state.setAt = remoteNow ? Date.now() : undefined;
 				}
@@ -1171,6 +1206,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 				} catch (error) {
 					pendingNotices.push(`[${TOOL_NAME}] checkpoint recovery failed (${String(error)}) — deliveries stay pending and closeout stays blocked`);
 				}
+			}
+			// OMP-137: a durable /summary refusal that still targets the current NOW
+			// re-enters model context as ONE pending notice with its exact reason.
+			if (ownerSession(ctx) && state.summaryRefusal && state.issueId && state.summaryRefusal.issueId === state.issueId) {
+				pendingNotices.push(
+					`[${TOOL_NAME}] The last /summary on ${state.summaryRefusal.key} was refused and is still unresolved: ${state.summaryRefusal.reason}`,
+				);
 			}
 			digestPending = true;
 			digestInjectedThisSession = false;
@@ -1350,8 +1392,26 @@ export function createWorkflowHost(cfg: HostConfig) {
 				if (event.stop_hook_active || !state.executingIssue) return;
 				const reviewOwed = state.obligationReview?.armed && !state.obligationReview.blockedOnce;
 				const handoffOwed = state.obligationHandoff?.armed && !state.obligationHandoff.blockedOnce;
-				const kind = reviewOwed ? backend.reviewKind : handoffOwed ? "handoff" : undefined;
-				if (!kind) return;
+				if (!reviewOwed && !handoffOwed) return;
+				let orientation = "The body carries the execution handoff: done, remaining, and exact resume steps.";
+				if (reviewOwed) {
+					// OMP-134/OMP-137: the closeout checkpoint is emitted only from LIVE
+					// ledger state. Anything but an audited attempt (active, audit_ready,
+					// auditor_in_flight, closeout_requested, terminal, missing) or an
+					// unreadable workflow emits nothing and leaves blockedOnce false, so a
+					// later valid audited state can still trigger exactly once.
+					let workflow: WorkflowCheckpoint;
+					try {
+						workflow = await backend.workflowState(state.executingIssue.key);
+					} catch {
+						return;
+					}
+					if (workflow.closeAttempt?.state !== "audited") return;
+					orientation = workflow.closeAttempt.latestEventText
+						? `The body carries the closeout review. Ledger state: ${workflow.closeAttempt.latestEventText}`
+						: "The body carries the closeout review.";
+				}
+				const kind = reviewOwed ? backend.reviewKind : "handoff";
 				if (state.obligationHandoff?.armed) state.obligationHandoff.blockedOnce = true;
 				if (state.obligationReview?.armed) state.obligationReview.blockedOnce = true;
 				await saveCache();
@@ -1359,7 +1419,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					continue: true,
 					additionalContext: [
 						`Post one silent workflow checkpoint on ${state.executingIssue.key} with the ${TOOL_NAME} tool: action:"append_evidence", work:"${state.executingIssue.key}", kind:"${kind}".`,
-						kind === backend.reviewKind ? cfg.reviewCheckpointHint : "The body carries the execution handoff: done, remaining, and exact resume steps.",
+						orientation,
 						STOP_REMINDER_BOUNDARY,
 						"This continuation fires once; later turns show only ⚠ while the checkpoint remains owed.",
 					].join(" "),
@@ -1836,6 +1896,42 @@ export function createWorkflowHost(cfg: HostConfig) {
 									"Intake visible scan required before publication: deliver a standalone tool-free assistant message containing 'Figured out myself', 'Asking you', and 'Leaving for later' headings first.",
 								);
 							}
+							// OMP-139 atomic same-session filing: selected ONLY by the exact tuple
+							// work:<existing parent> + kind:"same_session_found_fixed" + title +
+							// body (## Finding / ## Verification). Partial tuples and unsupported
+							// authority fields are refused BEFORE any preview.
+							if (params.kind !== undefined || params.work !== undefined) {
+								if (params.kind !== "same_session_found_fixed") {
+									return deny('create_work accepts kind/work only as the atomic same-session form: kind:"same_session_found_fixed", work:<parent key>, title, and a body with `## Finding` and `## Verification`');
+								}
+								if (!params.work) return deny("the atomic same-session filing needs work:<existing parent key>");
+								if (!params.title) return deny("title required");
+								if (params.batch !== undefined) return deny("the atomic same-session filing rejects batch — it files exactly one child");
+								if (params.queue !== undefined) return deny("the atomic same-session filing rejects queue — the child closes with the parent's /done");
+								if (params.question !== undefined) return deny("the atomic same-session filing rejects question — no owner decision is queued");
+								if (params.project !== undefined) return deny("the atomic same-session filing rejects project — the child inherits the parent's project");
+								const sections = params.body ? sameSessionSections(params.body) : null;
+								if (!sections) {
+									return deny("the atomic same-session filing needs a body with non-empty `## Finding` and `## Verification` sections");
+								}
+								const parent = await backend.findIssue(params.work);
+								const gate = confirmWrite(
+									"create_work",
+									"Model wants to file a same-session found-and-fixed child",
+									`parent: ${parent.key} ${parent.title}\nchild: "${params.title}"\n\n## Finding\n${sections.finding}\n\n## Verification\n${sections.verification}\n\nFiles atomically against the parent's live /summary attempt; the child closes with the parent's /done.`,
+									params,
+								);
+								if (!gate.approved) return deny(gate.preview);
+								const created = await backend.createSameSessionChild({
+									parentKey: parent.key,
+									ownerSessionId: piRef.getSessionId(),
+									title: params.title,
+									...(params.description ? { description: params.description } : {}),
+									finding: sections.finding,
+									verification: sections.verification,
+								});
+								return okText(`created ${created.key} as a same-session child of ${parent.key} — it closes with the parent's /done`, { identifier: created.key, parent: parent.key });
+							}
 							if (params.queue) {
 								if (!params.question || typeof params.question !== "string" || !params.question.trim()) {
 									return deny("question required when creating a TRIAGE issue (queue:true)");
@@ -2063,6 +2159,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 						case "set_now": {
 							if (!params.work) return deny("work key required");
 							const issue = await backend.findIssue(params.work);
+							const refusal = nowRefusal(issue);
+							if (refusal) return deny(refusal);
 							const gate = confirmWrite("set_now", "Model wants to set NOW", `${issue.key} ${issue.title}`, params);
 							if (!gate.approved) return deny(gate.preview);
 							await setNow(issue, ctx);

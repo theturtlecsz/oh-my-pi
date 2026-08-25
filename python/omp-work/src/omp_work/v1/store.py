@@ -16,7 +16,7 @@ from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import migration_set_sha256
 from omp_work.operations.fingerprints import code_fingerprint, config_fingerprint, transform_sha256
 from .canonical import canonical_json, close_attempt_identity_sha256, command_sha256, sha256, text_sha256
-from .models import Candidate, CloseAttemptState, CommandEnvelope, CompletionInput, EvidenceReceipt, LIVE_CLOSE_ATTEMPT_STATES, MAX_ACCEPTED_REPORTS, MAX_AUDITOR_LAUNCHES, OperationReceipt, OperationState, RelationEdge, SameSessionFoundFixedPayload
+from .models import Candidate, CloseAttemptState, CommandEnvelope, CompletionInput, CreateWorkBatchPayload, EvidenceKind, EvidenceReceipt, LIVE_CLOSE_ATTEMPT_STATES, MAX_ACCEPTED_REPORTS, MAX_AUDITOR_LAUNCHES, OperationReceipt, OperationState, RelationEdge, SameSessionFoundFixedPayload
 from .semantics import completion_blockers, normalize_auditor_report, validate_cutover_manifest, would_create_cycle
 
 _RECEIPT_FIELDS = "receipt_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit"
@@ -148,7 +148,7 @@ class PostgresWorkStore:
 
     def _execute(self, envelope: CommandEnvelope, actor_id: UUID, actor_kind: str, required_scope: str, request_hash: str, attempt: int) -> tuple[OperationReceipt, dict[str, object]]:
         command = envelope.command
-        serializable = command.type in {"create_work_batch", "put_relation", "remove_relation", "finalize_candidate", "activate_cutover"}
+        serializable = command.type in {"create_work_batch", "create_same_session_child", "put_relation", "remove_relation", "finalize_candidate", "activate_cutover"}
         conflict = False
         with self._transaction(envelope.workspace_id, actor_id, serializable=serializable) as cur:
             cur.execute("SELECT request_sha256, response, result_sha256, diagnostics FROM omp_control.idempotent_commands WHERE workspace_id=%s AND operation_id=%s FOR UPDATE", (envelope.workspace_id, envelope.operation_id))
@@ -172,6 +172,8 @@ class PostgresWorkStore:
                         raise WorkStoreError("cutover_invariant", ("awaiting_cutover_plan_attestation",))
                 if command.type == "create_work_batch":
                     result = self._create_batch(cur, envelope)
+                elif command.type == "create_same_session_child":
+                    result = self._create_same_session_child(cur, envelope)
                 elif command.type == "revise_work":
                     result = self._revise(cur, envelope)
                 elif command.type == "set_work_state":
@@ -229,6 +231,8 @@ class PostgresWorkStore:
             aggregate_id = payload.receipt.work_id
         elif hasattr(payload, "input"):
             aggregate_id = payload.input.work_id
+        elif hasattr(payload, "parent_work_id"):
+            aggregate_id = payload.parent_work_id
         elif hasattr(payload, "slot"):
             aggregate_id = payload.slot.work_id or envelope.workspace_id
         close_event = result.get("event")
@@ -245,10 +249,15 @@ class PostgresWorkStore:
         cur.execute("INSERT INTO omp_audit.domain_events(event_id,workspace_id,aggregate_type,aggregate_id,aggregate_version,actor_id,actor_kind,capability_id,request_id,correlation_id,operation_id,causation_id,event_type,outcome,payload,payload_sha256,previous_event_sha256,event_sha256) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (uuid4(), envelope.workspace_id, "work_item" if aggregate_id != envelope.workspace_id else "workspace", aggregate_id, int(result.get("row_version", 1)), actor_id, actor_kind, envelope.operation_id, envelope.request_id, envelope.correlation_id, envelope.operation_id, envelope.operation_id, event_type or envelope.command.type, outcome, json.dumps(result), payload_hash, previous_hash, event_hash))
 
     def _create_batch(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
-        payload = envelope.command.payload
+        return {"type": "create_work_batch", "items": self._create_items(cur, envelope.workspace_id, envelope.command.payload)}
+
+    def _create_items(self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, payload: CreateWorkBatchPayload) -> list[dict[str, object]]:
+        """Batch-creation primitive shared by create_work_batch and the OMP-139
+        atomic same-session filing: alias allocation, duplicate-title refusal,
+        rows, criteria, and intra-batch relations."""
         project_ids = {item.project_id for item in payload.items if item.project_id is not None}
         if project_ids:
-            cur.execute("SELECT project_id FROM omp_work.projects WHERE workspace_id=%s AND project_id = ANY(%s)", (envelope.workspace_id, [str(project_id) for project_id in project_ids]))
+            cur.execute("SELECT project_id FROM omp_work.projects WHERE workspace_id=%s AND project_id = ANY(%s)", (workspace_id, [str(project_id) for project_id in project_ids]))
             if {row["project_id"] for row in cur.fetchall()} != project_ids:
                 raise WorkStoreError("invalid_request", ("unknown project reference",))
         parent_sources: set[str] = set()
@@ -262,8 +271,8 @@ class PostgresWorkStore:
             if edge_key in seen_edges:
                 raise WorkStoreError("invalid_request", ("duplicate relation",))
             seen_edges.add(edge_key)
-        cur.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING", (envelope.workspace_id,))
-        cur.execute("SELECT next_alias FROM omp_control.workspaces WHERE workspace_id=%s FOR UPDATE", (envelope.workspace_id,))
+        cur.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING", (workspace_id,))
+        cur.execute("SELECT next_alias FROM omp_control.workspaces WHERE workspace_id=%s FOR UPDATE", (workspace_id,))
         start = int(cur.fetchone()["next_alias"])
 
         batch_seen: dict[tuple[str | None, str], str] = {}
@@ -284,7 +293,7 @@ class PostgresWorkStore:
             WHERE w.workspace_id = %s
               AND w.state NOT IN ('DONE', 'CANCELED')
             """,
-            (envelope.workspace_id,),
+            (workspace_id,),
         )
         open_rows = cur.fetchall()
         for item in payload.items:
@@ -304,11 +313,11 @@ class PostgresWorkStore:
             work_id, revision_id = uuid4(), uuid4()
             title = item.title.strip()
             content_hash = sha256({"title": title, "description": item.description, "scope": item.scope, "acceptance_criteria": list(item.acceptance_criteria)})
-            cur.execute("INSERT INTO omp_work.work_items(work_id,workspace_id,state,current_revision_id,project_id) VALUES(%s,%s,%s,%s,%s)", (work_id,envelope.workspace_id,item.state,revision_id,item.project_id))
-            cur.execute("INSERT INTO omp_work.work_aliases(work_id,workspace_id,key,origin) VALUES(%s,%s,%s,'local')", (work_id,envelope.workspace_id,f"OMP-{start + offset}"))
-            cur.execute("INSERT INTO omp_work.work_revisions(revision_id,work_id,workspace_id,revision_number,title,description,scope,content_sha256,created_by,supplied_at) VALUES(%s,%s,%s,1,%s,%s,%s,%s,%s,%s)", (revision_id,work_id,envelope.workspace_id,title,item.description,item.scope,content_hash,"service",now))
+            cur.execute("INSERT INTO omp_work.work_items(work_id,workspace_id,state,current_revision_id,project_id) VALUES(%s,%s,%s,%s,%s)", (work_id,workspace_id,item.state,revision_id,item.project_id))
+            cur.execute("INSERT INTO omp_work.work_aliases(work_id,workspace_id,key,origin) VALUES(%s,%s,%s,'local')", (work_id,workspace_id,f"OMP-{start + offset}"))
+            cur.execute("INSERT INTO omp_work.work_revisions(revision_id,work_id,workspace_id,revision_number,title,description,scope,content_sha256,created_by,supplied_at) VALUES(%s,%s,%s,1,%s,%s,%s,%s,%s,%s)", (revision_id,work_id,workspace_id,title,item.description,item.scope,content_hash,"service",now))
             for position, criterion in enumerate(item.acceptance_criteria):
-                cur.execute("INSERT INTO omp_work.acceptance_criteria(revision_id,workspace_id,position,criterion) VALUES(%s,%s,%s,%s)", (revision_id,envelope.workspace_id,position,criterion))
+                cur.execute("INSERT INTO omp_work.acceptance_criteria(revision_id,workspace_id,position,criterion) VALUES(%s,%s,%s,%s)", (revision_id,workspace_id,position,criterion))
             ref_to_work_id[item.client_ref] = work_id
             items.append({"client_ref": item.client_ref, "work_id": str(work_id), "revision_id": str(revision_id), "key": f"OMP-{start + offset}", "state": item.state, "row_version": 1})
         edges: list[RelationEdge] = []
@@ -316,13 +325,75 @@ class PostgresWorkStore:
             source, target = ref_to_work_id[relation.source_ref], ref_to_work_id[relation.target_ref]
             if relation.kind.value == "related" and str(source) > str(target):
                 source, target = target, source
-            edge = RelationEdge(workspace_id=envelope.workspace_id, source_work_id=source, target_work_id=target, kind=relation.kind)
+            edge = RelationEdge(workspace_id=workspace_id, source_work_id=source, target_work_id=target, kind=relation.kind)
             if would_create_cycle(tuple(edges), edge):
                 raise WorkStoreError("relation_cycle")
             edges.append(edge)
-            cur.execute("INSERT INTO omp_work.work_relations(relation_id,workspace_id,source_work_id,target_work_id,kind) VALUES(%s,%s,%s,%s,%s)", (uuid4(),envelope.workspace_id,source,target,relation.kind.value))
-        cur.execute("UPDATE omp_control.workspaces SET next_alias=next_alias+%s WHERE workspace_id=%s", (len(items),envelope.workspace_id))
-        return {"type": "create_work_batch", "items": items}
+            cur.execute("INSERT INTO omp_work.work_relations(relation_id,workspace_id,source_work_id,target_work_id,kind) VALUES(%s,%s,%s,%s,%s)", (uuid4(),workspace_id,source,target,relation.kind.value))
+        cur.execute("UPDATE omp_control.workspaces SET next_alias=next_alias+%s WHERE workspace_id=%s", (len(items),workspace_id))
+        return items
+
+    def _create_same_session_child(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
+        """OMP-139: one serializable transaction files a same-session found-and-fixed
+        child — the BACKLOG child inheriting the parent's project, the active
+        child→parent edge, and the typed same_session_found_fixed receipt bound to
+        the live attempt's start commit, final commit, and candidate SHA. Any
+        validation or conflict failure rolls child, edge, receipt, and alias
+        allocation back together."""
+        payload = envelope.command.payload
+        parent = self._lock_work_chain(cur, envelope.workspace_id, payload.parent_work_id)
+        if parent["archived"] or parent["state"] in ("DONE", "CANCELED", "CANCELLED"):
+            raise WorkStoreError("invalid_request", ("parent work item is closed — same-session children ride an OPEN parent",))
+        cur.execute(f"SELECT {_ATTEMPT_FIELDS} FROM omp_work.close_attempts WHERE workspace_id=%s AND attempt_id=%s FOR UPDATE", (envelope.workspace_id, payload.attempt_id))
+        attempt = cur.fetchone()
+        if attempt is None or attempt["work_id"] != parent["work_id"]:
+            raise WorkStoreError("invalid_request", ("unknown close attempt on this parent",))
+        if attempt["state"] not in _LIVE_STATES:
+            raise WorkStoreError("invalid_request", ("the referenced close attempt is not live — run /summary first",))
+        if attempt["owner_session_id"] != payload.owner_session_id:
+            raise WorkStoreError("stale_evidence", ("owner session does not match the live attempt",))
+        if not attempt["candidate_sha256"] or not attempt["candidate_commit"] or not attempt["owner_session_start_commit"]:
+            raise WorkStoreError("stale_evidence", ("the live attempt carries no complete candidate identity",))
+        cur.execute("SELECT kind FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s", (envelope.workspace_id, attempt["candidate_id"]))
+        candidate = cur.fetchone()
+        if candidate is None or candidate["kind"] != "final":
+            raise WorkStoreError("stale_evidence", ("the attempt candidate is not final",))
+        cur.execute("SELECT project_id FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s", (envelope.workspace_id, parent["work_id"]))
+        parent_project = cur.fetchone()["project_id"]
+        child_input = payload.item.model_copy(update={"state": "BACKLOG", "project_id": parent_project})
+        items = self._create_items(cur, envelope.workspace_id, CreateWorkBatchPayload(items=(child_input,)))
+        child = items[0]
+        child_id, child_revision_id = UUID(str(child["work_id"])), UUID(str(child["revision_id"]))
+        # child→parent edge; the fresh child has no other edges, so the shared
+        # recursive check mirrors _put_relation for parity, never for necessity.
+        cur.execute("WITH RECURSIVE path(id) AS (SELECT target_work_id FROM omp_work.work_relations WHERE workspace_id=%s AND source_work_id=%s AND kind='parent' AND active UNION SELECT r.target_work_id FROM omp_work.work_relations r JOIN path p ON r.source_work_id=p.id WHERE r.workspace_id=%s AND r.kind='parent' AND r.active) SELECT 1 FROM path WHERE id=%s", (envelope.workspace_id, parent["work_id"], envelope.workspace_id, child_id))
+        if cur.fetchone():
+            raise WorkStoreError("relation_cycle")
+        cur.execute("INSERT INTO omp_work.work_relations(relation_id,workspace_id,source_work_id,target_work_id,kind) VALUES(%s,%s,%s,%s,'parent')", (uuid4(), envelope.workspace_id, child_id, parent["work_id"]))
+        link = SameSessionFoundFixedPayload(
+            attempt_id=payload.attempt_id,
+            owner_session_id=payload.owner_session_id,
+            base_commit=str(attempt["owner_session_start_commit"]),
+            fix_commit=str(attempt["candidate_commit"]),
+            candidate_sha256=str(attempt["candidate_sha256"]),
+            finding=payload.finding,
+            verification=payload.verification,
+        )
+        receipt_payload = link.model_dump(mode="json")
+        receipt = EvidenceReceipt(
+            receipt_id=uuid4(),
+            work_id=child_id,
+            revision_id=child_revision_id,
+            candidate_id=attempt["candidate_id"],
+            kind=EvidenceKind.SAME_SESSION_FOUND_FIXED,
+            payload=receipt_payload,
+            payload_sha256=sha256(receipt_payload),
+            issuer="service",
+            issued_at=datetime.now(timezone.utc),
+        )
+        cur.execute("INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (receipt.receipt_id, envelope.workspace_id, receipt.work_id, receipt.revision_id, receipt.candidate_id, receipt.kind.value, canonical_json(receipt.payload), receipt.payload_sha256, receipt.artifact_sha256, receipt.issuer, receipt.issued_at, receipt.candidate_sha256, receipt.candidate_commit, receipt.verdict, receipt.independent, receipt.remote_ref, receipt.remote_commit))
+        return {"type": "create_same_session_child", "item": child, "receipt": receipt.model_dump(mode="json")}
+
     def _revise(self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
         revision = payload.revision
@@ -793,6 +864,15 @@ class PostgresWorkStore:
             revision = cur.fetchone()
             description = revision["description"] if revision and isinstance(revision["description"], str) else ""
             criteria = _acceptance_from_markdown(description) or _acceptance_from_markdown(plan_body)
+        if not criteria:
+            # OMP-147 (decision 0007): with no structured criteria and no named
+            # Acceptance criteria section anywhere, the approved plan's STORED
+            # verification gates are the acceptance criteria — non-blank strings
+            # in stored order. Legacy plans with neither source keep
+            # "(none recorded)"; prose outside named/stored fields is never parsed.
+            stored_gates = plan["payload"].get("verification") if isinstance(plan["payload"], dict) else None
+            if isinstance(stored_gates, list):
+                criteria = [gate.strip() for gate in stored_gates if isinstance(gate, str) and gate.strip()]
         task_body, section_hashes = _compose_audit_task(
             plan_receipt_sha256=plan["payload_sha256"], plan_body=plan_body, criteria=criteria,
             start_commit=attempt["owner_session_start_commit"], dirty_paths=list(attempt["starting_dirty_paths"] or []),

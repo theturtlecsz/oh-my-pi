@@ -437,7 +437,9 @@ describe("AgentSession owner-routed async delivery", () => {
 
 			expect(promptCalls).toBe(0);
 			const entries = sessionManager.getEntries();
-			const custom = entries.find(e => e.type === "custom_message" && "customType" in e && e.customType === "center-readout");
+			const custom = entries.find(
+				e => e.type === "custom_message" && "customType" in e && e.customType === "center-readout",
+			);
 			expect(custom).toBeDefined();
 			expect((custom as { content?: string })?.content).toBe("Read-only summary");
 			expect(emittedEvents.some(e => e.type === "message_start")).toBe(true);

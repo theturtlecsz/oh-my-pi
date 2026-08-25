@@ -11,6 +11,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from omp_work import contract_sha256
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import collect_health, migration_set_sha256
 from omp_work.operations.fingerprints import code_fingerprint
@@ -47,6 +48,22 @@ def _error(error: WorkError, request_id: UUID, correlation_id: UUID) -> JSONResp
     return JSONResponse({"error": {"code": error.code, "request_id": str(request_id), "correlation_id": str(correlation_id), "diagnostics": list(error.diagnostics[:8])}}, status_code=error.status)
 
 
+
+def _require_contract(request: Request, service_digest: str) -> None:
+    """OMP-143 fail-first handshake: refuse a stale or headerless host BEFORE
+    parsing a command body or authenticating — no command, budget, event, or
+    idempotency row is ever written for a mismatched contract."""
+    host_digest = request.headers.get("x-omp-contract-sha256")
+    if host_digest != service_digest:
+        raise WorkError(
+            "contract_mismatch",
+            status=409,
+            diagnostics=(
+                f"host contract digest: {host_digest or 'missing'}",
+                f"service contract digest: {service_digest}",
+                "restart the OMP session",
+            ),
+        )
 def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkStore | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -60,6 +77,9 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
     # writes against missing migrations. Startup migration enforcement plus
     # this disk-snapshot compare make silent stale serving unreachable.
     source_snapshot = code_fingerprint() + migration_set_sha256()
+    # OMP-143: the digest this service process loaded — compared against every
+    # authenticated request's X-OMP-Contract-SHA256 before any other work.
+    service_digest = contract_sha256()
 
     @app.get("/v1/health/live")
     def live() -> dict[str, object]:
@@ -72,6 +92,7 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
 
     def read_route(request: Request, workspace_id: UUID, kind: str, value: str) -> JSONResponse:
         try:
+            _require_contract(request, service_digest)
             principal = _principal(request, capabilities_dir)
             return JSONResponse(jsonable_encoder(service.read(principal, workspace_id, kind, value)))
         except WorkError as error:
@@ -100,6 +121,7 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
     @app.get("/v1/workspaces/{workspace_id}/activity")
     def activity(request: Request, workspace_id: UUID, project_id: UUID | None = None, limit: int = Query(8, ge=1, le=20)) -> JSONResponse:
         try:
+            _require_contract(request, service_digest)
             principal = _principal(request, capabilities_dir)
             return JSONResponse(jsonable_encoder(service.activity(principal, workspace_id, project_id=project_id, limit=limit)))
         except WorkError as error:
@@ -112,6 +134,9 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
     async def command(request: Request) -> JSONResponse:
         envelope: CommandEnvelope | None = None
         try:
+            # OMP-143: the handshake runs BEFORE the body is parsed — a retired
+            # stale host never reaches discriminator validation.
+            _require_contract(request, service_digest)
             envelope = CommandEnvelope.model_validate(await request.json())
             principal = _principal(request, capabilities_dir)
             if code_fingerprint() + migration_set_sha256() != source_snapshot:

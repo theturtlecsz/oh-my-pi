@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
 if (process.env.OMP_WORK_POSTGRES_INTEGRATION !== "1") {
 	console.log("work-service-candidate-smoke: skipped (set OMP_WORK_POSTGRES_INTEGRATION=1; needs docker)");
@@ -161,7 +162,7 @@ try {
 	}
 
 	const token = (JSON.parse(fs.readFileSync(path.join(xdg, "omp/work-ledger/capabilities/owner.json"), "utf8")) as { token: string }).token;
-	const headers = { authorization: `Bearer ${token}`, "X-OMP-Workspace-ID": WORKSPACE };
+	const headers = { authorization: `Bearer ${token}`, "X-OMP-Workspace-ID": WORKSPACE, "X-OMP-Contract-SHA256": WORK_CONTRACT_SHA256 };
 
 	const runHarness = (phase: "audit" | "closeout" | "done", phaseKey?: string) => {
 		const args = [path.join(import.meta.dir, "fixtures/work-service-smoke-harness.ts"), probe, phase];

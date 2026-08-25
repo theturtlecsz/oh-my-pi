@@ -13,6 +13,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
+from omp_work import contract_sha256
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import bootstrap
 from omp_work.v1.canonical import sha256, text_sha256
@@ -74,7 +75,7 @@ def _seed_project(service, workspace_id, project_id, name: str = "Test Project")
                 (project_id, workspace_id, f"PROJ-{str(project_id)[:4]}", name, "surface", json.dumps({"source": "test"})),
             )
 def _owner_headers(workspace_id) -> dict[str, str]:
-    return {"Authorization": "Bearer owner-token", "X-OMP-Workspace-ID": str(workspace_id)}
+    return {"Authorization": "Bearer owner-token", "X-OMP-Workspace-ID": str(workspace_id), "X-OMP-Contract-SHA256": contract_sha256()}
 
 
 def _command(service, workspace_id, command: dict, *, token: str = "owner-token", operation_id=None) -> tuple[int, dict]:
@@ -831,6 +832,176 @@ def test_same_session_child_completion_valid_and_invalid(service) -> None:
     assert states["OMP-1"] == "DONE" and states["OMP-2"] == "DONE" and states["OMP-3"] != "DONE"
 
 
+def test_create_same_session_child_atomic(service) -> None:
+    # OMP-139: the atomic filing lands child + parent edge + typed receipt in one
+    # transaction; every refusal and an injected mid-transaction failure leave
+    # NO child, edge, receipt, or alias behind.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id, "atomic parent")
+
+    def _filing(**overrides) -> dict:
+        payload = {
+            "parent_work_id": item["work_id"],
+            "attempt_id": attempt["attempt_id"],
+            "owner_session_id": "session-test",
+            "item": {"client_ref": "c", "title": overrides.pop("title", "atomic child fix")},
+            "finding": "bug found in the owner session",
+            "verification": "fix proven in the owner session",
+        }
+        payload.update(overrides)
+        return {"type": "create_same_session_child", "payload": payload}
+
+    def _tree_counts() -> dict[str, str]:
+        tree = service.client.get(f"/v1/workspaces/{workspace_id}/tree", headers=_owner_headers(workspace_id)).json()
+        return {entry["alias"]["key"]: entry["state"] for entry in tree["items"]}
+
+    # Success: child + edge + receipt in one command.
+    status, body = _command(service, workspace_id, _filing())
+    assert status == 200, body
+    child = body["result"]["item"]
+    receipt = body["result"]["receipt"]
+    assert body["result"]["type"] == "create_same_session_child"
+    assert child["state"] == "BACKLOG"
+    assert receipt["kind"] == "same_session_found_fixed"
+    assert receipt["work_id"] == child["work_id"]
+    assert receipt["candidate_id"] == final["candidate_id"]
+    assert receipt["payload"]["base_commit"] == "e" * 40
+    assert receipt["payload"]["fix_commit"] == final["commit_sha"]
+    assert receipt["payload"]["candidate_sha256"] == final["candidate_sha256"]
+    view = service.client.get(f"/v1/work-items/{child['key']}/workflow", headers=_owner_headers(workspace_id)).json()
+    edges = [edge for edge in view["relations"] if edge["kind"] == "parent" and edge["active"] and edge["source_work_id"] == child["work_id"]]
+    assert len(edges) == 1 and edges[0]["target_work_id"] == item["work_id"]
+    baseline = _tree_counts()
+    assert set(baseline) == {"OMP-1", child["key"]} and baseline[child["key"]] == "BACKLOG"
+
+    # Stale attempt: unknown attempt id refuses and creates nothing.
+    status, body = _command(service, workspace_id, _filing(attempt_id=str(uuid4()), title="stale attempt child"))
+    assert status == 400 and body["error"]["code"] == "invalid_request", body
+    # Stale session: wrong owner session refuses and creates nothing.
+    status, body = _command(service, workspace_id, _filing(owner_session_id="session-imposter", title="stale session child"))
+    assert status == 409 and body["error"]["code"] == "stale_evidence", body
+    # Malformed body: blank finding refuses at envelope validation.
+    status, body = _command(service, workspace_id, _filing(finding="   ", title="blank finding child"))
+    assert status == 400 and body["error"]["code"] == "invalid_request", body
+    assert _tree_counts() == baseline
+
+    # Injected service failure mid-transaction: nothing survives, alias unchanged.
+    from omp_work.v1.store import PostgresWorkStore, WorkStoreError
+
+    original = PostgresWorkStore._create_items
+
+    def boom(self, cur, ws, payload):
+        original(self, cur, ws, payload)
+        raise WorkStoreError("unavailable", ("injected failure after child insert",))
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(PostgresWorkStore, "_create_items", boom)
+        status, body = _command(service, workspace_id, _filing(title="doomed child"))
+    assert status == 503 and body["error"]["code"] == "unavailable", body
+    assert _tree_counts() == baseline
+    view = service.client.get(f"/v1/work-items/{child['key']}/workflow", headers=_owner_headers(workspace_id)).json()
+    assert len([r for r in view["receipts"] if r["kind"] == "same_session_found_fixed"]) == 1
+
+    # The filed child completes atomically with the parent through the existing
+    # OMP-52 completion logic — no extra authority path.
+    _drain_deliveries(service, workspace_id)
+    status, body = _record_review(service, workspace_id, item, final, attempt)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    push = _receipt(item["work_id"], item["revision_id"], final["candidate_id"], "push", remote_ref="refs/heads/main", remote_commit=final["commit_sha"])
+    status, _ = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}})
+    assert status == 200
+    _drain_deliveries(service, workspace_id)
+    status, body = _complete(service, workspace_id, item, final, attempt["attempt_id"], satisfied=[child["work_id"]])
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["completed_work_ids"] == [child["work_id"]]
+    states = _tree_counts()
+    assert states["OMP-1"] == "DONE" and states[child["key"]] == "DONE"
+
+    # Closed parent: a filing against a DONE parent refuses outright.
+    status, body = _command(service, workspace_id, _filing(title="late child"))
+    assert status == 400 and body["error"]["code"] == "invalid_request", body
+    assert "closed" in " ".join(body["error"].get("diagnostics", [])), body
+    assert _tree_counts() == states
+
+
+def test_contract_mismatch_handshake_refuses_stale_hosts(service) -> None:
+    # OMP-143: missing/wrong X-OMP-Contract-SHA256 refuses BEFORE the body is
+    # parsed or the bearer is authenticated — a retired command type never
+    # reaches discriminator validation, and nothing is written.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    operation_id = uuid4()
+    retired_envelope = {
+        "api_version": "work.omp.dev/v1",
+        "workspace_id": str(workspace_id),
+        "operation_id": str(operation_id),
+        "request_id": str(uuid4()),
+        "correlation_id": str(uuid4()),
+        "command": {"type": "request_closeout", "payload": {"work_id": str(uuid4())}},
+    }
+    missing = {"Authorization": "Bearer owner-token", "X-OMP-Workspace-ID": str(workspace_id)}
+    response = service.client.post("/v1/commands", headers=missing, json=retired_envelope)
+    assert response.status_code == 409, response.text
+    error = response.json()["error"]
+    assert error["code"] == "contract_mismatch"
+    assert error["diagnostics"][0] == "host contract digest: missing"
+    assert error["diagnostics"][1] == f"service contract digest: {contract_sha256()}"
+    assert error["diagnostics"][2] == "restart the OMP session"
+    # Wrong digest: the same typed refusal, naming the stale digest.
+    wrong = dict(missing, **{"X-OMP-Contract-SHA256": "0" * 64})
+    response = service.client.post("/v1/commands", headers=wrong, json=retired_envelope)
+    assert response.status_code == 409 and response.json()["error"]["code"] == "contract_mismatch"
+    assert response.json()["error"]["diagnostics"][0] == f"host contract digest: {'0' * 64}"
+    # Authenticated reads refuse the same way; health probes stay exempt.
+    read = service.client.get(f"/v1/workspaces/{workspace_id}/tree", headers=missing)
+    assert read.status_code == 409 and read.json()["error"]["code"] == "contract_mismatch"
+    assert service.client.get("/v1/health/live").status_code == 200
+    # Nothing was written for the refused operation id: the same id with a
+    # matching digest and a VALID body applies fresh — never replayed, no
+    # idempotency row, no budget or event burned.
+    refused_reuse = dict(retired_envelope, command=_batch([{"client_ref": "root", "title": "post-handshake item"}]))
+    response = service.client.post("/v1/commands", headers=missing, json=refused_reuse)
+    assert response.status_code == 409
+    status, body = _command(service, workspace_id, _batch([{"client_ref": "root", "title": "post-handshake item"}]), operation_id=operation_id)
+    assert status == 200 and body["receipt"]["state"] == "applied", body
+    # Matching digest keeps ordinary behavior end to end.
+    status, body = _command(service, workspace_id, _batch([{"client_ref": "root", "title": "ordinary item"}]))
+    assert status == 200 and body["result"]["items"][0]["state"] == "BACKLOG"
+
+
+def test_seal_acceptance_criteria_fall_back_to_stored_verification_gates(service) -> None:
+    # OMP-147 (decision 0007): no revision criteria + no `## Acceptance criteria`
+    # anywhere → the plan receipt's stored verification array supplies the
+    # criteria: seven gates become seven AC lines, stored order, no
+    # "(none recorded)", and the section/task hashes cover exactly those bytes.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "fallback gates target")
+    gates = [f"gate {index}: command {index} exits zero" for index in range(1, 8)]
+    plan_body = "## Approach\n1. do the work\n\n## Verification\n" + "\n".join(f"{index}. {gate}" for index, gate in enumerate(gates, start=1))
+    plan_payload = {"body": plan_body, "verification": gates}
+    plan_receipt = _receipt(item["work_id"], item["revision_id"], str(uuid4()), "plan", body=plan_payload, candidate_sha256=secrets.token_hex(32))
+    status, body = _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": plan_receipt}})
+    assert status == 200, body
+    plan = body["result"]["receipt"]
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    task = seal["manifest"]["task_body"]
+    expected_section = "\n".join(f"- AC-{index}: {gate}" for index, gate in enumerate(gates, start=1))
+    assert expected_section in task
+    assert "(none recorded)" not in task
+    assert task.count("- AC-") == 7
+    section_hashes = json.loads(seal["manifest"]["section_hashes"]) if isinstance(seal["manifest"]["section_hashes"], str) else seal["manifest"]["section_hashes"]
+    assert section_hashes["Acceptance criteria"] == text_sha256(expected_section)
+    assert seal["manifest"]["task_sha256"] == text_sha256(task)
+
+
 def test_waiver_requires_failed_delivery(service) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)
@@ -868,7 +1039,7 @@ def test_candidate_read_capability_is_bounded(service) -> None:
     reader.write_text(json.dumps({"token": "reader-token", "actor_id": str(uuid4()), "actor_kind": "task-agent", "workspaces": [str(workspace_id)], "scopes": ["work.candidate.read"], "candidate_ids": [final["candidate_id"]]}))
     reader.chmod(0o600)
 
-    headers = {"Authorization": "Bearer reader-token", "X-OMP-Workspace-ID": str(workspace_id)}
+    headers = {"Authorization": "Bearer reader-token", "X-OMP-Workspace-ID": str(workspace_id), "X-OMP-Contract-SHA256": contract_sha256()}
     workflow = service.client.get("/v1/work-items/OMP-1/workflow", headers=headers)
     assert workflow.status_code == 200
     assert workflow.json()["item"]["candidate"]["candidate_id"] == final["candidate_id"]

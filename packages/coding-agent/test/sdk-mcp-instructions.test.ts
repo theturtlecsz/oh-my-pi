@@ -222,8 +222,12 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 			// completion signal exposed to this integration harness; fake timers
 			// cannot advance it, so retain the established polling bounds above.
 			const deadline = Date.now() + 12_000;
+			// MCP `initialize` publishes server instructions before `tools/list`
+			// publishes mappings, so waiting on SERVER_INSTRUCTIONS races the
+			// mapping render. Wait for the first rendered mapping instead.
+			const mappingSentinel = '- "row_aa" → `xd://mcp__instr_row_aa`';
 			let prompt = session.systemPrompt.join("\n");
-			while (!prompt.includes(SERVER_INSTRUCTIONS) && Date.now() < deadline) {
+			while (!prompt.includes(mappingSentinel) && Date.now() < deadline) {
 				await Bun.sleep(10);
 				prompt = session.systemPrompt.join("\n");
 			}

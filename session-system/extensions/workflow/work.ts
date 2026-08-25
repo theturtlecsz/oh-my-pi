@@ -50,6 +50,8 @@ import {
 	type IssueDetail,
 	type MapSurface,
 	type NowRef,
+	nowRefusal,
+	sameSessionSections,
 	PLAN_PACKET_MAX_BYTES,
 	type PlanPacket,
 	type CancellationProof,
@@ -205,16 +207,7 @@ export function planHash(receiptRow: EvidenceReceipt): string {
 	return typeof stamped === "string" && /^[0-9a-f]{64}$/.test(stamped) ? stamped : receiptRow.payload_sha256;
 }
 
-/** Split a same-session receipt body into its finding and verification texts
- *  (OMP-52): the model writes `## Finding` and `## Verification` sections. */
-export function sameSessionSections(body: string): { finding: string; verification: string } | null {
-	// `\Z` is not a JavaScript end anchor (it is a literal "z" under /i);
-	// `(?![\s\S])` asserts true end-of-input.
-	const finding = /^##\s+Finding\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/im.exec(body);
-	const verification = /^##\s+Verification\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/im.exec(body);
-	if (!finding?.[1]?.trim() || !verification?.[1]?.trim()) return null;
-	return { finding: finding[1].trim(), verification: verification[1].trim() };
-}
+export { sameSessionSections };
 
 /** Render cost of one packet line as get_work emits it ("- " + text + "\n") —
  *  the cap sizes what the owner-facing render actually costs, so a flood of
@@ -323,6 +316,8 @@ export function createWorkBackend(
 			id: item.work_id,
 			key: item.alias.key,
 			title: item.revision.title,
+			state: item.state,
+			archived: item.archived,
 			...(item.project_id && projects.has(item.project_id) ? { project: projects.get(item.project_id) } : {}),
 		};
 	}
@@ -606,7 +601,11 @@ export function createWorkBackend(
 			if (!slot.work_id) return null;
 			const tree = await client.tree();
 			const item = tree.items.find(i => i.work_id === slot.work_id);
-			return item ? toRef(item, projectNames(tree)) : null;
+			if (!item) return null;
+			const ref = toRef(item, projectNames(tree));
+			// A focus slot left pointing at closed work (canceled/done outside the
+			// canonical flows) is stale — never resurrect it as NOW (owner ruling 2026-08-25).
+			return nowRefusal(ref) ? null : ref;
 		},
 
 		async goalTree(now: NowRef): Promise<GoalTree | null> {
@@ -726,11 +725,22 @@ export function createWorkBackend(
 			const plan = latest("plan");
 			const handoff = latest("handoff");
 			const audit = latest("audit");
+			// OMP-134/OMP-137: project the live attempt + its newest service event so
+			// the host gates closeout continuations on real ledger state.
+			const attempt = liveAttempt(view);
+			const attemptEvent = attempt
+				? (view.close_attempt_events ?? [])
+						.filter(e => e.attempt_id === attempt.attempt_id)
+						.sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0]
+				: undefined;
 			return {
 				issue,
 				...(plan ? { plan: { hash: planHash(plan), at: plan.issued_at } } : {}),
 				...(handoff ? { handoff: { at: handoff.issued_at } } : {}),
 				...(audit ? { review: { hash: audit.payload_sha256.slice(0, 12), at: audit.issued_at } } : {}),
+				...(attempt
+					? { closeAttempt: { state: attempt.state, ...(attemptEvent ? { latestEventText: attemptEvent.rendered_text } : {}) } }
+					: {}),
 			};
 		},
 
@@ -985,6 +995,31 @@ export function createWorkBackend(
 			});
 			const created = result.items[0];
 			return { id: created.work_id, key: created.key, title: input.title, ...(input.project ? { project: input.project } : {}) };
+		},
+
+		async createSameSessionChild(input: { parentKey: string; ownerSessionId: string; title: string; description?: string; finding: string; verification: string }): Promise<NowRef> {
+			// OMP-139: bind the filing to the parent's LIVE attempt; the service
+			// re-validates parent, attempt, session, and candidate atomically.
+			const view = await client.workflow(input.parentKey);
+			const attempt = liveAttempt(view);
+			if (!attempt) throw new Error(`${input.parentKey} has no live summary close attempt — run /summary on the parent first`);
+			const result = await run("create_same_session_child", {
+				parent_work_id: view.item.work_id,
+				attempt_id: attempt.attempt_id,
+				owner_session_id: input.ownerSessionId,
+				item: {
+					client_ref: "c",
+					title: input.title,
+					description: input.description ?? "",
+					scope: "",
+					acceptance_criteria: [],
+					state: "BACKLOG",
+				},
+				finding: input.finding,
+				verification: input.verification,
+			});
+			const created = result.item;
+			return { id: created.work_id, key: created.key, title: input.title, ...(view.project ? { project: view.project.name } : {}) };
 		},
 
 		async createBatch(input: CreateBatchInput): Promise<BatchOutcome> {
