@@ -47,7 +47,22 @@ Re-run the read-only `git merge-tree` preview immediately before merging; any ch
 
 ### Merge-preview re-run (pre-merge)
 
-PENDING — recorded immediately before the driver merge.
+Re-run 2026-08-26 from integration commit `089daf02e4` (pre-merge tooling committed):
+`git merge-tree --write-tree --no-messages HEAD b4e8e856ad40294167679a3f88417c07429fe59b`
+predicts textual conflicts in **19** paths — the 17 planned paths plus two caused by the
+pre-merge tooling commit itself:
+
+- `package.json` — fork `test:scripts` gained the verifier test on a line upstream also
+  changed (upstream adds `scripts/ci-test-ts.test.ts` to the same script). Resolution:
+  union both — `test:scripts` runs ci-test-ts, release, musl, publish, build-binaries,
+  and verify-upstream-handoff tests.
+- `.github/workflows/ci.yml` — fork replaced the `bun test scripts/release.test.ts`
+  workaround with `bun run test:scripts` on lines upstream also touched. Resolution:
+  keep the fork's full `test:scripts` invocation inside upstream's revised workflow text.
+
+Both additions are unions of the planned §3 tooling changes with upstream's 18.0.6 text;
+no new behavioral surface is involved. The other 17 paths and their resolutions are
+unchanged from the table above.
 
 ## Generated and binary handling
 
