@@ -938,7 +938,10 @@ async function setNow(): Promise<void> {
 	if (!confirmed.includes("NOW → HOME-1")) throw new Error(`set_now failed: ${confirmed}`);
 }
 
-const planA = "# Work\n\n## Approach\n1. Change the shared path\n\n## Verification\n1. Run the focused check\n";
+// OMP-155: content the old summary rebuild dropped — a nested bullet, an
+// extra section, and a multibyte character — must survive in the receipt.
+const planA =
+	"# Work\n\n## Approach\n1. Change the shared path\n   - nested detail the summary dropped\n\n## Verification\n1. Run the focused check\n\n## Assumptions & contingencies\n- café rollback stays reversible\n";
 const planB = `${planA}2. Run the smoke path\n`;
 async function approve(content: string): Promise<{ cancel: boolean; reason?: string }> {
 	const result = await runner.emit({
@@ -1069,6 +1072,9 @@ if (mode === "intake") {
 	await setNow();
 	out.first = await approve(planA);
 	out.commentsAfterFirst = comments.length;
+	out.submittedPlan = planA;
+	out.firstReceiptBody = ((receipts.find(r => r.kind === "plan") as Record<string, unknown> | undefined)?.payload as Record<string, unknown> | undefined)?.body ?? null;
+	out.firstGetWork = await execute({ action: "get_work", work: "HOME-1" });
 	out.invalid = await approve("# Missing required sections\n");
 	out.commentsAfterInvalid = comments.length;
 	out.firstBody = comments[0]?.body;
@@ -1076,6 +1082,12 @@ if (mode === "intake") {
 	out.commentsAfterSame = comments.length;
 	out.changed = await approve(planB);
 	out.commentsAfterChanged = comments.length;
+	out.candidateAfterChanged = items.get("HOME-1")?.candidate?.candidate_id ?? null;
+	// OMP-155: a VALID plan over the packet ceiling is refused before any write.
+	out.oversized = await approve(`# Work\n\n## Approach\n1. ${"x".repeat(33 * 1024)}\n\n## Verification\n1. Run the focused check\n`);
+	out.commentsAfterOversized = comments.length;
+	out.planReceiptsAfterOversized = receipts.filter(r => r.kind === "plan").length;
+	out.candidateAfterOversized = items.get("HOME-1")?.candidate?.candidate_id ?? null;
 	out.hashA = Bun.SHA256.hash(planA, "hex");
 	out.hashB = Bun.SHA256.hash(planB, "hex");
 	const stopHandler = extension.handlers.get("session_stop")?.[0];

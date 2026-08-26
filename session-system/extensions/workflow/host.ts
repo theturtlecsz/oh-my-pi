@@ -788,23 +788,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 		if (approach.length === 0 || verification.length === 0) {
 			return { reason: "Plan approval requires non-empty ## Approach and ## Verification lists." };
 		}
-		const hash = Bun.SHA256.hash(plan.planContent, "hex");
-		return {
-			hash,
-			body: [
-				"**Plan approved**",
-				"",
-				`# ${plan.title}`,
-				`- Plan: \`${plan.planFilePath}\``,
-				`- SHA-256: \`${hash}\``,
-				"",
-				"## Approach",
-				...approach.map((item, index) => `${index + 1}. ${item}`),
-				"",
-				"## Verification",
-				...verification.map((item, index) => `${index + 1}. ${item}`),
-			].join("\n"),
-		};
+		// OMP-155: the receipt body IS the exact approved plan — the sha-sealed
+		// local:// file dies with its authoring session; the ledger copy is the
+		// durable source the stored SHA-256 recovers against.
+		return { hash: Bun.SHA256.hash(plan.planContent, "hex"), body: plan.planContent };
 	}
 
 	// ---- in-card digest engine (owner ruling R4: auto per highlighted issue) ----

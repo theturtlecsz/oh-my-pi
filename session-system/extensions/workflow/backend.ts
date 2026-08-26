@@ -361,7 +361,9 @@ export interface WorkflowCheckpoint {
 
 export interface PlanStamp {
 	hash: string;
-	body?: string;
+	/** Exact approved plan text — the durable copy of the bytes `hash` seals
+	 *  (OMP-155); never a reconstructed summary. */
+	body: string;
 	title: string;
 	planFilePath: string;
 	approach: string[];

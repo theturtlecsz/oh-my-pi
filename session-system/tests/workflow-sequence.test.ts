@@ -87,6 +87,19 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.commentsAfterSame, "same bytes must not duplicate the stamp").toBe(1);
 		expect(out.commentsAfterChanged, "changed bytes require a fresh stamp").toBe(2);
 		expect(out.firstBody).not.toContain(String(out.hashB));
+		// OMP-155: the receipt body is the exact approved plan bytes.
+		expect(out.firstReceiptBody, "receipt body is the exact submitted plan").toBe(out.submittedPlan);
+		expect(Bun.SHA256.hash(String(out.firstReceiptBody), "hex"), "stored bytes hash to the approved plan sha").toBe(out.hashA);
+		const getWork = String(out.firstGetWork);
+		expect(getWork).toContain("plan body (exact stored bytes):");
+		expect(getWork, "nested bullet the old summary dropped survives").toContain("- nested detail the summary dropped");
+		expect(getWork, "extra section the old summary dropped survives").toContain("## Assumptions & contingencies");
+		expect(getWork, "multibyte content survives byte-exact").toContain("café rollback stays reversible");
+		expect(record(out.oversized).cancel, "oversized valid plan is refused at approval").toBe(true);
+		expect(String(record(out.oversized).reason)).toContain("over the 32768-byte limit; shorten the plan or acceptance criteria");
+		expect(out.planReceiptsAfterOversized, "oversized approval writes no plan receipt").toBe(2);
+		expect(out.commentsAfterOversized, "oversized approval writes no stamp comment").toBe(2);
+		expect(out.candidateAfterOversized, "oversized approval mints no candidate").toBe(out.candidateAfterChanged);
 		expect(record(out.stopFirst).additionalContext).toContain("Post one silent workflow checkpoint");
 		expect(out.stopSecond, "continuation is injected only once").toBeNull();
 		expect(out.evidence, "ambient untyped notes are refused with the kind menu").toContain("kind required");

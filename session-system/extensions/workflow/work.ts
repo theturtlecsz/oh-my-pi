@@ -214,6 +214,16 @@ export { sameSessionSections };
  *  tiny/empty criteria cannot slip under a bytes-only sum. */
 const CRITERION_RENDER_OVERHEAD = 3;
 
+/** OMP-155: one packet price for both the read cap and the pre-write gate —
+ *  UTF-8 body bytes plus each criterion's rendered cost. stampPlan refuses
+ *  what buildPlanPacket would cap, so a stored plan receipt always renders. */
+function planPacketBytes(body: string, criteria: readonly string[]): number {
+	return (
+		Buffer.byteLength(body, "utf8")
+		+ criteria.reduce((total, criterion) => total + Buffer.byteLength(criterion, "utf8") + CRITERION_RENDER_OVERHEAD, 0)
+	);
+}
+
 /** OMP-38 bounded audit-reconstruction packet: NEWEST plan receipt on the
  *  CURRENT candidate — deterministically newest by issued_at then receipt_id,
  *  independent of service row order — or undefined when no candidate/plan
@@ -231,9 +241,7 @@ export function buildPlanPacket(view: WorkflowView): PlanPacket | undefined {
 	const revision = view.item.revision;
 	const criteria =
 		revision.acceptance_criteria.length > 0 ? revision.acceptance_criteria : acceptanceFromDescription(revision.description);
-	const bytes =
-		Buffer.byteLength(body, "utf8") +
-		criteria.reduce((total, criterion) => total + Buffer.byteLength(criterion, "utf8") + CRITERION_RENDER_OVERHEAD, 0);
+	const bytes = planPacketBytes(body, criteria);
 	const base = {
 		candidateId: candidate.candidate_id,
 		candidateSha256: candidate.candidate_sha256,
@@ -928,6 +936,17 @@ export function createWorkBackend(
 
 		async stampPlan(target: NowRef, stamp: PlanStamp): Promise<{ issue: NowRef; plannedCandidateId: UUID }> {
 			const item = await client.workItem(target.key);
+			// OMP-155: price the packet BEFORE any write — same math as
+			// buildPlanPacket, so a stamp the packet would cap is refused here
+			// instead of stranding /summary behind an unrenderable receipt.
+			const criteria =
+				item.revision.acceptance_criteria.length > 0
+					? item.revision.acceptance_criteria
+					: acceptanceFromDescription(item.revision.description);
+			const bytes = planPacketBytes(stamp.body, criteria);
+			if (bytes > PLAN_PACKET_MAX_BYTES) {
+				throw new Error(`Approved plan packet is ${bytes} bytes, over the ${PLAN_PACKET_MAX_BYTES}-byte limit; shorten the plan or acceptance criteria.`);
+			}
 			// Deterministic per (work, revision, plan hash): an identical retry
 			// replays; a revised plan or revision mints a fresh candidate.
 			const candidateId = stableId("planned-candidate", item.work_id, item.revision.revision_id, stamp.hash);
