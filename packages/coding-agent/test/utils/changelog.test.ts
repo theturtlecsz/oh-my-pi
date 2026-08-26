@@ -16,6 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { removeWithRetries, VERSION } from "@oh-my-pi/pi-utils";
 import { SETTINGS_SCHEMA, Settings } from "../../src/config/settings";
+import { CURRENT_SETUP_VERSION } from "../../src/modes/setup-version";
 import {
 	type ChangelogEntry,
 	formatStartupChangelogSummary,
@@ -308,7 +309,15 @@ describe.skipIf(!hasPtyHarness)("interactive startup changelog PTY smoke", () =>
 				await fs.mkdir(path.join(root, "xdg-config"), { recursive: true });
 				await fs.mkdir(path.join(root, "xdg-state"), { recursive: true });
 				await fs.mkdir(path.join(root, "xdg-data"), { recursive: true });
-				await Bun.write(path.join(agentDir, "config.yml"), "setupVersion: 1\ncollapseChangelog: false\n");
+				// Pin the CURRENT setup version: this smoke guards the startup
+				// changelog path, and a stale setupVersion would instead run the
+				// animated setup-wizard splash for the whole timeout window (its
+				// frames alone blow the output ceiling; reproduces on the pristine
+				// upstream tree once CURRENT_SETUP_VERSION moved past 1).
+				await Bun.write(
+					path.join(agentDir, "config.yml"),
+					`setupVersion: ${CURRENT_SETUP_VERSION}\ncollapseChangelog: false\n`,
+				);
 
 				const proc = Bun.spawn(
 					["timeout", "6s", "script", "-q", "-c", `bun ${JSON.stringify(cliEntry)}`, "/dev/null"],
