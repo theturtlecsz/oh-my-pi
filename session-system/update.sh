@@ -78,8 +78,9 @@ assert_tree_unmapped() {
 			# the root/system carve-out. Still-owned kernel-shielded process
 			# (session infrastructure, or anything self-shielded via
 			# PR_SET_DUMPABLE=0) -> skip with a warning: owner-accepted
-			# reduced guarantee (OMP-157, 2026-08-26). Harness processes are
-			# always inspectable; a shielded mapper is the accepted blind spot.
+			# reduced guarantee (OMP-157, 2026-08-26). Inspectability is
+			# process state, not class: any process may self-shield, and a
+			# shielded mapper is the accepted blind spot.
 			if [ -d "$procdir" ] && [ -O "$procdir" ]; then
 				echo "update.sh: warning: skipping kernel-shielded same-owner process $pid — mappings not inspectable" >&2
 			fi
