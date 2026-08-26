@@ -100,6 +100,13 @@ beforeAll(async () => {
 		stableCache: true,
 		assetsRemoved: 0,
 	};
+	// Omission guard for the derived expectation: the composed template must be
+	// at least as large as its two dominant embedded payloads, so a composer bug
+	// that silently drops an asset can never produce a self-consistent pass.
+	const toolViewsBytes = fs.statSync(new URL("tool-views.generated.js", assetDir)).size;
+	const templateJsBytes = fs.statSync(new URL("template.js", assetDir)).size;
+	expect(toolViewsBytes).toBeGreaterThan(100_000);
+	expect(expectedTemplate.bytes).toBeGreaterThan(toolViewsBytes + templateJsBytes);
 	const bundle = await Bun.build({
 		entrypoints: [templateProbePath],
 		outdir: bundleDir,

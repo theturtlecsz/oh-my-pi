@@ -55,3 +55,13 @@ poetry.lock -text
 # Changelogs are append-mostly; auto-merge by unioning both sides.
 packages/*/CHANGELOG.md merge=union
 
+
+# OMP-156: whitespace upstream ships intentionally — vendored license texts are
+# verbatim, markdown trailing double-spaces are hard line breaks, one upstream
+# tool has a spaces-only blank line, and two upstream proto tables end with a
+# blank line. Scoped so all other code keeps full `git diff --check` coverage.
+THIRD-PARTY-NOTICES.txt -whitespace
+*.md whitespace=-trailing-space
+crates/pi-natives/tools/cache/tokenization_kimi.py whitespace=-trailing-space
+packages/catalog/src/discovery/cursor-proto.ts whitespace=-blank-at-eof
+packages/catalog/src/discovery/devin-proto.ts whitespace=-blank-at-eof
