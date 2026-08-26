@@ -432,7 +432,7 @@ export function createWorkBackend(
 
 	function linesOf(view: WorkflowView): string {
 		return view.receipts
-			.map(r => `${r.kind} ${r.issued_at.slice(0, 19)} ${r.verdict ? `${r.verdict} ` : ""}${r.payload_sha256.slice(0, 12)}`)
+			.map(r => `${r.kind} ${r.issued_at.slice(0, 19)} candidate ${r.candidate_id ?? "none"} revision ${r.revision_id} ${r.verdict ? `${r.verdict} ` : ""}${r.payload_sha256.slice(0, 12)}`)
 			.join("\n");
 	}
 

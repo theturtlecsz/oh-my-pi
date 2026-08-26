@@ -83,6 +83,7 @@ export type CanonicalAction =
 	| "waiting"
 	| "my_now"
 	| "status"
+	| "list_work"
 	| "append_evidence"
 	| "create_work"
 	| "queue_work"
@@ -93,7 +94,7 @@ export type CanonicalAction =
 	| "cancel_work";
 
 const ACTIONS = [
-	"get_work", "tree", "waiting", "my_now", "status",
+	"get_work", "tree", "waiting", "my_now", "status", "list_work",
 	"append_evidence", "create_work", "queue_work", "revise_work",
 	"set_now", "record_health", "waive_delivery", "cancel_work",
 ] as const;
@@ -237,7 +238,7 @@ function sectionItems(content: string, heading: "Approach" | "Verification"): st
 const DIGEST_LABELS = new Set(["PROBLEM", "MAKEUP", "DECISIONS", "BLOCKERS", "ON-YOU", "EVIDENCE", "STATE", "NEXT", "SUGGEST"]);
 
 /** Reads are free at any depth; every other canonical action is a write. */
-const READ_ACTIONS: ReadonlySet<CanonicalAction> = new Set(["get_work", "tree", "waiting", "my_now", "status"]);
+const READ_ACTIONS: ReadonlySet<CanonicalAction> = new Set(["get_work", "tree", "waiting", "my_now", "status", "list_work"]);
 
 /** Tool params — the extension API types zod `parameters` as unknown at execute. */
 interface WorkflowToolParams {
@@ -1722,7 +1723,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				work: z.string().optional().describe("Work key (e.g. HOME-31) or ledger work id"),
 				title: z.string().optional().describe("Work title (create_work, revise_work)"),
 				description: z.string().optional().describe("Work description markdown (create_work, revise_work)"),
-				project: z.string().optional().describe("Project name (create_work target, record_health)"),
+				project: z.string().optional().describe("Project name (create_work target, record_health, list_work filter)"),
 				health: z.enum(["onTrack", "atRisk", "offTrack"]).optional().describe("Project health (record_health)"),
 				body: z.string().optional().describe("Receipt body or close reason; record_health is status-only and refuses body"),
 				kind: kindEnum.optional().describe(KIND_DESCRIPTION),
@@ -1820,6 +1821,19 @@ export function createWorkflowHost(cfg: HostConfig) {
 						case "tree": {
 							return okText((await backend.projectTreeLines()).join("\n"));
 						}
+						case "list_work": {
+							if (!params.project) return deny("project required");
+							const project = params.project;
+							if (!(await backend.projectScopeExists(project))) {
+								return deny(`project "${project}" does not exist`);
+							}
+							const { surfaces } = await backend.mapData(undefined, project);
+							const issues = surfaces[0]?.issues ?? [];
+							const lines = [...issues]
+								.sort((left, right) => left.key.localeCompare(right.key))
+								.map(issue => `${issue.key} | ${issue.state} | ${issue.title}`);
+							return okText(lines.length > 0 ? lines.join("\n") : `Project "${project}" — no open items`);
+						}
 						case "get_work": {
 							if (!params.work) return deny("work key required");
 							const i = await backend.issueDetail(params.work);
@@ -1828,6 +1842,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 									`${params.work} ${i.title}`,
 									`state: ${i.state} · project: ${i.project ?? "none"} · labels: ${i.labels.join(",") || "none"}`,
 									i.description ?? "",
+									"RECEIPTS:",
+									i.digestPacket,
+									...(i.attemptSnapshot
+										? [`CLOSE ATTEMPT: state ${i.attemptSnapshot.state} · candidate ${i.attemptSnapshot.candidateId ?? "none"} · commit ${i.attemptSnapshot.candidateCommit ?? "none"} · launches left ${i.attemptSnapshot.remainingLaunches} · reports left ${i.attemptSnapshot.remainingReports}`]
+										: []),
 									...renderPlanPacket(i.planPacket),
 									...renderAuditTask(i.auditTask, i.attemptSnapshot),
 								].join("\n"),
@@ -1850,6 +1869,24 @@ export function createWorkflowHost(cfg: HostConfig) {
 								return deny(`REFUSED — ${kind} evidence is a close-ritual write; ${reason}.`);
 							}
 							const issue = workflow?.issue ?? (await backend.findIssue(params.work));
+							if (kind === backend.reviewKind && ownerSession(ctx)) {
+								// OMP-152: self-heal stale requires_delivery checkpoints BEFORE the
+								// closeout append — a superseded attempt's undelivered event must not
+								// strand an otherwise-complete close behind a session restart. The
+								// helper queues fire-and-forget (OMP-97: never await deliverMessage);
+								// an unreadable preflight read surfaces via its notice and refuses.
+								const preflightNotices: string[] = [];
+								const preflight = await queuePendingCheckpointDeliveries(pi, backend, issue.key, notice => preflightNotices.push(notice));
+								if (preflight.events.length > 0) {
+									return deny(
+										`closeout receipt not recorded yet — ${preflight.events.length} pending checkpoint(s) queued. Yield the turn now, then retry this exact closeout write.\n\n`
+										+ preflight.events.map(event => event.renderedText).join("\n\n"),
+									);
+								}
+								if (preflightNotices.length > 0) {
+									return deny(preflightNotices.join("; "));
+								}
+							}
 							const meta: EvidenceMeta = { ...(workflow?.plan ? { planHash: workflow.plan.hash } : {}) };
 							try {
 								await backend.appendEvidence(issue, kind, params.body, meta, summaryAuthorizationRef);

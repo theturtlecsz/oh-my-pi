@@ -10,7 +10,7 @@ import { createWorkBackend } from "../../extensions/workflow/work";
 import { riderBatchPath } from "../../extensions/workflow/rider-batch";
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "summary-refusal-durable", "summary-rider-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
+const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "summary-refusal-durable", "summary-rider-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger-reads", "ledger-reads-subagent", "closeout-pending-recovery", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -69,6 +69,14 @@ const settleCalls: Array<Record<string, unknown>> = [];
 const cancelCalls: Array<Record<string, unknown>> = [];
 const attestCalls: Array<Record<string, unknown>> = [];
 const sscCalls: Array<Record<string, unknown>> = [];
+// Deterministic attestation rendezvous (OMP-154): fixtures await the exact
+// attest_checkpoint_delivery arrival instead of sleeping on wall-clock timers.
+const attestWaiters: Array<() => void> = [];
+function nextAttestation(): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	attestWaiters.push(resolve);
+	return promise;
+}
 function mockEvent(workId: string, attemptId: string | null, eventType: string, reasonCode: string, requiresDelivery: boolean, legalNextActions: string[] = []): Record<string, unknown> {
 	eventSeq += 1;
 	const rendered = `CLOSE ATTEMPT — ${eventType}\n${reasonCode}: mock`;
@@ -165,6 +173,41 @@ if (mode === "plan-now-change") {
 	items.set("HOME-2", second);
 	items.set("id-2", second);
 }
+if (mode === "ledger-reads") {
+	const openItem: MockWorkItem = {
+		...initialItem,
+		work_id: "id-2",
+		alias: { key: "HOME-2" },
+		revision: { ...initialItem.revision, revision_id: "rev-2", title: "Zulu open item", description: "" },
+		state: "BACKLOG",
+		project_id: "proj-1",
+		candidate: null,
+	};
+	const closedItem: MockWorkItem = {
+		...initialItem,
+		work_id: "id-3",
+		alias: { key: "HOME-3" },
+		revision: { ...initialItem.revision, revision_id: "rev-3", title: "Closed thing", description: "" },
+		state: "DONE",
+		project_id: "proj-1",
+		candidate: null,
+	};
+	const canceledItem: MockWorkItem = {
+		...initialItem,
+		work_id: "id-4",
+		alias: { key: "HOME-4" },
+		revision: { ...initialItem.revision, revision_id: "rev-4", title: "Killed thing", description: "" },
+		state: "CANCELED",
+		project_id: "proj-1",
+		candidate: null,
+	};
+	items.set("HOME-2", openItem);
+	items.set("id-2", openItem);
+	items.set("HOME-3", closedItem);
+	items.set("id-3", closedItem);
+	items.set("HOME-4", canceledItem);
+	items.set("id-4", canceledItem);
+}
 if (mode === "center" || mode === "center-scoped") {
 	// pads the unscoped READY list.
 	const elsewhere: MockWorkItem = {
@@ -256,6 +299,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 				projects: [
 					{ project_id: "proj-1", workspace_id: WORKSPACE_ID, name: "The Bookends", health: "onTrack" },
 					...(mode === "center" || mode === "center-scoped" ? [{ project_id: "proj-2", workspace_id: WORKSPACE_ID, name: "Elsewhere", health: "onTrack" }] : []),
+					...(mode === "ledger-reads" ? [{ project_id: "proj-3", workspace_id: WORKSPACE_ID, name: "Empty Surface", health: "onTrack" }] : []),
 				],
 				items: Array.from(new Set(items.values())),
 				relations: (mode === "center" || mode === "center-scoped")
@@ -682,6 +726,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			const target = closeEvents.find(e => e.event_id === payload.event_id);
 			if (!target) throw new Error("attest without event");
 			deliveries.push({ delivery_id: `del-${deliveries.length + 1}`, event_id: payload.event_id, delivery_sequence: deliveries.filter(d => d.event_id === payload.event_id).length + 1, owner_session_id: payload.owner_session_id, rendered_sha256: payload.rendered_sha256, status: payload.status, authorization_ref: payload.authorization_ref ?? null, created_at: new Date().toISOString() });
+			attestWaiters.shift()?.();
 			const event = mockEvent(target.work_id as string, (target.attempt_id as string) ?? null, "checkpoint_delivery_recorded", `delivery_${payload.status}`, false);
 			return new Response(JSON.stringify({ receipt: { state: "applied", operation_id: `op-att-${eventSeq}` }, result: { type: "attest_checkpoint_delivery", status: "applied", delivery: deliveries.at(-1), event } }), { status: 200 });
 		}
@@ -785,7 +830,7 @@ let throwNextSend = false;
 let throwNextSendMessage = false;
 let throwNextSetTools = false;
 let abortCalls = 0;
-const depth = mode === "summary-subagent" ? 1 : 0;
+const depth = mode === "summary-subagent" || mode === "ledger-reads-subagent" ? 1 : 0;
 const inheritedNow =
 	mode === "summary-subagent"
 		? [{ type: "custom", customType: "work-now", data: { backend: "work", issueId: "id-1", identifier: "HOME-1", title: "First", setAt: Date.now() } }]
@@ -1262,6 +1307,12 @@ if (mode === "intake") {
 		}),
 	});
 	out.auditedGetWork = await execute({ action: "get_work", work: "HOME-1" });
+	// OMP-152: the direct settle above minted an undelivered requires_delivery
+	// event; the closeout preflight queues it and refuses once, then the
+	// retried identical write lands — no restart, no waiver.
+	const settleAttested = nextAttestation();
+	await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "review body" });
+	await settleAttested;
 	await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "review body" });
 	out.closeoutRequestedGetWork = await execute({ action: "get_work", work: "HOME-1" });
 } else if (mode === "omp140-restart-flow") {
@@ -1777,6 +1828,179 @@ if (mode === "intake") {
 	out.home2State = items.get("id-2")?.state;
 	out.batchFileExists = fs.existsSync(batchFile);
 	out.consumedFiles = fs.readdirSync(batchDir).filter(f => f.includes(".consumed-"));
+} else if (mode === "ledger-reads") {
+	out.missing = await execute({ action: "list_work" });
+	out.unknown = await execute({ action: "list_work", project: "No Such Project" });
+	out.empty = await execute({ action: "list_work", project: "Empty Surface" });
+	out.listing = await execute({ action: "list_work", project: "The Bookends" });
+	// Full-width identities: truncation of candidate/revision/commit in any
+	// render is detectable, unlike short synthetic tokens.
+	const ledgerCandidate = "aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee";
+	const ledgerRevision = "11111111-2222-7333-8444-555555555555";
+	const ledgerCommit = "f".repeat(40);
+	receipts.push({
+		receipt_id: "rec-ledger-handoff",
+		work_id: "id-1",
+		revision_id: ledgerRevision,
+		candidate_id: ledgerCandidate,
+		kind: "handoff",
+		independent: false,
+		payload: { body: planA },
+		payload_sha256: "1".repeat(64),
+		issuer: "fixture/ledger-reads",
+		issued_at: "2026-08-26T05:00:00+00:00",
+		candidate_sha256: "0".repeat(64),
+		candidate_commit: ledgerCommit,
+	});
+	receipts.push({
+		receipt_id: "rec-ledger-verification",
+		work_id: "id-1",
+		revision_id: ledgerRevision,
+		candidate_id: ledgerCandidate,
+		kind: "verification",
+		independent: false,
+		payload: { body: "tests pass" },
+		payload_sha256: "2".repeat(64),
+		issuer: "fixture/ledger-reads",
+		issued_at: "2026-08-26T05:01:00+00:00",
+		candidate_sha256: "0".repeat(64),
+		candidate_commit: ledgerCommit,
+	});
+	receipts.push({
+		receipt_id: "rec-ledger-audit",
+		work_id: "id-1",
+		revision_id: ledgerRevision,
+		candidate_id: ledgerCandidate,
+		kind: "audit",
+		verdict: "PASS",
+		independent: true,
+		payload: { report: "VERDICT: PASS" },
+		payload_sha256: "5".repeat(64),
+		issuer: "work-service/auditor-settle",
+		issued_at: "2026-08-26T05:02:00+00:00",
+		candidate_sha256: "0".repeat(64),
+		candidate_commit: ledgerCommit,
+	});
+	attempts.push({
+		attempt_id: "att-1",
+		work_id: "id-1",
+		revision_id: ledgerRevision,
+		candidate_id: ledgerCandidate,
+		plan_receipt_id: "plan-receipt-1",
+		candidate_sha256: "0".repeat(64),
+		candidate_commit: ledgerCommit,
+		owner_session_id: "session-ledger",
+		owner_session_started_at: "2026-08-26T04:00:00+00:00",
+		owner_session_start_commit: "start-commit",
+		repository: "fixture-repo",
+		diff_sha256: "3".repeat(64),
+		starting_dirty_paths: [],
+		authorization_kind: "summary",
+		authorization_ref: "summary-ledger",
+		launch_count: 0,
+		cancelled_launch_count: 0,
+		accepted_report_count: 0,
+		in_flight_launch_id: null,
+		state: "audit_ready",
+		terminal_reason: null,
+		requested_at: "2026-08-26T05:03:00+00:00",
+		closeout_requested_at: null,
+		completed_at: null,
+		completion_authorization_ref: null,
+	});
+	manifests.push({
+		manifest_id: "manifest-1",
+		work_id: "id-1",
+		attempt_id: "att-1",
+		manifest_version: 1,
+		plan_receipt_id: "plan-receipt-1",
+		verification_receipt_id: "rec-ledger-verification",
+		candidate_id: ledgerCandidate,
+		candidate_sha256: "0".repeat(64),
+		candidate_commit: ledgerCommit,
+		task_body: "AUDIT BODY BYTES",
+		task_sha256: "4".repeat(64),
+		section_hashes: {},
+		created_at: "2026-08-26T05:04:00+00:00",
+	});
+	out.detail = await execute({ action: "get_work", work: "HOME-1" });
+} else if (mode === "ledger-reads-subagent") {
+	out.listing = await execute({ action: "list_work", project: "The Bookends" });
+	out.writeRefusal = await execute({ action: "set_now", work: "HOME-1" });
+} else if (mode === "closeout-pending-recovery") {
+	await setNow();
+	fs.writeFileSync(path.join(probe, "dirty.txt"), "dirty\n");
+	const done = extension.commands.get("done");
+	if (!done) throw new Error("done command missing");
+	await done.handler("", runner.createCommandContext());
+	await approve(planA);
+	await done.handler("", runner.createCommandContext());
+	await enterSummary();
+	await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "tests pass" });
+	const attempt = attempts.at(-1);
+	if (!attempt) throw new Error("no attempt after /summary");
+	attempt.state = "audited";
+	attempt.accepted_report_count = 1;
+	receipts.push({
+		receipt_id: "rec-a",
+		work_id: attempt.work_id,
+		revision_id: attempt.revision_id,
+		candidate_id: attempt.candidate_id,
+		kind: "audit",
+		verdict: "PASS",
+		independent: true,
+		payload: { report: "VERDICT: PASS" },
+		payload_sha256: "0".repeat(64),
+		issuer: "work-service/auditor-settle",
+		issued_at: new Date().toISOString(),
+		candidate_sha256: attempt.candidate_sha256,
+		candidate_commit: attempt.candidate_commit,
+	});
+	// The stale checkpoint belongs to a real SUPERSEDED attempt (the OMP-147
+	// incident shape: dead candidate, undelivered required event, no rows).
+	attempts.push({
+		attempt_id: "att-stale",
+		work_id: "id-1",
+		revision_id: attempt.revision_id,
+		candidate_id: "cand-dead",
+		plan_receipt_id: "plan-receipt-1",
+		candidate_sha256: "9".repeat(64),
+		candidate_commit: "dead-commit",
+		owner_session_id: "session-dead",
+		owner_session_started_at: "2026-08-26T02:00:00+00:00",
+		owner_session_start_commit: "dead-start",
+		repository: "fixture-repo",
+		diff_sha256: "8".repeat(64),
+		starting_dirty_paths: [],
+		authorization_kind: "summary",
+		authorization_ref: "summary-dead",
+		launch_count: 0,
+		cancelled_launch_count: 0,
+		accepted_report_count: 0,
+		in_flight_launch_id: null,
+		state: "superseded",
+		terminal_reason: "superseded_by_new_summary",
+		requested_at: "2026-08-26T02:01:00+00:00",
+		closeout_requested_at: null,
+		completed_at: null,
+		completion_authorization_ref: null,
+	});
+	const staleEvent = mockEvent("id-1", "att-stale", "attempt_superseded", "attempt_superseded", true);
+	const staleAttested = nextAttestation();
+	out.first = await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "complete" });
+	out.closeoutReceiptsAfterFirst = receipts.filter(receipt => receipt.kind === "closeout").length;
+	out.attemptStateAfterFirst = attempt.state;
+	await staleAttested;
+	out.staleDeliveries = deliveries.filter(delivery => delivery.event_id === staleEvent.event_id).map(delivery => delivery.status);
+	out.waivedCount = attestCalls.filter(call => call.status === "waived").length;
+	const closeoutAttested = nextAttestation();
+	out.second = await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "complete" });
+	out.closeoutReceipts = receipts.filter(receipt => receipt.kind === "closeout").length;
+	out.attemptState = attempt.state;
+	await closeoutAttested;
+	const closeoutEvent = closeEvents.find(event => event.attempt_id === attempt.attempt_id && event.event_type === "closeout_review_recorded");
+	out.newCheckpointDelivered = closeoutEvent !== undefined && deliveries.some(delivery => delivery.event_id === closeoutEvent.event_id && delivery.status === "delivered");
+	out.totalCloseoutReceipts = receipts.filter(receipt => receipt.kind === "closeout").length;
 } else if (mode === "ledger") {
 	// OMP-69 smoke: installed shape only — owner agent_start → terminal
 	// agent_end with real work yields exactly one displayed nextTurn message

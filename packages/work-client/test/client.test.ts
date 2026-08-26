@@ -160,3 +160,52 @@ test("payloadHash matches canonical_json semantics (sorted keys, tight separator
 	// canonical.py: json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 	expect(payloadHash({ b: 1, a: [2, { d: "ü", c: null }] })).toBe(payloadHash({ a: [2, { c: null, d: "ü" }], b: 1 }));
 });
+
+test("tree rejects unauthenticated without calling fetch when the token provider returns null", async () => {
+	let fetchCalls = 0;
+	const client = new WorkClient(
+		"http://127.0.0.1:8787",
+		"workspace-test",
+		() => null,
+		async () => {
+			fetchCalls += 1;
+			return new Response("{}", { status: 200 });
+		},
+	);
+
+	await expect(client.tree()).rejects.toMatchObject({
+		code: "unauthenticated",
+		status: 401,
+	});
+	expect(fetchCalls).toBe(0);
+});
+
+test("tree maps a redacted fetch exception to unavailable", async () => {
+	const secret = "fetch-exception-secret-4f2d9c7a";
+	let fetchCalls = 0;
+	const client = new WorkClient(
+		"http://127.0.0.1:8787",
+		"workspace-test",
+		() => "configured-token",
+		async () => {
+			fetchCalls += 1;
+			throw new Error(`request failed with Authorization: Bearer ${secret}`);
+		},
+	);
+
+	let rejection: unknown;
+	try {
+		await client.tree();
+	} catch (error) {
+		rejection = error;
+	}
+
+	expect(fetchCalls).toBe(1);
+	expect(rejection).toMatchObject({
+		code: "unavailable",
+		status: 0,
+	});
+	const diagnostics = (rejection as { readonly diagnostics: readonly string[] }).diagnostics;
+	expect(diagnostics.length).toBeGreaterThan(0);
+	expect(diagnostics.join("\n")).not.toContain(secret);
+});

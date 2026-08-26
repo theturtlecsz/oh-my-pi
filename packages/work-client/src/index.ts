@@ -597,11 +597,12 @@ export class WorkClient {
 	}
 
 	private async request(method: "GET" | "POST", path: string, body?: unknown, auth = true): Promise<unknown> {
+		const headers = auth ? this.headers() : {};
 		let response: Response;
 		try {
 			response = await this.fetchImpl(`${this.baseUrl}${path}`, {
 				method,
-				headers: auth ? this.headers() : {},
+				headers,
 				...(body === undefined ? {} : { body: JSON.stringify(body) }),
 				signal: AbortSignal.timeout(8000),
 			});

@@ -117,6 +117,7 @@ place rules/work-plan.md      "$HOME/.omp/agent/rules/work-plan.md"
 unplace "$HOME/.omp/agent/rules/linear-plan.md"
 place agents/AGENTS.md        "$HOME/AGENTS.md"
 place agents/omp-AGENTS.md    "$HOME/.omp/agent/AGENTS.md"
+place hooks/task-observer-first-tool.mjs "$HOME/.omp/agent/hook/task-observer-first-tool.mjs"
 for s in summary questionyourself whatsmissing; do
   place "skills/$s" "$HOME/.agents/skills/$s"
 done

@@ -2,7 +2,7 @@
  * workflow/config.ts — Work Ledger client configuration (HOME-147).
  *
  * Config:  ~/.config/omp-work/client.json   (0600) — { base_url, workspace_id, owner_id, bearer_file? }
- * Bearer:  $OMP_WORK_BEARER, else the file named by bearer_file (0600, single line).
+ * Bearer:  $OMP_WORK_BEARER, else the mode-0600 JSON capability named by bearer_file; its token field is returned.
  * Loopback only: any non-loopback base_url is refused — the backend never
  * crosses the network boundary.
  */

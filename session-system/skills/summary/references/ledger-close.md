@@ -18,9 +18,11 @@ continuation only ever points at state the service has already confirmed.
 
 Perform in order, skipping any step the live attempt already satisfied:
 
-1. **Project updates** — every touched project gets honest health plus one
-   plain-language line via `record_health`. Include another project when this
-   session moved its dependency or promise.
+1. **Project updates** — every touched project gets an honest health status
+   via `record_health`; the tool is status-only and refuses a body, so the
+   one plain-language health line belongs in SECTION 1's owner-facing review,
+   never in this write. Include another project when this session moved its
+   dependency or promise.
    The `record_health` preview proves only the gates the service actually
    evaluated for THAT write — it never certifies the whole ritual (obs #204).
 

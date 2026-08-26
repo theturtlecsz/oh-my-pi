@@ -11,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "summary-refusal-durable" | "summary-rider-refusal-durable" | "stop-continuation-states" | "atomic-child" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "now-canceled" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "summary-refusal-durable" | "summary-rider-refusal-durable" | "stop-continuation-states" | "atomic-child" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "now-canceled" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "ledger-reads" | "ledger-reads-subagent" | "closeout-pending-recovery" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -544,6 +544,52 @@ describe("HOME-122 workflow sequence", () => {
 		expect(extras.some(l => l.includes("CLOSE ATTEMPT: remediation_required (needs_fix) — fix the findings"))).toBe(true);
 		const budgetExtras = list(out.budgetExtras);
 		expect(budgetExtras.some(l => l.includes("CLOSE ATTEMPT: budget_exhausted (auditor_budget_exhausted) — enter /summary again for a fresh bounded attempt"))).toBe(true);
+	});
+});
+
+describe("OMP-154 ledger reads and closeout recovery", () => {
+	test("provides bounded project ledger reads and detailed receipt context", () => {
+		const out = run("ledger-reads");
+		const candidate = "aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee";
+		const revision = "11111111-2222-7333-8444-555555555555";
+		const commit = "f".repeat(40);
+		expect(out.missing).toContain("project required");
+		expect(out.unknown).toContain('project "No Such Project" does not exist');
+		expect(out.empty).toContain('Project "Empty Surface" — no open items');
+		expect(out.listing).toBe("HOME-1 | IN_PROGRESS | First\nHOME-2 | BACKLOG | Zulu open item");
+		const detail = String(out.detail);
+		expect(detail).toContain("RECEIPTS:");
+		// Exact full-width receipt lines: any identity truncation or dropped
+		// optional-verdict token fails these, not just substring presence.
+		expect(detail).toContain(`handoff 2026-08-26T05:00:00 candidate ${candidate} revision ${revision} ${"1".repeat(12)}`);
+		expect(detail).toContain(`verification 2026-08-26T05:01:00 candidate ${candidate} revision ${revision} ${"2".repeat(12)}`);
+		expect(detail).toContain(`audit 2026-08-26T05:02:00 candidate ${candidate} revision ${revision} PASS ${"5".repeat(12)}`);
+		expect(detail).toContain(`CLOSE ATTEMPT: state audit_ready · candidate ${candidate} · commit ${commit} · launches left 3 · reports left 2`);
+		// Sealed auditor task bytes are extracted and compared whole.
+		const sealedBody = detail.split("----- SEALED AUDITOR TASK BEGIN -----\n")[1]?.split("\n----- SEALED AUDITOR TASK END -----")[0];
+		expect(sealedBody).toBe("AUDIT BODY BYTES");
+	});
+
+	test("allows bounded ledger reads from a subagent while refusing writes", () => {
+		const out = run("ledger-reads-subagent");
+		expect(out.listing).toBe("HOME-1 | IN_PROGRESS | First");
+		expect(out.writeRefusal).toContain("owner-session");
+	});
+
+	test("queues an undelivered checkpoint before recording closeout and recovers on retry", () => {
+		const out = run("closeout-pending-recovery");
+		expect(out.first).toContain("closeout receipt not recorded yet — 1 pending checkpoint(s) queued");
+		expect(out.first).toContain("attempt_superseded");
+		expect(out.closeoutReceiptsAfterFirst).toBe(0);
+		expect(out.attemptStateAfterFirst).toBe("audited");
+		expect(list(out.staleDeliveries)).toEqual(["delivered"]);
+		expect(out.waivedCount).toBe(0);
+		expect(out.second).toContain("closeout receipt recorded on HOME-1");
+		expect(out.second).toContain("Yield the turn now");
+		expect(out.closeoutReceipts).toBe(1);
+		expect(out.attemptState).toBe("closeout_requested");
+		expect(out.newCheckpointDelivered).toBe(true);
+		expect(out.totalCloseoutReceipts).toBe(1);
 	});
 });
 
