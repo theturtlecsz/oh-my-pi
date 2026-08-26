@@ -6,6 +6,10 @@
 # Behavior:
 #   * refuses anything but exactly one full 40-hex commit id (never a branch, never `main`)
 #   * refuses a dirty worktree (tracked files)
+#   * refuses while any live same-owner process maps code from this checkout (/proc scan)
+#     (kernel-shielded same-owner processes — maps unreadable by ptrace policy,
+#     e.g. systemd --user, ssh/gpg agents — are skipped with a warning:
+#     owner-accepted carve-out, OMP-157 2026-08-26)
 #   * fetches `upstream`, verifies the object resolves to exactly the supplied commit
 #   * target NOT an ancestor of HEAD  -> `git merge --no-ff <commit>` and stop.
 #     A conflicted or otherwise failed merge exits immediately: resolve by hand, commit,
@@ -36,6 +40,53 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 	echo "update.sh: worktree has uncommitted tracked changes — commit or stash first" >&2
 	exit 1
 fi
+
+# OMP-157: refuse to mutate a checkout whose code any live process maps.
+# Overwriting mapped files replaces text pages under running processes and
+# crashed the broker and every session in OMP-156. The /proc scan is the only
+# proof that covers the executing session itself; there is no bypass.
+assert_tree_unmapped() {
+	local root pid cmd procdir status
+	root="$(pwd -P)"
+	if [ ! -r /proc/self/maps ]; then
+		echo "update.sh: /proc mappings unavailable — refusing to mutate $root" >&2
+		echo "update.sh: run the upgrade from a session already on the stable build, then retry" >&2
+		exit 1
+	fi
+	for procdir in /proc/[0-9]*; do
+		# [ -O ]: owned by the invoking user (id -u). Root/system processes are
+		# skipped rather than failed: they cannot map this user-owned checkout,
+		# and their maps are expectedly unreadable.
+		[ -O "$procdir" ] || continue
+		pid="${procdir#/proc/}"
+		if [ ! -r "$procdir/maps" ]; then
+			[ -d "$procdir" ] || continue # vanished between glob and read
+			echo "update.sh: warning: skipping kernel-shielded same-owner process $pid — mappings not inspectable" >&2
+			continue
+		fi
+		status=0
+		grep -qF " $root/" "$procdir/maps" 2>/dev/null || status=$?
+		if [ "$status" -eq 0 ]; then
+			cmd="$(tr '\0' ' ' <"$procdir/cmdline" 2>/dev/null || true)"
+			cmd="${cmd% }"
+			echo "update.sh: refusing to mutate $root — live process $pid maps code from this checkout: ${cmd:-unknown}" >&2
+			echo "update.sh: run the upgrade from a session already on the stable build, then retry" >&2
+			exit 1
+		elif [ "$status" -gt 1 ]; then
+			# Read denied at read() time (ptrace policy; maps mode is always
+			# 0444 so -r never catches this). Vanished or now root-owned ->
+			# the root/system carve-out. Still-owned kernel-shielded process
+			# (session infrastructure, or anything self-shielded via
+			# PR_SET_DUMPABLE=0) -> skip with a warning: owner-accepted
+			# reduced guarantee (OMP-157, 2026-08-26). Harness processes are
+			# always inspectable; a shielded mapper is the accepted blind spot.
+			if [ -d "$procdir" ] && [ -O "$procdir" ]; then
+				echo "update.sh: warning: skipping kernel-shielded same-owner process $pid — mappings not inspectable" >&2
+			fi
+		fi
+	done
+}
+assert_tree_unmapped
 
 git fetch upstream
 

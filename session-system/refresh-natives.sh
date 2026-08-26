@@ -22,9 +22,25 @@ if [ -f "$dest/pi_natives.linux-x64-modern.node" ] && [ -f "$dest/pi_natives.lin
 fi
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+stage=$(mktemp -d "$dest/.refresh-natives.XXXXXX")
+trap 'rm -rf "$tmp" "$stage"' EXIT
 ( cd "$tmp" && npm pack "@oh-my-pi/pi-natives-linux-x64@$ver" >/dev/null && tar xzf ./*.tgz )
-cp "$tmp"/package/pi_natives.linux-x64-*.node "$dest"/
+# Stage on the destination filesystem, then rename onto each basename: live
+# processes keep their old mapped inodes while new loads resolve the new
+# files. Copying over the loaded file in place replaces mapped text pages and
+# crashes every process with the addon loaded (OMP-156 root cause). The
+# marker is written only after both renames, so an interrupted refresh stays
+# stale and the next run retries.
+cp "$tmp"/package/pi_natives.linux-x64-*.node "$stage"/
+for variant in modern baseline; do
+	[ -f "$stage/pi_natives.linux-x64-$variant.node" ] || {
+		echo "refresh-natives: package $ver is missing pi_natives.linux-x64-$variant.node — leaving current natives untouched" >&2
+		exit 1
+	}
+done
+for variant in modern baseline; do
+	mv -f "$stage/pi_natives.linux-x64-$variant.node" "$dest/pi_natives.linux-x64-$variant.node"
+done
 mkdir -p packages/natives/npm
 echo "$ver" > "$marker"
 echo "natives refreshed to $ver"

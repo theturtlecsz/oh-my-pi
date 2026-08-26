@@ -58,10 +58,21 @@ Re-run `bun run setup` only if natives change and bazelisk is available.
 
 Update loop: `bash session-system/update.sh <full-40-hex-upstream-commit>` from
 an integration branch (never `main` — the script refuses to merge there, and it
-refuses moving refs like `upstream/main`). The first run merges the pinned
-commit with `--no-ff` and stops — on conflicts, resolve by hand, commit, and
-re-run. Once the target is an ancestor, a re-run executes the frozen install
-(`bun install --frozen-lockfile`), `refresh-natives.sh`, and the full gate
+refuses moving refs like `upstream/main`). Before any fetch, merge, or install
+it scans `/proc` for live mappings: if any same-owner process — including the
+session running the script — maps code from the checkout, it refuses and
+prints the exact recovery `update.sh: run the upgrade from a session already
+on the stable build, then retry`. Kernel-shielded same-owner processes whose
+maps the kernel refuses to expose (session infrastructure like `systemd
+--user` and the ssh/gpg agents) are skipped with a warning — an
+owner-accepted blind spot (OMP-157, 2026-08-26); harness processes are always
+inspectable. The first run merges the pinned commit with
+`--no-ff` and stops — on conflicts, resolve by hand, commit, and re-run. Once
+the target is an ancestor, a re-run executes the frozen install
+(`bun install --frozen-lockfile`), `refresh-natives.sh` (which stages the new
+addons on the same filesystem and renames them into place, so already-running
+processes keep their old mapped inodes while new launches resolve the new
+files), and the full gate
 list (handoff verifier, session-system + work-client + verifier tests,
 session-system tsc, `check:ts`, cargo fmt/clippy, `test:ts`, `test:scripts`,
 `test:py`, cargo nextest, and the PostgreSQL session smoke), refusing success

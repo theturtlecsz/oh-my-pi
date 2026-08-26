@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // update.sh contract (OMP-156): pinned non-pushing gate runner.
 //   * exactly one full 40-hex upstream commit; `main`/short/moving refs refused
 //   * dirty tracked worktree refused
+//   * refuses (before fetch) while any live same-owner process maps code from the checkout
 //   * non-ancestor target -> --no-ff merge only (never on branch `main`), then stop
 //   * conflicted merge exits immediately; no gate runs
 //   * ancestor target -> frozen install + natives + gates 1-11 verbatim, in order
@@ -267,4 +268,114 @@ describe("forbidden behavior", () => {
 		expect(code).toMatch(/git merge --no-ff "\$TARGET"/);
 		expect(code.match(/git merge(?!-base)/g)).toHaveLength(1);
 	});
+});
+
+describe("live-mapping fence (OMP-157)", () => {
+	// The mapper prints "ready" only after mmap succeeds, then sleeps until the
+	// test terminates it — awaiting that line awaits the real mapping event.
+	// With a "shield" argument it also sets PR_SET_DUMPABLE=0, making its maps
+	// kernel-unreadable to the fence (the owner-accepted carve-out class).
+	const MAPPER_SCRIPT = `import ctypes, mmap, sys, time
+f = open(sys.argv[1], "r+b")
+m = mmap.mmap(f.fileno(), 0)
+if len(sys.argv) > 2 and sys.argv[2] == "shield":
+    ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)
+print("ready", flush=True)
+time.sleep(600)
+`;
+
+	async function awaitReady(stdout: ReadableStream<Uint8Array>): Promise<void> {
+		const reader = stdout.getReader();
+		const decoder = new TextDecoder();
+		let seen = "";
+		while (!seen.includes("ready")) {
+			const { done, value } = await reader.read();
+			if (done) throw new Error(`mapper exited before signaling ready: ${JSON.stringify(seen)}`);
+			seen += decoder.decode(value, { stream: true });
+		}
+		reader.releaseLock();
+	}
+
+	test.skipIf(process.platform !== "linux")(
+		"refuses the ancestor path while a live process maps the checkout, then succeeds once unmapped",
+		async () => {
+			const fx = makeFixture();
+			git(fx.repo, "checkout", "-b", "integration");
+			const merge = fx.runUpdate(fx.upstreamSha);
+			expect(merge.exitCode, merge.stderr).toBe(0);
+
+			const root = realpathSync(fx.repo);
+			const mappedFile = join(fx.repo, "mapped.bin"); // untracked: dirty check ignores it
+			writeFileSync(mappedFile, Buffer.alloc(4096, 1));
+			const mapperPy = join(fx.binDir, "mapper.py");
+			writeFileSync(mapperPy, MAPPER_SCRIPT);
+			const mappedReal = realpathSync(mappedFile);
+
+			const mapper = Bun.spawn(["python3", mapperPy, mappedReal], {
+				stdout: "pipe",
+				stderr: "ignore",
+			});
+			try {
+				await awaitReady(mapper.stdout);
+				const refused = fx.runUpdate(fx.upstreamSha);
+				expect(refused.exitCode).toBe(1);
+				expect(refused.stderr).toContain(
+					`update.sh: refusing to mutate ${root} — live process ${mapper.pid} maps code from this checkout: python3 ${mapperPy} ${mappedReal}`,
+				);
+				expect(refused.stderr).toContain(
+					"update.sh: run the upgrade from a session already on the stable build, then retry",
+				);
+				expect(fx.logLines()).toEqual([]); // bun install and native refresh never started
+			} finally {
+				mapper.kill();
+				await mapper.exited;
+			}
+
+			const second = fx.runUpdate(fx.upstreamSha);
+			expect(second.exitCode, second.stderr).toBe(0);
+			expect(second.stdout).toContain("all gates passed");
+			const lines = fx.logLines();
+			expect(lines[0]).toBe("bun install --frozen-lockfile");
+			expect(lines[1]).toBe("refresh-natives");
+			expect(lines[lines.length - 1]).toBe("bun run test:session:smoke pg=1");
+		},
+		20000,
+	);
+
+	test.skipIf(process.platform !== "linux")(
+		"skips a kernel-shielded same-owner mapper with a warning (owner-accepted carve-out)",
+		async () => {
+			const fx = makeFixture();
+			git(fx.repo, "checkout", "-b", "integration");
+			const merge = fx.runUpdate(fx.upstreamSha);
+			expect(merge.exitCode, merge.stderr).toBe(0);
+
+			const mappedFile = join(fx.repo, "mapped.bin");
+			writeFileSync(mappedFile, Buffer.alloc(4096, 1));
+			const mapperPy = join(fx.binDir, "mapper.py");
+			writeFileSync(mapperPy, MAPPER_SCRIPT);
+			const mapper = Bun.spawn(["python3", mapperPy, realpathSync(mappedFile), "shield"], {
+				stdout: "pipe",
+				stderr: "ignore",
+			});
+			try {
+				await awaitReady(mapper.stdout);
+				// The shielded mapping is invisible by kernel policy: the fence
+				// warns, skips, and the full gate path runs — the accepted blind spot.
+				const result = fx.runUpdate(fx.upstreamSha);
+				expect(result.exitCode, result.stderr).toBe(0);
+				expect(result.stdout).toContain("all gates passed");
+				expect(result.stderr).toContain(
+					`update.sh: warning: skipping kernel-shielded same-owner process ${mapper.pid} — mappings not inspectable`,
+				);
+				const lines = fx.logLines();
+				expect(lines[0]).toBe("bun install --frozen-lockfile");
+				expect(lines[lines.length - 1]).toBe("bun run test:session:smoke pg=1");
+			} finally {
+				mapper.kill();
+				await mapper.exited;
+			}
+		},
+		20000,
+	);
 });

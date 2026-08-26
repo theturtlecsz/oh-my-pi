@@ -25,6 +25,17 @@ When in plan mode or asked to plan:
 3. Owner approval is the execution boundary. The host stamps the final plan
    digest on the item before allowing execution; no manual comment or NOW
    selection is required.
+4. Upgrade/cutover plans that mutate a checkout or its dependencies MUST put
+   a `/proc/<pid>/maps` proof before the first mutation: show that no live
+   process — including the session executing the plan — maps code from that
+   tree, and when any mapping exists, run the mutation from a
+   stable/rollback-linked session instead. Live-link manifests protect only
+   future launches and are not a substitute for the mapping proof. In
+   oh-my-pi, `session-system/update.sh` enforces this fence
+   (`assert_tree_unmapped`); never bypass it. Kernel-shielded same-owner
+   processes (maps unreadable by ptrace policy) sit outside the proof — an
+   owner-accepted carve-out (OMP-157, 2026-08-26); everything inspectable
+   refuses.
 
 Always: capture stray findings as work items instead of chasing them. `/summary`
 records the typed session review; `/done` alone closes after that review.
