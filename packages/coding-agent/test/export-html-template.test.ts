@@ -18,13 +18,12 @@ interface TemplateProbeResult {
 	assetsRemoved: number;
 }
 
-const expectedTemplate: TemplateProbeResult = {
-	chars: 376_586,
-	bytes: 376_742,
-	sha256: "d1832d9fc1e2033e4d998856bfdd7739aa3be94bff74c21154d7fa6a51788269",
-	stableCache: true,
-	assetsRemoved: 0,
-};
+// Derived (not hardcoded) from the source composition in beforeAll: the template
+// embeds tool-views.generated.js, which the fork's collab-web tool views change,
+// so pinned upstream bytes/sha would drift on every legitimate fork regeneration.
+// The load-bearing contract is byte-identity between the in-process composition
+// and every probe/bundle/compiled deployment, plus cache stability.
+let expectedTemplate: TemplateProbeResult;
 const assetDir = new URL("../src/export/html/", import.meta.url);
 const templateProbePath = path.resolve(import.meta.dir, "fixtures", "html-export-template-probe.ts");
 const heapProbePath = path.resolve(import.meta.dir, "fixtures", "html-export-static-import-heap-probe.ts");
@@ -93,6 +92,14 @@ async function runProbe(command: string[]): Promise<TemplateProbeResult> {
 
 beforeAll(async () => {
 	fs.mkdirSync(unrelatedCwd);
+	const expected = composeExpectedTemplate();
+	expectedTemplate = {
+		chars: expected.length,
+		bytes: Buffer.byteLength(expected, "utf8"),
+		sha256: new Bun.CryptoHasher("sha256").update(expected).digest("hex"),
+		stableCache: true,
+		assetsRemoved: 0,
+	};
 	const bundle = await Bun.build({
 		entrypoints: [templateProbePath],
 		outdir: bundleDir,
