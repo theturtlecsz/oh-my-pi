@@ -38,15 +38,7 @@ export const MATRIX_HEADER = [
 	"resolution",
 	"proof",
 ] as const;
-export const CHANGELOG_HEADER = [
-	"entry_id",
-	"package",
-	"version",
-	"section",
-	"text",
-	"disposition",
-	"proof",
-] as const;
+export const CHANGELOG_HEADER = ["entry_id", "package", "version", "section", "text", "disposition", "proof"] as const;
 
 export type SourceKind = "hunk" | "binary" | "rename" | "delete" | "meta";
 
@@ -217,11 +209,18 @@ export function computeSourceRecords(rawText: string, numstatText: string, diffT
 		}
 		if (change.oldPath !== undefined) {
 			records.push(
-				make("rename", change.path, `from:${change.oldPath}`, `${change.oldSha.slice(0, 12)}>${change.newSha.slice(0, 12)}`),
+				make(
+					"rename",
+					change.path,
+					`from:${change.oldPath}`,
+					`${change.oldSha.slice(0, 12)}>${change.newSha.slice(0, 12)}`,
+				),
 			);
 		}
 		if (binaries.has(change.path)) {
-			records.push(make("binary", change.path, "binary", `${change.oldSha.slice(0, 12)}>${change.newSha.slice(0, 12)}`));
+			records.push(
+				make("binary", change.path, "binary", `${change.oldSha.slice(0, 12)}>${change.newSha.slice(0, 12)}`),
+			);
 		}
 	}
 	for (const hunk of parseHunks(diffText)) {
@@ -233,11 +232,18 @@ export function computeSourceRecords(rawText: string, numstatText: string, diffT
 	for (const change of parseRawDiff(rawText)) {
 		if (!coveredPaths.has(change.path)) {
 			records.push(
-				make("meta", change.path, `status:${change.status}`, `${change.oldSha.slice(0, 12)}>${change.newSha.slice(0, 12)}`),
+				make(
+					"meta",
+					change.path,
+					`status:${change.status}`,
+					`${change.oldSha.slice(0, 12)}>${change.newSha.slice(0, 12)}`,
+				),
 			);
 		}
 	}
-	records.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.locator < b.locator ? -1 : a.locator > b.locator ? 1 : 0));
+	records.sort((a, b) =>
+		a.path < b.path ? -1 : a.path > b.path ? 1 : a.locator < b.locator ? -1 : a.locator > b.locator ? 1 : 0,
+	);
 	return records;
 
 	function make(kind: SourceKind, path: string, locator: string, bodySha: string): SourceRecord {
@@ -345,7 +351,10 @@ export function parseMatrixTsv(text: string): MatrixRow[] {
 		surfaceId: cells[0],
 		path: cells[1],
 		scope: cells[2],
-		sourceIds: cells[3].split(",").map(s => s.trim()).filter(Boolean),
+		sourceIds: cells[3]
+			.split(",")
+			.map(s => s.trim())
+			.filter(Boolean),
 		forkBehavior: cells[4],
 		upstreamChange: cells[5],
 		classification: cells[6],

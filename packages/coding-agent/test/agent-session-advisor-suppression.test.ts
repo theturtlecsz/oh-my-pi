@@ -274,7 +274,11 @@ describe("AgentSession advisor auto-resume suppression", () => {
 						{
 							type: "toolCall",
 							name: "advise",
-							arguments: { note: "Final yield needs correction", severity: "blocker", category: "semantic-concern" },
+							arguments: {
+								note: "Final yield needs correction",
+								severity: "blocker",
+								category: "semantic-concern",
+							},
 						},
 					],
 				},

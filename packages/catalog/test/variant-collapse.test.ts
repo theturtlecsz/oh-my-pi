@@ -10,7 +10,11 @@ import {
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { stripThinkingVariantToken } from "@oh-my-pi/pi-catalog/identity/family";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
-import { clampThinkingLevelForModel, defaultSupportedEffort, resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
+import {
+	clampThinkingLevelForModel,
+	defaultSupportedEffort,
+	resolveWireModelId,
+} from "@oh-my-pi/pi-catalog/model-thinking";
 import { googleGeminiCliModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/google";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import {

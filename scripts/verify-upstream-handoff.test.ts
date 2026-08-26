@@ -1,21 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type ChangelogRow,
-	type MatrixRow,
-	type SourceRecord,
-	type ValidateInput,
 	compareVersions,
 	computeSourceRecords,
 	deriveChangelogEntries,
 	formatSourcesTsv,
+	type MatrixRow,
 	parseArgs,
 	parseChangelogTsv,
 	parseHunks,
 	parseMatrixTsv,
 	parseRawDiff,
 	parseSourcesTsv,
+	type SourceRecord,
 	sourceId,
 	unquoteGitPath,
+	type ValidateInput,
 	validate,
 	versionInRange,
 } from "./verify-upstream-handoff.ts";
@@ -187,8 +187,7 @@ describe("tsv parsing", () => {
 		expect(() => parseMatrixTsv("wrong\theader\n")).toThrow(/bad header/);
 	});
 	test("rejects rows with the wrong field count", () => {
-		const header =
-			"entry_id\tpackage\tversion\tsection\ttext\tdisposition\tproof\n";
+		const header = "entry_id\tpackage\tversion\tsection\ttext\tdisposition\tproof\n";
 		expect(() => parseChangelogTsv(`${header}too\tfew\n`)).toThrow(/row 2/);
 	});
 });
