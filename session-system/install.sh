@@ -2,24 +2,71 @@
 # install.sh — link the session system into place. Idempotent.
 # --copy: copy instead of symlink (fallback if a harness won't follow links).
 # --expect-backend work: read-only verification mode.
+# --print-manifest: read-only manifest of every managed live destination.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"
 MODE="link"
 EXPECT_BACKEND=""
+PRINT_MANIFEST=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --copy) MODE="copy" ;;
+    --print-manifest) PRINT_MANIFEST=1 ;;
     --expect-backend) EXPECT_BACKEND="${2:?--expect-backend needs work}"; shift ;;
     --expect-backend=*) EXPECT_BACKEND="${1#--expect-backend=}" ;;
-    *) echo "usage: install.sh [--copy] [--expect-backend work]" >&2; exit 2 ;;
+    *) echo "usage: install.sh [--copy] [--expect-backend work] [--print-manifest]" >&2; exit 2 ;;
   esac
   shift
 done
+# Managed live destinations. Every list below is shared by the install flow and
+# --print-manifest so the manifest can never drift from what install.sh manages.
+EXT_DIR="$HOME/.omp/agent/extensions"
+AGENT_SKILLS="summary questionyourself whatsmissing"
+OMP_SKILLS="intake caveman caveman-commit caveman-compress caveman-help caveman-review notebooklm prompt-master task-observer vibe-check wiz-ccr-creator wiz-mcp"
+managed_destinations() { # every managed live path outside the extensions set
+  printf '%s\n' \
+    "$HOME/.omp/agent/agents/auditor.md" \
+    "$HOME/.omp/agent/rules/work-plan.md" \
+    "$HOME/.omp/agent/rules/linear-plan.md" \
+    "$HOME/AGENTS.md" \
+    "$HOME/.omp/agent/AGENTS.md" \
+    "$HOME/.omp/agent/hook/task-observer-first-tool.mjs"
+  local s
+  for s in $AGENT_SKILLS; do printf '%s\n' "$HOME/.agents/skills/$s"; done
+  for s in $OMP_SKILLS; do printf '%s\n' "$HOME/.omp/agent/skills/$s"; done
+}
+
+# --print-manifest: read-only. One TSV line per managed artifact:
+#   <path>\t<type>\t<mode>\t<detail>
+# type: symlink|file|dir|absent; detail: resolved link target, file sha256, or '-'.
+# The extensions root is walked recursively. Output is LC_ALL=C sorted so two
+# manifests can be compared with cmp(1). Never touches the live set.
+if [ -n "$PRINT_MANIFEST" ]; then
+  describe() {
+    local p="$1"
+    if [ -L "$p" ]; then
+      printf '%s\tsymlink\t%s\t%s\n' "$p" "$(stat -c %a "$p")" "$(readlink -f "$p" 2>/dev/null || readlink "$p")"
+    elif [ -d "$p" ]; then
+      printf '%s\tdir\t%s\t-\n' "$p" "$(stat -c %a "$p")"
+    elif [ -f "$p" ]; then
+      printf '%s\tfile\t%s\t%s\n' "$p" "$(stat -c %a "$p")" "$(sha256sum "$p" | cut -d' ' -f1)"
+    else
+      printf '%s\tabsent\t-\t-\n' "$p"
+    fi
+  }
+  {
+    describe "$EXT_DIR"
+    if [ -d "$EXT_DIR" ]; then
+      while IFS= read -r p; do describe "$p"; done < <(find "$EXT_DIR" -mindepth 1)
+    fi
+    while IFS= read -r p; do describe "$p"; done < <(managed_destinations)
+  } | LC_ALL=C sort
+  exit 0
+fi
 # --expect-backend: read-only verification mode. Prints the installed backend and
 # exits non-zero on mismatch. Never touches the live set.
 if [ -n "$EXPECT_BACKEND" ]; then
   case "$EXPECT_BACKEND" in work) ;; *) echo "unknown backend: $EXPECT_BACKEND" >&2; exit 2 ;; esac
-  EXT_DIR="$HOME/.omp/agent/extensions"
   installed="unknown"
   if [ -e "$EXT_DIR/work-now.ts" ] && [ ! -e "$EXT_DIR/linear-now.ts" ]; then installed="work"; fi
   if [ "$installed" != "$EXPECT_BACKEND" ]; then
@@ -51,7 +98,6 @@ unplace() { # remove a live artifact left by the other backend
 # single renameat2(RENAME_EXCHANGE): a reader always sees the complete old set or
 # the complete new set, and a crash before the exchange leaves the old set
 # untouched. On a first install (nothing to exchange) a bare rename(2) is atomic.
-EXT_DIR="$HOME/.omp/agent/extensions"
 SET_DIR="$HOME/.omp/agent/.extensions-set.$$"
 mkdir -p "$SET_DIR"
 if [ -d "$EXT_DIR" ]; then
@@ -118,10 +164,10 @@ unplace "$HOME/.omp/agent/rules/linear-plan.md"
 place agents/AGENTS.md        "$HOME/AGENTS.md"
 place agents/omp-AGENTS.md    "$HOME/.omp/agent/AGENTS.md"
 place hooks/task-observer-first-tool.mjs "$HOME/.omp/agent/hook/task-observer-first-tool.mjs"
-for s in summary questionyourself whatsmissing; do
+for s in $AGENT_SKILLS; do
   place "skills/$s" "$HOME/.agents/skills/$s"
 done
-for s in intake caveman caveman-commit caveman-compress caveman-help caveman-review notebooklm prompt-master task-observer vibe-check wiz-ccr-creator wiz-mcp; do
+for s in $OMP_SKILLS; do
   place "skills/$s" "$HOME/.omp/agent/skills/$s"
 done
 # prompts/ is archive-only by ruling 2026-08-10: work routes through the

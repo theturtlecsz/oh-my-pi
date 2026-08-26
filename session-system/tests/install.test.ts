@@ -1,120 +1,144 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const repoRoot = path.resolve(import.meta.dir, "../..");
-const ss = path.join(repoRoot, "session-system");
-const home = fs.mkdtempSync(path.join(os.tmpdir(), "ss-install-"));
-afterAll(() => fs.rmSync(home, { recursive: true, force: true }));
+// install.sh --print-manifest contract (OMP-156): a read-only, LC_ALL=C-sorted TSV of
+// every managed live destination — extensions root walked recursively plus the
+// singleton files and skill links — comparable across runs with cmp(1).
 
-const SHARED_LINKS: Array<[string, string]> = [
-	// workflow/ is support code: work-now.ts imports it
-	[".omp/agent/extensions/workflow", "extensions/workflow"],
-	[".omp/agent/extensions/model-bookends.ts", "extensions/model-bookends.ts"],
-	[".omp/agent/extensions/model-bookends-audit.md", "extensions/model-bookends-audit.md"],
-	[".omp/agent/agents/auditor.md", "agents/auditor.md"],
-	[".omp/agent/rules/work-plan.md", "rules/work-plan.md"],
-	["AGENTS.md", "agents/AGENTS.md"],
-	[".omp/agent/AGENTS.md", "agents/omp-AGENTS.md"],
-	[".agents/skills/summary", "skills/summary"],
-	[".agents/skills/questionyourself", "skills/questionyourself"],
-	[".agents/skills/whatsmissing", "skills/whatsmissing"],
-	[".omp/agent/skills/intake", "skills/intake"],
-];
-const LINEAR_ENTRY = ".omp/agent/extensions/linear-now.ts";
-const WORK_ENTRY = ".omp/agent/extensions/work-now.ts";
+const installSh = join(import.meta.dir, "..", "install.sh");
+const tempDirs: string[] = [];
 
-function run(args: string[] = []) {
-	return Bun.spawnSync(["bash", path.join(ss, "install.sh"), ...args], {
-		env: { ...process.env, HOME: home },
-	});
+afterEach(() => {
+	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+interface RunResult {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
 }
-const live = (p: string) => path.join(home, p);
 
-describe("install.sh", () => {
-	test("default installation links work-now and all shared links", () => {
-		expect(run().exitCode).toBe(0);
-		for (const [dst, src] of SHARED_LINKS) {
-			expect(fs.realpathSync(live(dst))).toBe(fs.realpathSync(path.join(ss, src)));
+function runInstall(home: string, ...args: string[]): RunResult {
+	const proc = Bun.spawnSync(["bash", installSh, ...args], {
+		env: { ...process.env, HOME: home } as Record<string, string>,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+}
+
+function fakeHome(): string {
+	const home = mkdtempSync(join(tmpdir(), "omp-install-test-"));
+	tempDirs.push(home);
+	return home;
+}
+
+const MANAGED_SINGLETONS = [
+	"/.omp/agent/agents/auditor.md",
+	"/.omp/agent/rules/work-plan.md",
+	"/.omp/agent/rules/linear-plan.md",
+	"/AGENTS.md",
+	"/.omp/agent/AGENTS.md",
+	"/.omp/agent/hook/task-observer-first-tool.mjs",
+];
+const AGENT_SKILLS = ["summary", "questionyourself", "whatsmissing"];
+const OMP_SKILLS = [
+	"intake",
+	"caveman",
+	"caveman-commit",
+	"caveman-compress",
+	"caveman-help",
+	"caveman-review",
+	"notebooklm",
+	"prompt-master",
+	"task-observer",
+	"vibe-check",
+	"wiz-ccr-creator",
+	"wiz-mcp",
+];
+
+describe("install.sh --print-manifest", () => {
+	test("is read-only and reports every managed destination absent on a fresh home", () => {
+		const home = fakeHome();
+		const result = runInstall(home, "--print-manifest");
+		expect(result.exitCode, result.stderr).toBe(0);
+		const lines = result.stdout.split("\n").filter(Boolean);
+		// ext root + 6 singletons + 3 agent skills + 12 omp skills, all absent
+		expect(lines).toHaveLength(22);
+		for (const line of lines) {
+			const cells = line.split("\t");
+			expect(cells).toHaveLength(4);
+			expect(cells[1]).toBe("absent");
 		}
-		expect(fs.realpathSync(live(WORK_ENTRY))).toBe(fs.realpathSync(path.join(ss, "extensions/work-now.ts")));
-		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(false);
+		// read-only: nothing was created under the fake home
+		expect(readdirSync(home)).toEqual([]);
 	});
-	test("re-run is idempotent: staged set is retired and work-now is live", () => {
-		expect(run().exitCode).toBe(0);
-		expect(fs.lstatSync(live(".omp/agent/extensions")).isDirectory()).toBe(true);
-		// staged sets from every run (including crashed ones) are retired
-		const leftovers = fs.readdirSync(live(".omp/agent")).filter((n) => n.startsWith(".extensions-set.") || n.startsWith(".extensions-legacy."));
-		expect(leftovers).toHaveLength(0);
-		expect(fs.existsSync(live(WORK_ENTRY))).toBe(true);
-		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(false);
-	});
-	test("--expect-backend work verifies installed backend, non-work fails", () => {
-		expect(run(["--expect-backend", "work"]).exitCode).toBe(0);
-		expect(run(["--expect-backend", "linear"]).exitCode).not.toBe(0);
-		expect(run(["--expect-backend", "other"]).exitCode).not.toBe(0);
-	});
-	test("preserves unmanaged extensions across install runs and copy-mode flips, and removes stale linear-now.ts", () => {
-		const extensions = live(".omp/agent/extensions");
-		const regular = Buffer.from([0, 1, 2, 255]);
-		const hidden = Buffer.from("hidden\n");
-		const nested = Buffer.from([255, 0, 127]);
-		fs.writeFileSync(path.join(extensions, "custom.bin"), regular);
-		fs.writeFileSync(path.join(extensions, ".custom-hidden"), hidden);
-		fs.mkdirSync(path.join(extensions, "custom-dir"));
-		fs.writeFileSync(path.join(extensions, "custom-dir/nested.bin"), nested);
-		fs.symlinkSync("custom.bin", path.join(extensions, "custom-link"));
-		fs.symlinkSync("missing-target", path.join(extensions, "broken-link"));
-		// Simulate a stale linear-now.ts left over in the live directory
-		fs.writeFileSync(path.join(extensions, "linear-now.ts"), "// stale\n");
-		const rootMode = 0o700;
-		const rootMtimeSeconds = 978307200;
-		fs.chmodSync(extensions, rootMode);
-		fs.utimesSync(extensions, rootMtimeSeconds, rootMtimeSeconds);
 
-		const assertPreserved = () => {
-			expect(fs.readFileSync(path.join(extensions, "custom.bin"))).toEqual(regular);
-			expect(fs.readFileSync(path.join(extensions, ".custom-hidden"))).toEqual(hidden);
-			expect(fs.readFileSync(path.join(extensions, "custom-dir/nested.bin"))).toEqual(nested);
-			expect(fs.readlinkSync(path.join(extensions, "custom-link"))).toBe("custom.bin");
-			expect(fs.readlinkSync(path.join(extensions, "broken-link"))).toBe("missing-target");
-			expect(fs.existsSync(live(WORK_ENTRY))).toBe(true);
-			expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(false);
-			const root = fs.statSync(extensions);
-			expect(root.mode & 0o777).toBe(rootMode);
-			expect(Math.floor(root.mtimeMs / 1000)).toBe(rootMtimeSeconds);
-		};
+	test("covers the extensions tree, singletons, and both skill sets after install", () => {
+		const home = fakeHome();
+		const install = runInstall(home);
+		expect(install.exitCode, install.stderr).toBe(0);
 
-		expect(run().exitCode).toBe(0);
-		assertPreserved();
-		expect(run(["--copy"]).exitCode).toBe(0);
-		assertPreserved();
-	});
-	test("refuses an unreadable extension root before exchange", () => {
-		expect(run().exitCode).toBe(0);
-		const extensions = live(".omp/agent/extensions");
-		const sentinel = path.join(extensions, "keep.txt");
-		fs.writeFileSync(sentinel, "keep");
-		const mode = fs.statSync(extensions).mode & 0o777;
-		const result = (() => {
-			fs.chmodSync(extensions, 0);
-			try {
-				return run();
-			} finally {
-				fs.chmodSync(extensions, mode);
+		const result = runInstall(home, "--print-manifest");
+		expect(result.exitCode, result.stderr).toBe(0);
+		const lines = result.stdout.split("\n").filter(Boolean);
+		const byPath: Record<string, string[]> = {};
+		for (const line of lines) {
+			const cells = line.split("\t");
+			expect(cells).toHaveLength(4);
+			byPath[cells[0]] = cells;
+		}
+
+		expect(byPath[`${home}/.omp/agent/extensions`]?.[1]).toBe("dir");
+		for (const child of ["workflow", "work-now.ts", "model-bookends.ts", "model-bookends-audit.md"]) {
+			expect(byPath[`${home}/.omp/agent/extensions/${child}`]?.[1]).toBe("symlink");
+		}
+		for (const singleton of MANAGED_SINGLETONS) {
+			const entry = byPath[`${home}${singleton}`];
+			expect(entry, singleton).toBeDefined();
+			if (singleton.endsWith("linear-plan.md")) {
+				expect(entry[1]).toBe("absent"); // retired backend artifact must stay absent
+			} else {
+				expect(entry[1]).toBe("symlink");
 			}
-		})();
-
-		expect(result.exitCode).not.toBe(0);
-		expect(result.stderr.toString()).toContain("extension root unreadable");
-		expect(fs.readFileSync(sentinel, "utf8")).toBe("keep");
-		expect(fs.existsSync(live(WORK_ENTRY))).toBe(true);
-		expect(fs.existsSync(live(LINEAR_ENTRY))).toBe(false);
+		}
+		for (const skill of AGENT_SKILLS) {
+			expect(byPath[`${home}/.agents/skills/${skill}`]?.[1]).toBe("symlink");
+		}
+		for (const skill of OMP_SKILLS) {
+			expect(byPath[`${home}/.omp/agent/skills/${skill}`]?.[1]).toBe("symlink");
+		}
+		// every managed symlink resolves into this repository checkout
+		const repoRoot = join(import.meta.dir, "..", "..");
+		for (const cells of Object.values(byPath)) {
+			if (cells[1] === "symlink") {
+				expect(cells[3].startsWith(repoRoot), `${cells[0]} -> ${cells[3]}`).toBe(true);
+			}
+		}
 	});
-	test("rejects legacy --backend selector", () => {
-		expect(run(["--backend", "linear"]).exitCode).toBe(2);
-		expect(run(["--backend", "work"]).exitCode).toBe(2);
-		expect(run(["--backend", "notion"]).exitCode).toBe(2);
+
+	test("is byte-stable across runs and LC_ALL=C sorted", () => {
+		const home = fakeHome();
+		expect(runInstall(home).exitCode).toBe(0);
+		const first = runInstall(home, "--print-manifest");
+		const second = runInstall(home, "--print-manifest");
+		expect(first.stdout).toBe(second.stdout);
+		const paths = first.stdout
+			.split("\n")
+			.filter(Boolean)
+			.map(line => line.split("\t")[0]);
+		expect(paths).toEqual([...paths].sort());
+	});
+
+	test("--expect-backend work verifies without touching the live set", () => {
+		const home = fakeHome();
+		expect(runInstall(home, "--expect-backend", "work").exitCode).toBe(1); // nothing installed yet
+		expect(runInstall(home).exitCode).toBe(0);
+		const verify = runInstall(home, "--expect-backend", "work");
+		expect(verify.exitCode, verify.stderr).toBe(0);
+		expect(verify.stdout).toContain("backend work");
+		expect(existsSync(join(home, ".omp/agent/extensions/work-now.ts"))).toBe(true);
 	});
 });

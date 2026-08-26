@@ -30,7 +30,7 @@ retained offline as static export archives and provenance records.
 | `skills/whatsmissing` | `~/.agents/skills/whatsmissing` | Blind-spot audit, invoked by summary |
 | `prompts/archive/` | (nothing — archive only) | Retired session charters. Ruling 2026-08-10: work routes through the ledger, never prompt files |
 | `tests/` | (nothing — fork-persistence tests) | Extension loads against current omp source; installer integrity + idempotency |
-| `update.sh` | (nothing — run by hand) | The update loop: fetch upstream → merge → `bun install` → native refresh → fork tests → push origin |
+| `update.sh` | (nothing — run by hand) | Pinned upstream merge + gate runner: full-40-hex commit only, never pushes, never touches live links |
 | `refresh-natives.sh` | (nothing — run by update.sh) | Keeps the drop-in native addon matched to the current omp version |
 
 `~/.claude/skills/summary` reaches the skill via `~/.agents/skills/summary`.
@@ -56,11 +56,20 @@ them matched to `packages/natives/package.json` (the workspace loader skips
 the version sentinel, so without this gate a stale binary fails nothing).
 Re-run `bun run setup` only if natives change and bazelisk is available.
 
-Update loop: `bash session-system/update.sh` from the fork root — fetches
-upstream, merges `upstream/main`, runs `bun install`, refreshes the native
-addon (`refresh-natives.sh`), then the fork tests (`session-system/tests/`,
-the drift alarm proving the extension still loads against the new omp
-source), then pushes origin. Restart omp afterward.
+Update loop: `bash session-system/update.sh <full-40-hex-upstream-commit>` from
+an integration branch (never `main` — the script refuses to merge there, and it
+refuses moving refs like `upstream/main`). The first run merges the pinned
+commit with `--no-ff` and stops — on conflicts, resolve by hand, commit, and
+re-run. Once the target is an ancestor, a re-run executes the frozen install
+(`bun install --frozen-lockfile`), `refresh-natives.sh`, and the full gate
+list (handoff verifier, session-system + work-client + verifier tests,
+session-system tsc, `check:ts`, cargo fmt/clippy, `test:ts`, `test:scripts`,
+`test:py`, cargo nextest, and the PostgreSQL session smoke), refusing success
+if the tracked tree ends dirty. The script never pushes and never installs
+live links: cutover to the live checkout is a separate, separately-gated
+procedure (see OMP-156's `docs/upstream-18.0.6-upgrade.md` for the reference
+run), and `install.sh --print-manifest` provides the read-only live-link
+manifest that cutover and rollback compare against. Restart omp afterward.
 
 ## New project (day 1)
 
