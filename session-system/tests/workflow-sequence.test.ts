@@ -11,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "summary-refusal-durable" | "stop-continuation-states" | "atomic-child" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "now-canceled" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "summary-refusal-durable" | "summary-rider-refusal-durable" | "stop-continuation-states" | "atomic-child" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "now-canceled" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -162,6 +162,19 @@ describe("HOME-122 workflow sequence", () => {
 		expect(String(out.noticeAfterRestart)).toContain("plan_receipt_missing: mock");
 		// Successful retry resolves it: the next fresh session carries no refusal notice.
 		expect(out.beginCallsAfterRetry, "retry /summary issued a second begin").toBe(2);
+		expect(String(out.noticeAfterRetry)).not.toContain("was refused and is still unresolved");
+	});
+
+	test("an invalid staged rider batch refusal survives a fresh session and clears after a successful retry (OMP-149)", () => {
+		const out = run("summary-rider-refusal-durable");
+		expect(out.beginCallsAfterFirst, "invalid staged batch must refuse before issuing a begin").toBe(0);
+		// Fresh session: the persisted refusal retains the specific host
+		// validator error rather than the old generic rider-batch category.
+		expect(String(out.noticeAfterRestart)).toContain("The last /summary on HOME-1 was refused and is still unresolved");
+		expect(String(out.noticeAfterRestart)).toContain("staged batch must be mode 0600 exactly");
+		expect(String(out.noticeAfterRestart)).not.toContain("the staged rider batch was rejected");
+		// Removing the invalid batch permits a clean begin and resolves the refusal.
+		expect(out.beginCallsAfterRetry, "retry /summary issued its first begin").toBe(1);
 		expect(String(out.noticeAfterRetry)).not.toContain("was refused and is still unresolved");
 	});
 

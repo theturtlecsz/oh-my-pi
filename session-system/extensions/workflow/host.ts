@@ -591,14 +591,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 	/** OMP-93 rider staging: host-owned path (never repo-controlled), one file
 	 *  per canonical working directory. Consumption requires an owner confirm
 	 *  bound to the exact keys and file digest, then a one-shot rename. */
-	async function stageRiders(ctx: ExtensionContext): Promise<{ riders: RiderProof[]; batch: StagedRiderBatch } | undefined | null> {
+	async function stageRiders(ctx: ExtensionContext): Promise<{ riders: RiderProof[]; batch: StagedRiderBatch } | { refusal: string } | undefined> {
 		const path = riderBatchPath(getAgentDir(), process.cwd());
 		let batch: StagedRiderBatch | null;
 		try {
 			batch = readStagedRiderBatch(path);
 		} catch (error) {
 			ctx.ui.notify(`close attempt not begun — staged rider batch rejected (${String(error)}); fix or remove ${path}`, "warning");
-			return null; // fail closed: only a provably absent batch is skippable
+			return { refusal: `staged rider batch rejected (${String(error)}) — fix or remove ${path}` }; // fail closed: only a provably absent batch is skippable
 		}
 		if (batch === null) return undefined; // no staged batch — the normal case
 		try {
@@ -613,14 +613,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 				ctx.ui.notify("rider batch declined — archived, no riders sealed", "info");
 				// Fail closed: a canceled batch aborts the begin so summary writes
 				// are not armed on a riderless attempt the owner did not approve.
-				return null;
+				return { refusal: "the owner declined the staged rider batch — archived, no riders sealed" };
 			}
 			// NOT consumed yet: the file is archived only after the service applies
 			// the begin — a refusal must leave the approved batch staged.
 			return { riders, batch };
 		} catch (error) {
 			ctx.ui.notify(`close attempt not begun — staged rider batch is invalid (${String(error)}); fix or remove ${path}`, "warning");
-			return null; // fail closed: never begin an attempt that silently drops a staged batch
+			return { refusal: `staged rider batch is invalid (${String(error)}) — fix or remove ${path}` }; // fail closed: never begin an attempt that silently drops a staged batch
 		}
 	}
 
@@ -676,9 +676,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 		}
 		summaryAuthorizationRef ??= `summary:${randomUUID()}`;
 		const staged = await stageRiders(ctx);
-		if (staged === null) {
-			summaryBlockReason = "the staged rider batch was rejected";
-			await recordSummaryRefusal(now, "the staged rider batch was rejected — fix or remove it before the next /summary");
+		if (staged && "refusal" in staged) {
+			summaryBlockReason = staged.refusal;
+			await recordSummaryRefusal(now, staged.refusal);
 			return false;
 		}
 		const session: CloseAttemptSession = {

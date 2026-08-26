@@ -3,13 +3,14 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ExtensionRunner, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { ExtensionRunner, getAgentDir, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { confirmRoundTrip } from "./two-phase";
 import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 import { createWorkBackend } from "../../extensions/workflow/work";
+import { riderBatchPath } from "../../extensions/workflow/rider-batch";
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "summary-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
+const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "summary-refusal-durable", "summary-rider-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -1124,6 +1125,36 @@ if (mode === "intake") {
 	await runner.emit({ type: "session_start" } as never);
 	out.noticeAfterRestart = await drain();
 	await enterSummary(); // begin #2 applies — the refusal is resolved
+	out.beginCallsAfterRetry = beginCalls.length;
+	await runner.emit({ type: "session_switch", reason: "new" } as never);
+	currentSessionId = "session-3";
+	await runner.emit({ type: "session_start" } as never);
+	out.noticeAfterRetry = await drain();
+} else if (mode === "summary-rider-refusal-durable") {
+	// OMP-149: a host-side staged-rider validation refusal persists its
+	// specific validator reason; removing the batch permits a retry to clear it.
+	const beforeAgentHandlers = extension.handlers.get("before_agent_start") ?? [];
+	const drain = async () => {
+		for (const handler of beforeAgentHandlers) {
+			const result = (await handler({ type: "before_agent_start" } as never, ctx)) as { message?: { content?: string } } | undefined;
+			if (result?.message?.content) return result.message.content;
+		}
+		return "";
+	};
+	await setNow();
+	await approve(planA);
+	const batchPath = riderBatchPath(getAgentDir(), process.cwd());
+	fs.mkdirSync(path.dirname(batchPath), { recursive: true });
+	fs.writeFileSync(batchPath, JSON.stringify([{ key: "HOME-2", evidence: "staged rider regression" }]));
+	fs.chmodSync(batchPath, 0o644);
+	await enterSummary(); // host validation refuses before begin
+	out.beginCallsAfterFirst = beginCalls.length;
+	await runner.emit({ type: "session_switch", reason: "new" } as never);
+	currentSessionId = "session-2";
+	await runner.emit({ type: "session_start" } as never);
+	out.noticeAfterRestart = await drain();
+	fs.rmSync(batchPath);
+	await enterSummary(); // clean retry begins and applies
 	out.beginCallsAfterRetry = beginCalls.length;
 	await runner.emit({ type: "session_switch", reason: "new" } as never);
 	currentSessionId = "session-3";
