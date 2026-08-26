@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import { ADVISOR_TRANSCRIPT_FILENAME, isAdvisorTranscriptName } from "../advisor/transcript-recorder";
 import { resolveExplicitModelRole } from "../config/model-resolver";
 import { assistantTurnProducedOutput } from "../session/messages";
@@ -19,12 +20,21 @@ import {
 
 /** Maximum prefix entries inspected for task metadata. */
 const MAX_METADATA_LINES = 64;
+/**
+ * Upper bound on records scanned to compute an advisor transcript's Hub metrics.
+ * Well above any healthy advisor file (post issue #9553 the file grows O(new
+ * content)); it exists only so a legacy multi-GB transcript can't stall the
+ * render thread when the Hub roster is built.
+ */
+const MAX_ADVISOR_HISTORY_LINES = 200_000;
 
 interface PersistedAgentMetadata {
 	activity?: string;
 	createdAt?: number;
 	lastActivity?: number;
 	history?: AgentHistorySummary;
+	/** True when the file is only a SessionManager header (no session_init, no messages). */
+	incomplete?: boolean;
 }
 
 interface PersistedTranscript {
@@ -153,7 +163,17 @@ async function readPersistedAgentHistory(
 				const message = recordOf(record.message);
 				if (message?.role === "assistant") assistantById.set(id, assistantMetrics(message));
 			},
-			{ shouldContinue },
+			// Advisor transcripts are the one file that can grow pathologically large
+			// (issue #9553); cap their scan so one bad transcript can't stall the Hub
+			// on the render thread. Healthy advisor files sit far below this bound,
+			// so their metrics stay exact; a capped legacy file reports approximate
+			// (lower-bound) cost/tokens rather than freezing `hub list`.
+			{
+				shouldContinue,
+				maxRecords: isAdvisorTranscriptName(path.basename(transcript.sessionFile))
+					? MAX_ADVISOR_HISTORY_LINES
+					: undefined,
+			},
 		);
 	} catch {
 		return {};
@@ -244,6 +264,8 @@ async function readPersistedAgentMetadata(sessionFile: string): Promise<Persiste
 	let createdAt: number | undefined;
 	let activity: string | undefined;
 	let history: AgentHistorySummary = {};
+	let hasSessionInit = false;
+	let hasConversation = false;
 	try {
 		await visitEntriesFromFileStream(
 			sessionFile,
@@ -264,7 +286,12 @@ async function readPersistedAgentMetadata(sessionFile: string): Promise<Persiste
 					}
 					return;
 				}
+				if (record.type === "message" || record.type === "custom_message") {
+					hasConversation = true;
+					return;
+				}
 				if (record.type !== "session_init") return;
+				hasSessionInit = true;
 				createdAt ??= timestampOf(record.timestamp);
 				if (typeof record.task === "string") activity = summarizePersistedTask(record.task);
 				const inferred = typeof record.systemPrompt === "string" ? inferBundledAgent(record.systemPrompt) : {};
@@ -290,6 +317,7 @@ async function readPersistedAgentMetadata(sessionFile: string): Promise<Persiste
 		activity,
 		createdAt: createdAt ?? file?.birthtimeMs,
 		lastActivity: file?.mtimeMs,
+		incomplete: !hasSessionInit && !hasConversation,
 		history: {
 			...history,
 			...(hasOutput ? { outputPath } : {}),
@@ -312,6 +340,61 @@ async function readPersistedVibeChildIds(sessionFile: string, shouldContinue: ()
 	} catch {
 		return new Set();
 	}
+}
+
+const kPersistedRosterLatches = Symbol("persistedRosterLatches");
+
+interface RegistryWithPersistedRosterLatches extends AgentRegistry {
+	[kPersistedRosterLatches]?: Map<string, Promise<void>>;
+}
+
+async function resolveRootSessionFile(registry: AgentRegistry, hint?: string | null): Promise<string | undefined> {
+	const mainFile = registry.get(MAIN_AGENT_ID)?.sessionFile;
+	const candidate =
+		typeof hint === "string" && hint.endsWith(".jsonl")
+			? hint
+			: typeof mainFile === "string" && mainFile.endsWith(".jsonl")
+				? mainFile
+				: undefined;
+	if (candidate === undefined) return undefined;
+	let current: string = path.resolve(candidate);
+	for (let depth = 0; depth < 8; depth++) {
+		const parentFile: string = `${path.dirname(current)}.jsonl`;
+		if (!(await Bun.file(parentFile).exists())) return current;
+		current = parentFile;
+	}
+	return current;
+}
+
+/**
+ * Restore parked sibling transcripts from the interactive root session once
+ * per root. Live in-memory peers do not skip the scan; an empty tree is
+ * not scanned again.
+ */
+export async function ensurePersistedRoster(registry: AgentRegistry, sessionFileHint?: string | null): Promise<void> {
+	let root: string | undefined;
+	try {
+		root = await resolveRootSessionFile(registry, sessionFileHint);
+	} catch (error) {
+		logger.warn("Failed to resolve persisted agent roster", { error: String(error) });
+		return;
+	}
+	if (!root) return;
+
+	const taggedRegistry = registry as RegistryWithPersistedRosterLatches;
+	let latches = taggedRegistry[kPersistedRosterLatches];
+	if (!latches) {
+		latches = new Map();
+		taggedRegistry[kPersistedRosterLatches] = latches;
+	}
+	const existing = latches.get(root);
+	if (existing) return existing;
+	const pending = registerPersistedSubagents(registry, root).catch(error => {
+		latches.delete(root);
+		logger.warn("Failed to restore persisted agent roster", { root, error: String(error) });
+	});
+	latches.set(root, pending);
+	await pending;
 }
 
 /** Register persisted subagent and advisor transcripts as parked registry refs. */
@@ -425,26 +508,36 @@ async function registerPersistedSubagentsFromDir(
 		if (!registry.get(id)) {
 			const metadata = await readPersistedAgentMetadata(sessionFile);
 			if (!shouldContinue()) return;
-			registry.register({
-				id,
-				displayName: id,
-				kind: "sub",
-				parentId: parentId ?? MAIN_AGENT_ID,
-				session: null,
-				sessionFile,
-				activity: metadata.activity,
-				createdAt: metadata.createdAt,
-				lastActivity: metadata.lastActivity,
-				history: metadata.history,
-				status: tombstoned ? "aborted" : "parked",
-			});
-			const ref = registry.get(id);
-			transcripts.push({
-				id,
-				sessionFile,
-				createdAt: ref?.createdAt,
-				lastActivity: ref?.lastActivity,
-			});
+			// Metadata reads yield. A spawn may claim the id while this scan is
+			// inspecting the file; never replace that live generation with a
+			// transcript-derived parked ref.
+			const unclaimed = !registry.get(id);
+			// SessionManager.open writes title+session before createAgentSession
+			// claims the id. Parking that stub makes the spawn's expectedAgentRef:null
+			// CAS fail with "already owned by another session generation".
+			if (unclaimed && metadata.incomplete && !tombstoned) continue;
+			if (unclaimed) {
+				registry.register({
+					id,
+					displayName: id,
+					kind: "sub",
+					parentId: parentId ?? MAIN_AGENT_ID,
+					session: null,
+					sessionFile,
+					activity: metadata.activity,
+					createdAt: metadata.createdAt,
+					lastActivity: metadata.lastActivity,
+					history: metadata.history,
+					status: tombstoned ? "aborted" : "parked",
+				});
+				const ref = registry.get(id);
+				transcripts.push({
+					id,
+					sessionFile,
+					createdAt: ref?.createdAt,
+					lastActivity: ref?.lastActivity,
+				});
+			}
 		}
 		await registerPersistedSubagentsFromDir(
 			registry,

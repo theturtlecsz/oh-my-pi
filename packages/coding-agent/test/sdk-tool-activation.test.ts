@@ -206,7 +206,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			await session.setModel(fable);
 			expect(session.getToolByName("think")).toBeDefined();
 			expect(session.getActiveToolNames()).toContain("think");
-			expect(session.systemPrompt.join("\n")).toContain("private scratchpad; not shown to user");
+			expect(session.systemPrompt.join("\n")).toContain("other tools become callable when it completes");
 
 			await session.setModel(responses);
 			expect(session.getActiveToolNames()).toContain("think");
@@ -217,7 +217,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 			await session.setModel(unsupported);
 			expect(session.getActiveToolNames()).not.toContain("think");
-			expect(session.systemPrompt.join("\n")).not.toContain("private scratchpad; not shown to user");
+			expect(session.systemPrompt.join("\n")).not.toContain("other tools become callable when it completes");
 		} finally {
 			await session.dispose();
 		}
@@ -1247,6 +1247,11 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			const errors: string[] = [];
 			const unsubscribe = runner.onError(error => {
 				errors.push(error.error);
+				// The 10ms budget exists only to reap the stalled first handler
+				// quickly; handlers run sequentially and the budget is read per
+				// handler, so restoring it here keeps machine load from timing out
+				// the genuine recovery registration too (flaked in full-suite runs).
+				testSetExtensionHandlerTimeoutMs(EXTENSION_HANDLER_TIMEOUT_MS);
 			});
 			testSetExtensionHandlerTimeoutMs(10);
 
@@ -1454,6 +1459,10 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 			releaseStalledRegistration.resolve();
 			const failure = await detachedFailure.promise;
+			// Restore the default budget before the recovered registration flush:
+			// the 10ms budget was only for reaping the stalled activation, and the
+			// real presentation pass can exceed it under full-suite load.
+			testSetExtensionHandlerTimeoutMs(EXTENSION_HANDLER_TIMEOUT_MS);
 			releaseRecoveredRegistration.resolve();
 			await recoveredActivation.promise;
 
@@ -1498,6 +1507,87 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			const context = await session.agent.buildSideRequestContext([]);
 			const providerToolNames = context.tools?.map(tool => tool.name);
 			expect(providerToolNames).toEqual(expect.arrayContaining(["ast_edit", "mcp__fixture_report"]));
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("excludes hidden custom tools from the parent active set unless listed", async () => {
+		const tempDir = makeTempDir();
+		const hiddenTool = {
+			...sdkCustomTool,
+			name: "hidden_custom_tool",
+			hidden: true,
+		} satisfies CustomTool;
+
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			customTools: [hiddenTool],
+		});
+
+		try {
+			expect(session.getAllToolNames()).toContain("hidden_custom_tool");
+			expect(session.getActiveToolNames()).not.toContain("hidden_custom_tool");
+			expect(session.getXdevToolEntries().map(e => e.name)).not.toContain("hidden_custom_tool");
+			expect(session.systemPrompt.join("\n")).not.toContain("hidden_custom_tool");
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("keeps a hidden custom-tool winner inactive after a visible extension name collision", async () => {
+		const tempDir = makeTempDir();
+		const hiddenTool = {
+			...sdkCustomTool,
+			name: "colliding_hidden_tool",
+			label: "Hidden SDK Winner",
+			hidden: true,
+		} satisfies CustomTool;
+
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			extensions: [
+				pi => {
+					pi.registerTool({
+						name: hiddenTool.name,
+						label: "Visible Extension Loser",
+						description: "Visible definition that loses registry precedence.",
+						parameters: type({}),
+						async execute() {
+							return { content: [{ type: "text", text: "visible" }] };
+						},
+					});
+				},
+			],
+			customTools: [hiddenTool],
+		});
+
+		try {
+			expect(session.getToolByName(hiddenTool.name)?.label).toBe(hiddenTool.label);
+			expect(session.getActiveToolNames()).not.toContain(hiddenTool.name);
+			expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(hiddenTool.name);
+			expect(session.systemPrompt.join("\n")).not.toContain(hiddenTool.name);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("activates a hidden custom tool when an agent lists it", async () => {
+		const tempDir = makeTempDir();
+		const hiddenTool = {
+			...sdkCustomTool,
+			name: "hidden_custom_tool",
+			hidden: true,
+		} satisfies CustomTool;
+
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			customTools: [hiddenTool],
+			toolNames: ["read", "hidden_custom_tool"],
+		});
+
+		try {
+			expect(session.getActiveToolNames()).toContain("hidden_custom_tool");
 		} finally {
 			await session.dispose();
 		}
@@ -1977,13 +2067,14 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	// A session created on another provider keeps its configured-mode `edit` in
-	// the registry (only a Cursor-created session moves it out) and the tool
-	// roster is built once, at creation — switching to Cursor later does not
-	// rebuild it. These two cover both directions of that wiring: the granted
-	// session must still reach a replace-mode instance for `pi_edit` (whose
-	// `old_string`/`new_string` args do not validate against the default `hashline`
-	// schema), and the restricted one must still be refused.
+	// Hashline `edit` stays in the registry on Cursor so the model can still
+	// call it as MCP. Native StrReplace arrives as `editToolCall` and is
+	// materialized via exec read/write; `pi_edit` still uses the replace-mode
+	// instance from `getEditReplaceTool`. The roster is built once at creation.
+	// These two cover both directions of that wiring: the granted session must
+	// still reach a replace-mode instance for `pi_edit` (whose `old_string` /
+	// `new_string` args do not validate against the default `hashline` schema),
+	// and the restricted one must still be refused.
 	//
 	// The handlers are internal to the session; `streamFn` is where they are
 	// handed to the provider, which is the externally observable seam.
@@ -2038,6 +2129,24 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 				expect(result.isError).toBeFalsy();
 				expect(fs.readFileSync(target, "utf8")).toBe("alpha\ngamma\n");
+			} finally {
+				await session.dispose();
+			}
+		});
+	});
+
+	it("keeps hashline edit advertised when the session starts on Cursor", async () => {
+		const tempDir = makeTempDir();
+		const cursorModel = getBundledModel("cursor", "composer-1.5");
+		if (!cursorModel) throw new Error("expected bundled Cursor model");
+
+		await withProviderAuth(["cursor"], async () => {
+			const { session } = await createAgentSession({
+				...baseOptions(tempDir),
+				model: cursorModel,
+			});
+			try {
+				expect(session.getActiveToolNames()).toContain("edit");
 			} finally {
 				await session.dispose();
 			}

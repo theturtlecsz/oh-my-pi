@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models/descriptors";
 import {
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
@@ -54,13 +56,163 @@ describe("OpenCode provider discovery", () => {
 		});
 	});
 
+	test("routes opencode-go muse-spark-1.2 to the responses API (#8957)", () => {
+		const descriptor = MODELS_DEV_PROVIDER_DESCRIPTORS.find(item => item.providerId === "opencode-go");
+		// The Go /zen/go/v1/models discovery drops the provider.npm hint for the
+		// muse-spark ids, so without an override they fall through to
+		// openai-completions even though the gateway only serves them at
+		// /zen/go/v1/responses. Sending completions requests closes the stream
+		// with no finish_reason on every tool-call turn.
+		for (const id of ["muse-spark-1.2", "muse-spark-1.2-contributor"]) {
+			expect(descriptor?.resolveApi?.(id, { tool_call: true })).toEqual({
+				api: "openai-responses",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+			});
+		}
+	});
+
+	test("pins gateway-only muse-spark ids to responses in live discovery (#8957)", async () => {
+		// models.dev omits muse-spark-1.2[-contributor] under opencode-go, so
+		// there is no bundled reference row. Without the discovery-side pin the
+		// mapper defaults them to openai-completions and every tool-call turn
+		// fails with "stream closed before a finish_reason was received".
+		const options = opencodeGoModelManagerOptions({
+			apiKey: "test-key",
+			fetch: async () => modelListResponse(["muse-spark-1.2", "muse-spark-1.2-contributor", "kimi-k3"]),
+		});
+		const models = await options.fetchDynamicModels?.();
+		expect(models).not.toBeNull();
+		const byId = new Map((models ?? []).map(model => [model.id, model]));
+		for (const id of ["muse-spark-1.2", "muse-spark-1.2-contributor"]) {
+			expect(byId.get(id)).toMatchObject({
+				api: "openai-responses",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+			});
+		}
+		// Contrast: an unpinned id with a bundled reference keeps its route.
+		expect(byId.get("kimi-k3")).toMatchObject({ api: "openai-completions" });
+		// Upgrade path: pinned ids invalidate caches written before the pin,
+		// otherwise 17.3.7-era rows keep the completions route until TTL.
+		expect(options.dropCachedModelIdsOnStaticMismatch).toContain("muse-spark-1.2-contributor");
+	});
+
+	test("routes gateway-first ids via sibling catalog and variant-base hints", async () => {
+		// The Go gateway ships models before models.dev lists them under
+		// opencode-go (muse-spark-1.2[-contributor] did exactly this, #8957).
+		// With no same-provider metadata, the mapper borrows the
+		// openai-responses route from the sibling Zen catalog or the
+		// billing-variant base id — responses only, never anthropic-messages
+		// (cross-gateway transports genuinely diverge there).
+		const options = opencodeGoModelManagerOptions({
+			apiKey: "test-key",
+			fetch: async () =>
+				modelListResponse([
+					"gpt-5.5", // zen bundles it as openai-responses; absent from the go bundle
+					"deepseek-v4-flash-free", // base id is pinned to responses on go
+					"minimax-m2.5-free", // anthropic hints only -> must keep the completions default
+					"brand-new-model", // no hint anywhere -> completions default
+				]),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const apiById = new Map((models ?? []).map(model => [model.id, model.api]));
+		expect(apiById.get("gpt-5.5")).toBe("openai-responses");
+		expect(apiById.get("deepseek-v4-flash-free")).toBe("openai-responses");
+		expect(apiById.get("minimax-m2.5-free")).toBe("openai-completions");
+		expect(apiById.get("brand-new-model")).toBe("openai-completions");
+	});
+
+	test("enriches gateway-first ids from stencil without changing their route", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-opencode-zen-gateway-first-"));
+		try {
+			const options = opencodeZenModelManagerOptions({
+				apiKey: "zen-account-key",
+				fetch: async () => modelListResponse(["brand-new-stencil-model"]),
+			});
+			const modelsDev = options.modelsDev;
+			if (!modelsDev) throw new Error("OpenCode model manager did not configure stencil fallback");
+			const catalog = {
+				opencode: {
+					models: {
+						"brand-new-stencil-model": {
+							id: "brand-new-stencil-model",
+							name: "Gateway First Test Model",
+							tool_call: true,
+							reasoning: true,
+							limit: { context: 1_000_000, output: 131_072 },
+							modalities: { input: ["text", "image", "video"], output: ["text"] },
+							provider: { npm: "@ai-sdk/anthropic" },
+						},
+					},
+				},
+			};
+			const managerOptions = {
+				...options,
+				cacheDbPath: path.join(tempDir, "models.db"),
+				modelsDev: { ...modelsDev, fetch: async () => catalog },
+			};
+			const online = await resolveProviderModels(managerOptions, "online");
+			const model = online.models.find(candidate => candidate.id === "brand-new-stencil-model");
+			expect(model).toMatchObject({
+				name: "Gateway First Test Model",
+				api: "openai-completions",
+				baseUrl: "https://opencode.ai/zen/v1",
+				contextWindow: 1_000_000,
+				maxTokens: 131_072,
+				reasoning: true,
+				input: ["text", "image"],
+			});
+			if (!model) throw new Error("Gateway-first model was not resolved");
+			expect(getSupportedEfforts(model)).toEqual([
+				Effort.Minimal,
+				Effort.Low,
+				Effort.Medium,
+				Effort.High,
+				Effort.XHigh,
+			]);
+
+			const cached = await resolveProviderModels(managerOptions, "online-if-uncached");
+			expect(cached.models.find(candidate => candidate.id === model.id)).toMatchObject({
+				contextWindow: 1_000_000,
+				maxTokens: 131_072,
+				reasoning: true,
+			});
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("recovers muse-spark thinking levels from live OpenCode Go discovery", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-opencode-go-muse-"));
+		try {
+			const options = opencodeGoModelManagerOptions({
+				apiKey: "go-account-key",
+				fetch: async () => modelListResponse(["muse-spark-1.2", "muse-spark-1.2-contributor"]),
+			});
+			const result = await resolveProviderModels(
+				{ ...options, cacheDbPath: path.join(tempDir, "models.db") },
+				"online-if-uncached",
+			);
+			const expected = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
+			for (const id of ["muse-spark-1.2", "muse-spark-1.2-contributor"]) {
+				const model = result.models.find(item => item.id === id);
+				expect(model?.api).toBe("openai-responses");
+				expect(model?.reasoning).toBe(true);
+				expect(model?.thinking?.efforts).toEqual(expected);
+				expect(model?.thinking?.requiresEffort).toBeUndefined();
+			}
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	test("replaces stale bundled Zen models with each credential's live endpoint list", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-opencode-zen-"));
 		try {
 			let freeFetches = 0;
 			const freeOptions = opencodeZenModelManagerOptions({
 				apiKey: "free-account-key",
-				fetch: async () => {
+				fetch: async input => {
+					if (String(input).includes("catalog.stencil.so")) return Response.json({});
 					freeFetches++;
 					return modelListResponse(LIVE_FREE_MODEL_IDS);
 				},
@@ -73,7 +225,8 @@ describe("OpenCode provider discovery", () => {
 			let paidFetches = 0;
 			const paidOptions = opencodeZenModelManagerOptions({
 				apiKey: "paid-account-key",
-				fetch: async () => {
+				fetch: async input => {
+					if (String(input).includes("catalog.stencil.so")) return Response.json({});
 					paidFetches++;
 					return modelListResponse(LIVE_PAID_MODEL_IDS);
 				},

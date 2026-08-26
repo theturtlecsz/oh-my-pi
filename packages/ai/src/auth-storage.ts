@@ -53,7 +53,7 @@ import { cursorUsageProvider } from "./usage/cursor";
 import { googleGeminiCliUsageProvider } from "./usage/gemini";
 import { githubCopilotUsageProvider } from "./usage/github-copilot";
 import { antigravityRankingStrategy, antigravityUsageProvider } from "./usage/google-antigravity";
-import { kimiUsageProvider } from "./usage/kimi";
+import { kimiRankingStrategy, kimiUsageProvider } from "./usage/kimi";
 import { minimaxCodeUsageProvider } from "./usage/minimax-code";
 import { ollamaCloudUsageProvider, ollamaUsageProvider } from "./usage/ollama";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./usage/openai-codex";
@@ -677,6 +677,7 @@ const DEFAULT_USAGE_PROVIDER_MAP = new Map<Provider, UsageProvider>(
 );
 
 const USAGE_CACHE_PREFIX = "usage_cache:";
+const USAGE_FORCE_REFRESH_CACHE_PREFIX = "force-refresh:";
 const USAGE_HEADER_INGEST_INTERVAL_MS = 60_000;
 const USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000;
 /**
@@ -686,6 +687,12 @@ const USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000;
  * on the next poll.
  */
 const USAGE_FAILURE_BACKOFF_MS = 10_000;
+/**
+ * A manual invalidation persists across the next CLI process and serializes
+ * same-provider probes, avoiding a cold-account burst against IP-limited
+ * upstream usage endpoints.
+ */
+const USAGE_FORCE_REFRESH_TTL_MS = 5 * 60_000;
 // Bumped from 3s — Claude usage retries up to 3 times with exponential backoff
 // (~3.5s total worst case); a tight per-request budget aborts retries mid-cycle.
 const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 10_000;
@@ -703,6 +710,7 @@ const USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES: Partial<Record<Provider, number>
 	anthropic: 3,
 };
 const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 10_000;
+const OAUTH_REFRESH_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
 /**
  * Refresh OAuth access tokens this many ms before their stated expiry. The
  * skew exists so callers downstream of {@link AuthStorage} (stream providers,
@@ -782,6 +790,7 @@ interface UsageCache {
 	get<T>(key: string): UsageCacheEntry<T> | undefined;
 	getStale<T>(key: string): UsageCacheEntry<T> | undefined;
 	set<T>(key: string, entry: UsageCacheEntry<T>): void;
+	deletePrefix(prefix: string): boolean;
 	cleanup?(): void;
 }
 
@@ -789,6 +798,11 @@ type UsageRequestDescriptor = {
 	provider: Provider;
 	credential: UsageCredential;
 	baseUrl?: string;
+};
+
+type ForcedUsageRefresh = {
+	all: boolean;
+	providers: Set<Provider>;
 };
 
 type AuthApiKeyOptions = {
@@ -1013,6 +1027,32 @@ function resolveOpenAICodexPlanRequirement(provider: string, modelId: string | u
 	return "none";
 }
 
+const MODEL_ACCOUNT_POLICY_BLOCK_SCOPE_PREFIX = "model-policy:";
+const MODEL_ACCOUNT_POLICY_PROVIDERS: Readonly<Record<string, true>> = {
+	"openai-codex": true,
+	cursor: true,
+};
+
+function modelAccountPolicyBlockScope(provider: string, modelId: string | undefined): string | undefined {
+	if (!Object.hasOwn(MODEL_ACCOUNT_POLICY_PROVIDERS, provider) || typeof modelId !== "string") return undefined;
+	const separator = modelId.lastIndexOf("/");
+	const bareModelId = (separator === -1 ? modelId : modelId.slice(separator + 1)).trim().toLowerCase();
+	if (!bareModelId || bareModelId.includes("\0")) return undefined;
+	return `${MODEL_ACCOUNT_POLICY_BLOCK_SCOPE_PREFIX}${bareModelId}`;
+}
+
+function credentialBlockScopesForRequest(
+	provider: string,
+	strategy: CredentialRankingStrategy | undefined,
+	rankingContext: CredentialRankingContext,
+	blockScope: string | undefined,
+): readonly string[] {
+	const scopes = strategy?.blockScopes?.(rankingContext) ?? (blockScope ? [blockScope] : []);
+	const modelPolicyScope = modelAccountPolicyBlockScope(provider, rankingContext.modelId);
+	if (!modelPolicyScope || scopes.includes(modelPolicyScope)) return scopes;
+	return [...scopes, modelPolicyScope];
+}
+
 function getUsagePlanType(report: UsageReport | null): string | undefined {
 	const metadata = report?.metadata;
 	if (!metadata) return undefined;
@@ -1069,6 +1109,7 @@ const DEFAULT_RANKING_STRATEGIES = new Map<Provider, CredentialRankingStrategy>(
 	["openai-codex", codexRankingStrategy],
 	["anthropic", claudeRankingStrategy],
 	["google-antigravity", antigravityRankingStrategy],
+	["kimi-code", kimiRankingStrategy],
 	["zai", zaiRankingStrategy],
 	["opencode-go", opencodeGoRankingStrategy],
 ]);
@@ -1185,6 +1226,12 @@ class AuthStorageUsageCache implements UsageCache {
 		this.store.setCache(`${USAGE_CACHE_PREFIX}${key}`, payload, Math.floor(durableExpiresAt / 1000));
 	}
 
+	deletePrefix(prefix: string): boolean {
+		if (!this.store.deleteCachePrefix) return false;
+		this.store.deleteCachePrefix(`${USAGE_CACHE_PREFIX}${prefix}`);
+		return true;
+	}
+
 	cleanup(): void {
 		this.store.cleanExpiredCache();
 	}
@@ -1271,6 +1318,9 @@ export class AuthStorage {
 	 */
 	#persistedBlockStoreDamaged = false;
 	#usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
+	/** Runtime extension providers take precedence over this configured/default resolver. */
+	#runtimeUsageProviderOverrides: Map<Provider, { provider: UsageProvider; apiKey?: string }> = new Map();
+	#usageReportCacheKeysByProvider: Map<Provider, Set<string>> = new Map();
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
 	#usageCacheEpoch = 0;
@@ -1448,6 +1498,26 @@ export class AuthStorage {
 	 */
 	removeRuntimeApiKey(provider: string): void {
 		this.#runtimeOverrides.delete(provider);
+	}
+
+	/**
+	 * Install a runtime usage provider override (not persisted to disk).
+	 *
+	 * Runtime overrides are checked before the configured resolver, including its
+	 * built-in fallback. Removing the override restores that resolver unchanged.
+	 */
+	setRuntimeUsageProvider(provider: Provider, usageProvider: UsageProvider, apiKey?: string): void {
+		this.#runtimeUsageProviderOverrides.set(provider, { provider: usageProvider, apiKey });
+		this.#invalidateUsageReportCacheForProvider(provider);
+	}
+	/** Remove a runtime usage provider override and restore configured/default resolution. */
+	removeRuntimeUsageProvider(provider: Provider): void {
+		if (!this.#runtimeUsageProviderOverrides.has(provider)) return;
+		this.#invalidateUsageReportCacheForProvider(provider);
+		this.#runtimeUsageProviderOverrides.delete(provider);
+	}
+	#resolveUsageProvider(provider: Provider): UsageProvider | undefined {
+		return this.#runtimeUsageProviderOverrides.get(provider)?.provider ?? this.#usageProviderResolver?.(provider);
 	}
 
 	/**
@@ -2149,7 +2219,7 @@ export class AuthStorage {
 
 		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
 		const blockScope = strategy.blockScope?.(rankingContext);
-		const blockScopes = strategy.blockScopes?.(rankingContext) ?? (blockScope ? [blockScope] : []);
+		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
 		const candidates = await this.#rankApiKeySelections({
 			providerKey,
 			provider,
@@ -2661,16 +2731,30 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Check if any form of auth is configured for a provider.
-	 * Unlike getApiKey(), this doesn't refresh OAuth tokens.
+	 * Dedicated auth for default-model availability (picker / `getAvailable`).
+	 * Unlike {@link getApiKey}, this does not refresh OAuth tokens, and unlike
+	 * {@link hasResolvableAuth} it ignores cross-provider env aliases so
+	 * `XAI_API_KEY` does not auto-select SuperGrok (`xai-oauth`).
 	 */
 	hasAuth(provider: string): boolean {
 		if (this.#runtimeOverrides.has(provider)) return true;
 		if (this.#configOverrides.has(provider)) return true;
 		if (this.#getCredentialsForProvider(provider).length > 0) return true;
-		if (getEnvApiKey(provider)) return true;
+		if (this.#hasDedicatedEnvAuth(provider)) return true;
 		if (this.#fallbackResolver?.(provider)) return true;
 		return false;
+	}
+
+	/**
+	 * Whether a request could resolve a key for this provider, including
+	 * cross-provider env aliases (`xai-oauth` borrowing `XAI_API_KEY`).
+	 * Use this for explicit model preflight (`xai-oauth/grok-4.6`); use
+	 * {@link hasAuth} for auto-availability so the default picker stays on
+	 * paid `xai` when only `XAI_API_KEY` is set.
+	 */
+	hasResolvableAuth(provider: string): boolean {
+		if (this.hasAuth(provider)) return true;
+		return Boolean(getEnvApiKey(provider));
 	}
 
 	/**
@@ -2693,6 +2777,22 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Env auth that belongs to this provider, not a cross-provider alias.
+	 *
+	 * `getEnvApiKey("xai-oauth")` also accepts `XAI_API_KEY` so an explicit
+	 * `xai-oauth/…` stream can still borrow the paid key. Availability and
+	 * origin must not: otherwise an API-key-only setup marks SuperGrok as
+	 * signed in and `pickDefaultAvailableModel` prefers `xai-oauth/grok-4.6`
+	 * over paid `xai/grok-4.6`.
+	 */
+	#hasDedicatedEnvAuth(provider: string): boolean {
+		if (provider === "xai-oauth") {
+			return Boolean($env.XAI_OAUTH_TOKEN?.trim());
+		}
+		return Boolean(getEnvApiKey(provider));
+	}
+
+	/**
 	 * Classify where a provider's auth comes from, following the same precedence
 	 * as {@link AuthStorage.getApiKey}: runtime override → config override →
 	 * stored OAuth → login-stored api_key → env var → stored api_key →
@@ -2708,7 +2808,7 @@ export class AuthStorage {
 		if (stored.some(credential => credential.type === "api_key" && credential.source === "login")) {
 			return { kind: "api_key" };
 		}
-		if (getEnvApiKey(provider)) return { kind: "env", envVar: getEnvApiKeyName(provider) };
+		if (this.#hasDedicatedEnvAuth(provider)) return { kind: "env", envVar: getEnvApiKeyName(provider) };
 		if (stored.some(credential => credential.type === "api_key")) return { kind: "api_key" };
 		if (this.#fallbackResolver?.(provider)) return { kind: "fallback" };
 		return undefined;
@@ -2955,20 +3055,65 @@ export class AuthStorage {
 		return baseUrl?.trim().replace(/\/+$/, "") ?? "";
 	}
 
+	#usageCacheProviderKey(provider: Provider): string {
+		const versionOverride = USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[provider];
+		return versionOverride === undefined ? provider : `${versionOverride}:${provider}`;
+	}
+
+	#usageForceRefreshCacheKey(provider?: Provider): string {
+		return provider
+			? `${USAGE_FORCE_REFRESH_CACHE_PREFIX}provider:${provider}`
+			: `${USAGE_FORCE_REFRESH_CACHE_PREFIX}all`;
+	}
+
+	#markUsageForceRefresh(provider?: Provider): void {
+		this.#usageCache.set(this.#usageForceRefreshCacheKey(provider), {
+			value: true,
+			expiresAt: Date.now() + USAGE_FORCE_REFRESH_TTL_MS,
+		});
+	}
+
+	#hasUsageForceRefresh(provider?: Provider): boolean {
+		const key = this.#usageForceRefreshCacheKey(provider);
+		const entry = this.#usageCache.get<boolean>(key);
+		if (entry?.value !== true) return false;
+		if (entry.expiresAt > Date.now()) return true;
+		this.#usageCache.set(key, { value: null, expiresAt: 0 });
+		return false;
+	}
+
+	#usageForceRefresh(requests: readonly UsageRequestDescriptor[]): ForcedUsageRefresh {
+		const all = this.#hasUsageForceRefresh();
+		const providers = new Set<Provider>();
+		for (const request of requests) providers.add(request.provider);
+		if (!all) {
+			for (const provider of providers) {
+				if (!this.#hasUsageForceRefresh(provider)) providers.delete(provider);
+			}
+		}
+		return { all, providers };
+	}
+
+	#clearUsageForceRefresh(refresh: ForcedUsageRefresh): void {
+		if (refresh.all) this.#usageCache.set(this.#usageForceRefreshCacheKey(), { value: null, expiresAt: 0 });
+		for (const provider of refresh.providers) {
+			this.#usageCache.set(this.#usageForceRefreshCacheKey(provider), { value: null, expiresAt: 0 });
+		}
+	}
 	#buildUsageReportCacheKey(request: UsageRequestDescriptor): string {
 		const baseUrl = this.#normalizeUsageBaseUrl(request.baseUrl) || "default";
 		const identity = this.#buildUsageCacheIdentity(request.credential);
-		const versionOverride = USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider];
-		const providerKey = versionOverride === undefined ? request.provider : `${versionOverride}:${request.provider}`;
-		return `report:${providerKey}:${baseUrl}:${identity}`;
+		const providerKey = this.#usageCacheProviderKey(request.provider);
+		const cacheKey = `report:${providerKey}:${baseUrl}:${identity}`;
+		const cacheKeys = this.#usageReportCacheKeysByProvider.get(request.provider) ?? new Set<string>();
+		cacheKeys.add(cacheKey);
+		this.#usageReportCacheKeysByProvider.set(request.provider, cacheKeys);
+		return cacheKey;
 	}
-
 	#buildUsageReportsCacheKey(requests: ReadonlyArray<UsageRequestDescriptor>): string {
 		const snapshot = requests
 			.map(request => {
-				const versionOverride = USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES[request.provider];
-				const providerKey =
-					versionOverride === undefined ? request.provider : `${versionOverride}:${request.provider}`;
+				const providerKey = this.#usageCacheProviderKey(request.provider);
 				return `${providerKey}:${this.#normalizeUsageBaseUrl(request.baseUrl) || "default"}:${this.#buildUsageCacheIdentity(request.credential)}`;
 			})
 			.sort()
@@ -3101,10 +3246,7 @@ export class AuthStorage {
 	}
 
 	async #fetchUsageUncached(request: UsageRequestDescriptor, timeoutMs?: number): Promise<UsageReport | null> {
-		const resolver = this.#usageProviderResolver;
-		if (!resolver) return null;
-
-		const providerImpl = resolver(request.provider);
+		const providerImpl = this.#resolveUsageProvider(request.provider);
 		if (!providerImpl) return null;
 
 		const timeoutSignal =
@@ -3209,20 +3351,25 @@ export class AuthStorage {
 			return null;
 		}
 	}
-
-	async #fetchUsageCached(request: UsageRequestDescriptor, timeoutMs?: number): Promise<UsageReport | null> {
+	async #fetchUsageCached(
+		request: UsageRequestDescriptor,
+		options: { timeoutMs?: number; forceRefresh?: boolean } = {},
+	): Promise<UsageReport | null> {
+		const timeoutMs = options.timeoutMs;
+		const forceRefresh = options.forceRefresh ?? false;
 		const cacheKey = this.#buildUsageReportCacheKey(request);
+
 		const now = Date.now();
-		const cached = this.#usageCache.get<UsageReport | null>(cacheKey);
+		const cached = forceRefresh ? undefined : this.#usageCache.get<UsageReport | null>(cacheKey);
 		// Fresh cache hit: return whatever's there (success or null fallback).
 		if (cached && cached.expiresAt > now) {
 			return cached.value;
 		}
 
-		const inFlight = this.#usageRequestInFlight.get(cacheKey);
-		if (inFlight) return inFlight;
-
 		const usageCacheEpoch = this.#usageCacheEpoch;
+		const inFlightKey = `${cacheKey}\0${usageCacheEpoch}`;
+		const inFlight = this.#usageRequestInFlight.get(inFlightKey);
+		if (inFlight) return inFlight;
 		const promise = (async () => {
 			const report = await this.#fetchUsageUncached(request, timeoutMs);
 			if (usageCacheEpoch !== this.#usageCacheEpoch) return report;
@@ -3242,7 +3389,8 @@ export class AuthStorage {
 			// re-hit the endpoint on every poll. Most providers serve the last good
 			// value through transient failures. Session-cookie providers can opt out
 			// so an expired login does not display stale quota indefinitely.
-			const retainLastGood = this.#usageProviderResolver?.(request.provider)?.retainLastGoodOnFailure !== false;
+			const retainLastGood =
+				!forceRefresh && this.#resolveUsageProvider(request.provider)?.retainLastGoodOnFailure !== false;
 			const lastGood = retainLastGood
 				? (this.#usageCache.getStale<UsageReport | null>(cacheKey)?.value ?? null)
 				: null;
@@ -3251,13 +3399,12 @@ export class AuthStorage {
 			this.#usageCache.set(cacheKey, { value: lastGood, expiresAt: coolDown });
 			return lastGood;
 		})().finally(() => {
-			this.#usageRequestInFlight.delete(cacheKey);
+			this.#usageRequestInFlight.delete(inFlightKey);
 		});
 
-		this.#usageRequestInFlight.set(cacheKey, promise);
+		this.#usageRequestInFlight.set(inFlightKey, promise);
 		return promise;
 	}
-
 	/**
 	 * Append a freshly fetched report to durable usage history (when the store
 	 * supports it). The usage cache is latest-snapshot-only — these rows are
@@ -3358,7 +3505,7 @@ export class AuthStorage {
 		options?: { sessionId?: string; baseUrl?: string },
 	): boolean {
 		if (this.#fetchUsageReportsOverride) return false;
-		const parseHeaders = this.#usageProviderResolver?.(provider)?.parseRateLimitHeaders;
+		const parseHeaders = this.#resolveUsageProvider(provider)?.parseRateLimitHeaders;
 		if (!parseHeaders) return false;
 
 		const credential = this.#resolveActiveOAuthCredential(provider, options?.sessionId);
@@ -3438,18 +3585,16 @@ export class AuthStorage {
 	async #collectUsageRequests(options?: {
 		baseUrlResolver?: (provider: Provider) => string | undefined;
 	}): Promise<UsageRequestDescriptor[]> {
-		const resolver = this.#usageProviderResolver;
-		if (!resolver) return [];
-
 		const requests: UsageRequestDescriptor[] = [];
 		const providers = new Set<string>([
 			...this.#data.keys(),
+			...this.#runtimeUsageProviderOverrides.keys(),
 			...DEFAULT_USAGE_PROVIDERS.map(provider => provider.id),
 		]);
 
 		for (const providerId of providers) {
 			const provider = providerId as Provider;
-			const providerImpl = resolver(provider);
+			const providerImpl = this.#resolveUsageProvider(provider);
 			if (!providerImpl) continue;
 			const baseUrl = options?.baseUrlResolver?.(provider);
 			let entries = this.#getStoredCredentials(providerId);
@@ -3486,8 +3631,12 @@ export class AuthStorage {
 
 			if (entries.length === 0) {
 				const runtimeKey = this.#runtimeOverrides.get(providerId);
-				const envKey = getEnvApiKey(providerId);
-				const apiKey = runtimeKey ?? envKey;
+				const extensionUsageKeyConfig = this.#runtimeUsageProviderOverrides.get(provider)?.apiKey,
+					extensionUsageKey = extensionUsageKeyConfig
+						? await this.#configValueResolver(extensionUsageKeyConfig)
+						: undefined,
+					envKey = getEnvApiKey(providerId);
+				const apiKey = runtimeKey ?? extensionUsageKey ?? envKey;
 				if (!apiKey) continue;
 				const request = this.#buildUsageRequest(provider, { type: "api_key", apiKey }, baseUrl);
 				if (providerImpl.supports && !providerImpl.supports(request)) continue;
@@ -3730,10 +3879,9 @@ export class AuthStorage {
 			if (!resolvedApiKey) return null;
 			usageCredential.apiKey = resolvedApiKey;
 		}
-		return this.#fetchUsageCached(
-			this.#buildUsageRequest(provider, usageCredential, options?.baseUrl),
-			options?.timeoutMs ?? this.#usageRequestTimeoutMs,
-		);
+		return this.#fetchUsageCached(this.#buildUsageRequest(provider, usageCredential, options?.baseUrl), {
+			timeoutMs: options?.timeoutMs ?? this.#usageRequestTimeoutMs,
+		});
 	}
 
 	/**
@@ -3744,7 +3892,7 @@ export class AuthStorage {
 	 * providers without a usage API) — the latter never warrants a usage row.
 	 */
 	usageProviderFor(provider: Provider): UsageProvider | undefined {
-		return this.#usageProviderResolver?.(provider);
+		return this.#resolveUsageProvider(provider);
 	}
 
 	/**
@@ -3813,7 +3961,7 @@ export class AuthStorage {
 		const planRequirement = resolveOpenAICodexPlanRequirement(provider, options.modelId);
 		const planEligibilityByCredential = new Map<number, boolean | undefined>();
 		const blockScope = strategy.blockScope?.(rankingContext);
-		const blockScopes = strategy.blockScopes?.(rankingContext) ?? (blockScope ? [blockScope] : []);
+		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
 		const reserveFraction = Number.isFinite(options.reserveFraction)
 			? Math.max(0, Math.min(1, options.reserveFraction))
 			: 0;
@@ -3863,7 +4011,12 @@ export class AuthStorage {
 				}
 				if (!report) return { credentialId: entry.id, credentialType, state: "unknown" };
 
-				const limits = this.#getScopedUsageLimits(strategy, report, rankingContext);
+				// Reserve health is opt-in and non-destructive: prefer the strategy's
+				// reserve scoping, which may expose mapped model/tier rows that the
+				// hard-block scoper withholds until confirmed exhaustion.
+				const limits =
+					strategy.scopeLimitsForReserve?.(report, rankingContext) ??
+					this.#getScopedUsageLimits(strategy, report, rankingContext);
 				if (limits.length === 0) return { credentialId: entry.id, credentialType, state: "unknown" };
 
 				const currentLimits = limits.filter(limit => {
@@ -3927,6 +4080,37 @@ export class AuthStorage {
 		return true;
 	}
 
+	/**
+	 * Fetch every requested report, keeping normal polls parallel while a
+	 * manually invalidated provider probes accounts one at a time.
+	 */
+	#fetchUsageRequests(
+		requests: readonly UsageRequestDescriptor[],
+		serializedProviders: ReadonlySet<Provider>,
+	): Promise<Array<UsageReport | null>> {
+		const tails = new Map<Provider, Promise<void>>();
+		return Promise.all(
+			requests.map(request => {
+				const forceRefresh = serializedProviders.has(request.provider);
+				if (!forceRefresh) {
+					return this.#fetchUsageCached(request, { timeoutMs: this.#usageRequestTimeoutMs });
+				}
+				const tail = tails.get(request.provider) ?? Promise.resolve();
+				const current = tail.then(() =>
+					this.#fetchUsageCached(request, { timeoutMs: this.#usageRequestTimeoutMs, forceRefresh: true }),
+				);
+				tails.set(
+					request.provider,
+					current.then(
+						() => undefined,
+						() => undefined,
+					),
+				);
+				return current;
+			}),
+		);
+	}
+
 	async fetchUsageReports(options?: {
 		baseUrlResolver?: (provider: Provider) => string | undefined;
 		/** Caller's cancel signal; only rejects this caller, never the shared upstream fetch. */
@@ -3945,21 +4129,21 @@ export class AuthStorage {
 			// dispatch + credential selection) coalesce into one upstream call.
 			// Each caller's `signal` only cancels THAT caller's await; the
 			// shared upstream fetch runs to completion so peers aren't punished.
-			const OVERRIDE_KEY = "__override__";
-			let shared = this.#usageReportsInFlight.get(OVERRIDE_KEY);
+			const overrideKey = `__override__\0${this.#usageCacheEpoch}`;
+			let shared = this.#usageReportsInFlight.get(overrideKey);
 			if (!shared) {
 				// Don't forward the caller signal into the shared fetch — first caller's
 				// abort would otherwise cancel the upstream for every peer.
 				shared = override().finally(() => {
-					this.#usageReportsInFlight.delete(OVERRIDE_KEY);
+					this.#usageReportsInFlight.delete(overrideKey);
 				});
-				this.#usageReportsInFlight.set(OVERRIDE_KEY, shared);
+				this.#usageReportsInFlight.set(overrideKey, shared);
 			}
 			const reports = await raceUsageWithSignal(shared, options?.signal);
 			if (shouldReconcileStoreHookReports && reports) this.#reconcileCodexUsageBlocksFromReports(reports);
 			return reports;
 		}
-		if (!this.#usageProviderResolver) return null;
+		if (!this.#usageProviderResolver && this.#runtimeUsageProviderOverrides.size === 0) return null;
 
 		const requests = await this.#collectUsageRequests(options);
 		if (requests.length === 0) return [];
@@ -3973,7 +4157,8 @@ export class AuthStorage {
 		// a single decorrelation snapshot for 30s, defeating the jitter (some
 		// accounts can be missing from one fetch and present in the next; the
 		// aggregate cache freezes whichever set landed first).
-		const cacheKey = this.#buildUsageReportsCacheKey(requests);
+		const forcedRefresh = this.#usageForceRefresh(requests);
+		const cacheKey = `${this.#buildUsageReportsCacheKey(requests)}\0${this.#usageCacheEpoch}`;
 
 		const inFlight = this.#usageReportsInFlight.get(cacheKey);
 		if (inFlight) return inFlight;
@@ -3989,9 +4174,7 @@ export class AuthStorage {
 				});
 			}
 
-			const results = await Promise.all(
-				requests.map(request => this.#fetchUsageCached(request, this.#usageRequestTimeoutMs)),
-			);
+			const results = await this.#fetchUsageRequests(requests, forcedRefresh.providers);
 			const reports = results.filter((report): report is UsageReport => report !== null);
 			const deduped = this.#dedupeUsageReports(reports);
 			// no outer cache write — see comment above.
@@ -4012,6 +4195,7 @@ export class AuthStorage {
 					};
 				}),
 			});
+			this.#clearUsageForceRefresh(forcedRefresh);
 			return resolved;
 		})().finally(() => {
 			this.#usageReportsInFlight.delete(cacheKey);
@@ -4050,7 +4234,7 @@ export class AuthStorage {
 	async checkCredentials(options?: CheckCredentialsOptions): Promise<CredentialHealthResult[]> {
 		options?.signal?.throwIfAborted();
 		const stored = this.#store.listAuthCredentials();
-		const resolver = this.#usageProviderResolver;
+
 		const timeoutMs = options?.timeoutMs ?? this.#usageRequestTimeoutMs;
 		const completionProbe = options?.completionProbe;
 		const completionTimeoutMs = options?.completionTimeoutMs ?? timeoutMs;
@@ -4151,7 +4335,7 @@ export class AuthStorage {
 				continue;
 			}
 
-			const providerImpl = resolver?.(row.provider as Provider);
+			const providerImpl = this.#resolveUsageProvider(row.provider as Provider);
 			if (!providerImpl) {
 				base.reason = `no usage probe configured for provider ${row.provider}`;
 			} else if (providerImpl.supports && !providerImpl.supports(initialRequest)) {
@@ -4249,17 +4433,24 @@ export class AuthStorage {
 		provider: string,
 		credentialType: AuthCredential["type"],
 		modelId: string | undefined,
+		blockScopeOverride?: string,
 	): CredentialBlockRouting {
 		const providerKey = this.#getProviderTypeKey(provider, credentialType);
 		const strategy = this.#rankingStrategyResolver?.(provider);
 		const rankingContext: CredentialRankingContext = { modelId };
-		const blockScope = strategy?.blockScope?.(rankingContext);
+		const defaultBlockScope = strategy?.blockScope?.(rankingContext);
+		const blockScope = blockScopeOverride ?? defaultBlockScope;
+		const requestBlockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, defaultBlockScope);
+		const siblingBlockScopes =
+			blockScopeOverride && !requestBlockScopes.includes(blockScopeOverride)
+				? [...requestBlockScopes, blockScopeOverride]
+				: requestBlockScopes;
 		return {
 			providerKey,
 			strategy,
 			rankingContext,
 			blockScope,
-			siblingBlockScopes: strategy?.blockScopes?.(rankingContext) ?? (blockScope ? [blockScope] : []),
+			siblingBlockScopes,
 		};
 	}
 
@@ -4626,7 +4817,7 @@ export class AuthStorage {
 		const rankingContext: CredentialRankingContext = { modelId: options?.modelId };
 		const blockScope = strategy?.blockScope?.(rankingContext);
 		// Reads honour every scope that applies; the scalar above is for args that persist.
-		const blockScopes = strategy?.blockScopes?.(rankingContext) ?? (blockScope ? [blockScope] : []);
+		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
 		const planRequirement = resolveOpenAICodexPlanRequirement(provider, options?.modelId);
 		const hasPlanRequirement = planRequirement !== "none";
 		const checkUsage = strategy !== undefined && (credentials.length > 1 || hasPlanRequirement);
@@ -4690,6 +4881,7 @@ export class AuthStorage {
 					.map(idx => credentials[idx])
 					.filter((selection): selection is { credential: OAuthCredential; index: number } => Boolean(selection))
 					.map(selection => ({ selection, usage: null, usageChecked: false }));
+		const preflightFailures = new Set<OAuthCandidate>();
 
 		// On the warm skip path the candidate list follows the round-robin `order`, not the pin, so
 		// hoist the pinned credential to the front to actually reuse it. When ranking ran, the pin is
@@ -4733,8 +4925,8 @@ export class AuthStorage {
 					candidate.selection.credential = latestCredential;
 					return;
 				}
+				const credentialId = this.#getStoredCredentials(provider)[candidate.selection.index]?.id;
 				try {
-					const credentialId = this.#getStoredCredentials(provider)[candidate.selection.index]?.id;
 					// Hand #refreshOAuthCredential a stale clone (expires:0) so its
 					// not-yet-expired short-circuit doesn't suppress the forced
 					// re-mint; an in-flight peer refresh is still awaited via the
@@ -4761,15 +4953,60 @@ export class AuthStorage {
 						this.#replaceCredentialAt(provider, candidate.selection.index, updated);
 					}
 				} catch (error) {
-					// Recovery for definitive failures (incl. peer rotation) lives in
-					// #tryOAuthCredential; log instead of swallowing silently — a bare
-					// catch here hid stale-refresh-token replays from concurrent
-					// sessions (one-turn 401 "Invalid authentication credentials").
+					// A failed preflight already exercised the provider refresh path.
+					// Do not replay the same refresh token in the final candidate pass.
+					const errorMsg = String(error);
+					const isDefinitiveFailure = AIError.isDefinitiveOAuthFailure(errorMsg);
 					logger.debug("OAuth preflight refresh failed", {
 						provider,
 						index: candidate.selection.index,
-						error: String(error),
+						error: errorMsg,
+						isDefinitiveFailure,
 					});
+					if (isDefinitiveFailure) {
+						// A dead grant discovered during preflight must be disabled here too —
+						// the final candidate pass below skips every `preflightFailures` entry,
+						// so if this branch only blocked the row (like the transient case), the
+						// definitive failure would never reach `#tryOAuthCredential`'s own
+						// disable logic and the row would be retried forever instead of torn down.
+						const outcome = await this.#disableDefinitiveOAuthFailure(
+							provider,
+							credentialId,
+							candidate.selection.credential,
+							candidate.selection.index,
+							errorMsg,
+						);
+						if (
+							outcome !== "disabled" &&
+							credentialId !== undefined &&
+							this.#syncOAuthSelectionFromStore(provider, candidate.selection, credentialId)
+						) {
+							// A peer rotated this row (or won the disable CAS) between our
+							// snapshot and the refresh; the helper reloaded storage and the row
+							// still exists, so it now holds a valid, freshly rotated credential.
+							// Re-sync the candidate onto it and leave it eligible so the final
+							// pass retries with the live token instead of stranding it (mirrors
+							// #tryOAuthCredential's peer-rotated re-resolve). If the peer instead
+							// deleted/disabled the row, the re-sync fails and we fall through to
+							// preflightFailures — leaving a stale index could rebind the candidate
+							// to a sibling account with the wrong prefetched usage/plan.
+							return;
+						}
+					} else if (credentialId !== undefined) {
+						const latestIndex = this.#getStoredCredentials(provider).findIndex(
+							entry => entry.id === credentialId,
+						);
+						if (latestIndex !== -1) {
+							this.#markCredentialBlocked(
+								provider,
+								providerKey,
+								latestIndex,
+								Date.now() + OAUTH_REFRESH_FAILURE_BACKOFF_MS,
+								blockScope,
+							);
+						}
+					}
+					preflightFailures.add(candidate);
 				}
 			}),
 		);
@@ -4812,6 +5049,7 @@ export class AuthStorage {
 
 		for (const pass of passes) {
 			for (const candidate of candidates) {
+				if (preflightFailures.has(candidate)) continue;
 				const resolved = await this.#tryOAuthCredential(
 					provider,
 					candidate.selection,
@@ -4836,6 +5074,73 @@ export class AuthStorage {
 		}
 
 		return undefined;
+	}
+
+	/**
+	 * Handles a definitively-dead OAuth grant discovered during refresh (`invalid_grant`,
+	 * `revoked`, …): checks for a peer rotation that raced the failure, then CAS-disables
+	 * the row and emits `credential_disabled`. Shared by the eager preflight refresh in
+	 * {@link AuthStorage.#resolveOAuthSelection} and the final-candidate refresh in
+	 * {@link AuthStorage.#tryOAuthCredential} so both actually disable the credential — not
+	 * just temporarily block it — on a definitive failure.
+	 *
+	 * Returns `"disabled"` once the row is torn down, `"peer-rotated"` when a concurrent
+	 * process refreshed the same row first (the persisted refresh token no longer matches
+	 * what we attempted — the caller should reload and retry with the new credential), or
+	 * `"cas-lost"` when the disable itself lost a race and the caller should reload before
+	 * continuing.
+	 */
+	async #disableDefinitiveOAuthFailure(
+		provider: string,
+		credentialId: number | undefined,
+		attemptedCredential: OAuthCredential,
+		index: number,
+		errorMsg: string,
+	): Promise<"disabled" | "peer-rotated" | "cas-lost"> {
+		// The credential at this index may have been rotated by another process between
+		// our in-memory snapshot and the refresh attempt: Anthropic rotates refresh
+		// tokens on every use, so the peer's success leaves our stored token invalid.
+		// Re-read the row from disk before marking it disabled — if the persisted
+		// refresh token has changed, the peer rotation succeeded and we should pick
+		// up the new credential instead of soft-deleting the row that the peer just
+		// updated.
+		if (credentialId !== undefined) {
+			const latestRow = this.#store.listAuthCredentials(provider).find(row => row.id === credentialId);
+			const latestCredential = latestRow?.credential;
+			if (latestCredential?.type === "oauth" && latestCredential.refresh !== attemptedCredential.refresh) {
+				logger.debug("OAuth refresh race detected; another process rotated token first", {
+					provider,
+					index,
+					credentialId,
+				});
+				await this.reload();
+				return "peer-rotated";
+			}
+		}
+		// Permanently disable invalid credentials with an explicit cause for inspection/debugging.
+		// Use a CAS-style disable conditioned on the row still containing the stale credential
+		// we tried to refresh, so a peer rotation that lands between the pre-check above and
+		// this disable doesn't soft-delete the freshly-rotated row.
+		const disabled =
+			credentialId !== undefined
+				? this.#disableCredentialByIdIfMatches(
+						provider,
+						credentialId,
+						attemptedCredential,
+						`oauth refresh failed: ${errorMsg}`,
+					)
+				: this.#tryDisableCredentialAtIfMatches(
+						provider,
+						index,
+						attemptedCredential,
+						`oauth refresh failed: ${errorMsg}`,
+					);
+		if (!disabled) {
+			logger.debug("OAuth refresh disable lost CAS; reloading after peer rotation", { provider, index });
+			await this.reload();
+			return "cas-lost";
+		}
+		return "disabled";
 	}
 
 	async #refreshOAuthCredential(
@@ -4885,8 +5190,31 @@ export class AuthStorage {
 						credentialId,
 						signal && refreshSignal ? AbortSignal.any([signal, refreshSignal]) : (signal ?? refreshSignal),
 					),
+				isDefinitiveFailure: error => AIError.isDefinitiveOAuthFailure(String(error)),
+				disabledCause: error => `oauth refresh failed: ${String(error)}`,
 			});
-			if (result.credential) return result.credential;
+			if (result.credential) {
+				if (result.refreshed) {
+					// We performed this refresh ourselves — trust the provider's new token
+					// even when its lifetime is shorter than the refresh skew (some grants
+					// are legitimately short-lived); the next resolve simply treats it as
+					// due for refresh again instead of rejecting a token we just minted.
+					if (Date.now() < result.credential.expires) return result.credential;
+				} else if (Date.now() + OAUTH_REFRESH_SKEW_MS < result.credential.expires) {
+					// Reloaded (not refreshed by us) credential — match #refreshOAuthCredential's
+					// freshness contract: a reload within the refresh skew still counts as
+					// needing refresh, so returning it here would make the final candidate pass
+					// refresh the same row again and replay the token we just failed on.
+					return result.credential;
+				}
+				throw new AIError.OAuthError(
+					`OAuth refresh did not produce a usable credential for provider: ${provider}`,
+					{
+						kind: "token-refresh",
+						provider,
+					},
+				);
+			}
 			throw new AIError.OAuthError(`OAuth credential no longer exists for provider: ${provider}`, {
 				kind: "token-refresh",
 				provider,
@@ -4918,9 +5246,9 @@ export class AuthStorage {
 						provider,
 					});
 				}
-				refreshPromise = customProvider.refreshToken(credential);
+				refreshPromise = customProvider.refreshToken(credential, signal);
 			} else {
-				refreshPromise = refreshOAuthToken(provider as OAuthProvider, credential);
+				refreshPromise = refreshOAuthToken(provider as OAuthProvider, credential, signal);
 			}
 		}
 		// Bound the refresh so a slow/hanging token endpoint cannot stall credential selection.
@@ -5172,58 +5500,29 @@ export class AuthStorage {
 			});
 
 			if (isDefinitiveFailure) {
-				// The credential at this index may have been rotated by another process between
-				// our in-memory snapshot and the refresh attempt: Anthropic rotates refresh
-				// tokens on every use, so the peer's success leaves our stored token invalid.
-				// Re-read the row from disk before marking it disabled — if the persisted
-				// refresh token has changed, the peer rotation succeeded and we should pick
-				// up the new credential instead of soft-deleting the row that the peer just
-				// updated.
-				if (credentialId !== undefined) {
-					const latestRow = this.#store.listAuthCredentials(provider).find(row => row.id === credentialId);
-					const latestCredential = latestRow?.credential;
-					if (latestCredential?.type === "oauth" && latestCredential.refresh !== selection.credential.refresh) {
-						logger.debug("OAuth refresh race detected; another process rotated token first", {
-							provider,
-							index: selection.index,
-							credentialId,
-						});
-						await this.reload();
-						if (allowFallback) return this.#resolveOAuthSelection(provider, sessionId, options);
-					}
-				}
-				// Permanently disable invalid credentials with an explicit cause for inspection/debugging.
-				// Use a CAS-style disable conditioned on the row still containing the stale credential
-				// we tried to refresh, so a peer rotation that lands between the pre-check above and
-				// this disable doesn't soft-delete the freshly-rotated row.
-				const disabled =
-					credentialId !== undefined
-						? this.#disableCredentialByIdIfMatches(
-								provider,
-								credentialId,
-								selection.credential,
-								`oauth refresh failed: ${errorMsg}`,
-							)
-						: this.#tryDisableCredentialAtIfMatches(
-								provider,
-								selection.index,
-								selection.credential,
-								`oauth refresh failed: ${errorMsg}`,
-							);
-				if (!disabled) {
-					logger.debug("OAuth refresh disable lost CAS; reloading after peer rotation", {
-						provider,
-						index: selection.index,
-					});
-					await this.reload();
+				const outcome = await this.#disableDefinitiveOAuthFailure(
+					provider,
+					credentialId,
+					selection.credential,
+					selection.index,
+					errorMsg,
+				);
+				if (outcome === "peer-rotated") {
 					if (allowFallback) return this.#resolveOAuthSelection(provider, sessionId, options);
+					return undefined;
 				}
+				if (outcome === "cas-lost") return undefined;
 				if (this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth")) {
 					if (allowFallback) return this.#resolveOAuthSelection(provider, sessionId, options);
 				}
 			} else {
 				// Block temporarily for transient failures (5 minutes)
-				this.#markCredentialBlocked(provider, providerKey, selection.index, Date.now() + 5 * 60 * 1000);
+				this.#markCredentialBlocked(
+					provider,
+					providerKey,
+					selection.index,
+					Date.now() + OAUTH_REFRESH_FAILURE_BACKOFF_MS,
+				);
 			}
 		}
 
@@ -5729,31 +6028,54 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Force-invalidate cached usage reports so the next fetch retrieves fresh
-	 * values from upstream providers. If `provider` is specified, only that
-	 * provider's credentials are invalidated; otherwise, all credentials in the
-	 * store are invalidated.
+	 * Expire cached reports for a provider after its runtime usage implementation changes.
+	 * This keeps a newly installed extension provider from serving a built-in snapshot.
 	 */
-	async invalidateUsageCache(provider?: string, signal?: AbortSignal): Promise<void> {
-		if (provider) {
-			this.#invalidateUsageReportCache(provider);
-		} else {
-			this.#usageCacheEpoch += 1;
-			const expired = Date.now() - 1;
-			try {
-				const credentials = this.#store.listAuthCredentials();
-				for (const entry of credentials) {
-					if (entry.credential.type !== "oauth") continue;
-					const cacheKey = this.#buildUsageReportCacheKey(
-						this.#buildUsageRequestForOauth(entry.provider, entry.credential),
-					);
-					const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
-					this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: expired });
-				}
-			} catch (err) {
-				logger.debug("Failed to list auth credentials for complete usage cache invalidation", { err });
+	#invalidateUsageReportCacheForProvider(provider: Provider): void {
+		this.#usageCacheEpoch += 1;
+		const expired = Date.now() - 1;
+		const prefix = `report:${this.#usageCacheProviderKey(provider)}:`;
+		if (this.#usageCache.deletePrefix(prefix)) return;
+		const cacheKeys = new Set(this.#usageReportCacheKeysByProvider.get(provider));
+		for (const entry of this.#getStoredCredentials(provider)) {
+			cacheKeys.add(
+				this.#buildUsageReportCacheKey({
+					provider,
+					credential: this.#buildUsageCredential(entry.credential),
+				}),
+			);
+		}
+		for (const cacheKey of cacheKeys) {
+			this.#usageCache.set(cacheKey, { value: null, expiresAt: expired });
+		}
+	}
+	/**
+	 * Drop report snapshots for a user-requested refresh so a failed probe
+	 * cannot replay the pre-invalidation last-good value. The persisted marker
+	 * makes the next same-provider refresh serial rather than a cold fan-out.
+	 */
+	async #clearUsageReportCache(provider?: string): Promise<void> {
+		this.#usageCacheEpoch += 1;
+		const prefix = provider ? `report:${this.#usageCacheProviderKey(provider)}:` : "report:";
+		if (!this.#usageCache.deletePrefix(prefix)) {
+			// Third-party stores may not support prefix deletion. Clear every active
+			// request key instead, including API-key and environment credentials.
+			const requests = await this.#collectUsageRequests();
+			for (const request of requests) {
+				if (provider && request.provider !== provider) continue;
+				this.#usageCache.set(this.#buildUsageReportCacheKey(request), { value: null, expiresAt: 0 });
 			}
 		}
+		if (!this.#fetchUsageReportsOverride && !this.#store.fetchUsageReports) this.#markUsageForceRefresh(provider);
+	}
+
+	/**
+	 * Discard cached usage reports before a user-requested refresh. The next
+	 * read probes upstream serially per provider; a failure reports no fresh
+	 * usage instead of replaying an invalidated last-good snapshot.
+	 */
+	async invalidateUsageCache(provider?: string, signal?: AbortSignal): Promise<void> {
+		await this.#clearUsageReportCache(provider);
 
 		if (this.#store.invalidateUsageCache) {
 			await this.#store.invalidateUsageCache(signal).catch(err => {
@@ -6075,8 +6397,10 @@ export class AuthStorage {
 	 * - usage-limit / account-rate-limit error → {@link AuthStorage.markUsageLimitReached}
 	 *   (temporary block via its own backoff — default plus server usage-report
 	 *   reset; sticky left intact so the next resolve re-ranks around the block).
-	 * - account-scoped policy denial → temporarily block that account without
-	 *   marking its credential suspect, then rotate through eligible siblings.
+	 * - exact model-entitlement denial (Codex ChatGPT account or Cursor plan) →
+	 *   temporarily block only that requested model, then rotate.
+	 * - other account-scoped policy denial → temporarily block that account
+	 *   without marking its credential suspect, then rotate through siblings.
 	 * - otherwise (hard 401 / auth failure) → mark the credential suspect (or
 	 *   reload when no broker hook is wired) and block it, then drop matching
 	 *   sticky state.
@@ -6091,7 +6415,9 @@ export class AuthStorage {
 		const error = options?.error;
 		const status = AIError.status(error);
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
-		if (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message)) {
+		const exactCursorModelPolicy = AIError.isCursorPlanAccountPolicyError(error, provider);
+		const accountPolicy = exactCursorModelPolicy || AIError.isAccountPolicyError(error);
+		if (!accountPolicy && (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message))) {
 			// Thread the provider-specified reset window (e.g. Devin "Your limit
 			// will reset in 13 minutes") into the block duration so the credential
 			// is not reselected and hammered while the cap remains active.
@@ -6113,8 +6439,25 @@ export class AuthStorage {
 		});
 		if (!sessionCredential) return false;
 
-		if (AIError.isAccountPolicyError(error)) {
-			const routing = this.#credentialBlockRouting(provider, sessionCredential.type, options?.modelId);
+		const deniedModel = AIError.codexChatGPTAccountPolicyModel(error);
+		const exactCodexModelPolicy =
+			deniedModel !== undefined && AIError.isCodexChatGPTAccountPolicyError(error, provider, options?.modelId);
+		const exactModelPolicy = exactCodexModelPolicy || exactCursorModelPolicy;
+		// The exact sentence is provider-controlled input. A non-Codex provider,
+		// absent request model, or mismatched model must not turn it into either a
+		// global block or a hard-auth invalidation.
+		if (deniedModel !== undefined && !exactCodexModelPolicy) return false;
+		if (exactModelPolicy || accountPolicy) {
+			const modelPolicyScope = exactModelPolicy
+				? modelAccountPolicyBlockScope(provider, options?.modelId)
+				: undefined;
+			if (exactModelPolicy && modelPolicyScope === undefined) return false;
+			const routing = this.#credentialBlockRouting(
+				provider,
+				sessionCredential.type,
+				options?.modelId,
+				modelPolicyScope,
+			);
 			return this.#blockCredentialForRotation(
 				provider,
 				sessionCredential.type,
