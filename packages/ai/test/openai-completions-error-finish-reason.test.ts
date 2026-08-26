@@ -158,7 +158,7 @@ describe("premature stream closure", () => {
 
 	it("still retries a genuinely empty close via the empty-completion path", async () => {
 		// Zero content + no finish_reason is the flaky-gateway empty completion:
-		// it stays a clean `stop` so withEmptyCompletionRetry can re-sample
+		// it stays a clean `stop` so withReplaySafeStreamRetry can re-sample
 		// instead of failing outright.
 		let attempts = 0;
 		async function fetchMock(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
