@@ -1498,18 +1498,27 @@ describe("listClaudePluginRoots", () => {
 
 describe("discoverAgents plugin precedence", () => {
 	let tempDir: string;
+	let originalHome: string | undefined;
 	let originalClaudeConfigDir: string | undefined;
 
 	beforeEach(async () => {
 		clearClaudePluginRootsCache();
 		clearFsCache();
+		originalHome = process.env.HOME;
 		originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 		delete process.env.CLAUDE_CONFIG_DIR;
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "claude-plugins-precedence-test-"));
+		// Redirect user-scope discovery at the fixture: without this the real
+		// ~/.claude plugin registry leaks in and can shadow the project fixture.
+		process.env.HOME = tempDir;
+		vi.spyOn(os, "homedir").mockReturnValue(tempDir);
 	});
 
 	afterEach(async () => {
 		clearClaudePluginRootsCache();
+		clearFsCache();
+		vi.restoreAllMocks();
+		restoreEnvValue("HOME", originalHome);
 		restoreEnvValue("CLAUDE_CONFIG_DIR", originalClaudeConfigDir);
 		await removeWithRetries(tempDir);
 	});
