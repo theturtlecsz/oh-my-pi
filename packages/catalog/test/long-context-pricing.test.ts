@@ -11,7 +11,7 @@ function usage(fields: Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrit
 }
 
 describe("long-context pricing tier", () => {
-	// GPT-5.6 Sol: $5/$30 standard, $10/$45 above 272K input tokens; the tier
+	// GPT-5.6 Sol: $4/$20 standard, $10/$45 above 272K input tokens; the tier
 	// rate applies to the ENTIRE request once total prompt input (input +
 	// cacheRead + cacheWrite) crosses the threshold, matching OpenAI's billing.
 	const sol = getBundledModel("openai", "gpt-5.6-sol");
@@ -19,9 +19,9 @@ describe("long-context pricing tier", () => {
 	it("bills at standard rates at or below the 272K input threshold", () => {
 		const atThreshold = usage({ input: 72_000, output: 10_000, cacheRead: 200_000, cacheWrite: 0 });
 		calculateCost(sol, atThreshold);
-		expect(atThreshold.cost.input).toBeCloseTo((5 / 1e6) * 72_000, 10);
-		expect(atThreshold.cost.output).toBeCloseTo((30 / 1e6) * 10_000, 10);
-		expect(atThreshold.cost.cacheRead).toBeCloseTo((0.5 / 1e6) * 200_000, 10);
+		expect(atThreshold.cost.input).toBeCloseTo((4 / 1e6) * 72_000, 10);
+		expect(atThreshold.cost.output).toBeCloseTo((20 / 1e6) * 10_000, 10);
+		expect(atThreshold.cost.cacheRead).toBeCloseTo((0.4 / 1e6) * 200_000, 10);
 	});
 
 	it("bills the whole request at tier rates once prompt input crosses the threshold", () => {
