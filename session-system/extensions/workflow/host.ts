@@ -75,6 +75,7 @@ import {
 	type StagedRiderBatch,
 } from "./rider-batch";
 import { registerSessionLedger } from "./session-ledger";
+import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
 
 /** Tool actions — the canonical action set for the `work` tool. */
 export type CanonicalAction =
@@ -85,6 +86,7 @@ export type CanonicalAction =
 	| "status"
 	| "list_work"
 	| "append_evidence"
+	| "run_audit"
 	| "create_work"
 	| "queue_work"
 	| "revise_work"
@@ -95,10 +97,17 @@ export type CanonicalAction =
 
 const ACTIONS = [
 	"get_work", "tree", "waiting", "my_now", "status", "list_work",
-	"append_evidence", "create_work", "queue_work", "revise_work",
+	"append_evidence", "run_audit", "create_work", "queue_work", "revise_work",
 	"set_now", "record_health", "waive_delivery", "cancel_work",
 ] as const;
 const ACTION_ENUM: [string, ...string[]] = [...ACTIONS];
+const LIVE_ATTEMPT_STATES: Record<string, true> = {
+	active: true,
+	audit_ready: true,
+	auditor_in_flight: true,
+	audited: true,
+	closeout_requested: true,
+};
 const TOOL_NAME = "work";
 const ADMIN_COMMAND = "work";
 const TOOL_LABEL = "Work Ledger";
@@ -198,28 +207,78 @@ export function renderPlanPacket(packet: PlanPacket | undefined): string[] {
 	];
 }
 
-/** OMP-50 get_work tail: the sealed auditor task, byte-for-byte, never truncated.
- *  The model copies THIS body into the one auditor task — no transcript reads,
- *  no reconstruction; the service refuses any launch whose bytes differ. */
-export function renderAuditTask(task: SealedAuditTask | undefined, attempt?: CloseAttemptSnapshot): string[] {
-	if (!attempt) {
-		return ["AUDIT TASK: no attempt — owner /summary must begin one"];
+/** Render the deterministic three-line next-action banner for live close attempts (OMP-168). */
+export function renderNextActionBanner(
+	workKey: string,
+	snapshot: CloseAttemptSnapshot | undefined,
+	summaryAuthorized: boolean,
+): string[] {
+	if (!snapshot) return [];
+	switch (snapshot.state) {
+		case "active":
+			return [
+				"STATUS: CLOSE ATTEMPT active",
+				`NEXT REQUIRED ACTION: work action:"append_evidence", work:"${workKey}", kind:"verification"`,
+				`BLOCKED ACTIONS: run_audit, append_evidence kind:"closeout", /done`,
+			];
+		case "audit_ready":
+			return [
+				"STATUS: CLOSE ATTEMPT audit_ready",
+				`NEXT REQUIRED ACTION: work action:"run_audit", work:"${workKey}"`,
+				`BLOCKED ACTIONS: append_evidence kind:"closeout", /done`,
+			];
+		case "auditor_in_flight":
+			return [
+				"STATUS: CLOSE ATTEMPT auditor_in_flight",
+				"NEXT REQUIRED ACTION: wait for the current native run to settle and use get_work only for recovery",
+				"BLOCKED ACTIONS: run_audit, append_evidence, /done",
+			];
+		case "audited":
+			if (!summaryAuthorized) {
+				return [
+					"STATUS: CLOSE ATTEMPT audited",
+					"NEXT REQUIRED ACTION: owner /summary must be entered in this session to authorize closeout review",
+					`BLOCKED ACTIONS: append_evidence kind:"closeout", /done`,
+				];
+			}
+			return [
+				"STATUS: CLOSE ATTEMPT audited",
+				`NEXT REQUIRED ACTION: work action:"append_evidence", work:"${workKey}", kind:"closeout"`,
+				"BLOCKED ACTIONS: run_audit, /done",
+			];
+		case "closeout_requested":
+			return [
+				"STATUS: CLOSE ATTEMPT closeout_requested",
+				"NEXT REQUIRED ACTION: owner /done closes this work",
+				"BLOCKED ACTIONS: run_audit, append_evidence",
+			];
+		default:
+			return [];
 	}
-	if (attempt.state === "active") {
-		return ["AUDIT TASK: attempt active (unsealed) — append verification and seal the manifest with /summary; do not spawn"];
-	}
-	if (attempt.state === "audit_ready" && task && task.attemptId === attempt.attemptId) {
-		return [
-			`AUDIT TASK (sealed, attempt ${task.attemptId}, state ${task.attemptState}) — spawn ONE auditor task whose text is EXACTLY the body below, byte-for-byte; task sha256 ${task.taskSha256}:`,
-			"----- SEALED AUDITOR TASK BEGIN -----",
-			task.taskBody,
-			"----- SEALED AUDITOR TASK END -----",
-		];
-	}
-	if (["auditor_in_flight", "audited", "closeout_requested", "remediation_required", "blocked", "budget_exhausted", "superseded", "completed"].includes(attempt.state)) {
-		return [`AUDIT TASK: attempt ${attempt.state} (${attempt.nextAction}) — do not spawn`];
-	}
-	return [`AUDIT TASK: integrity error (attempt ${attempt.state}) — state invariant violated; do not spawn`];
+}
+
+/** Compact re-entry digest when a live close attempt already existed before /summary (OMP-168). */
+export function renderSummaryResumeDigest(
+	workKey: string,
+	snapshot: CloseAttemptSnapshot | undefined,
+): string {
+	const banner = renderNextActionBanner(workKey, snapshot, true);
+	const bannerText = banner.length > 0 ? `${banner.join("\n")}\n\n` : "";
+	return [
+		`${bannerText}# SUMMARY RESUME (${workKey})`,
+		"",
+		"A live close attempt is already in progress. Satisfied steps must NOT be repeated.",
+		`Call \`work action:"get_work", work:"${workKey}"\` and execute the single NEXT REQUIRED ACTION.`,
+		"",
+		'When appending closeout evidence (kind: "closeout"), format the review body with these sections:',
+		'1. Verbatim `work action:"my_now"` completion tree',
+		"2. MOVED — plain-language decisions and household-visible results",
+		"3. PROOF — durable issue evidence and exact verification commands/counts",
+		'4. UNVERIFIED / BLOCKED — real gaps or explicit "none"',
+		"5. NEXT SESSION — standing goal, starting state, queue sources in priority order, first action, gates, and stop conditions (loop charter)",
+		"",
+		"Do not post second handoff files or separate prompt files; the loop charter lives in the closeout receipt.",
+	].join("\n");
 }
 
 function sectionItems(content: string, heading: "Approach" | "Verification"): string[] {
@@ -722,7 +781,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		return outcome.status === "applied";
 	}
 
-	async function authorizeSummary(ctx: ExtensionContext): Promise<void> {
+	async function authorizeSummary(ctx: ExtensionContext): Promise<{ authorized: boolean; reason?: string }> {
 		// Review writes stay locked until a close attempt is actually live: a
 		// refused begin must not arm verification evidence (OMP-127).
 		summaryBlockReason = undefined;
@@ -735,7 +794,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		if (!now) {
 			summaryBlockReason = "no NOW item is selected";
 			ctx.ui.notify("No NOW is selected. Review can run, but /done stays blocked; run /intake first.", "warning");
-			return;
+			return { authorized: false, reason: summaryBlockReason };
 		}
 		try {
 			const gate = await backend.summaryGate(now, carrier(), hooksFor(ctx));
@@ -743,7 +802,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				summaryBlockReason = gate.reason;
 				await recordSummaryRefusal(now, gate.reason);
 				ctx.ui.notify(gate.reason, "warning");
-				return;
+				return { authorized: false, reason: summaryBlockReason };
 			}
 			mergeCarrier(gate.carrier);
 			if (gate.warning) {
@@ -756,14 +815,16 @@ export function createWorkflowHost(cfg: HostConfig) {
 				// so every state mutation + awaited persistence precedes it.
 				recordDeliveredOutcome(`summary gate passed for ${now.key} — candidate finalized with warnings, awaiting verdict`);
 				footer(ctx);
-				return;
+				return { authorized: false, reason: summaryBlockReason };
 			}
 			if (!gate.planHash) {
 				summaryBlockReason = "the approved plan hash is missing";
 				await recordSummaryRefusal(now, "the approved plan hash is missing");
-				return;
+				return { authorized: false, reason: summaryBlockReason };
 			}
-			if (!(await beginAttempt(now, ctx, gate.auditBaseCommit, gate.auditBaseDirtyPaths))) return;
+			if (!(await beginAttempt(now, ctx, gate.auditBaseCommit, gate.auditBaseDirtyPaths))) {
+				return { authorized: false, reason: summaryBlockReason ?? "close attempt could not be begun" };
+			}
 			summaryAuthorized = true;
 			state.summaryRefusal = undefined; // OMP-137: a successful begin/resume resolves the refusal
 			state.executingIssue = gate.issue;
@@ -773,10 +834,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 			await saveCache();
 			recordDeliveredOutcome(`summary gate passed for ${now.key} — candidate finalized, awaiting verdict`);
 			footer(ctx);
+			return { authorized: true };
 		} catch (error) {
 			summaryBlockReason = `workflow state could not be loaded (${String(error)})`;
 			await recordSummaryRefusal(now, `workflow state could not be loaded (${String(error)})`);
 			ctx.ui.notify(`Could not load ${now.key} workflow state (${String(error)}). Review can run, but /done stays blocked.`, "warning");
+			return { authorized: false, reason: summaryBlockReason };
 		}
 	}
 
@@ -1258,9 +1321,42 @@ export function createWorkflowHost(cfg: HostConfig) {
 				planTarget = now;
 			}
 			// Exact normalized owner /summary and /skill:summary commands re-authorize
-			// before prompt expansion or streaming (OMP-47).
-			if (event.originalText === "/summary" || event.originalText === "/skill:summary") await authorizeSummary(ctx);
-			else if (event.originalText === "/done") closeoutAuthorized = true;
+			// before prompt expansion or streaming (OMP-47, OMP-168).
+			if (event.originalText === "/summary" || event.originalText === "/skill:summary") {
+				const now = currentNowRef();
+				let preSnapshot: CloseAttemptSnapshot | undefined;
+				if (now) {
+					try {
+						const preDetail = await backend.issueDetail(now.key);
+						preSnapshot = preDetail.attemptSnapshot;
+					} catch (error) {
+						return {
+							text: `SUMMARY REFUSED: workflow state could not be read (${String(error)}). Call get_work and resolve that blocker; do not run review, health, triage, verification, or closeout writes.`,
+						};
+					}
+				}
+				const hadLiveAttempt = Boolean(preSnapshot && LIVE_ATTEMPT_STATES[preSnapshot.state] === true);
+				const auth = await authorizeSummary(ctx);
+				if (!auth.authorized) {
+					return {
+						text: `SUMMARY REFUSED: ${auth.reason ?? "authorization failed"}. Call get_work and resolve that blocker; do not run review, health, triage, verification, or closeout writes.`,
+					};
+				}
+				if (hadLiveAttempt && now) {
+					try {
+						const postDetail = await backend.issueDetail(now.key);
+						return {
+							text: renderSummaryResumeDigest(now.key, postDetail.attemptSnapshot),
+						};
+					} catch (error) {
+						return {
+							text: `SUMMARY RESUME (${now.key}): live attempt state could not be refreshed (${String(error)}). Call get_work and resolve that blocker; do not repeat satisfied steps.`,
+						};
+					}
+				}
+			} else if (event.originalText === "/done") {
+				closeoutAuthorized = true;
+			}
 			return undefined;
 		});
 		pi.on("message_start", async (event, ctx) => {
@@ -1748,7 +1844,24 @@ export function createWorkflowHost(cfg: HostConfig) {
 						details: { ...result.details, ...(newOps.length > 0 ? { opIds: newOps } : {}) },
 					};
 				};
-				const deny = (msg: string) => finalize({ content: [{ type: "text" as const, text: msg }], details: { success: false } });
+				const deny = async (msg: string) => {
+					let text = msg;
+					if (!msg.startsWith("CONFIRM REQUIRED")) {
+						const workTarget = params.work || currentNowRef()?.key;
+						if (workTarget) {
+							try {
+								const detail = await backend.issueDetail(workTarget);
+								const banner = renderNextActionBanner(workTarget, detail.attemptSnapshot, summaryAuthorized);
+								if (banner.length > 0) {
+									text = `${banner.join("\n")}\n\n${msg}`;
+								}
+							} catch {
+								// degrade to original refusal
+							}
+						}
+					}
+					return finalize({ content: [{ type: "text" as const, text }], details: { success: false } });
+				};
 				const okText = (text: string, details: Record<string, unknown> = {}) =>
 					finalize({ content: [{ type: "text" as const, text }], details: { success: true, ...details } });
 				if (!(ACTIONS as readonly string[]).includes(params.action)) return deny(`unknown action "${params.action}"`);
@@ -1824,8 +1937,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 						case "get_work": {
 							if (!params.work) return deny("work key required");
 							const i = await backend.issueDetail(params.work);
+							const banner = renderNextActionBanner(params.work, i.attemptSnapshot, summaryAuthorized);
 							return okText(
 								[
+									...banner,
 									`${params.work} ${i.title}`,
 									`state: ${i.state} · project: ${i.project ?? "none"} · labels: ${i.labels.join(",") || "none"}`,
 									i.description ?? "",
@@ -1835,9 +1950,85 @@ export function createWorkflowHost(cfg: HostConfig) {
 										? [`CLOSE ATTEMPT: state ${i.attemptSnapshot.state} · candidate ${i.attemptSnapshot.candidateId ?? "none"} · commit ${i.attemptSnapshot.candidateCommit ?? "none"} · launches left ${i.attemptSnapshot.remainingLaunches} · reports left ${i.attemptSnapshot.remainingReports}`]
 										: []),
 									...renderPlanPacket(i.planPacket),
-									...renderAuditTask(i.auditTask, i.attemptSnapshot),
 								].join("\n"),
 							);
+						}
+						case "run_audit": {
+							if (!params.work) return deny("work key required");
+							if (!ownerSession(ctx)) {
+								return deny(`REFUSED — ${TOOL_NAME} writes are owner-session only (task depth 0); a subagent holds no bearer.`);
+							}
+							if (!summaryAuthorized) {
+								return deny("REFUSED — a closeout audit requires Chris to literally enter /summary in this owner session.");
+							}
+							const now = currentNowRef();
+							if (!now || now.key !== params.work) {
+								return deny(`REFUSED — named work item "${params.work}" must be current NOW ("${now?.key ?? "none"}").`);
+							}
+							const issue = await backend.issueDetail(params.work);
+							const snapshot = issue.attemptSnapshot;
+							if (!snapshot || snapshot.state !== "audit_ready") {
+								return deny(`REFUSED — ${params.work} close attempt state is "${snapshot?.state ?? "none"}" (expected "audit_ready").`);
+							}
+							if (!issue.auditTask || issue.auditTask.attemptId !== snapshot.attemptId) {
+								return deny(`REFUSED — ${params.work} has no sealed audit task matching live attempt ${snapshot.attemptId}.`);
+							}
+							let runner: NativeAuditRunner;
+							try {
+								runner = await prepareNativeAuditRunner(ctx);
+							} catch (error) {
+								return deny(`REFUSED — auditor runner preparation failed: ${error instanceof Error ? error.message : String(error)}`);
+							}
+
+							const reservation = await backend.reserveAuditorLaunch(params.work, issue.auditTask.taskSha256, _id);
+							if (reservation.status === "refused" || !reservation.launchId) {
+								if (reservation.event?.requiresDelivery) {
+									queueCheckpointDelivery(pi, backend, reservation.event, notice => {
+										pendingNotices.push(`[${TOOL_NAME}] reserve checkpoint delivery failed (${notice})`);
+									});
+								}
+								return deny(`Audit launch refused by the ledger:\n${reservation.event?.renderedText ?? "unknown reservation refusal"}`);
+							}
+
+							let auditRun: NativeAuditRunResult;
+							try {
+								auditRun = await runner(issue.auditTask.taskBody, snapshot.attemptId, _signal);
+							} catch (error) {
+								auditRun = { started: false, error: String(error) };
+							}
+
+							if (!auditRun.started) {
+								try {
+									const cancelOutcome = await backend.cancelAuditorLaunch(params.work, reservation.launchId);
+									if (cancelOutcome.event?.requiresDelivery) {
+										queueCheckpointDelivery(pi, backend, cancelOutcome.event, notice => {
+											pendingNotices.push(`[${TOOL_NAME}] cancel checkpoint delivery failed (${notice})`);
+										});
+									}
+								} catch (error) {
+									// cancel failed
+								}
+								return deny(`Auditor launch failed before start: ${auditRun.error ?? "runner cancelled before dispatch"}`);
+							}
+
+							const transportPayload = auditRun.payload && auditRun.payload.trim().length > 0 ? { payload: auditRun.payload } : { failed: true };
+							const settleOutcome = await backend.settleAuditorLaunch(params.work, reservation.launchId, transportPayload);
+							if (settleOutcome.event?.requiresDelivery) {
+								queueCheckpointDelivery(pi, backend, settleOutcome.event, notice => {
+									pendingNotices.push(`[${TOOL_NAME}] settle checkpoint delivery failed (${notice})`);
+								});
+							}
+
+							if (settleOutcome.status === "refused") {
+								return deny(`Audit launch settlement refused by ledger:\n${settleOutcome.event.renderedText}`);
+							}
+
+							if (settleOutcome.verdict === "NEEDS_FIX" || settleOutcome.verdict === "BLOCKED") {
+								const reportSuffix = auditRun.payload ? `\n\n## Auditor Report\n${auditRun.payload}` : "";
+								return okText(`${settleOutcome.event.renderedText}${reportSuffix}`);
+							}
+
+							return okText(settleOutcome.event.renderedText);
 						}
 						case "append_evidence": {
 							if (!params.work || !params.body) return deny("work key and body required");
@@ -1894,7 +2085,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 									}
 									if (sealed.status === "applied") {
 										const eventText = sealed.event?.renderedText ? `\n\n${sealed.event.renderedText}` : "";
-										return okText(`${kind} receipt recorded on ${issue.key}; audit manifest sealed — read the AUDIT TASK from work get_work and spawn ONE auditor with those exact bytes. Yield the turn now before the next close step.${eventText}`);
+										return okText(`${kind} receipt recorded on ${issue.key}; audit manifest sealed — run native audit with work action:"run_audit", work:"${issue.key}".${eventText}`);
 									}
 									return okText(`${kind} receipt recorded on ${issue.key}; manifest not sealed — ${sealed.event.reasonCode}: ${sealed.event.renderedText}`);
 								} catch (error) {

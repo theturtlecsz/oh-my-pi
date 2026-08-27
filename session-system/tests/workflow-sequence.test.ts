@@ -346,42 +346,23 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.dirtyAfterDriftSummary, "drifted summary mutates no working tree").toBe("");
 	});
 
-	test("the ledger-sealed audit task drives one exact-byte bounded launch", () => {
+	test("the ledger-sealed audit task drives one exact-byte bounded launch (OMP-168)", () => {
 		const out = run("audit");
 		// Pre-summary close-ritual writes are refused.
-		expect(out.unauthorized, "audit is a close-ritual kind").toContain("literally enter /summary");
+		expect(out.unauthorized, "closeout is a close-ritual kind").toContain("literally enter /summary");
 		// The literal /summary began ONE ledger attempt with host-computed identity.
 		expect(out.beginCallsAfterNearMiss, "similarly prefixed skills do not authorize closeout").toBe(0);
 		expect(out.beginCallsAfterRewrite, "input rewrites cannot mint closeout authority").toBe(0);
 		expect(out.beginCallsBeforeSummaryMessage, "/skill:summary authorizes before prompt streaming").toBe(1);
 		expect(out.beginCalls).toBe(1);
 		expect(record(out.beginSession)).toEqual({ hasStartCommit: true, hasDiffSha: true, hasAuthorization: true });
-		// Verification append sealed the manifest; get_work renders the exact task.
+		// Verification append sealed the manifest; get_work renders the next action banner without task body bytes.
 		expect(out.verify).toContain("audit manifest sealed");
-		expect(out.getWork).toContain("AUDIT TASK (sealed");
-		expect(out.sealedBodyPresent).toBe(true);
-		expect(out.sealedHasManifest, "the Final diff carries the git-range-sha256 manifest").toBe(true);
-		// Changed bytes refuse BEFORE spawn with zero slot burn; schema refused.
-		expect(out.wrongBlocked).toBe(true);
-		expect(String(out.wrongReason)).toContain("manifest_task_mismatch");
-		expect(out.wrongRefusalDelivered).toBe(true);
-		expect(out.launchCountAfterWrong).toBe(0);
-		expect(out.schemaBlocked).toBe(true);
-		// A pre-start Task failure cancels its reservation and preserves budget.
-		expect(out.cancelCalls).toBe(1);
-		expect(out.cancelledLaunchCount).toBe(1);
-		expect(out.effectiveLaunchesAfterCancel).toBe(0);
-		expect(out.cancelAppended).toBe(true);
-		expect(out.cancelCallsAfterBlocked).toBe(2);
-		expect(out.effectiveLaunchesAfterBlocked).toBe(0);
-		// Exact bytes reserve the next physical launch and the spawn proceeds.
-		expect(out.exactBlocked).toBe(false);
-		expect(out.launchCountAfterExact).toBe(3);
-		// The tool result settled with the UNTOUCHED transport payload; the
-		// service minted the audit receipt itself and the outcome reached the
-		// model in-band plus the owner as an attested checkpoint.
+		expect(out.nextActionInGetWork).toBe(true);
+		expect(out.noSealedTaskBytes).toBe(true);
+
+		// The service minted the audit receipt itself and the outcome reached the owner as an attested checkpoint.
 		expect(out.settlePayload).toContain("VERDICT: PASS");
-		expect(String(out.settleAppended)).toContain("launch settled by the ledger");
 		expect(out.attemptState).toBe("audited");
 		expect(out.auditIssuer).toBe("work-service/auditor-settle");
 		expect(out.auditVerdict).toBe("PASS");
@@ -510,14 +491,22 @@ describe("HOME-122 workflow sequence", () => {
 		expect(readout).toContain("\\# FAKE TITLE");
 	});
 
-	test("get_work renders exhaustive audit task states without ambiguous placeholder (OMP-140)", () => {
+	test("get_work renders exhaustive next action banners for live states (OMP-168)", () => {
 		const out = run("omp140-audit-states");
-		expect(String(out.noAttemptGetWork)).toContain("AUDIT TASK: no attempt — owner /summary must begin one");
-		expect(String(out.activeGetWork)).toContain("AUDIT TASK: attempt active (unsealed) — append verification and seal the manifest with /summary; do not spawn");
-		expect(String(out.auditReadyGetWork)).toContain("AUDIT TASK (sealed, attempt");
-		expect(String(out.auditReadyGetWork)).toContain("spawn ONE auditor task whose text is EXACTLY the body below");
-		expect(String(out.auditedGetWork)).toContain("AUDIT TASK: attempt audited (PASS audit saved; enter /summary to resume close review) — do not spawn");
-		expect(String(out.closeoutRequestedGetWork)).toContain("AUDIT TASK: attempt closeout_requested (owner /done closes) — do not spawn");
+		expect(String(out.noAttemptGetWork)).not.toContain("STATUS: CLOSE ATTEMPT");
+		expect(String(out.noAttemptGetWork)).not.toContain("SEALED AUDITOR TASK");
+		expect(String(out.activeGetWork)).toContain("STATUS: CLOSE ATTEMPT active");
+		expect(String(out.activeGetWork)).toContain('NEXT REQUIRED ACTION: work action:"append_evidence", work:"HOME-1", kind:"verification"');
+		expect(String(out.activeGetWork)).toContain('BLOCKED ACTIONS: run_audit, append_evidence kind:"closeout", /done');
+		expect(String(out.auditReadyGetWork)).toContain("STATUS: CLOSE ATTEMPT audit_ready");
+		expect(String(out.auditReadyGetWork)).toContain('NEXT REQUIRED ACTION: work action:"run_audit", work:"HOME-1"');
+		expect(String(out.auditReadyGetWork)).toContain('BLOCKED ACTIONS: append_evidence kind:"closeout", /done');
+		expect(String(out.auditedGetWork)).toContain("STATUS: CLOSE ATTEMPT audited");
+		expect(String(out.auditedGetWork)).toContain('NEXT REQUIRED ACTION: work action:"append_evidence", work:"HOME-1", kind:"closeout"');
+		expect(String(out.auditedGetWork)).toContain("BLOCKED ACTIONS: run_audit, /done");
+		expect(String(out.closeoutRequestedGetWork)).toContain("STATUS: CLOSE ATTEMPT closeout_requested");
+		expect(String(out.closeoutRequestedGetWork)).toContain("NEXT REQUIRED ACTION: owner /done closes this work");
+		expect(String(out.closeoutRequestedGetWork)).toContain("BLOCKED ACTIONS: run_audit, append_evidence");
 	});
 
 	test("audited attempt survives restart, resumes cleanly without audit duplication, and enables fresh-session /done (OMP-140)", () => {
@@ -578,9 +567,9 @@ describe("OMP-154 ledger reads and closeout recovery", () => {
 		expect(detail).toContain(`verification 2026-08-26T05:01:00 candidate ${candidate} revision ${revision} ${"2".repeat(12)}`);
 		expect(detail).toContain(`audit 2026-08-26T05:02:00 candidate ${candidate} revision ${revision} PASS ${"5".repeat(12)}`);
 		expect(detail).toContain(`CLOSE ATTEMPT: state audit_ready · candidate ${candidate} · commit ${commit} · launches left 3 · reports left 2`);
-		// Sealed auditor task bytes are extracted and compared whole.
-		const sealedBody = detail.split("----- SEALED AUDITOR TASK BEGIN -----\n")[1]?.split("\n----- SEALED AUDITOR TASK END -----")[0];
-		expect(sealedBody).toBe("AUDIT BODY BYTES");
+		expect(detail).toContain("STATUS: CLOSE ATTEMPT audit_ready");
+		expect(detail).toContain('NEXT REQUIRED ACTION: work action:"run_audit", work:"HOME-1"');
+		expect(detail).not.toContain("----- SEALED AUDITOR TASK BEGIN -----");
 	});
 
 	test("allows bounded ledger reads from a subagent while refusing writes", () => {

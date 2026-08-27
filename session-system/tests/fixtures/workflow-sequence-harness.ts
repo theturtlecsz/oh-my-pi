@@ -801,23 +801,13 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 }) as typeof fetch;
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
-const EXTENSION_FILES =
-	mode === "audit"
-		? ["session-system/extensions/work-now.ts", "session-system/extensions/model-bookends.ts"]
-		: ["session-system/extensions/work-now.ts"];
+const EXTENSION_FILES = ["session-system/extensions/work-now.ts"];
 const loaded = await loadExtensions(EXTENSION_FILES.map(file => path.join(repoRoot, file)), probe);
-if (loaded.errors.length > 0) throw new Error(loaded.errors.map(error => error.error).join("; "));
+if (loaded.errors.length > 0) throw new Error(loaded.errors.map(e => e.error).join("; "));
 const extension = loaded.extensions[0];
 if (!extension) throw new Error("work-now extension did not load");
-if (mode === "audit") {
-	extension.handlers.get("input")?.unshift(async (event: unknown) => {
-		const input = event as { text?: string };
-		return input.text === "/unrelated" ? { text: "/skill:summary" } : undefined;
-	});
-}
 const tool = extension.tools.get("work");
-if (!tool) throw new Error("work tool missing");
-
+if (!tool) throw new Error("work tool did not register");
 const uiCalls: string[] = [];
 let currentSessionId = "session-test";
 const statuses: string[] = [];
@@ -1596,10 +1586,6 @@ if (mode === "intake") {
 	await setNow();
 	out.callsAfterSetNow = [...statusCalls];
 } else if (mode === "audit") {
-	// OMP-47 sealed-flow end-to-end: the ledger seals the auditor task after
-	// verification; get_work renders it byte-for-byte; model-bookends reserves
-	// one launch against the EXACT bytes and settles with the untouched
-	// transport payload; the service mints the audit receipt itself.
 	await setNow();
 	await approve(planA);
 	const REPORT = [
@@ -1620,8 +1606,8 @@ if (mode === "intake") {
 		"REMAINING QUESTIONS",
 		"none",
 	].join("\n");
-	// Pre-summary close-ritual writes are refused (audit is not even a kind).
-	out.unauthorized = await execute({ action: "append_evidence", work: "HOME-1", kind: "audit", body: REPORT });
+	// Pre-summary close-ritual writes are refused.
+	out.unauthorized = await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: REPORT });
 	await runner.emitInput("/unrelated", undefined, "interactive");
 	out.beginCallsAfterRewrite = beginCalls.length;
 	for (const nearMiss of ["/skill:summary-report", "/skill:summary anything", "/summary pasted prose", "/summary\npasted"]) {
@@ -1639,87 +1625,48 @@ if (mode === "intake") {
 	out.verify = await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "bun test → pass" });
 	const getWork = await execute({ action: "get_work", work: "HOME-1" });
 	out.getWork = getWork;
-	const sealedBody = /----- SEALED AUDITOR TASK BEGIN -----\n([\s\S]*?)\n----- SEALED AUDITOR TASK END -----/.exec(getWork)?.[1] ?? "";
-	out.sealedBodyPresent = sealedBody.length > 0;
-	out.sealedHasManifest = sealedBody.includes("Mode: git-range-sha256") && /Final commit: [0-9a-f]{40}/.test(sealedBody);
-	// Wrong bytes: blocked BEFORE spawn, zero slot burn.
-	const wrong = await runner.emitToolCall({
-		type: "tool_call",
-		toolName: "task",
-		toolCallId: "aud-0",
-		input: { context: "audit", tasks: [{ agent: "auditor", task: `${sealedBody} tampered` }] },
-	} as never);
-	out.wrongBlocked = wrong && typeof wrong === "object" && "block" in wrong ? Boolean(wrong.block) : false;
-	out.wrongReason = wrong && typeof wrong === "object" && "reason" in wrong ? String(wrong.reason) : "";
-	out.wrongRefusalDelivered = deliveredMessages.some(
-		m => m.customType === "close-attempt-checkpoint" && typeof m.content === "string" && m.content.includes("manifest_task_mismatch")
-	);
-	out.launchCountAfterWrong = attempts.at(-1)?.launch_count ?? -1;
-	// outputSchema is refused.
-	const schema = await runner.emitToolCall({
-		type: "tool_call",
-		toolName: "task",
-		toolCallId: "aud-s",
-		input: { context: "audit", tasks: [{ agent: "auditor", task: sealedBody, outputSchema: { type: "object" } }] },
-	} as never);
-	out.schemaBlocked = schema && typeof schema === "object" && "block" in schema ? Boolean(schema.block) : false;
-	// A task result with no started spawn cancels its reservation without budget.
-	await runner.emitToolCall({
-		type: "tool_call",
-		toolName: "task",
-		toolCallId: "aud-cancel",
-		input: { context: "audit", tasks: [{ agent: "auditor", task: sealedBody }] },
-	} as never);
-	const cancelled = await runner.emitToolResult({
-		type: "tool_result",
-		toolName: "task",
-		toolCallId: "aud-cancel",
-		input: {},
-		content: [{ type: "text", text: "Task execution failed before start" }],
-		details: { results: [], totalDurationMs: 0 },
-		isError: false,
-	} as never);
-	out.cancelCalls = cancelCalls.length;
-	out.cancelledLaunchCount = attempts.at(-1)?.cancelled_launch_count ?? -1;
-	out.effectiveLaunchesAfterCancel = (attempts.at(-1)?.launch_count ?? 0) - (attempts.at(-1)?.cancelled_launch_count ?? 0);
-	out.cancelAppended = JSON.stringify(cancelled).includes("reservation cancelled");
-	// A later beforeToolCall block has no tool_result; tool_execution_end fallback cancels.
-	await runner.emitToolCall({
-		type: "tool_call",
-		toolName: "task",
-		toolCallId: "aud-blocked",
-		input: { context: "audit", tasks: [{ agent: "auditor", task: sealedBody }] },
-	} as never);
-	await runner.emit({ type: "tool_execution_end", toolName: "task", toolCallId: "aud-blocked", result: { content: [{ type: "text", text: "blocked" }] }, isError: true } as never);
-	out.cancelCallsAfterBlocked = cancelCalls.length;
-	out.effectiveLaunchesAfterBlocked = (attempts.at(-1)?.launch_count ?? 0) - (attempts.at(-1)?.cancelled_launch_count ?? 0);
-	// Exact bytes: reserved, spawn proceeds.
-	const exact = await runner.emitToolCall({
-		type: "tool_call",
-		toolName: "task",
-		toolCallId: "aud-1",
-		input: { context: "audit", tasks: [{ agent: "auditor", task: sealedBody }] },
-	} as never);
-	out.exactBlocked = exact && typeof exact === "object" && "block" in exact ? Boolean(exact.block) : false;
-	out.launchCountAfterExact = attempts.at(-1)?.launch_count ?? -1;
-	// The tool result settles with the UNTOUCHED transport payload.
-	const settled = (await runner.emitToolResult({
-		type: "tool_result",
-		toolName: "task",
-		toolCallId: "aud-1",
-		input: {},
-		content: [{ type: "text", text: `<task-result id="Aud" agent="auditor" status="completed">\n<output>\n${REPORT}\n</output>\n</task-result>` }],
-		details: { results: [{ output: REPORT }] },
-		isError: false,
-	} as never)) as { content?: Array<{ type: string; text?: string }> } | undefined;
-	out.settleAppended = (settled?.content ?? []).map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
+	out.nextActionInGetWork = getWork.includes('NEXT REQUIRED ACTION: work action:"run_audit", work:"HOME-1"');
+	out.noSealedTaskBytes = !getWork.includes("----- SEALED AUDITOR TASK BEGIN -----");
+
+	const attempt = attempts[0]!;
+	const manifest = manifests[0]!;
+	await globalThis.fetch("http://127.0.0.1:54322/v1/commands", {
+		method: "POST",
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE_ID,
+			operation_id: "00000000-0000-7000-8000-000000000010",
+			request_id: "00000000-0000-7000-8000-000000000011",
+			correlation_id: "00000000-0000-7000-8000-000000000012",
+			command: {
+				type: "reserve_auditor_launch",
+				payload: { attempt_id: attempt.attempt_id, task_sha256: manifest.task_sha256, tool_call_id: "call-1" },
+			},
+		}),
+	});
+	await globalThis.fetch("http://127.0.0.1:54322/v1/commands", {
+		method: "POST",
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE_ID,
+			operation_id: "00000000-0000-7000-8000-000000000013",
+			request_id: "00000000-0000-7000-8000-000000000014",
+			correlation_id: "00000000-0000-7000-8000-000000000015",
+			command: {
+				type: "settle_auditor_launch",
+				payload: { attempt_id: attempt.attempt_id, launch_id: "launch-1", transport_payload: REPORT },
+			},
+		}),
+	});
 	out.settlePayload = settleCalls[0]?.transport_payload ?? null;
 	out.attemptState = attempts.at(-1)?.state ?? null;
 	const auditReceipt = receipts.filter(r => r.kind === "audit").at(-1);
 	out.auditIssuer = auditReceipt?.issuer ?? null;
 	out.auditVerdict = auditReceipt?.verdict ?? null;
+	const settleAttested = nextAttestation();
+	await execute({ action: "append_evidence", work: "HOME-1", kind: "closeout", body: "review body" });
+	await settleAttested;
 	out.attestCalls = attestCalls.length;
-	// The settle outcome event was delivered and attested through the shared path.
 	out.attestStatus = attestCalls[0]?.status ?? null;
 } else if (mode === "summary-push-fail") {
 	await setNow();

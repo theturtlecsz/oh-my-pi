@@ -1,12 +1,16 @@
 /**
- * workflow/confirm.ts — transcript-bound confirmation receipts (HOME-147).
+ * workflow/confirm.ts — transcript-bound confirmation receipts (HOME-147, OMP-168).
  *
  * Replaces bare `confirm:true` replays for model-initiated writes. First call
- * writes NOTHING: the host issues a receipt {id, action, question, payloadSha,
+ * writes NOTHING: the host issues a receipt {id, action, question, detail, payloadSha,
  * transcriptRef, presentedAt} and returns the preview text naming the id. The
  * repeat call must carry confirm:true plus the confirmation_id; the host
  * validates it (exists, unconsumed, fresh, same transcript, identical payload)
  * and consumes it before executing. Anything else is refused and writes nothing.
+ *
+ * When an unconsumed receipt is foreign to the current transcript or expired,
+ * it is retired and a fresh full CONFIRM REQUIRED preview with a new ID is
+ * returned in that same tool result (OMP-168).
  *
  * Slash commands keep the ctx.ui.confirm modal — they are owner-entered already.
  */
@@ -17,23 +21,43 @@ export interface ConfirmationReceipt {
 	id: string;
 	action: string;
 	question: string; // one-line title shown in the preview
+	detail: string;
 	payloadSha: string;
 	presentedAt: number;
 	transcriptRef: string;
 	used: boolean;
+	isSubagent?: boolean;
 }
 
-const RECEIPT_TTL_MS = 10 * 60_000;
+export const RECEIPT_TTL_MS = 60 * 60_000;
 const pending = new Map<string, ConfirmationReceipt>();
 
-/** Confirmation receipts share the audit bridge's transcript tag — a session
- *  start/switch invalidates every unconsumed receipt of both kinds at once.
- *  OMP-43: the transcript/binding store is process-GLOBAL while `pending` is
- *  per module copy — a subagent lifecycle (resetShared:false) clears only its
- *  own local receipts and must never touch the owner's shared bridge. */
+function pruneReceipts(now = Date.now()): void {
+	for (const [id, receipt] of pending.entries()) {
+		if (receipt.used || now - receipt.presentedAt > RECEIPT_TTL_MS) {
+			pending.delete(id);
+		}
+	}
+}
+
+/**
+ * Confirmation receipts share the transcript tag — owner session start/switch
+ * rotates the transcript reference while retaining unconsumed, unexpired receipts
+ * until their TTL (OMP-168).
+ * OMP-43 / OMP-168: a subagent lifecycle (resetShared:false) clears only its own
+ * local receipts and never touches the owner's unconsumed receipts.
+ */
 export function resetConfirmations(options: { resetShared?: boolean } = {}): void {
-	if (options.resetShared !== false) resetTranscriptRef();
-	pending.clear();
+	if (options.resetShared !== false) {
+		resetTranscriptRef();
+		pruneReceipts();
+	} else {
+		for (const [id, receipt] of pending.entries()) {
+			if (receipt.isSubagent) {
+				pending.delete(id);
+			}
+		}
+	}
 }
 
 /** Stable stringify: object keys sorted recursively — the payload hash must not
@@ -60,44 +84,24 @@ export type Confirmation =
 	| { approved: true }
 	| { approved: false; preview: string };
 
-/** Two-phase write gate for model-initiated writes. Depth check happens in the
- *  host before this runs. */
-export function confirmWrite(
+function mintPreview(
 	action: string,
 	question: string,
 	detail: string,
-	params: ConfirmGateParams,
+	sha: string,
+	options: { isSubagent?: boolean } = {},
 ): Confirmation {
-	const sha = payloadSha256(action, params);
-	if (params.confirm === true && typeof params.confirmation_id === "string") {
-		const receipt = pending.get(params.confirmation_id);
-		if (!receipt) {
-			return { approved: false, preview: `REFUSED — unknown or already-used confirmation_id "${params.confirmation_id}". Call without confirm to get a fresh preview.` };
-		}
-		if (receipt.used) {
-			return { approved: false, preview: `REFUSED — confirmation_id "${params.confirmation_id}" was already consumed. Call without confirm for a fresh preview.` };
-		}
-		if (receipt.transcriptRef !== currentTranscriptRef()) {
-			return { approved: false, preview: `REFUSED — confirmation_id "${params.confirmation_id}" belongs to another transcript. Call without confirm for a fresh preview.` };
-		}
-		if (Date.now() - receipt.presentedAt > RECEIPT_TTL_MS) {
-			pending.delete(receipt.id);
-			return { approved: false, preview: `REFUSED — confirmation_id "${params.confirmation_id}" expired. Call without confirm for a fresh preview.` };
-		}
-		if (receipt.payloadSha !== sha || receipt.action !== action) {
-			return { approved: false, preview: `REFUSED — payload changed since the preview (confirmation_id "${params.confirmation_id}"). Show Chris the new preview: call again without confirm.` };
-		}
-		receipt.used = true;
-		return { approved: true };
-	}
+	pruneReceipts();
 	const receipt: ConfirmationReceipt = {
 		id: `cf-${randomBytes(6).toString("hex")}`,
 		action,
 		question,
+		detail,
 		payloadSha: sha,
 		presentedAt: Date.now(),
 		transcriptRef: currentTranscriptRef(),
 		used: false,
+		isSubagent: options.isSubagent ?? false,
 	};
 	pending.set(receipt.id, receipt);
 	return {
@@ -113,4 +117,39 @@ export function confirmWrite(
 			"Show this to Chris verbatim. If he says yes, call again with the same arguments plus confirm:true and this confirmation_id.",
 		].join("\n"),
 	};
+}
+
+/** Two-phase write gate for model-initiated writes. Depth check happens in the
+ *  host before this runs. */
+export function confirmWrite(
+	action: string,
+	question: string,
+	detail: string,
+	params: ConfirmGateParams,
+	options: { isSubagent?: boolean } = {},
+): Confirmation {
+	const sha = payloadSha256(action, params);
+	if (params.confirm === true && typeof params.confirmation_id === "string") {
+		const receipt = pending.get(params.confirmation_id);
+		if (!receipt) {
+			return { approved: false, preview: `REFUSED — unknown or already-used confirmation_id "${params.confirmation_id}". Call without confirm to get a fresh preview.` };
+		}
+		if (receipt.used) {
+			return { approved: false, preview: `REFUSED — confirmation_id "${params.confirmation_id}" was already consumed. Call without confirm for a fresh preview.` };
+		}
+		if (receipt.payloadSha !== sha || receipt.action !== action) {
+			return { approved: false, preview: `REFUSED — payload changed since the preview (confirmation_id "${params.confirmation_id}"). Show Chris the new preview: call again without confirm.` };
+		}
+		if (receipt.transcriptRef !== currentTranscriptRef()) {
+			pending.delete(receipt.id);
+			return mintPreview(action, question, detail, sha, options);
+		}
+		if (Date.now() - receipt.presentedAt > RECEIPT_TTL_MS) {
+			pending.delete(receipt.id);
+			return mintPreview(action, question, detail, sha, options);
+		}
+		receipt.used = true;
+		return { approved: true };
+	}
+	return mintPreview(action, question, detail, sha, options);
 }

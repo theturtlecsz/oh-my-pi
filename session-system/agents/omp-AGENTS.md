@@ -40,6 +40,12 @@ the completion tree (`work` tool, action my_now) plus one plain explanation
 line. Code, commits, and Work Ledger evidence keep full technical precision — this
 governs what Chris SEES, not what is recorded.
 
+## Question format (owner ruling, 2026-08-27 — non-negotiable, global)
+
+Never present pros and cons or pro/con breakdowns for options in questions,
+ask dialogs, or decision menus. State options neutrally and concisely by what
+they do, with facts only — never a pros/cons comparison.
+
 ## Issue tracking law (owner ruling, 2026-08-13 — non-negotiable, global)
 
 Every item is tracked as a Work Ledger item: findings, fixes (including ones

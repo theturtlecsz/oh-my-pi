@@ -188,12 +188,12 @@ if (phase === "audit") {
 	// 6. OMP-47: verification evidence seals the audit manifest server-side.
 	out.verification = await execute({ action: "append_evidence", work: key, kind: "verification", body: "the smoke asserts the end state" });
 
-	// 7. get_work now renders the sealed auditor task byte-for-byte; the bookends
-	// gate reserves ONE launch against exactly those bytes.
-	const sealedScreen = await execute({ action: "get_work", work: key });
-	out.sealedScreen = sealedScreen;
-	const sealedTask = /----- SEALED AUDITOR TASK BEGIN -----\n([\s\S]*?)\n----- SEALED AUDITOR TASK END -----/.exec(sealedScreen)?.[1] ?? "";
-	out.sealedTaskPresent = sealedTask.length > 0;
+	// 7. get_work renders next action banner without task bytes
+	const nextActionScreen = await execute({ action: "get_work", work: key });
+	out.nextActionScreen = nextActionScreen;
+	out.hasRunAuditNextAction = nextActionScreen.includes(`NEXT REQUIRED ACTION: work action:"run_audit", work:"${key}"`);
+	out.noSealedTaskBytes = !nextActionScreen.includes("----- SEALED AUDITOR TASK BEGIN -----");
+
 	const REPORT = [
 		"VERDICT: PASS",
 		"",
@@ -212,34 +212,13 @@ if (phase === "audit") {
 		"REMAINING QUESTIONS",
 		"none",
 	].join("\n");
-	// A transformed-equivalent task must refuse BEFORE spawn with zero slot burn.
-	const wrongSpawn = await runner.emitToolCall({
-		type: "tool_call",
-		toolName: "task",
-		toolCallId: "aud-0",
-		input: { context: "audit the completed work", tasks: [{ agent: "auditor", task: `${sealedTask}\n` }] },
-	} as never);
-	out.wrongSpawnBlocked = wrongSpawn && typeof wrongSpawn === "object" && "block" in wrongSpawn ? Boolean(wrongSpawn.block) : false;
-	const spawn = await runner.emitToolCall({
-		type: "tool_call",
-		toolName: "task",
-		toolCallId: "aud-1",
-		input: { context: "audit the completed work", tasks: [{ agent: "auditor", task: sealedTask }] },
-	} as never);
-	out.spawnBlocked = spawn && typeof spawn === "object" && "block" in spawn ? Boolean(spawn.block) : false;
-	// The settle transaction verifies the report, mints the audit receipt
-	// service-side, and returns the typed outcome to the model in-band.
-	const settle = (await runner.emitToolResult({
-		type: "tool_result",
-		toolName: "task",
-		toolCallId: "aud-1",
-		input: {},
-		content: [{ type: "text", text: `<task-result id="Aud" agent="auditor" status="completed">\n<output>\n${REPORT}\n</output>\n</task-result>` }],
-		details: { results: [{ output: REPORT }] },
-		isError: false,
-	} as never)) as { content?: Array<{ type: string; text?: string }> } | undefined;
-	out.audit = (settle?.content ?? []).map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
 
+	// Reserve and settle launch directly against work service
+	const detail = await harnessBackend.issueDetail(key);
+	const manifest = (await harnessBackend.sealedAuditTask(key))!;
+	const reservation = await harnessBackend.reserveAuditorLaunch(key, manifest.taskSha256, "smoke-call-1");
+	const settle = await harnessBackend.settleAuditorLaunch(key, reservation.launchId!, { payload: REPORT });
+	out.audit = settle.event.renderedText;
 	await waitForNoPendingDeliveries(key);
 } else if (phase === "closeout") {
 	const key = workKeyArg!;

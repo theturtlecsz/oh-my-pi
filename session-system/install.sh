@@ -131,7 +131,6 @@ stage() { # stage <repo-relative> <name-in-set>
 stage extensions/workflow workflow
 stage extensions/work-now.ts work-now.ts
 stage extensions/model-bookends.ts model-bookends.ts
-stage extensions/model-bookends-audit.md model-bookends-audit.md
 if [ -d "$EXT_DIR" ]; then
   chmod --reference="$EXT_DIR" "$SET_DIR"
   touch --reference="$EXT_DIR" "$SET_DIR"

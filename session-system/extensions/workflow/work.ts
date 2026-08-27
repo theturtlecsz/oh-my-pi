@@ -78,13 +78,13 @@ const CENTER_MAX_ROWS = 8;
 function attemptNextAction(state: string): string {
 	switch (state) {
 		case "active":
-			return "append verification evidence, then seal the audit manifest with /summary";
+			return 'append verification evidence (work action:"append_evidence", kind:"verification")';
 		case "audit_ready":
-			return "spawn ONE auditor task with the sealed body";
+			return 'run native audit (work action:"run_audit")';
 		case "auditor_in_flight":
 			return "auditor launch in flight — wait for settlement";
 		case "audited":
-			return "PASS audit saved; enter /summary to resume close review";
+			return 'append closeout review (work action:"append_evidence", kind:"closeout")';
 		case "closeout_requested":
 			return "owner /done closes";
 		case "remediation_required":

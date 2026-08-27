@@ -90,7 +90,7 @@ describe("install.sh --print-manifest", () => {
 		}
 
 		expect(byPath[`${home}/.omp/agent/extensions`]?.[1]).toBe("dir");
-		for (const child of ["workflow", "work-now.ts", "model-bookends.ts", "model-bookends-audit.md"]) {
+		for (const child of ["workflow", "work-now.ts", "model-bookends.ts"]) {
 			expect(byPath[`${home}/.omp/agent/extensions/${child}`]?.[1]).toBe("symlink");
 		}
 		for (const singleton of MANAGED_SINGLETONS) {

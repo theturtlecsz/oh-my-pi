@@ -12,7 +12,7 @@ export const WORKFLOW_SEQUENCE =
 
 /** HOME-114: closeout is explicit-command only. */
 export const CLOSEOUT_BOUNDARY =
-	"Closeout is explicit-command only: /summary (questionyourself + whatsmissing + close ritual) and /done run ONLY when Chris literally enters them — never start a summary, close proposal, health update, capture triage, or NOW handoff because work, a todo list, or the session looks finished; a keep-open verdict blocks every closeout action until he enters one.";
+	"Closeout is explicit-command only: /summary and /done run ONLY when Chris literally enters them — never start a summary, close proposal, health update, capture triage, or NOW handoff because work, a todo list, or the session looks finished; a keep-open verdict blocks every closeout action until he enters one.";
 export const STOP_REMINDER_BOUNDARY =
 	"Post the checkpoint silently. Never narrate bookkeeping or start /summary or /done.";
 export const CLOSEOUT_LOCK_REFUSAL =

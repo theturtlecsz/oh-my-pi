@@ -18,16 +18,13 @@ retained offline as static export archives and provenance records.
 |---|---|---|
 | `extensions/work-now.ts` | `~/.omp/agent/extensions/work-now.ts` | Work Ledger backend entry: thin wiring onto workflow/host.ts + workflow/work.ts |
 | `extensions/workflow/` | `~/.omp/agent/extensions/workflow/` | Shared workflow host + backend adapter: NOW footer, start digest, /now /done /capture /center (OMP-25 read-only orientation turn), unified `work` tool (two-phase owner-gated typed writes), transcript-bound receipts |
-| `extensions/model-bookends.ts` | `~/.omp/agent/extensions/model-bookends.ts` | HOME-131 bookends: /intake auto-routes to the intake role (Fable-high) and forwards to the skill; /summary arms a fail-closed audit gate (one fresh auditor, five required input sections, verbatim report into the typed review) |
-| `extensions/model-bookends-audit.md` | `~/.omp/agent/extensions/model-bookends-audit.md` | Static audit contract the extension injects when /summary arms |
-| `extensions/model-bookends-stop-no-audit.md` | `~/.omp/agent/extensions/model-bookends-stop-no-audit.md` | Settlement notice when no usable independent audit has run |
-| `extensions/model-bookends-stop-not-forwarded.md` | `~/.omp/agent/extensions/model-bookends-stop-not-forwarded.md` | Settlement notice when the audit report has not reached the review record |
+| `extensions/model-bookends.ts` | `~/.omp/agent/extensions/model-bookends.ts` | HOME-131 bookends: /intake auto-routes to the intake role (Fable-high) and forwards to the skill |
 | `agents/auditor.md` | `~/.omp/agent/agents/auditor.md` | The `auditor` task agent: blocking, fresh-context final acceptance audit on `@audit`, verdict-structured report |
 | `rules/work-plan.md` | `~/.omp/agent/rules/work-plan.md` | omp plan-mode rule: ground plans in the ledger tree |
 | `agents/AGENTS.md` | `~/AGENTS.md` | Home-directory session protocol (bookends contract) |
 | `skills/summary` | `~/.agents/skills/summary` | /summary close ritual (cross-harness: pi + Claude Code) |
-| `skills/questionyourself` | `~/.agents/skills/questionyourself` | Confidence audit, invoked by summary |
-| `skills/whatsmissing` | `~/.agents/skills/whatsmissing` | Blind-spot audit, invoked by summary |
+| `skills/questionyourself` | `~/.agents/skills/questionyourself` | Confidence self-audit |
+| `skills/whatsmissing` | `~/.agents/skills/whatsmissing` | Blind-spot audit |
 | `prompts/archive/` | (nothing — archive only) | Retired session charters. Ruling 2026-08-10: work routes through the ledger, never prompt files |
 | `tests/` | (nothing — fork-persistence tests) | Extension loads against current omp source; installer integrity + idempotency |
 | `update.sh` | (nothing — run by hand) | Pinned upstream merge + gate runner: full-40-hex commit only, never pushes, never touches live links |
