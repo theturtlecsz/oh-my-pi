@@ -1265,7 +1265,8 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 		const cwdKey = sessionCwdKey(sessionsRoot, session);
 		const cwdSeen = inactiveSeenByCwd.get(cwdKey) ?? 0;
 		const keepGlobal = inactiveSeen < options.retainNewestGlobal;
-		const keepPerCwd = cwdSeen < options.retainNewestPerCwd;
+		const cwdPresent = session.cwd ? await pathExists(session.cwd) : false;
+		const keepPerCwd = cwdPresent && cwdSeen < options.retainNewestPerCwd;
 		inactiveSeen += 1;
 		inactiveSeenByCwd.set(cwdKey, cwdSeen + 1);
 		if (keepGlobal) {
