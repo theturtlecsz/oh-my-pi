@@ -2233,6 +2233,34 @@ export class Settings {
 	// Saving
 	// ─────────────────────────────────────────────────────────────────────────
 
+	async #backupConfigGenerations(filePath: string, maxGenerations = 5): Promise<void> {
+		try {
+			try {
+				await fs.promises.stat(filePath);
+			} catch (error) {
+				if (isEnoent(error)) return;
+				throw error;
+			}
+
+			for (let i = maxGenerations - 1; i >= 1; i--) {
+				const src = `${filePath}.bak.${i}`;
+				const dst = `${filePath}.bak.${i + 1}`;
+				try {
+					await fs.promises.rename(src, dst);
+				} catch (error) {
+					if (!isEnoent(error)) {
+						logger.warn("Settings: failed to rotate config backup generation", { src, dst, error: String(error) });
+					}
+				}
+			}
+
+			const target = `${filePath}.bak.1`;
+			await fs.promises.copyFile(filePath, target);
+		} catch (error) {
+			logger.warn("Settings: failed to create config backup", { filePath, error: String(error) });
+		}
+	}
+
 	async #writeYamlAtomically(filePath: string, settings: RawSettings): Promise<void> {
 		const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 		let removeTemp = false;
@@ -2245,6 +2273,7 @@ export class Settings {
 			} finally {
 				await handle.close();
 			}
+			await this.#backupConfigGenerations(filePath);
 			await replaceFileAtomically(tempPath, filePath);
 			removeTemp = false;
 		} finally {
@@ -2280,12 +2309,80 @@ export class Settings {
 		if (this.#savesCancelled || !this.#persist || !this.#configPath) return;
 		if (this.#modified.size === 0 && this.#modifiedGlobalModelRoles.size === 0) return;
 
+		const defaultUserAgentDir = path.normalize(path.join(os.homedir(), ".omp", "agent"));
+		const isRealAgentDir = path.normalize(this.#agentDir) === defaultUserAgentDir;
+		const isReadOnlyEnv =
+			process.env.OMP_REAL_AGENT_DIR_READONLY === "1" || process.env.OMP_REAL_AGENT_DIR_READONLY === "true";
+
+		if (isRealAgentDir && isReadOnlyEnv) {
+			logger.warn("Settings: refusing to persist to real agent directory (OMP_REAL_AGENT_DIR_READONLY)", {
+				configPath: this.#configPath,
+			});
+			this.#modified.clear();
+			this.#modifiedGlobalModelRoles.clear();
+			return;
+		}
+
 		const configPath = this.#configPath;
-		const modifiedPaths = [...this.#modified];
-		const modifiedModelRoles = [...this.#modifiedGlobalModelRoles];
+		let modifiedPaths = [...this.#modified];
+		let modifiedModelRoles = [...this.#modifiedGlobalModelRoles];
 		const globalRolesAtStart = this.#modelRolesFromLayer(this.#global);
 		this.#modified.clear();
 		this.#modifiedGlobalModelRoles.clear();
+
+		if (isRealAgentDir) {
+			const filteredRoles: string[] = [];
+			for (const role of modifiedModelRoles) {
+				const val = globalRolesAtStart[role];
+				if (typeof val === "string" && (val.startsWith("smoke/") || val.startsWith("mock/"))) {
+					logger.warn("Settings: refusing to persist test model role to real agent directory", {
+						role,
+						value: val,
+						configPath,
+					});
+				} else {
+					filteredRoles.push(role);
+				}
+			}
+			modifiedModelRoles = filteredRoles;
+
+			const filteredPaths: string[] = [];
+			for (const modPath of modifiedPaths) {
+				if (modPath.startsWith("modelRoles.") || modPath === "modelRoles") {
+					const val = getByPath(this.#global, modPath.split("."));
+					if (typeof val === "string" && (val.startsWith("smoke/") || val.startsWith("mock/"))) {
+						logger.warn("Settings: refusing to persist test model role to real agent directory", {
+							path: modPath,
+							value: val,
+							configPath,
+						});
+						continue;
+					}
+					if (isRecord(val)) {
+						let nonTestRoleCount = 0;
+						for (const [k, v] of Object.entries(val)) {
+							if (typeof v === "string" && (v.startsWith("smoke/") || v.startsWith("mock/"))) {
+								logger.warn("Settings: refusing to persist test model role to real agent directory", {
+									role: k,
+									value: v,
+									configPath,
+								});
+							} else {
+								nonTestRoleCount++;
+							}
+						}
+						if (nonTestRoleCount === 0 && Object.keys(val).length > 0) {
+							continue;
+						}
+					}
+				}
+				filteredPaths.push(modPath);
+			}
+			modifiedPaths = filteredPaths;
+			if (modifiedPaths.length === 0 && modifiedModelRoles.length === 0) {
+				return;
+			}
+		}
 
 		try {
 			await this.#withYamlWriteLock(configPath, async writePath => {
@@ -2299,7 +2396,22 @@ export class Settings {
 				// Apply only our modified whole-value paths
 				for (const modPath of modifiedPaths) {
 					const segments = modPath.split(".");
-					const value = getByPath(this.#global, segments);
+					let value = getByPath(this.#global, segments);
+					if (isRealAgentDir && (modPath === "modelRoles" || modPath.startsWith("modelRoles."))) {
+						if (typeof value === "string" && (value.startsWith("smoke/") || value.startsWith("mock/"))) {
+							continue;
+						}
+						if (isRecord(value)) {
+							const sanitized: Record<string, unknown> = {};
+							for (const [k, v] of Object.entries(value)) {
+								if (typeof v === "string" && (v.startsWith("smoke/") || v.startsWith("mock/"))) {
+									continue;
+								}
+								sanitized[k] = v;
+							}
+							value = sanitized;
+						}
+					}
 					setByPath(current, segments, value);
 				}
 
@@ -2316,6 +2428,14 @@ export class Settings {
 				for (const role in latestGlobalRoles) {
 					if (globalRolesAtStart[role] !== latestGlobalRoles[role]) {
 						rolesToPreserve.add(role);
+					}
+				}
+				if (isRealAgentDir) {
+					for (const role of [...rolesToPreserve]) {
+						const val = latestGlobalRoles[role];
+						if (typeof val === "string" && (val.startsWith("smoke/") || val.startsWith("mock/"))) {
+							rolesToPreserve.delete(role);
+						}
 					}
 				}
 				if (modifiedModelRoles.length > 0 || rolesToPreserve.size > 0) {

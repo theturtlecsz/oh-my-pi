@@ -40,7 +40,7 @@ const LOCK = "closeout lock (HOME-114)";
 const run = (mode: "input" | "skill" | "done" | "forged-subagent" | "legacy-host" | "body-refused"): Record<string, string | string[]> => {
 	const child = Bun.spawnSync([process.execPath, harness, probe, mode], {
 		cwd: probe,
-		env: { ...process.env, HOME: home },
+		env: { ...process.env, HOME: home, PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent") },
 	});
 	expect(child.exitCode, child.stderr.toString()).toBe(0);
 	return JSON.parse(child.stdout.toString()) as Record<string, string | string[]>;
