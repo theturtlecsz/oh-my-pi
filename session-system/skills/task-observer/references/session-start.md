@@ -4,8 +4,9 @@ Read at the start of task-oriented sessions. Load the full `skill://task-observe
 
 ## 1. Setup & Checks
 1. State paths: log is `[workspace]/skill-observations/log.md`, review date is `last-review-date.txt`, principles in `cross-cutting-principles.md`. If missing, create (date defaults to literal `never`). Re-anchor if in an ephemeral worktree.
-2. Review check: read `last-review-date.txt`. If `never` or >7 days old with OPEN observations, offer review in one line and continue unless user opts in. If ≥5 OPEN cluster on one skill, offer mini-review.
-3. Target system: if analyzing a named target system, resolve to concrete state root first.
+2. Scan: read and scan OPEN observations in `log.md` and active principles in `cross-cutting-principles.md`. Hold them in awareness; do not surface unprompted.
+3. Review check: read `last-review-date.txt`. If `never` or >7 days old with OPEN observations, offer review in one line and continue unless user opts in. If ≥5 OPEN cluster on one skill, offer mini-review.
+4. Target system: if analyzing a named target system, resolve to concrete state root first.
 
 ## 2. Prescriptive Command Rules (Mandatory)
 Any OPEN observation or plan clause prescribing command construction ("never pipe", "run separately", flags, redirection) MUST be restated in working notes BEFORE the first tool call it governs. Scope by command binary/shape, not intent.
