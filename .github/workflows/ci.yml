@@ -33,6 +33,7 @@ on:
          - "package.json"
          - "patches/**"
          - ".github/**"
+         - ".github/workflows/**"
    pull_request:
       branches: [main]
       paths:
@@ -62,6 +63,7 @@ on:
          - "package.json"
          - "patches/**"
          - ".github/**"
+         - ".github/workflows/**"
    workflow_dispatch:
       inputs:
          skip_npm:
