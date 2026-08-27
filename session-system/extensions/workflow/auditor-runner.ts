@@ -69,6 +69,7 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext): Promise<N
 				keepAlive: false,
 				id: attemptId,
 				signal,
+				settings,
 			});
 
 			started = Boolean(result.requests && result.requests > 0);

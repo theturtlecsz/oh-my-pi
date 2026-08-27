@@ -31,7 +31,8 @@ describe("Settings backup-on-rewrite and real agent dir guard", () => {
 
 	it("creates .bak.1 with previous contents on rewrite", async () => {
 		const configPath = path.join(agentDir, "config.yml");
-		fs.writeFileSync(configPath, "theme:\n  dark: theme-0\n", "utf8");
+		const initialContent = "theme:\n  dark: theme-0\n";
+		fs.writeFileSync(configPath, initialContent, "utf8");
 
 		const s = await Settings.init({ agentDir, cwd: projectDir });
 		s.set("theme.dark", "theme-1");
@@ -40,38 +41,41 @@ describe("Settings backup-on-rewrite and real agent dir guard", () => {
 		expect(fs.readFileSync(configPath, "utf8")).toContain("theme-1");
 		const bak1Path = `${configPath}.bak.1`;
 		expect(fs.existsSync(bak1Path)).toBe(true);
-		expect(fs.readFileSync(bak1Path, "utf8")).toContain("theme-0");
+		expect(fs.readFileSync(bak1Path, "utf8")).toBe(initialContent);
 	});
 
 	it("rotates up to 5 backup generations and caps at 5", async () => {
 		const configPath = path.join(agentDir, "config.yml");
-		fs.writeFileSync(configPath, "theme:\n  dark: theme-0\n", "utf8");
+		const initialContent = "theme:\n  dark: theme-0\n";
+		fs.writeFileSync(configPath, initialContent, "utf8");
 
 		const s = await Settings.init({ agentDir, cwd: projectDir });
 
+		const savedContents: string[] = [initialContent];
 		for (let i = 1; i <= 7; i++) {
 			s.set("theme.dark", `theme-${i}`);
 			await s.flush();
+			savedContents.push(fs.readFileSync(configPath, "utf8"));
 		}
 
-		// Current config should be theme-7
-		expect(fs.readFileSync(configPath, "utf8")).toContain("theme-7");
+		// Current config should be theme-7 (savedContents[7])
+		expect(fs.readFileSync(configPath, "utf8")).toBe(savedContents[7]!);
 
-		// .bak.1 should be theme-6, .bak.2 should be theme-5, ..., .bak.5 should be theme-2
+		// .bak.1 should be theme-6 (savedContents[6]), .bak.2 should be theme-5, ..., .bak.5 should be theme-2 (savedContents[2])
 		expect(fs.existsSync(`${configPath}.bak.1`)).toBe(true);
-		expect(fs.readFileSync(`${configPath}.bak.1`, "utf8")).toContain("theme-6");
+		expect(fs.readFileSync(`${configPath}.bak.1`, "utf8")).toBe(savedContents[6]!);
 
 		expect(fs.existsSync(`${configPath}.bak.2`)).toBe(true);
-		expect(fs.readFileSync(`${configPath}.bak.2`, "utf8")).toContain("theme-5");
+		expect(fs.readFileSync(`${configPath}.bak.2`, "utf8")).toBe(savedContents[5]!);
 
 		expect(fs.existsSync(`${configPath}.bak.3`)).toBe(true);
-		expect(fs.readFileSync(`${configPath}.bak.3`, "utf8")).toContain("theme-4");
+		expect(fs.readFileSync(`${configPath}.bak.3`, "utf8")).toBe(savedContents[4]!);
 
 		expect(fs.existsSync(`${configPath}.bak.4`)).toBe(true);
-		expect(fs.readFileSync(`${configPath}.bak.4`, "utf8")).toContain("theme-3");
+		expect(fs.readFileSync(`${configPath}.bak.4`, "utf8")).toBe(savedContents[3]!);
 
 		expect(fs.existsSync(`${configPath}.bak.5`)).toBe(true);
-		expect(fs.readFileSync(`${configPath}.bak.5`, "utf8")).toContain("theme-2");
+		expect(fs.readFileSync(`${configPath}.bak.5`, "utf8")).toBe(savedContents[2]!);
 
 		// .bak.6 should not exist (capped at 5 generations)
 		expect(fs.existsSync(`${configPath}.bak.6`)).toBe(false);

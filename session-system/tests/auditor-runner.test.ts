@@ -1,6 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
-import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
+import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import { prepareNativeAuditRunner } from "../extensions/workflow/auditor-runner";
 import type { CloseAttemptSnapshot } from "../extensions/workflow/backend";
 import {
@@ -14,6 +16,9 @@ import {
 } from "../extensions/workflow/host";
 
 describe("native auditor runner (OMP-168)", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
 	test("prepareNativeAuditRunner fails if @audit role cannot be resolved", async () => {
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
@@ -52,6 +57,71 @@ describe("native auditor runner (OMP-168)", () => {
 		const result = await runner("test task", "attempt-1", abortController.signal);
 		expect(result.started).toBe(false);
 		expect(result.payload).toBeUndefined();
+	});
+
+	test("forwards effective settings to the native auditor subprocess", async () => {
+		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "test/auditor" } });
+		const settingsSpy = vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(sentinelSettings);
+
+		const fakeAgent = {
+			name: "auditor",
+			description: "Auditor agent",
+			systemPrompt: "Audit prompt",
+			model: "@audit",
+			source: "bundle" as const,
+		};
+		const discoverSpy = vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
+			agents: [fakeAgent],
+		});
+
+		let capturedOptions: executorModule.ExecutorOptions | undefined;
+		const runSubprocessSpy = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async (options) => {
+				capturedOptions = options;
+				return {
+					index: options.index,
+					id: options.id,
+					agent: options.agent.name,
+					agentSource: options.agent.source,
+					task: options.task,
+					exitCode: 0,
+					output: "VERDICT: PASS\nAll acceptance criteria verified.",
+					stderr: "",
+					truncated: false,
+					durationMs: 120,
+					tokens: 450,
+					requests: 1,
+				} as executorModule.SingleResult;
+			});
+
+		const sentinelRegistry = { getApiKey: () => Promise.resolve("key") };
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const fakeCtx = {
+			cwd: repoRoot,
+			models: {
+				resolve: (role: string) =>
+					role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined,
+			},
+			modelRegistry: sentinelRegistry,
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		const runner = await prepareNativeAuditRunner(fakeCtx);
+		const result = await runner("Run audit on OMP-173", "attempt-123");
+
+		expect(settingsSpy).toHaveBeenCalledWith({
+			cwd: repoRoot,
+			agentDir: expect.any(String),
+		});
+		expect(discoverSpy).toHaveBeenCalledWith(repoRoot);
+		expect(runSubprocessSpy).toHaveBeenCalledTimes(1);
+		expect(capturedOptions).toBeDefined();
+		expect(capturedOptions?.settings).toBe(sentinelSettings);
+		expect(capturedOptions?.modelOverride).toBe("@audit");
+		expect(capturedOptions?.modelRole).toBe("audit");
+		expect(result.started).toBe(true);
+		expect(result.payload).toBe("VERDICT: PASS\nAll acceptance criteria verified.");
 	});
 });
 
