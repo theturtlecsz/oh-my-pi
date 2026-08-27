@@ -1626,8 +1626,12 @@ if (mode === "intake") {
 	const getWork = await execute({ action: "get_work", work: "HOME-1" });
 	out.getWork = getWork;
 	out.nextActionInGetWork = getWork.includes('NEXT REQUIRED ACTION: work action:"run_audit", work:"HOME-1"');
+	out.getWorkStartsWithStatus = getWork.startsWith("STATUS: CLOSE ATTEMPT audit_ready");
+	out.nextActionCount = (getWork.match(/NEXT REQUIRED ACTION:/g) || []).length;
 	out.noSealedTaskBytes = !getWork.includes("----- SEALED AUDITOR TASK BEGIN -----");
 
+	// Execute a refused action while the attempt is live to verify refusal finalizer banner
+	out.refusedWhileAuditReady = await execute({ action: "append_evidence", work: "HOME-1" });
 	const attempt = attempts[0]!;
 	const manifest = manifests[0]!;
 	await globalThis.fetch("http://127.0.0.1:54322/v1/commands", {

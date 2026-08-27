@@ -359,8 +359,11 @@ describe("HOME-122 workflow sequence", () => {
 		// Verification append sealed the manifest; get_work renders the next action banner without task body bytes.
 		expect(out.verify).toContain("audit manifest sealed");
 		expect(out.nextActionInGetWork).toBe(true);
+		expect(out.getWorkStartsWithStatus).toBe(true);
+		expect(out.nextActionCount).toBe(1);
 		expect(out.noSealedTaskBytes).toBe(true);
-
+		expect(String(out.refusedWhileAuditReady).startsWith("STATUS: CLOSE ATTEMPT audit_ready")).toBe(true);
+		expect(String(out.refusedWhileAuditReady)).toContain('NEXT REQUIRED ACTION: work action:"run_audit", work:"HOME-1"');
 		// The service minted the audit receipt itself and the outcome reached the owner as an attested checkpoint.
 		expect(out.settlePayload).toContain("VERDICT: PASS");
 		expect(out.attemptState).toBe("audited");
@@ -495,16 +498,20 @@ describe("HOME-122 workflow sequence", () => {
 		const out = run("omp140-audit-states");
 		expect(String(out.noAttemptGetWork)).not.toContain("STATUS: CLOSE ATTEMPT");
 		expect(String(out.noAttemptGetWork)).not.toContain("SEALED AUDITOR TASK");
-		expect(String(out.activeGetWork)).toContain("STATUS: CLOSE ATTEMPT active");
+		expect(String(out.activeGetWork).indexOf("STATUS: CLOSE ATTEMPT active")).toBe(0);
+		expect((String(out.activeGetWork).match(/NEXT REQUIRED ACTION:/g) || []).length).toBe(1);
 		expect(String(out.activeGetWork)).toContain('NEXT REQUIRED ACTION: work action:"append_evidence", work:"HOME-1", kind:"verification"');
 		expect(String(out.activeGetWork)).toContain('BLOCKED ACTIONS: run_audit, append_evidence kind:"closeout", /done');
-		expect(String(out.auditReadyGetWork)).toContain("STATUS: CLOSE ATTEMPT audit_ready");
+		expect(String(out.auditReadyGetWork).indexOf("STATUS: CLOSE ATTEMPT audit_ready")).toBe(0);
+		expect((String(out.auditReadyGetWork).match(/NEXT REQUIRED ACTION:/g) || []).length).toBe(1);
 		expect(String(out.auditReadyGetWork)).toContain('NEXT REQUIRED ACTION: work action:"run_audit", work:"HOME-1"');
 		expect(String(out.auditReadyGetWork)).toContain('BLOCKED ACTIONS: append_evidence kind:"closeout", /done');
-		expect(String(out.auditedGetWork)).toContain("STATUS: CLOSE ATTEMPT audited");
+		expect(String(out.auditedGetWork).indexOf("STATUS: CLOSE ATTEMPT audited")).toBe(0);
+		expect((String(out.auditedGetWork).match(/NEXT REQUIRED ACTION:/g) || []).length).toBe(1);
 		expect(String(out.auditedGetWork)).toContain('NEXT REQUIRED ACTION: work action:"append_evidence", work:"HOME-1", kind:"closeout"');
 		expect(String(out.auditedGetWork)).toContain("BLOCKED ACTIONS: run_audit, /done");
-		expect(String(out.closeoutRequestedGetWork)).toContain("STATUS: CLOSE ATTEMPT closeout_requested");
+		expect(String(out.closeoutRequestedGetWork).indexOf("STATUS: CLOSE ATTEMPT closeout_requested")).toBe(0);
+		expect((String(out.closeoutRequestedGetWork).match(/NEXT REQUIRED ACTION:/g) || []).length).toBe(1);
 		expect(String(out.closeoutRequestedGetWork)).toContain("NEXT REQUIRED ACTION: owner /done closes this work");
 		expect(String(out.closeoutRequestedGetWork)).toContain("BLOCKED ACTIONS: run_audit, append_evidence");
 	});

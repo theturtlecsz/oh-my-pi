@@ -115,7 +115,7 @@ async function waitForNoPendingDeliveries(key: string) {
 	for (let i = 0; i < 40; i++) {
 		const pending = await harnessBackend.pendingDeliveries(key);
 		if (pending.length === 0) return;
-		await new Promise(resolve => setTimeout(resolve, 50));
+		await Bun.sleep(50);
 	}
 	const finalPending = await harnessBackend.pendingDeliveries(key);
 	if (finalPending.length > 0) {
@@ -219,12 +219,21 @@ if (phase === "audit") {
 	const reservation = await harnessBackend.reserveAuditorLaunch(key, manifest.taskSha256, "smoke-call-1");
 	const settle = await harnessBackend.settleAuditorLaunch(key, reservation.launchId!, { payload: REPORT });
 	out.audit = settle.event.renderedText;
+	if (settle.event.requiresDelivery) {
+		await harnessBackend.attestDelivery(settle.event.eventId, sessionId, settle.event.renderedSha256, "delivered");
+	}
 	await waitForNoPendingDeliveries(key);
 } else if (phase === "closeout") {
 	const key = workKeyArg!;
 	// Resume the close attempt in fresh session by entering /skill:summary
-	await runner.emitInput("/skill:summary", undefined, "interactive");
-	await runner.emit(summaryMessage as never);
+	const resumeInput = await runner.emitInput("/skill:summary", undefined, "interactive");
+	out.resumeText = resumeInput?.text;
+	out.isResumeDigest = Boolean(
+		resumeInput?.text &&
+		resumeInput.text.includes(`# SUMMARY RESUME (${key})`) &&
+		resumeInput.text.includes("STATUS: CLOSE ATTEMPT audited") &&
+		resumeInput.text.includes("Satisfied steps must NOT be repeated")
+	);
 
 	await waitForNoPendingDeliveries(key);
 

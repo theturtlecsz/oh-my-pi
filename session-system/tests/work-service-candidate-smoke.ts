@@ -44,8 +44,16 @@ function freePort(): number {
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-work-smoke-"));
 const xdg = REUSE ? (process.env.OMP_WORK_SMOKE_XDG ?? path.join(root, "xdg")) : path.join(root, "xdg");
 const home = path.join(root, "home");
-fs.mkdirSync(xdg, { recursive: true });
-fs.mkdirSync(home, { recursive: true });
+fs.mkdirSync(path.join(xdg, "omp"), { recursive: true });
+fs.mkdirSync(path.join(home, ".omp", "agent", "agents"), { recursive: true });
+fs.writeFileSync(
+	path.join(home, ".omp", "agent", "config.yml"),
+	"modelRoles:\n  audit: smoke/mock-fable\n  default: smoke/mock-fable\n",
+);
+fs.copyFileSync(
+	path.join(repoRoot, "session-system/agents/auditor.md"),
+	path.join(home, ".omp", "agent", "agents", "auditor.md"),
+);
 const pgPort = freePort();
 const httpPort = freePort();
 const baseUrl = REUSE ? (process.env.OMP_WORK_SMOKE_BASE_URL ?? "") : `http://127.0.0.1:${httpPort}`;
@@ -169,7 +177,7 @@ try {
 		if (phaseKey) args.push(phaseKey);
 		const child = Bun.spawnSync([process.execPath, ...args], {
 			cwd: probe,
-			env: { ...process.env, HOME: home, XDG_CONFIG_HOME: xdg },
+			env: { ...process.env, HOME: home, XDG_CONFIG_HOME: xdg, PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent") },
 		});
 		if (child.exitCode !== 0) throw new Error(`harness phase "${phase}" failed:\n${child.stderr.toString()}`);
 		const parsed = JSON.parse(child.stdout.toString()) as Record<string, unknown>;
@@ -229,20 +237,20 @@ try {
 	assert.ok(String(out.captured).includes("Captured →"), "/capture filed the item");
 	assert.ok(String(out.nowAfterSelect).includes(key), "/now selected the item");
 	assert.equal(out.plan, "stamped", "plan stamp landed");
-	assert.equal(out.sealedTaskPresent, true, "get_work renders the sealed auditor task");
-	assert.equal(out.wrongSpawnBlocked, true, "transformed-equivalent task refused before spawn");
-	assert.equal(out.spawnBlocked, false, "exact-byte auditor spawn not blocked");
+	assert.equal(out.hasRunAuditNextAction, true, "get_work renders next required action run_audit");
+	assert.equal(out.noSealedTaskBytes, true, "get_work omits sealed task bytes");
 	assert.ok(String(out.getWork).includes("PLAN PACKET"), "get_work renders the plan packet");
 	assert.ok(String(out.packetPlanBody).includes("## Verification"), "packet carries the exact stored plan body");
 	assert.match(String(out.packetReceiptSha), /^[0-9a-f]{64}$/, "packet cites the plan receipt sha256");
 	assert.deepEqual(out.packetCriteria, ["AC-1 the item closes done with a pushed candidate"], "description-fallback criteria flow into the packet");
 	assert.ok(String(out.verification).includes("verification receipt recorded"), "verification receipt");
 	assert.ok(String(out.verification).includes("audit manifest sealed"), "verification append seals the manifest");
-	assert.ok(String(out.audit).includes("the auditor reported PASS"), "settle minted the audit outcome");
+	assert.ok(String(out.audit).includes("verdict_pass") || String(out.audit).includes("the auditor reported PASS"), "settle minted the audit outcome");
+	assert.equal(out.isResumeDigest, true, "resumed summary in fresh session injects short re-entry digest");
 	assert.ok(String(out.closeout).includes("closeout receipt recorded"), "closeout receipt");
 	assert.ok(String(out.closeout).includes("Yield the turn now before the next close step"), "closeout carries queued delivery yield note");
 	assert.ok(String(out.closeout).includes("CLOSE ATTEMPT"), "closeout carries server-rendered checkpoint");
-	const notices = (out.doneUi as string[]).join("\n");
+	const notices = ((out.doneUi as string[]) ?? []).join("\n");
 	assert.ok(notices.includes("pushed"), "/done pushed the candidate");
 	assert.ok(notices.includes("done"), "/done completed the work");
 	assert.equal(out.batchFileExists, false, "staged cancel batch was consumed");
@@ -302,7 +310,7 @@ try {
 			{ command_type: "plan_stamp", passed: out.plan === "stamped" },
 			{ command_type: "summary_freeze", passed: headSha !== initialSha && git(probe, ["show", "HEAD:smoke.txt"]) === "candidate payload" },
 			{ command_type: "plan_packet", passed: String(out.getWork).includes("PLAN PACKET") && out.packetCommit === headSha && /^[0-9a-f]{64}$/.test(String(out.packetReceiptSha)) },
-			{ command_type: "auditor_spawn", passed: out.spawnBlocked === false && out.wrongSpawnBlocked === true && out.sealedTaskPresent === true },
+			{ command_type: "auditor_spawn", passed: out.hasRunAuditNextAction === true && out.noSealedTaskBytes === true },
 			{ command_type: "verification", passed: String(out.verification).includes("verification receipt recorded") && String(out.verification).includes("audit manifest sealed") },
 			{ command_type: "audit", passed: String(out.audit).includes("the auditor reported PASS") },
 			{ command_type: "audit_binding", passed: bound.find(r => r.kind === "audit")?.candidate_commit === headSha },

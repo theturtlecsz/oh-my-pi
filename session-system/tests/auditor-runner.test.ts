@@ -73,6 +73,8 @@ describe("renderNextActionBanner table-driven coverage (OMP-168)", () => {
 			'NEXT REQUIRED ACTION: work action:"append_evidence", work:"HOME-1", kind:"verification"',
 			'BLOCKED ACTIONS: run_audit, append_evidence kind:"closeout", /done',
 		]);
+		expect(lines[0]).toBe("STATUS: CLOSE ATTEMPT active");
+		expect(lines.filter(l => l.startsWith("NEXT REQUIRED ACTION:"))).toHaveLength(1);
 	});
 
 	test("audit_ready state banner", () => {
@@ -82,6 +84,8 @@ describe("renderNextActionBanner table-driven coverage (OMP-168)", () => {
 			'NEXT REQUIRED ACTION: work action:"run_audit", work:"HOME-1"',
 			'BLOCKED ACTIONS: append_evidence kind:"closeout", /done',
 		]);
+		expect(lines[0]).toBe("STATUS: CLOSE ATTEMPT audit_ready");
+		expect(lines.filter(l => l.startsWith("NEXT REQUIRED ACTION:"))).toHaveLength(1);
 	});
 
 	test("auditor_in_flight state banner", () => {
@@ -91,6 +95,8 @@ describe("renderNextActionBanner table-driven coverage (OMP-168)", () => {
 			"NEXT REQUIRED ACTION: wait for the current native run to settle and use get_work only for recovery",
 			"BLOCKED ACTIONS: run_audit, append_evidence, /done",
 		]);
+		expect(lines[0]).toBe("STATUS: CLOSE ATTEMPT auditor_in_flight");
+		expect(lines.filter(l => l.startsWith("NEXT REQUIRED ACTION:"))).toHaveLength(1);
 	});
 
 	test("audited state banner (authorized)", () => {
@@ -100,6 +106,8 @@ describe("renderNextActionBanner table-driven coverage (OMP-168)", () => {
 			'NEXT REQUIRED ACTION: work action:"append_evidence", work:"HOME-1", kind:"closeout"',
 			"BLOCKED ACTIONS: run_audit, /done",
 		]);
+		expect(lines[0]).toBe("STATUS: CLOSE ATTEMPT audited");
+		expect(lines.filter(l => l.startsWith("NEXT REQUIRED ACTION:"))).toHaveLength(1);
 	});
 
 	test("audited state banner (unauthorized)", () => {
@@ -109,6 +117,8 @@ describe("renderNextActionBanner table-driven coverage (OMP-168)", () => {
 			"NEXT REQUIRED ACTION: owner /summary must be entered in this session to authorize closeout review",
 			'BLOCKED ACTIONS: append_evidence kind:"closeout", /done',
 		]);
+		expect(lines[0]).toBe("STATUS: CLOSE ATTEMPT audited");
+		expect(lines.filter(l => l.startsWith("NEXT REQUIRED ACTION:"))).toHaveLength(1);
 	});
 
 	test("closeout_requested state banner", () => {
@@ -118,6 +128,8 @@ describe("renderNextActionBanner table-driven coverage (OMP-168)", () => {
 			"NEXT REQUIRED ACTION: owner /done closes this work",
 			"BLOCKED ACTIONS: run_audit, append_evidence",
 		]);
+		expect(lines[0]).toBe("STATUS: CLOSE ATTEMPT closeout_requested");
+		expect(lines.filter(l => l.startsWith("NEXT REQUIRED ACTION:"))).toHaveLength(1);
 	});
 
 	test("terminal or missing snapshot returns empty array", () => {

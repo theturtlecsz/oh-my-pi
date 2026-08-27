@@ -156,7 +156,7 @@ export interface IssueDetail {
 	digestPacket: string;
 	/** OMP-38: bounded ledger packet for audit reconstruction (work backend). */
 	planPacket?: PlanPacket;
-	/** OMP-50: the sealed auditor task, rendered byte-for-byte once it exists. */
+	/** OMP-50 / OMP-168: the sealed auditor task — internal input to run_audit only, never model-facing. */
 	auditTask?: SealedAuditTask;
 	/** OMP-140: attempt state snapshot from WorkService workflow data. */
 	attemptSnapshot?: CloseAttemptSnapshot;
