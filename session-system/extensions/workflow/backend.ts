@@ -15,9 +15,6 @@ export const CLOSEOUT_BOUNDARY =
 	"Closeout is explicit-command only: /summary (questionyourself + whatsmissing + close ritual) and /done run ONLY when Chris literally enters them — never start a summary, close proposal, health update, capture triage, or NOW handoff because work, a todo list, or the session looks finished; a keep-open verdict blocks every closeout action until he enters one.";
 export const STOP_REMINDER_BOUNDARY =
 	"Post the checkpoint silently. Never narrate bookkeeping or start /summary or /done.";
-export const PLAN_APPROVED_PREFIX = "**Plan approved**";
-export const EXECUTION_HANDOFF_PREFIX = "**Execution handoff**";
-export const SESSION_REVIEW_PREFIX = "**Session review**";
 export const CLOSEOUT_LOCK_REFUSAL =
 	"REFUSED — closeout lock (HOME-114): no owner-entered /summary or /done this session. record_health and cancel_work are wrap-up writes; they unlock only when Chris literally enters /summary or /done. If he wants this write, he must enter one of those commands himself — do not retry on your own.";
 
