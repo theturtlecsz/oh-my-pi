@@ -952,9 +952,15 @@ jobs:
    work_ledger_postgres:
       name: Work Ledger PostgreSQL integration
       runs-on: ubuntu-22.04
+      needs: [native_addons]
+      if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       steps:
          - uses: actions/checkout@v4
+         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
+         - uses: ./.github/actions/native-artifacts
+           with:
+              targets: linux-x64-baseline linux-x64-modern
          - uses: astral-sh/setup-uv@v6
          - name: Expose PostgreSQL binaries
            run: |
