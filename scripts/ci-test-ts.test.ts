@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildChildEnv, describeChunkFailure } from "./ci-test-ts.ts";
+import { buildChildEnv, describeChunkFailure, withTempAgentDir } from "./ci-test-ts.ts";
 
 // The two ways a chunk reaches SIGKILL are indistinguishable by exit code, so
 // these drive real subprocesses to produce a genuine 137 rather than asserting
@@ -91,35 +91,41 @@ describe("buildChildEnv", () => {
 		expect(env.BUN_JSC_numberOfGCMarkers).toBe("1");
 	});
 
-	test("cleans up temporary agent directory in try-finally lifecycle on success and failure", async () => {
-		const runInTempAgentDir = async (shouldFail: boolean) => {
-			const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-agent-test-"));
-			let capturedDir = agentDir;
-			try {
-				const env = buildChildEnv({ agentDir });
-				expect(env.PI_CODING_AGENT_DIR).toBe(agentDir);
-				const statBefore = await fs.stat(agentDir);
-				expect(statBefore.isDirectory()).toBe(true);
-				if (shouldFail) {
-					throw new Error("simulated test chunk failure");
-				}
-			} finally {
-				await fs.rm(agentDir, { recursive: true, force: true }).catch(() => {});
-			}
-			return capturedDir;
-		};
+	test("withTempAgentDir cleans up allocated directory after resolved callback", async () => {
+		let allocatedDir = "";
+		const result = await withTempAgentDir(async (agentDir, env) => {
+			allocatedDir = agentDir;
+			expect(env.PI_CODING_AGENT_DIR).toBe(agentDir);
+			const stat = await fs.stat(agentDir);
+			expect(stat.isDirectory()).toBe(true);
+			return "success-result";
+		});
 
-		const successDir = await runInTempAgentDir(false);
-		expect(await fs.stat(successDir).catch(() => null)).toBeNull();
+		expect(result).toBe("success-result");
+		expect(allocatedDir).not.toBe("");
+		// Allocated directory removed in finally
+		expect(await fs.stat(allocatedDir).catch(() => null)).toBeNull();
+	});
 
+	test("withTempAgentDir cleans up allocated directory after rejected callback", async () => {
+		let allocatedDir = "";
 		let errorThrown = false;
-		let failureDir = "";
 		try {
-			failureDir = await runInTempAgentDir(true);
-		} catch {
+			await withTempAgentDir(async (agentDir, env) => {
+				allocatedDir = agentDir;
+				expect(env.PI_CODING_AGENT_DIR).toBe(agentDir);
+				const stat = await fs.stat(agentDir);
+				expect(stat.isDirectory()).toBe(true);
+				throw new Error("simulated chunk failure");
+			});
+		} catch (error) {
 			errorThrown = true;
+			expect(error instanceof Error && error.message).toBe("simulated chunk failure");
 		}
+
 		expect(errorThrown).toBe(true);
-		expect(await fs.stat(failureDir).catch(() => null)).toBeNull();
+		expect(allocatedDir).not.toBe("");
+		// Allocated directory removed in finally on failure
+		expect(await fs.stat(allocatedDir).catch(() => null)).toBeNull();
 	});
 });

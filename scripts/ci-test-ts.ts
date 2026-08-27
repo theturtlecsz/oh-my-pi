@@ -410,9 +410,7 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 	}
 
 	for (let attempt = 1; ; attempt++) {
-		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-agent-"));
-		try {
-			const env = buildChildEnv({ agentDir });
+		const outcome = await withTempAgentDir(async (_agentDir, env) => {
 			const proc = Bun.spawn(testCommand.command, {
 				cwd,
 				env,
@@ -428,19 +426,18 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			}, chunkTimeoutMs());
 			const exitCode = await proc.exited;
 			clearTimeout(killTimer);
-			if (exitCode === 0) {
-				return;
-			}
-			if (!timedOut && BUN_CRASH_EXITS[exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
-				console.log(
-					`==> ${testCommand.label}: bun crashed (exit ${exitCode}); retrying (attempt ${attempt + 1}/${MAX_CHUNK_ATTEMPTS})`,
-				);
-				continue;
-			}
-			throw new Error(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}: ${renderedCommand}`);
-		} finally {
-			await fs.rm(agentDir, { recursive: true, force: true }).catch(() => {});
+			return { exitCode, timedOut };
+		});
+		if (outcome.exitCode === 0) {
+			return;
 		}
+		if (!outcome.timedOut && BUN_CRASH_EXITS[outcome.exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
+			console.log(
+				`==> ${testCommand.label}: bun crashed (exit ${outcome.exitCode}); retrying (attempt ${attempt + 1}/${MAX_CHUNK_ATTEMPTS})`,
+			);
+			continue;
+		}
+		throw new Error(`${testCommand.label} ${describeChunkFailure(outcome.exitCode, outcome.timedOut)}: ${renderedCommand}`);
 	}
 }
 
@@ -484,6 +481,24 @@ export function buildChildEnv(options: {
 		}
 	}
 	return env;
+}
+
+/**
+ * Allocate a unique temporary agent directory, run `fn(agentDir, env)` with
+ * PI_CODING_AGENT_DIR set, and guarantee the temporary directory is removed in
+ * `finally` on success, rejection, or error.
+ */
+export async function withTempAgentDir<T>(
+	fn: (agentDir: string, env: Record<string, string | undefined>) => Promise<T>,
+	baseEnv?: Record<string, string | undefined>,
+): Promise<T> {
+	const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-agent-"));
+	try {
+		const env = buildChildEnv({ agentDir, baseEnv });
+		return await fn(agentDir, env);
+	} finally {
+		await fs.rm(agentDir, { recursive: true, force: true }).catch(() => {});
+	}
 }
 
 // Per-chunk watchdog. A bun child that wedges (e.g. the panic handler
@@ -832,42 +847,38 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	async function runAttempt(
 		testCommand: TestCommand,
 	): Promise<{ exitCode: number; output: string; timedOut: boolean }> {
-		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-agent-"));
-		try {
-			const env = buildChildEnv({ agentDir });
+		return await withTempAgentDir(async (_agentDir, env) => {
 			const proc = Bun.spawn(testCommand.command, {
 				cwd: path.join(repoRoot, testCommand.cwd),
 				env,
 				stdout: "pipe",
 				stderr: "pipe",
 			});
-		const stdout = { text: "" };
-		const stderr = { text: "" };
-		const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
-		const stderrDrain = drainInto(proc.stderr as ReadableStream<Uint8Array>, stderr);
-		const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
-		// Watchdog: a wedged child (e.g. bun's panic handler deadlocking
-		// after a GC crash) would otherwise hang this worker forever.
-		let timedOut = false;
-		const killTimer = setTimeout(() => {
-			timedOut = true;
-			proc.kill("SIGKILL");
-		}, chunkTimeoutMs());
-		const exitCode = await proc.exited;
-		clearTimeout(killTimer);
-		if (!(await settleWithin(drains, 5000))) {
-			stdoutDrain.cancel();
-			stderrDrain.cancel();
-			await drains;
-		}
+			const stdout = { text: "" };
+			const stderr = { text: "" };
+			const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
+			const stderrDrain = drainInto(proc.stderr as ReadableStream<Uint8Array>, stderr);
+			const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
+			// Watchdog: a wedged child (e.g. bun's panic handler deadlocking
+			// after a GC crash) would otherwise hang this worker forever.
+			let timedOut = false;
+			const killTimer = setTimeout(() => {
+				timedOut = true;
+				proc.kill("SIGKILL");
+			}, chunkTimeoutMs());
+			const exitCode = await proc.exited;
+			clearTimeout(killTimer);
+			if (!(await settleWithin(drains, 5000))) {
+				stdoutDrain.cancel();
+				stderrDrain.cancel();
+				await drains;
+			}
 			return {
 				exitCode,
 				timedOut,
 				output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
 			};
-		} finally {
-			await fs.rm(agentDir, { recursive: true, force: true }).catch(() => {});
-		}
+		});
 	}
 
 	async function worker(): Promise<void> {
