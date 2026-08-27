@@ -221,7 +221,7 @@ jobs:
    # skips its version sentinel for workspace loads, so release addons load
    # fine under a newer checkout; a PR whose TS tests depend on changed
    # native behavior fails visibly and the native side lands via main.
-   # Main (self-hosted rust runner, cluster remote cache) builds all Linux-hosted targets with
+   # Main (self-hosted rust runner, remote cache) builds all Linux-hosted targets with
    # bazel. Job name says "bazel" for continuity with required checks.
    native_addons:
       name: Build native addons (bazel)
