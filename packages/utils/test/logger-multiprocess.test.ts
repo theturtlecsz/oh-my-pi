@@ -40,12 +40,10 @@ async function makeProbe(logsDir: string): Promise<string> {
 }
 
 describe("multiprocess file logging", () => {
-	it("prunes completed PID namespaces across short-lived invocations", async () => {
+	it("prunes completed PID namespaces across short-lived invocations and caps at 20 logs per day", async () => {
 		const logsDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-logger-retention-"));
 		roots.push(logsDir);
-		// macOS process identifiers are far below these values, so the fixtures
-		// are deterministically completed rather than briefly lingering as zombies.
-		const exitedPids = [9_000_001, 9_000_002];
+		const deadPids = Array.from({ length: 25 }, (_, i) => 9_000_001 + i);
 
 		await Bun.write(path.join(logsDir, ".release"), "");
 		const probePath = await makeProbe(logsDir);
@@ -68,22 +66,39 @@ describe("multiprocess file logging", () => {
 				String(date.getDate()).padStart(2, "0")
 			);
 		};
-		const retainedNames: string[] = [];
-		const expiredNames: string[] = [];
-		for (const pid of exitedPids) {
-			for (let daysAgo = -1; daysAgo <= 5; daysAgo++) {
+
+		// 1. Multi-day retention across 5 days (days 2..4 survive, -1 and 5 expire)
+		const multiDayPids = [9_000_101, 9_000_102];
+		const multiDayRetained: string[] = [];
+		const multiDayExpired: string[] = [];
+		for (const pid of multiDayPids) {
+			for (const daysAgo of [-1, 2, 3, 4, 5]) {
 				const name = `omp.${localDate(daysAgo)}.${pid}.log`;
 				await Bun.write(path.join(logsDir, name), name);
 				await fs.utimes(path.join(logsDir, name), 2, 2);
-				(daysAgo > 0 && daysAgo < 5 ? retainedNames : expiredNames).push(name);
+				(daysAgo > 0 && daysAgo < 5 ? multiDayRetained : multiDayExpired).push(name);
 			}
-			const rolloverName = `omp.${localDate(0)}.${pid}.log.1`;
-			await Bun.write(path.join(logsDir, rolloverName), rolloverName);
-			await fs.utimes(path.join(logsDir, rolloverName), 2, 2);
-			retainedNames.push(rolloverName);
 			await Bun.write(path.join(logsDir, `.omp.${pid}-audit.json`), "{}");
 		}
 
+		// 2. Day-level cap: on localDate(1), seed 25 dead PID logs with increasing mtimes
+		const capDay = localDate(1);
+
+		const dayCapRetained: string[] = [];
+		const dayCapExpired: string[] = [];
+		for (let i = 0; i < deadPids.length; i++) {
+			const pid = deadPids[i];
+			const name = `omp.${capDay}.${pid}.log`;
+			await Bun.write(path.join(logsDir, name), name);
+			const mtimeSec = 1000 + i * 10;
+			await fs.utimes(path.join(logsDir, name), mtimeSec, mtimeSec);
+			if (i >= deadPids.length - 20) {
+				dayCapRetained.push(name);
+			} else {
+				dayCapExpired.push(name);
+			}
+			await Bun.write(path.join(logsDir, `.omp.${pid}-audit.json`), "{}");
+		}
 		let currentPid = 0;
 		for (let restart = 0; restart < 2; restart++) {
 			const current = Bun.spawn([process.execPath, probePath], {
@@ -97,9 +112,12 @@ describe("multiprocess file logging", () => {
 		}
 
 		const entries = await fs.readdir(logsDir);
-		for (const expected of retainedNames) expect(entries).toContain(expected);
-		for (const expired of expiredNames) expect(entries).not.toContain(expired);
-		expect(entries.filter(name => name.endsWith(".log.1"))).toHaveLength(exitedPids.length);
+		for (const expected of multiDayRetained) expect(entries).toContain(expected);
+		for (const expired of multiDayExpired) expect(entries).not.toContain(expired);
+		for (const expected of dayCapRetained) expect(entries).toContain(expected);
+		for (const expired of dayCapExpired) expect(entries).not.toContain(expired);
+		const deadOnCapDay = entries.filter(name => name.startsWith(`omp.${capDay}.90000`));
+		expect(deadOnCapDay).toHaveLength(20);
 		expect(entries.filter(name => name.endsWith("-audit.json"))).toEqual([`.omp.${currentPid}-audit.json`]);
 	});
 });

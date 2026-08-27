@@ -55,7 +55,7 @@ function emitToSinks(level: LogLevel, message: string, context: Record<string, u
 
 const PROCESS_LOG_PATTERN = /^omp\.(\d{4}-\d{2}-\d{2})\.(\d+)\.log(?:\.(\d+))?$/;
 const PROCESS_AUDIT_PATTERN = /^\.omp\.(\d+)-audit\.json$/;
-const RETAINED_STALE_LOGS_PER_PROCESS_DAY = 1;
+const RETAINED_STALE_LOGS_PER_DAY = 20;
 const RETAINED_STALE_AUDIT_FILES = 0;
 const RETAINED_STALE_LOG_DAYS = 5;
 
@@ -69,10 +69,11 @@ function processIsRunning(pid: number): boolean {
 }
 
 /**
- * Retain one newest completed-process log per process/day within the current
- * and previous four local calendar days, and remove one-use audit files. Live
- * PID namespaces are never touched. The calendar-day boundary preserves daily
- * diagnostic coverage while bounding completed-process storage and scans.
+ * Retain up to 20 newest completed-process logs per local calendar day within
+ * the current and previous four local calendar days, and remove one-use audit
+ * files. Live PID namespaces are never touched. The calendar-day boundary
+ * preserves daily diagnostic coverage while bounding completed-process storage
+ * and scans.
  */
 function pruneStaleProcessLogs(dir: string): void {
 	let entries: fs.Dirent[];
@@ -91,7 +92,7 @@ function pruneStaleProcessLogs(dir: string): void {
 		`${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, "0")}-` +
 		String(cutoff.getDate()).padStart(2, "0");
 
-	const staleLogsByProcessDay = new Map<string, Array<{ path: string; rollover: number }>>();
+	const staleLogsByDay = new Map<string, Array<{ path: string; rollover: number }>>();
 	for (const entry of entries) {
 		if (!entry.isFile()) continue;
 		const logMatch = PROCESS_LOG_PATTERN.exec(entry.name);
@@ -111,7 +112,8 @@ function pruneStaleProcessLogs(dir: string): void {
 			continue;
 		}
 		if (!logMatch?.[1]) continue;
-		if (logMatch[1] < cutoffDate || logMatch[1] > currentDate) {
+		const dateKey = logMatch[1];
+		if (dateKey < cutoffDate || dateKey > currentDate) {
 			try {
 				fs.rmSync(entryPath, { force: true });
 			} catch {
@@ -120,17 +122,16 @@ function pruneStaleProcessLogs(dir: string): void {
 			continue;
 		}
 
-		const key = `${pidText}:${logMatch[1]}`;
-		const staleLogs = staleLogsByProcessDay.get(key) ?? [];
+		const staleLogs = staleLogsByDay.get(dateKey) ?? [];
 		staleLogs.push({
 			path: entryPath,
 			rollover: Number(logMatch[3] ?? 0),
 		});
-		staleLogsByProcessDay.set(key, staleLogs);
+		staleLogsByDay.set(dateKey, staleLogs);
 	}
 
-	for (const staleLogs of staleLogsByProcessDay.values()) {
-		if (staleLogs.length <= RETAINED_STALE_LOGS_PER_PROCESS_DAY) continue;
+	for (const staleLogs of staleLogsByDay.values()) {
+		if (staleLogs.length <= RETAINED_STALE_LOGS_PER_DAY) continue;
 		const ranked: Array<{ path: string; mtimeMs: number; rollover: number }> = [];
 		for (const stale of staleLogs) {
 			try {
@@ -142,7 +143,7 @@ function pruneStaleProcessLogs(dir: string): void {
 		ranked.sort(
 			(a, b) => b.mtimeMs - a.mtimeMs || b.rollover - a.rollover || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
 		);
-		for (const stale of ranked.slice(RETAINED_STALE_LOGS_PER_PROCESS_DAY)) {
+		for (const stale of ranked.slice(RETAINED_STALE_LOGS_PER_DAY)) {
 			try {
 				fs.rmSync(stale.path, { force: true });
 			} catch {

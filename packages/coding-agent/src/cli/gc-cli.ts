@@ -62,6 +62,7 @@ export interface ArchiveGcResult {
 	keptNewestPerCwd: number;
 	wouldArchive: number;
 	archived: number;
+	prunedProjectRoots: number;
 	historyRowsDeleted: number;
 	statsRowsDeleted: number;
 	ftsRebuilt: boolean;
@@ -385,10 +386,16 @@ async function listNestedSessionsReadOnly(artifactsRoot: string): Promise<Sessio
 	return sessions;
 }
 
+async function isSessionActive(session: SessionInfo): Promise<boolean> {
+	if (!session.status || !ACTIVE_STATUSES.has(session.status)) return false;
+	if (!session.cwd || !path.isAbsolute(session.cwd)) return true;
+	return await pathExists(session.cwd);
+}
+
 async function hasLiveNestedSessions(session: SessionInfo, archiveBeforeMs: number): Promise<boolean> {
 	for (const nested of await listNestedSessionsReadOnly(sessionArtifactsPath(session.path))) {
-		if (nested.status && ACTIVE_STATUSES.has(nested.status)) return true;
 		if (nested.modified.getTime() > archiveBeforeMs) return true;
+		if (await isSessionActive(nested)) return true;
 	}
 	return false;
 }
@@ -1231,6 +1238,7 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 		keptNewestPerCwd: 0,
 		wouldArchive: 0,
 		archived: 0,
+		prunedProjectRoots: 0,
 		historyRowsDeleted: 0,
 		statsRowsDeleted: 0,
 		ftsRebuilt: false,
@@ -1242,11 +1250,11 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 	const archiveBeforeMs = Date.now() - GC_WRITE_GRACE_MS;
 
 	for (const session of sessions) {
-		if (session.status && ACTIVE_STATUSES.has(session.status)) {
+		if (session.modified.getTime() > archiveBeforeMs) {
 			result.skippedActive += 1;
 			continue;
 		}
-		if (session.modified.getTime() > archiveBeforeMs) {
+		if (await isSessionActive(session)) {
 			result.skippedActive += 1;
 			continue;
 		}
@@ -1292,7 +1300,33 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 
 	await cleanupHistoryRowsForArchivedSessions(options, archiveRoot, archivedSessionIds, result);
 	await cleanupStatsRowsForArchivedSessions(options, archiveRoot, archivedSessions, result);
+	result.prunedProjectRoots = await pruneEmptyProjectRoots(sessionsRoot, result);
 	return result;
+}
+
+async function pruneEmptyProjectRoots(sessionsRoot: string, result: ArchiveGcResult): Promise<number> {
+	let count = 0;
+	try {
+		const entries = await fs.readdir(sessionsRoot, { withFileTypes: true });
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			const dirPath = path.join(sessionsRoot, entry.name);
+			try {
+				const children = await fs.readdir(dirPath);
+				if (children.length === 0) {
+					await fs.rmdir(dirPath);
+					count += 1;
+				}
+			} catch (error) {
+				result.errors.push(`prune empty root ${entry.name}: ${errorMessage(error)}`);
+			}
+		}
+	} catch (error) {
+		if (codeOf(error) !== "ENOENT") {
+			result.errors.push(`prune empty roots: ${errorMessage(error)}`);
+		}
+	}
+	return count;
 }
 
 async function checkpointWal(dbPath: string, apply: boolean): Promise<WalCheckpointResult> {
@@ -1550,6 +1584,9 @@ function renderText(result: GcResult): string {
 			`sessions: ${result.archive.archived}/${result.archive.wouldArchive} archived, ${result.archive.historyRowsDeleted} history rows and ${result.archive.statsRowsDeleted} stats rows removed`,
 		);
 		if (result.archive.skippedActive > 0) lines.push(`sessions skipped active: ${result.archive.skippedActive}`);
+		if (result.archive.prunedProjectRoots > 0) {
+			lines.push(`session roots pruned: ${result.archive.prunedProjectRoots}`);
+		}
 		if (result.archive.errors.length > 0) lines.push(`session errors: ${result.archive.errors.length}`);
 	}
 	if (result.wal) {

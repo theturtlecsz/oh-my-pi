@@ -409,33 +409,38 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 		return;
 	}
 
-	const env = buildChildEnv();
 	for (let attempt = 1; ; attempt++) {
-		const proc = Bun.spawn(testCommand.command, {
-			cwd,
-			env,
-			stdout: "inherit",
-			stderr: "inherit",
-		});
-		// Watchdog, mirroring the parallel path: record that *we* killed the child,
-		// otherwise the resulting 137 is indistinguishable from an OOM kill.
-		let timedOut = false;
-		const killTimer = setTimeout(() => {
-			timedOut = true;
-			proc.kill("SIGKILL");
-		}, chunkTimeoutMs());
-		const exitCode = await proc.exited;
-		clearTimeout(killTimer);
-		if (exitCode === 0) {
-			return;
+		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-agent-"));
+		try {
+			const env = buildChildEnv({ agentDir });
+			const proc = Bun.spawn(testCommand.command, {
+				cwd,
+				env,
+				stdout: "inherit",
+				stderr: "inherit",
+			});
+			// Watchdog, mirroring the parallel path: record that *we* killed the child,
+			// otherwise the resulting 137 is indistinguishable from an OOM kill.
+			let timedOut = false;
+			const killTimer = setTimeout(() => {
+				timedOut = true;
+				proc.kill("SIGKILL");
+			}, chunkTimeoutMs());
+			const exitCode = await proc.exited;
+			clearTimeout(killTimer);
+			if (exitCode === 0) {
+				return;
+			}
+			if (!timedOut && BUN_CRASH_EXITS[exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
+				console.log(
+					`==> ${testCommand.label}: bun crashed (exit ${exitCode}); retrying (attempt ${attempt + 1}/${MAX_CHUNK_ATTEMPTS})`,
+				);
+				continue;
+			}
+			throw new Error(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}: ${renderedCommand}`);
+		} finally {
+			await fs.rm(agentDir, { recursive: true, force: true }).catch(() => {});
 		}
-		if (!timedOut && BUN_CRASH_EXITS[exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
-			console.log(
-				`==> ${testCommand.label}: bun crashed (exit ${exitCode}); retrying (attempt ${attempt + 1}/${MAX_CHUNK_ATTEMPTS})`,
-			);
-			continue;
-		}
-		throw new Error(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}: ${renderedCommand}`);
 	}
 }
 
@@ -461,13 +466,17 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 // `JSAbortSignal::visitAdditionalChildrenInGCThread` reading a dead `reason`
 // cell), where no marker/concurrency knob applies. That residual crash is
 // handled by retrying crashed chunks in a fresh process (MAX_CHUNK_ATTEMPTS).
-function buildChildEnv(): Record<string, string | undefined> {
+export function buildChildEnv(options: {
+	agentDir?: string;
+	baseEnv?: Record<string, string | undefined>;
+} = {}): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
-		...Bun.env,
+		...(options.baseEnv ?? Bun.env),
 		GITHUB_ACTIONS: "",
 		PI_TEST_RUNTIME: "1",
 		BUN_JSC_useConcurrentGC: "0",
 		BUN_JSC_numberOfGCMarkers: "1",
+		...(options.agentDir ? { PI_CODING_AGENT_DIR: options.agentDir } : {}),
 	};
 	for (const key of Object.keys(env)) {
 		if (isScrubbedEnvVar(key)) {
@@ -768,7 +777,6 @@ export function formatFailureReport(failures: ChunkOutcome[], total: number, rep
 // failures are collected and reported together instead of failing fast, so one
 // run surfaces every broken chunk and exits non-zero without a runner stack trace.
 export async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
-	const env = buildChildEnv();
 	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
 	let completed = 0;
@@ -824,12 +832,15 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	async function runAttempt(
 		testCommand: TestCommand,
 	): Promise<{ exitCode: number; output: string; timedOut: boolean }> {
-		const proc = Bun.spawn(testCommand.command, {
-			cwd: path.join(repoRoot, testCommand.cwd),
-			env,
-			stdout: "pipe",
-			stderr: "pipe",
-		});
+		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-agent-"));
+		try {
+			const env = buildChildEnv({ agentDir });
+			const proc = Bun.spawn(testCommand.command, {
+				cwd: path.join(repoRoot, testCommand.cwd),
+				env,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
 		const stdout = { text: "" };
 		const stderr = { text: "" };
 		const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
@@ -849,11 +860,14 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 			stderrDrain.cancel();
 			await drains;
 		}
-		return {
-			exitCode,
-			timedOut,
-			output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
-		};
+			return {
+				exitCode,
+				timedOut,
+				output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
+			};
+		} finally {
+			await fs.rm(agentDir, { recursive: true, force: true }).catch(() => {});
+		}
 	}
 
 	async function worker(): Promise<void> {

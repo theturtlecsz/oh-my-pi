@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { describeChunkFailure } from "./ci-test-ts.ts";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { buildChildEnv, describeChunkFailure } from "./ci-test-ts.ts";
 
 // The two ways a chunk reaches SIGKILL are indistinguishable by exit code, so
 // these drive real subprocesses to produce a genuine 137 rather than asserting
@@ -69,5 +72,54 @@ describe("describeChunkFailure", () => {
 			if (previous === undefined) delete Bun.env.OMP_TEST_CHUNK_TIMEOUT;
 			else Bun.env.OMP_TEST_CHUNK_TIMEOUT = previous;
 		}
+	});
+});
+
+describe("buildChildEnv", () => {
+	test("overrides parent PI_CODING_AGENT_DIR with provided agentDir", () => {
+		const baseEnv = {
+			PI_CODING_AGENT_DIR: "/parent/agent/dir",
+			SOME_OTHER_VAR: "kept",
+			AWS_SECRET_ACCESS_KEY: "scrubbed",
+		};
+		const env = buildChildEnv({ agentDir: "/child/temp/agent/dir", baseEnv });
+		expect(env.PI_CODING_AGENT_DIR).toBe("/child/temp/agent/dir");
+		expect(env.SOME_OTHER_VAR).toBe("kept");
+		expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+		expect(env.PI_TEST_RUNTIME).toBe("1");
+		expect(env.BUN_JSC_useConcurrentGC).toBe("0");
+		expect(env.BUN_JSC_numberOfGCMarkers).toBe("1");
+	});
+
+	test("cleans up temporary agent directory in try-finally lifecycle on success and failure", async () => {
+		const runInTempAgentDir = async (shouldFail: boolean) => {
+			const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-agent-test-"));
+			let capturedDir = agentDir;
+			try {
+				const env = buildChildEnv({ agentDir });
+				expect(env.PI_CODING_AGENT_DIR).toBe(agentDir);
+				const statBefore = await fs.stat(agentDir);
+				expect(statBefore.isDirectory()).toBe(true);
+				if (shouldFail) {
+					throw new Error("simulated test chunk failure");
+				}
+			} finally {
+				await fs.rm(agentDir, { recursive: true, force: true }).catch(() => {});
+			}
+			return capturedDir;
+		};
+
+		const successDir = await runInTempAgentDir(false);
+		expect(await fs.stat(successDir).catch(() => null)).toBeNull();
+
+		let errorThrown = false;
+		let failureDir = "";
+		try {
+			failureDir = await runInTempAgentDir(true);
+		} catch {
+			errorThrown = true;
+		}
+		expect(errorThrown).toBe(true);
+		expect(await fs.stat(failureDir).catch(() => null)).toBeNull();
 	});
 });

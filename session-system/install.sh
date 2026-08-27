@@ -22,7 +22,10 @@ done
 # --print-manifest so the manifest can never drift from what install.sh manages.
 EXT_DIR="$HOME/.omp/agent/extensions"
 AGENT_SKILLS="summary questionyourself whatsmissing"
-OMP_SKILLS="intake caveman caveman-commit caveman-compress caveman-help caveman-review notebooklm prompt-master task-observer vibe-check wiz-ccr-creator wiz-mcp"
+OMP_SKILLS="intake caveman caveman-commit caveman-review task-observer"
+CLAUDE_SKILLS="summary questionyourself whatsmissing intake task-observer"
+CODEX_SKILLS="task-observer"
+RETIRED_SKILLS="caveman-compress caveman-help notebooklm prompt-master vibe-check wiz-ccr-creator wiz-mcp"
 managed_destinations() { # every managed live path outside the extensions set
   printf '%s\n' \
     "$HOME/.omp/agent/agents/auditor.md" \
@@ -34,6 +37,11 @@ managed_destinations() { # every managed live path outside the extensions set
   local s
   for s in $AGENT_SKILLS; do printf '%s\n' "$HOME/.agents/skills/$s"; done
   for s in $OMP_SKILLS; do printf '%s\n' "$HOME/.omp/agent/skills/$s"; done
+  for s in $CLAUDE_SKILLS; do printf '%s\n' "$HOME/.claude/skills/$s"; done
+  for s in $CODEX_SKILLS; do printf '%s\n' "$HOME/.codex/skills/$s"; done
+  for s in $RETIRED_SKILLS; do
+    printf '%s\n' "$HOME/.omp/agent/skills/$s" "$HOME/.claude/skills/$s" "$HOME/.codex/skills/$s"
+  done
 }
 
 # --print-manifest: read-only. One TSV line per managed artifact:
@@ -169,6 +177,17 @@ for s in $AGENT_SKILLS; do
 done
 for s in $OMP_SKILLS; do
   place "skills/$s" "$HOME/.omp/agent/skills/$s"
+done
+for s in $CLAUDE_SKILLS; do
+  place "skills/$s" "$HOME/.claude/skills/$s"
+done
+for s in $CODEX_SKILLS; do
+  place "skills/$s" "$HOME/.codex/skills/$s"
+done
+for s in $RETIRED_SKILLS; do
+  unplace "$HOME/.omp/agent/skills/$s"
+  unplace "$HOME/.claude/skills/$s"
+  unplace "$HOME/.codex/skills/$s"
 done
 # prompts/ is archive-only by ruling 2026-08-10: work routes through the
 # ledger, never through ~/PROMPT-*.md files — nothing from prompts/ gets linked.

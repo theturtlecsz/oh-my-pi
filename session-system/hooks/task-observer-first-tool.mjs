@@ -22,9 +22,10 @@
 // - Subagents and unknown layouts fail open without writing a marker, so they
 //   are reclassified on later calls. Once the main session writes its loaded
 //   marker, task-spawned sessions sharing its id take the marker fast-path.
-// - Only a read whose tool_args.path is exactly skill://task-observer passes
-//   before the marker exists; prefix matching would unblock on range
-//   selectors (skill://task-observer:1-50) loading a truncated skill.
+// - Only a read whose tool_args.path is exactly
+//   skill://task-observer/references/session-start.md or skill://task-observer
+//   passes before the marker exists; prefix matching would unblock on range
+//   selectors loading a truncated file.
 // - Fail open (exit 0) on missing session id, unparseable payload, or an
 //   envelope without a usable tool_name: a shape change in the hook contract
 //   must degrade to no-enforcement, never to blocking every tool with no
@@ -54,14 +55,14 @@ const name = typeof payload?.tool_name === "string" ? payload.tool_name : ""
 if (!name) process.exit(0) // envelope shape changed — degrade open, never brick
 
 const toolPath = String(payload.tool_args?.path ?? "")
-if (name === "read" && toolPath === "skill://task-observer") {
+if (name === "read" && (toolPath === "skill://task-observer/references/session-start.md" || toolPath === "skill://task-observer")) {
   try { fs.writeFileSync(marker, "loaded\n") } catch {}
   process.exit(0)
 }
 
 console.error(
   "task-observer-first-tool: this session has not loaded the Task Observer yet (obs #152->#177 lineage). " +
-  'Read it first — call the read tool with {"path":"skill://task-observer","i":"Loading Task Observer"} — ' +
+  'Read it first — call the read tool with {"path":"skill://task-observer/references/session-start.md","i":"Loading Task Observer session start"} — ' +
   "then retry this exact tool call. Applies once per session."
 )
 process.exit(2)

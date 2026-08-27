@@ -44,16 +44,14 @@ const MANAGED_SINGLETONS = [
 	"/.omp/agent/hook/task-observer-first-tool.mjs",
 ];
 const AGENT_SKILLS = ["summary", "questionyourself", "whatsmissing"];
-const OMP_SKILLS = [
-	"intake",
-	"caveman",
-	"caveman-commit",
+const OMP_SKILLS = ["intake", "caveman", "caveman-commit", "caveman-review", "task-observer"];
+const CLAUDE_SKILLS = ["summary", "questionyourself", "whatsmissing", "intake", "task-observer"];
+const CODEX_SKILLS = ["task-observer"];
+const RETIRED_SKILLS = [
 	"caveman-compress",
 	"caveman-help",
-	"caveman-review",
 	"notebooklm",
 	"prompt-master",
-	"task-observer",
 	"vibe-check",
 	"wiz-ccr-creator",
 	"wiz-mcp",
@@ -65,8 +63,8 @@ describe("install.sh --print-manifest", () => {
 		const result = runInstall(home, "--print-manifest");
 		expect(result.exitCode, result.stderr).toBe(0);
 		const lines = result.stdout.split("\n").filter(Boolean);
-		// ext root + 6 singletons + 3 agent skills + 12 omp skills, all absent
-		expect(lines).toHaveLength(22);
+		// ext root + 6 singletons + 3 agent skills + 5 omp skills + 5 claude skills + 1 codex skill + 21 retired skill destinations, all absent
+		expect(lines).toHaveLength(42);
 		for (const line of lines) {
 			const cells = line.split("\t");
 			expect(cells).toHaveLength(4);
@@ -109,6 +107,17 @@ describe("install.sh --print-manifest", () => {
 		}
 		for (const skill of OMP_SKILLS) {
 			expect(byPath[`${home}/.omp/agent/skills/${skill}`]?.[1]).toBe("symlink");
+		}
+		for (const skill of CLAUDE_SKILLS) {
+			expect(byPath[`${home}/.claude/skills/${skill}`]?.[1]).toBe("symlink");
+		}
+		for (const skill of CODEX_SKILLS) {
+			expect(byPath[`${home}/.codex/skills/${skill}`]?.[1]).toBe("symlink");
+		}
+		for (const skill of RETIRED_SKILLS) {
+			expect(byPath[`${home}/.omp/agent/skills/${skill}`]?.[1], `retired omp skill ${skill}`).toBe("absent");
+			expect(byPath[`${home}/.claude/skills/${skill}`]?.[1], `retired claude skill ${skill}`).toBe("absent");
+			expect(byPath[`${home}/.codex/skills/${skill}`]?.[1], `retired codex skill ${skill}`).toBe("absent");
 		}
 		// every managed symlink resolves into this repository checkout
 		const repoRoot = join(import.meta.dir, "..", "..");

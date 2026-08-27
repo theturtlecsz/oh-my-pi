@@ -21,13 +21,18 @@ const arbitraryTool = JSON.stringify({
 	tool_name: "bash",
 	tool_args: {},
 })
-const observerRead = JSON.stringify({
+const digestRead = JSON.stringify({
+	tool_name: "read",
+	tool_args: {
+		path: "skill://task-observer/references/session-start.md",
+	},
+})
+const fullSkillRead = JSON.stringify({
 	tool_name: "read",
 	tool_args: {
 		path: "skill://task-observer",
 	},
 })
-
 let home: string
 let tempDir: string
 
@@ -94,10 +99,19 @@ describe("task-observer-first-tool", () => {
 		expect(existsSync(markerPath())).toBe(false)
 	})
 
-	test("loads task-observer from the exact skill path and writes the loaded marker", () => {
+	test("loads task-observer from the digest path and writes the loaded marker", () => {
 		createDirectoryLayout()
 
-		const result = runHook(observerRead)
+		const result = runHook(digestRead)
+
+		expect(result.status).toBe(0)
+		expect(readFileSync(markerPath(), "utf8")).toContain("loaded")
+	})
+
+	test("loads task-observer from the full skill episode path and writes the loaded marker", () => {
+		createDirectoryLayout()
+
+		const result = runHook(fullSkillRead)
 
 		expect(result.status).toBe(0)
 		expect(readFileSync(markerPath(), "utf8")).toContain("loaded")
@@ -105,7 +119,7 @@ describe("task-observer-first-tool", () => {
 
 	test("allows an arbitrary tool through the loaded-marker fast-path", () => {
 		createDirectoryLayout()
-		expect(runHook(observerRead).status).toBe(0)
+		expect(runHook(digestRead).status).toBe(0)
 
 		rmSync(join(home, ".omp", "agent", "sessions"), { recursive: true, force: true })
 		const result = runHook(arbitraryTool)
@@ -152,17 +166,34 @@ describe("task-observer-first-tool", () => {
 		expect(existsSync(markerPath())).toBe(false)
 	})
 
-	test("does not accept a task-observer range selector", () => {
+	test("does not accept a task-observer range selector on full skill or digest", () => {
 		createDirectoryLayout()
 
-		const result = runHook(JSON.stringify({
+		const result1 = runHook(JSON.stringify({
 			tool_name: "read",
 			tool_args: {
 				path: "skill://task-observer:1-50",
 			},
 		}))
-
-		expect(result.status).toBe(2)
+		expect(result1.status).toBe(2)
 		expect(existsSync(markerPath())).toBe(false)
+
+		const result2 = runHook(JSON.stringify({
+			tool_name: "read",
+			tool_args: {
+				path: "skill://task-observer/references/session-start.md:1-50",
+			},
+		}))
+		expect(result2.status).toBe(2)
+		expect(existsSync(markerPath())).toBe(false)
+	})
+
+	test("session-start digest is <= 2,048 bytes", () => {
+		const digestFile = fileURLToPath(
+			new URL("../skills/task-observer/references/session-start.md", import.meta.url),
+		)
+		const bytes = readFileSync(digestFile).length
+		expect(bytes).toBeGreaterThan(0)
+		expect(bytes).toBeLessThanOrEqual(2048)
 	})
 })

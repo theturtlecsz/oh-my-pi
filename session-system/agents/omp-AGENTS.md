@@ -106,9 +106,10 @@ Three-part rule:
 ## Task Observer (installed 2026-07-18, owner-approved activation)
 
 At the start of any task-oriented session — any interaction where you will
-use tools and produce deliverables — invoke the `task-observer` skill before
-beginning work, so skill improvement opportunities are captured throughout
-the session.
+use tools and produce deliverables — read `skill://task-observer/references/session-start.md`
+before beginning work, so skill improvement opportunities are captured
+throughout the session. Load the full `skill://task-observer` only for its
+episodes (logging observations, weekly reviews, editing or staging skills).
 
 When loading any skill, check the observation log
 (`~/.agents/skill-observations/log.md`) for OPEN

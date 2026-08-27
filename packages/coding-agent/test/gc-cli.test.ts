@@ -62,13 +62,19 @@ async function writeSession(
 	project: string,
 	id: string,
 	status: "complete" | "pending" | "interrupted",
-	options: { blobRef?: string; ageDays?: number; filename?: string } = {},
+	options: { blobRef?: string; ageDays?: number; filename?: string; cwd?: string } = {},
 ): Promise<string> {
 	const sessionDir = path.join(getSessionsDir(agentDir), project);
 	await fs.mkdir(sessionDir, { recursive: true });
 	const file = path.join(sessionDir, `${options.filename ?? id}.jsonl`);
 	const lines = [
-		JSON.stringify({ type: "session", version: 3, id, timestamp: "2026-01-01T00:00:00.000Z", cwd: "/tmp" }),
+		JSON.stringify({
+			type: "session",
+			version: 3,
+			id,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			cwd: options.cwd ?? "/tmp",
+		}),
 	];
 	if (options.blobRef) {
 		lines.push(JSON.stringify({ type: "message", message: { role: "user", content: options.blobRef } }));
@@ -1761,5 +1767,108 @@ describe("runGcCommand lock handling", () => {
 		);
 		expect(await Bun.file(lockPath).exists()).toBe(true);
 		expect(await Bun.file(breakerPath).exists()).toBe(true);
+	});
+});
+
+describe("runGcCommand missing cwd and empty root pruning", () => {
+	test("archives active sessions when their recorded cwd no longer exists", async () => {
+		const missingCwd = path.join(root, "non-existent-cwd-12345");
+		const session = await writeSession(root, "project-orphan", "orphaned-active", "pending", {
+			ageDays: 1,
+			cwd: missingCwd,
+		});
+
+		const result = await runGcCommand({
+			flags: {
+				agentDir: root,
+				archive: true,
+				coldArchiveAfterDays: 0,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+				apply: true,
+			},
+		});
+
+		expect(result.archive?.wouldArchive).toBe(1);
+		expect(result.archive?.archived).toBe(1);
+		expect(result.archive?.skippedActive).toBe(0);
+		expect(await Bun.file(session).exists()).toBe(false);
+	});
+
+	test("preserves active sessions when their recorded cwd exists", async () => {
+		const existingCwd = path.join(root, "live-project-dir");
+		await fs.mkdir(existingCwd, { recursive: true });
+		const session = await writeSession(root, "project-live", "live-active", "pending", {
+			ageDays: 1,
+			cwd: existingCwd,
+		});
+
+		const result = await runGcCommand({
+			flags: {
+				agentDir: root,
+				archive: true,
+				coldArchiveAfterDays: 0,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+				apply: true,
+			},
+		});
+
+		expect(result.archive?.wouldArchive).toBe(0);
+		expect(result.archive?.archived).toBe(0);
+		expect(result.archive?.skippedActive).toBe(1);
+		expect(await Bun.file(session).exists()).toBe(true);
+	});
+
+	test("dry-run does not mutate active sessions or prune empty directories", async () => {
+		const missingCwd = path.join(root, "missing-cwd-dry");
+		const session = await writeSession(root, "project-dry", "dry-session", "pending", {
+			ageDays: 1,
+			cwd: missingCwd,
+		});
+		const projectDir = path.dirname(session);
+
+		const result = await runGcCommand({
+			flags: {
+				agentDir: root,
+				archive: true,
+				coldArchiveAfterDays: 0,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+				apply: false,
+			},
+		});
+
+		expect(result.archive?.wouldArchive).toBe(1);
+		expect(result.archive?.archived).toBe(0);
+		expect(result.archive?.prunedProjectRoots).toBe(0);
+		expect(await Bun.file(session).exists()).toBe(true);
+		expect(await fs.stat(projectDir).then(() => true, () => false)).toBe(true);
+	});
+
+	test("prunes empty immediate project root directories after applied archive", async () => {
+		const missingCwd = path.join(root, "pruned-cwd");
+		const session = await writeSession(root, "project-empty-prune", "archived-1", "complete", {
+			ageDays: 1,
+			cwd: missingCwd,
+		});
+		const projectDir = path.dirname(session);
+		expect(await fs.stat(projectDir).then(() => true, () => false)).toBe(true);
+
+		const result = await runGcCommand({
+			flags: {
+				agentDir: root,
+				archive: true,
+				coldArchiveAfterDays: 0,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+				apply: true,
+			},
+		});
+
+		expect(result.archive?.archived).toBe(1);
+		expect(result.archive?.prunedProjectRoots).toBe(1);
+		// Empty project directory was pruned
+		expect(await fs.stat(projectDir).then(() => true, () => false)).toBe(false);
 	});
 });

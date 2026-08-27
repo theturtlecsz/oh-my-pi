@@ -1,19 +1,11 @@
 ---
 name: task-observer
 description: >
-  Monitors task execution for skill improvement opportunities. Use this skill
-  during ANY multi-step task, agentic workflow, or substantive work session where
-  the agent is using tools and producing deliverables. It captures patterns, user
-  corrections, workflow insights, and methodology worth preserving as reusable
-  skills. Also triggers during post-task feedback discussions and when the user
-  explicitly mentions skill observations, improvements, the observation log,
-  skill taxonomy, or asks the agent to watch for skill opportunities. Also known
-  as "One Skill to Rule Them All" — trigger on this phrase too. IMPORTANT:
-  this skill should be invoked at the start of every task-oriented session — if
-  you are about to use tools to produce deliverables, invoke this skill first.
-  For reliable activation, pair this description with a CLAUDE.md instruction
-  or harness-level session-start hook (see Recommended Activation Setup) —
-  description-level matching alone is not enforceable.
+  Observation logging, backlog reviews, and skill authoring/improvement for the
+  Task Observer methodology. Trigger when logging observations, marking todo
+  checkpoints, running weekly reviews, editing or staging skills, or when the
+  user asks about skill methodology, observation backlog, or skill improvements.
+  Routine task sessions start by reading skill://task-observer/references/session-start.md.
 ---
 
 # Task Observer — Continuous Skill Discovery & Improvement
@@ -45,24 +37,24 @@ configuration pins it elsewhere.
 
 ## Reference files — load on demand, not up front
 
-- `references/weekly-review.md` — the comprehensive review procedure
+- references/session-start.md — session-start startup digest (<=2 KB) for routine task sessions.
+- references/weekly-review.md — the comprehensive review procedure
   (scheduled or 7-day fallback), approval policy, delivery/staging of
   updated skills. Load when a review triggers or the user asks for one.
-- `references/skill-authoring.md` — taxonomy details, licensing, attribution
+- references/skill-authoring.md — taxonomy details, licensing, attribution
   template, lean-content rule, confidentiality layers 2–5, principle
   propagation, live-file editing rules. Load before creating or editing any
   skill.
-- `references/environments.md` — activation/config setup, compaction
+- references/environments.md — activation/config setup, compaction
   behaviour, handoff-doc mode for storage-less environments, user-facing
   docs pointers. Load for setup questions or when there's no filesystem.
-
 These loads are mandatory steps, not suggestions: when an episode fires
 (review triggers → weekly-review; creating/editing a skill →
 skill-authoring; setup/no-filesystem → environments), load the file before
 proceeding — never improvise the episode from this core file. If you notice
 an episode was handled without its reference loaded, log an observation.
 
-**Bundle manifest:** this skill consists of `SKILL.md` plus the three
+**Bundle manifest:** this skill consists of `SKILL.md` plus the four
 reference files listed above. If a referenced file is missing, the install
 is incomplete: proceed using the rules in this file, tell the user which
 files are missing, and point them to the full bundle at the canonical
@@ -70,6 +62,9 @@ source (for the published version, the repository in the attribution
 above).
 
 ## Session Start Protocol
+
+Routine task sessions start by reading references/session-start.md. When full
+Task Observer is active, the complete startup protocol is:
 
 1. If `skill-observations/log.md` or `cross-cutting-principles.md` don't
    exist, create them (templates below / in the principles section of
