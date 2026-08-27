@@ -140,7 +140,7 @@
     "stats:followups": "python3 scripts/session-stats/analyze.py followups",
     "stats:audit": "bun scripts/session-stats/audit.ts",
     "test:py": "uv run --project python/omp-work --extra dev python -m pytest -x python/omp-work/tests && uv run --project python/omp-rpc --with pytest python -m pytest -x python/omp-rpc/tests && uv run --project python/robomp --extra dev python -m pytest -x python/robomp/tests",
-    "test:py:work-ledger:integration": "OMP_WORK_POSTGRES_INTEGRATION=1 uv run --project python/omp-work --directory python/omp-work pytest tests/test_postgres_operations.py tests/test_work_service.py tests/test_workflow_service.py",
+    "test:py:work-ledger:integration": "OMP_WORK_POSTGRES_INTEGRATION=1 uv run --project python/omp-work pytest python/omp-work/tests/test_postgres_operations.py python/omp-work/tests/test_work_service.py python/omp-work/tests/test_workflow_service.py",
     "test:session:smoke": "OMP_WORK_POSTGRES_INTEGRATION=1 bun run session-system/tests/work-service-candidate-smoke.ts",
     "robomp:install": "pip install -e 'python/robomp[dev]'",
     "robomp:serve": "python3 -m robomp serve",
