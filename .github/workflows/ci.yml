@@ -957,7 +957,14 @@ jobs:
          - uses: ./.github/actions/bun-install
          - uses: astral-sh/setup-uv@v6
          - name: Expose PostgreSQL binaries
-           run: echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+           run: |
+              if ! command -v pg_config >/dev/null 2>&1 || [ "$(pg_config --version | grep -oE '[0-9]+' | head -n1)" != "18" ]; then
+                sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+                curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/postgresql.gpg
+                sudo apt-get update
+                sudo apt-get install -y postgresql-18 postgresql-client-18
+              fi
+              echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
          - name: Run PostgreSQL integration
            run: bun run test:py:work-ledger:integration
          - name: Run session candidate smoke
