@@ -120,4 +120,70 @@ describe("multiprocess file logging", () => {
 		expect(deadOnCapDay).toHaveLength(20);
 		expect(entries.filter(name => name.endsWith("-audit.json"))).toEqual([`.omp.${currentPid}-audit.json`]);
 	});
+
+	it("preserves active/live PID namespaces while pruning dead logs and audit files", async () => {
+		const logsDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-logger-live-"));
+		roots.push(logsDir);
+		const releasePath = path.join(logsDir, ".release");
+		const probePath = await makeProbe(logsDir);
+
+		// Start a live probe that stays alive waiting for .release
+		const liveProc = Bun.spawn([process.execPath, probePath], {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+
+		// Wait for the live probe to print "ready\n"
+		const reader = (liveProc.stdout as ReadableStream<Uint8Array>).getReader();
+		const decoder = new TextDecoder();
+		let stdout = "";
+		while (!stdout.includes("ready\n")) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			stdout += decoder.decode(value);
+		}
+
+		const livePid = liveProc.pid;
+		const initialEntries = await fs.readdir(logsDir);
+		const liveLog = initialEntries.find(name => name.endsWith(`.${livePid}.log`));
+		const liveAudit = `.omp.${livePid}-audit.json`;
+		expect(liveLog).toBeDefined();
+		expect(initialEntries).toContain(liveAudit);
+
+		// Seed dead log and dead audit file
+		const deadPid = 9_876_543;
+		const deadDate = liveLog?.match(/^omp\.(\d{4}-\d{2}-\d{2})\./)?.[1] ?? "2026-08-27";
+		const deadLog = `omp.${deadDate}.${deadPid}.log`;
+		const deadAudit = `.omp.${deadPid}-audit.json`;
+		await Bun.write(path.join(logsDir, deadLog), "dead-log");
+		await Bun.write(path.join(logsDir, deadAudit), "{}");
+
+		// Trigger pruning from a second short-lived process while the first probe is still alive
+		const secondProbePath = path.join(logsDir, "second-probe.ts");
+		await Bun.write(
+			secondProbePath,
+			`import { info, setTransports } from ${JSON.stringify(loggerModuleUrl)};\n` +
+				`setTransports({ file: ${JSON.stringify(logsDir)} });\n` +
+				`info("second probe");\n` +
+				`setTransports({ file: false });\n`,
+		);
+		const secondProbe = Bun.spawn([process.execPath, secondProbePath], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "pipe",
+		});
+		expect(await secondProbe.exited).toBe(0);
+
+		// Verify: live probe log and audit file were NOT pruned
+		const postPruneEntries = await fs.readdir(logsDir);
+		expect(postPruneEntries).toContain(liveLog!);
+		expect(postPruneEntries).toContain(liveAudit);
+		expect(postPruneEntries).not.toContain(deadAudit);
+
+		// Release live probe
+		await Bun.write(releasePath, "");
+		liveProc.stdin.end();
+		expect(await liveProc.exited).toBe(0);
+	});
 });
