@@ -993,7 +993,11 @@ class PostgresWorkStore:
         else:
             attempt = self._transition_attempt(cur, envelope.workspace_id, attempt["attempt_id"], "state=%s, accepted_report_count=accepted_report_count+1, in_flight_launch_id=NULL", (new_state,))
         launches, reports = self._budget(attempt)
-        next_actions = {"PASS": ("record the closeout review", "owner /done closes"), "NEEDS_FIX": ("fix the findings", "enter /summary again for a fresh attempt"), "BLOCKED": ("resolve the blocker", "enter /summary again for a fresh attempt")}[verdict]
+        next_actions = {
+            "PASS": ("record the closeout review", "owner /done closes"),
+            "NEEDS_FIX": ("fix the findings", "after fixing: if code changed, enter /plan then /summary; otherwise enter /summary"),
+            "BLOCKED": ("resolve the blocker", "after resolving: if code changed, enter /plan then /summary; otherwise enter /summary"),
+        }[verdict]
         event = self._close_event(cur, envelope, work_id=attempt["work_id"], attempt_id=attempt["attempt_id"], launch_id=payload.launch_id, event_type="auditor_launch_settled", reason_code=f"verdict_{verdict.lower()}", reason=f"the auditor reported {verdict}; the exact report is the attempt's audit receipt", next_actions=next_actions, remaining_launches=launches, remaining_reports=reports, requires_fresh_authorization=verdict != "PASS", requires_delivery=True)
         receipt_json = {
             "receipt_id": str(receipt_id), "work_id": str(attempt["work_id"]), "revision_id": str(attempt["revision_id"]), "candidate_id": str(attempt["candidate_id"]),

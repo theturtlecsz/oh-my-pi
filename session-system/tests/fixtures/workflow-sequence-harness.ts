@@ -78,9 +78,26 @@ function nextAttestation(): Promise<void> {
 	attestWaiters.push(resolve);
 	return promise;
 }
-function mockEvent(workId: string, attemptId: string | null, eventType: string, reasonCode: string, requiresDelivery: boolean, legalNextActions: string[] = []): Record<string, unknown> {
+function mockEvent(
+	workId: string,
+	attemptId: string | null,
+	eventType: string,
+	reasonCode: string,
+	requiresDelivery: boolean,
+	legalNextActions: string[] = [],
+	requiresFreshAuthorization: boolean = false,
+): Record<string, unknown> {
 	eventSeq += 1;
-	const rendered = `CLOSE ATTEMPT — ${eventType}\n${reasonCode}: mock`;
+	const lines = [
+		`CLOSE ATTEMPT — ${eventType}`,
+		`${reasonCode}: mock`,
+		`next: ${legalNextActions.length > 0 ? legalNextActions.join("; ") : "none"}`,
+		"budget: 3 launch(es), 2 accepted report(s) remain",
+	];
+	if (requiresFreshAuthorization) {
+		lines.push("A fresh owner-entered /summary is required to continue.");
+	}
+	const rendered = lines.join("\n");
 	const event = {
 		event_id: `ev-${eventSeq}`,
 		sequence: eventSeq,
@@ -93,7 +110,7 @@ function mockEvent(workId: string, attemptId: string | null, eventType: string, 
 		legal_next_actions: legalNextActions,
 		remaining_launches: 3,
 		remaining_reports: 2,
-		requires_fresh_authorization: false,
+		requires_fresh_authorization: requiresFreshAuthorization,
 		rendered_text: rendered,
 		rendered_sha256: new Bun.CryptoHasher("sha256").update(rendered, "utf8").digest("hex"),
 		requires_delivery: requiresDelivery,
@@ -700,9 +717,9 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			const actions = verdict === "PASS"
 				? ["record the closeout review", "owner /done closes"]
 				: verdict === "NEEDS_FIX"
-					? ["fix the findings", "enter /summary again for a fresh attempt"]
-					: ["resolve the blocker", "enter /summary again for a fresh attempt"];
-			const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_settled", `verdict_${verdict.toLowerCase()}`, true, actions);
+					? ["fix the findings", "after fixing: if code changed, enter /plan then /summary; otherwise enter /summary"]
+					: ["resolve the blocker", "after resolving: if code changed, enter /plan then /summary; otherwise enter /summary"];
+			const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_settled", `verdict_${verdict.toLowerCase()}`, true, actions, verdict !== "PASS");
 			const receipt = {
 				receipt_id: `rec-audit-${eventSeq}`,
 				work_id: attempt.work_id,
@@ -1498,7 +1515,7 @@ if (mode === "intake") {
 	currentSessionId = "session-2";
 	await runner.emit({ type: "session_start" } as never);
 	const testBackend = createWorkBackend({ baseUrl: "http://127.0.0.1:54322", workspaceId: WORKSPACE_ID, ownerId: OWNER_ID }, () => "test-token");
-	out.session2Extras = await testBackend.digestExtras();
+	out.session2Extras = await testBackend.digestExtras(probe);
 	out.session2Center = await testBackend.centerSnapshot();
 	await enterSummary();
 	out.beginCallsAfterResume = beginCalls.length;
@@ -1508,7 +1525,7 @@ if (mode === "intake") {
 	await runner.emit({ type: "session_switch", reason: "new" } as never);
 	currentSessionId = "session-3";
 	await runner.emit({ type: "session_start" } as never);
-	out.session3Extras = await testBackend.digestExtras();
+	out.session3Extras = await testBackend.digestExtras(probe);
 	out.session3Center = await testBackend.centerSnapshot();
 	const done = extension.commands.get("done");
 	if (!done) throw new Error("done command missing");
@@ -1536,11 +1553,12 @@ if (mode === "intake") {
 		created_at: new Date().toISOString(),
 	});
 	const testBackend = createWorkBackend({ baseUrl: "http://127.0.0.1:54322", workspaceId: WORKSPACE_ID, ownerId: OWNER_ID }, () => "test-token");
-	out.extrasWithPending = await testBackend.digestExtras();
+	out.extrasWithPending = await testBackend.digestExtras(probe);
 } else if (mode === "omp140-terminal-guidance") {
 	await setNow();
 	attempts.length = 0;
 	closeEvents.length = 0;
+	const headCommit = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
 	const remediationAttempt: MockAttempt = {
 		attempt_id: "att-remediation",
 		work_id: "id-1",
@@ -1548,11 +1566,11 @@ if (mode === "intake") {
 		candidate_id: "cand-1",
 		plan_receipt_id: "plan-1",
 		candidate_sha256: "0".repeat(64),
-		candidate_commit: "0".repeat(40),
+		candidate_commit: headCommit,
 		owner_session_id: "s1",
 		owner_session_started_at: new Date().toISOString(),
-		owner_session_start_commit: "0".repeat(40),
-		repository: "/repo",
+		owner_session_start_commit: headCommit,
+		repository: probe,
 		diff_sha256: "0".repeat(64),
 		starting_dirty_paths: [],
 		authorization_kind: "summary",
@@ -1569,10 +1587,26 @@ if (mode === "intake") {
 		completion_authorization_ref: null,
 	};
 	attempts.push(remediationAttempt);
-	mockEvent("id-1", "att-remediation", "auditor_launch_settled", "verdict_needs_fix", false, ["fix the findings", "enter /summary again for a fresh attempt"]);
+	out.settleEvent = mockEvent(
+		"id-1",
+		"att-remediation",
+		"auditor_launch_settled",
+		"verdict_needs_fix",
+		false,
+		["fix the findings", "after fixing: if code changed, enter /plan then /summary; otherwise enter /summary"],
+		true,
+	);
 	const testBackend = createWorkBackend({ baseUrl: "http://127.0.0.1:54322", workspaceId: WORKSPACE_ID, ownerId: OWNER_ID }, () => "test-token");
-	out.terminalExtras = await testBackend.digestExtras();
-	// Test budget_exhausted attempt with close_attempt_refused reason_code="budget_exhausted"
+	out.terminalExtras = await testBackend.digestExtras(probe);
+
+	// Create descendant remediation commit
+	fs.writeFileSync(path.join(probe, "remediation.txt"), "remediation\n");
+	Bun.spawnSync(["git", "add", "remediation.txt"], { cwd: probe });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "remediation fix"], { cwd: probe });
+
+	out.descendantExtras = await testBackend.digestExtras(probe);
+
+	// Test budget_exhausted attempt against the same reviewed commit
 	attempts.length = 0;
 	closeEvents.length = 0;
 	const budgetAttempt: MockAttempt = {
@@ -1582,11 +1616,11 @@ if (mode === "intake") {
 		candidate_id: "cand-1",
 		plan_receipt_id: "plan-1",
 		candidate_sha256: "0".repeat(64),
-		candidate_commit: "0".repeat(40),
+		candidate_commit: headCommit,
 		owner_session_id: "s1",
 		owner_session_started_at: new Date().toISOString(),
-		owner_session_start_commit: "0".repeat(40),
-		repository: "/repo",
+		owner_session_start_commit: headCommit,
+		repository: probe,
 		diff_sha256: "0".repeat(64),
 		starting_dirty_paths: [],
 		authorization_kind: "summary",
@@ -1603,24 +1637,8 @@ if (mode === "intake") {
 		completion_authorization_ref: null,
 	};
 	attempts.push(budgetAttempt);
-	closeEvents.push({
-		event_id: "event-budget-refusal",
-		workspace_id: WORKSPACE_ID,
-		work_id: "id-1",
-		attempt_id: "att-budget",
-		event_type: "close_attempt_refused",
-		reason_code: "budget_exhausted",
-		reason: "the auditor budget for this attempt is exhausted",
-		legal_next_actions: ["enter /summary again for a fresh bounded attempt"],
-		remaining_launches: 0,
-		remaining_reports: 2,
-		requires_fresh_authorization: true,
-		rendered_text: "budget exhausted text",
-		rendered_sha256: "0".repeat(64),
-		requires_delivery: true,
-		created_at: new Date().toISOString(),
-	});
-	out.budgetExtras = await testBackend.digestExtras();
+	mockEvent("id-1", "att-budget", "close_attempt_refused", "budget_exhausted", true, ["enter /summary again for a fresh bounded attempt"], true);
+	out.budgetExtras = await testBackend.digestExtras(probe);
 } else if (mode === "center" || mode === "center-scoped") {
 	const center = extension.commands.get("center");
 	if (!center) throw new Error("center command missing");
@@ -1869,24 +1887,42 @@ if (mode === "intake") {
 	const beginCallsBeforeDrift = beginCalls.length;
 	const pushReceiptsBeforeDrift = receipts.filter(receipt => receipt.kind === "push").length;
 
-	// Simulate commit B (e.g. manual amend or separate commit that moves HEAD away from candidate commit A)
+	// Simulate descendant commit B (fixes on top of commit A)
 	fs.writeFileSync(path.join(probe, "extra.txt"), "drifted commit\n");
 	Bun.spawnSync(["git", "add", "extra.txt"], { cwd: probe });
 	Bun.spawnSync(["git", "commit", "-q", "-m", "drifted commit B"], { cwd: probe });
 	const commitB = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
 
-	// Invoke summary again
+	// Invoke summary again (descendant drift)
 	await enterSummary();
 
 	out.commitA = commitA;
 	out.commitB = commitB;
 	out.beginCallsBeforeDrift = beginCallsBeforeDrift;
-	out.beginCallsAfterDrift = beginCalls.length;
+	out.beginCallsAfterDescendant = beginCalls.length;
 	out.pushReceiptsBeforeDrift = pushReceiptsBeforeDrift;
-	out.pushReceiptsAfterDrift = receipts.filter(receipt => receipt.kind === "push").length;
-	out.driftNotice = uiCalls.at(-1) ?? null;
-	out.headAfterDriftSummary = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
-	out.dirtyAfterDriftSummary = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: probe }).stdout.toString().trim();
+	out.pushReceiptsAfterDescendant = receipts.filter(receipt => receipt.kind === "push").length;
+	out.descendantDriftNotice = uiCalls.at(-1) ?? null;
+	out.headAfterDescendant = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	out.dirtyAfterDescendant = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: probe }).stdout.toString().trim();
+
+	// Move fixture to an orphan commit (unrelated history)
+	Bun.spawnSync(["git", "checkout", "-q", "--orphan", "unrelated-branch"], { cwd: probe });
+	Bun.spawnSync(["git", "rm", "-rf", "-q", "."], { cwd: probe });
+	fs.writeFileSync(path.join(probe, "orphan.txt"), "orphan work\n");
+	Bun.spawnSync(["git", "add", "orphan.txt"], { cwd: probe });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "orphan root"], { cwd: probe });
+	const commitOrphan = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+
+	// Invoke summary again (unrelated drift)
+	await enterSummary();
+
+	out.commitOrphan = commitOrphan;
+	out.beginCallsAfterUnrelated = beginCalls.length;
+	out.pushReceiptsAfterUnrelated = receipts.filter(receipt => receipt.kind === "push").length;
+	out.unrelatedDriftNotice = uiCalls.at(-1) ?? null;
+	out.headAfterUnrelated = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	out.dirtyAfterUnrelated = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: probe }).stdout.toString().trim();
 } else if (mode === "done-cancel" || mode === "done-cancel-decline") {
 	await setNow();
 	await approve(planA);

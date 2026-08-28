@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
-import { dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256 } from "../extensions/workflow/git";
+import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256 } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -430,5 +430,49 @@ describe("rangeDiffSha256", () => {
 		const args = diffCalls[0]!;
 		expect(args[0]).toBe("-C");
 		expect(args.slice(2)).toEqual(["diff", "--binary", "--full-index", `${start}..${final}`, "--"]);
+	});
+});
+
+describe("candidateDrift", () => {
+	test("detects unchanged HEAD", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const result = candidateDrift(repo, head);
+		expect(result).toEqual({ shape: "unchanged", head });
+	});
+
+	test("detects descendant fixes on top", () => {
+		const repo = makeRepo();
+		const candidate = git(repo, "rev-parse", "HEAD");
+		fs.writeFileSync(path.join(repo, "fix.txt"), "fix\n");
+		Bun.spawnSync(["git", "add", "--", "fix.txt"], { cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "fix"], { cwd: repo });
+		const head = git(repo, "rev-parse", "HEAD");
+		expect(head).not.toBe(candidate);
+		const result = candidateDrift(repo, candidate);
+		expect(result).toEqual({ shape: "fixes-on-top", head });
+	});
+
+	test("detects orphan/divergent history whose repository still contains the candidate object", () => {
+		const repo = makeRepo();
+		const candidate = git(repo, "rev-parse", "HEAD");
+		Bun.spawnSync(["git", "checkout", "-q", "--orphan", "other-branch"], { cwd: repo });
+		Bun.spawnSync(["git", "rm", "-rf", "-q", "."], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "other.txt"), "other\n");
+		Bun.spawnSync(["git", "add", "--", "other.txt"], { cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "other root"], { cwd: repo });
+		const head = git(repo, "rev-parse", "HEAD");
+		expect(head).not.toBe(candidate);
+		// Candidate object still exists in repo
+		const checkCandidate = git(repo, "cat-file", "-e", candidate);
+		const result = candidateDrift(repo, candidate);
+		expect(result).toEqual({ shape: "unrelated", head });
+	});
+
+	test("handles unreadable / non-repository path", () => {
+		const nonRepo = path.join(tempRoot, "not-a-repo");
+		fs.mkdirSync(nonRepo, { recursive: true });
+		const result = candidateDrift(nonRepo, "0123456789abcdef0123456789abcdef01234567");
+		expect(result).toEqual({ shape: "unrelated", head: null });
 	});
 });

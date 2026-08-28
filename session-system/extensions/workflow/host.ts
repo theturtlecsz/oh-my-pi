@@ -684,7 +684,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		footer(ctx);
 	}
 
-	async function buildDigest(): Promise<string> {
+	async function buildDigest(cwd: string): Promise<string> {
 		const now = currentNowRef();
 		const treeLines = now
 			? backend
@@ -702,7 +702,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		const contracts = [WORKFLOW_SEQUENCE, CLOSEOUT_BOUNDARY];
 		let extras: string[];
 		try {
-			extras = await backend.digestExtras();
+			extras = await backend.digestExtras(cwd);
 		} catch (e) {
 			// Fail open with what we have: cached NOW + the tree's own honest line.
 			return [backend.bookendTitle, nowLine, scopeLine, ...(await treeLines), `[${TOOL_NAME}] queue/in-flight unavailable (${String(e)}) — session unblocked`, ...contracts].join("\n");
@@ -1477,7 +1477,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			}
 			digestPending = false;
 			try {
-				const digest = await buildDigest();
+				const digest = await buildDigest(ctx.cwd);
 				digestInjectedThisSession = true;
 				return { message: { customType: `${TOOL_NAME}-digest`, content: notices ? `${digest}\n${notices}` : digest } };
 			} catch (e) {
@@ -1826,7 +1826,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				const sub = args.trim() || "status";
 				if (sub === "digest") {
 					try {
-						pi.sendMessage({ customType: `${TOOL_NAME}-digest`, content: await buildDigest() }, { deliverAs: "nextTurn" });
+						pi.sendMessage({ customType: `${TOOL_NAME}-digest`, content: await buildDigest(ctx.cwd) }, { deliverAs: "nextTurn" });
 						ctx.ui.notify("Digest refreshed into context", "info");
 					} catch (e) {
 						ctx.ui.notify(`digest failed: ${String(e)}`, "error");

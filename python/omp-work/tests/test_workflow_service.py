@@ -766,6 +766,14 @@ def test_remediation_required_blocks_closeout_until_fresh_summary(service) -> No
     assert status == 200 and body["result"]["status"] == "applied" and body["result"]["verdict"] == "NEEDS_FIX"
     assert body["result"]["attempt"]["state"] == "remediation_required"
     assert body["result"]["event"]["requires_fresh_authorization"] is True
+    assert body["result"]["event"]["legal_next_actions"] == [
+        "fix the findings",
+        "after fixing: if code changed, enter /plan then /summary; otherwise enter /summary",
+    ]
+    assert (
+        "next: fix the findings; after fixing: if code changed, enter /plan then /summary; otherwise enter /summary"
+        in body["result"]["event"]["rendered_text"]
+    )
     status, body = _record_review(service, workspace_id, item, {"candidate_id": str(uuid4())}, attempt)
     assert status == 200 and body["result"]["status"] == "refused"
     assert body["result"]["event"]["reason_code"] == "attempt_not_audited"

@@ -475,7 +475,7 @@ export interface WorkflowBackend {
 	goalTree(now: NowRef): Promise<GoalTree | null>;
 	/** Backend-only digest lines after the tree: IN FLIGHT / NEEDS CHRIS / DRAIN RULE.
 	 *  Throws on failure — the host degrades to one honest line, never blocks. */
-	digestExtras(): Promise<string[]>;
+	digestExtras(cwd: string): Promise<string[]>;
 	/** Bounded /work status rows (service probe, focus holder, drift). */
 	statusLines(now: NowRef | null, ctx: { projectFilter?: string; digestInjected: boolean }): Promise<string[]>;
 	workflowState(key: string): Promise<WorkflowCheckpoint>;

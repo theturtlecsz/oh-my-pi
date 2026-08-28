@@ -353,14 +353,25 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.commitA).toBeTruthy();
 		expect(out.commitB).toBeTruthy();
 		expect(out.commitA).not.toBe(out.commitB);
-		expect(out.driftNotice).toContain("candidate drift");
-		expect(out.driftNotice).toContain(String(out.commitA).slice(0, 12));
-		expect(out.driftNotice).toContain(String(out.commitB).slice(0, 12));
-		expect(out.driftNotice).toContain("Restore the frozen commit or stamp and freeze a fresh candidate through owner-entered /plan and /summary");
-		expect(out.beginCallsAfterDrift, "drifted candidate begins no new close attempt").toBe(out.beginCallsBeforeDrift);
-		expect(out.pushReceiptsAfterDrift, "drifted candidate mints no push receipt").toBe(out.pushReceiptsBeforeDrift);
-		expect(out.headAfterDriftSummary, "drifted summary mutates no HEAD commit").toBe(out.commitB);
-		expect(out.dirtyAfterDriftSummary, "drifted summary mutates no working tree").toBe("");
+
+		// Descendant drift (fixes on top of commitA)
+		const descNotice = String(out.descendantDriftNotice);
+		expect(descNotice).toContain("Code changed after the reviewed snapshot. Run /plan to approve the current code, then run /summary.");
+		expect(descNotice).toContain(`Details: reviewed commit ${out.commitA}; current commit ${out.commitB}.`);
+		expect(descNotice.toLowerCase()).not.toContain("restore");
+		expect(out.beginCallsAfterDescendant, "descendant candidate begins no new close attempt").toBe(out.beginCallsBeforeDrift);
+		expect(out.pushReceiptsAfterDescendant, "descendant candidate mints no push receipt").toBe(out.pushReceiptsBeforeDrift);
+		expect(out.headAfterDescendant, "descendant summary mutates no HEAD commit").toBe(out.commitB);
+		expect(out.dirtyAfterDescendant, "descendant summary mutates no working tree").toBe("");
+
+		// Unrelated drift (orphan branch)
+		const unrelNotice = String(out.unrelatedDriftNotice);
+		expect(unrelNotice).toContain("Current code is on a different history from the reviewed snapshot. Restore the reviewed snapshot, or run /plan to approve the current code and then run /summary.");
+		expect(unrelNotice).toContain(`Details: reviewed commit ${out.commitA}; current commit ${out.commitOrphan}.`);
+		expect(out.beginCallsAfterUnrelated, "unrelated candidate begins no new close attempt").toBe(out.beginCallsBeforeDrift);
+		expect(out.pushReceiptsAfterUnrelated, "unrelated candidate mints no push receipt").toBe(out.pushReceiptsBeforeDrift);
+		expect(out.headAfterUnrelated, "unrelated summary mutates no HEAD commit").toBe(out.commitOrphan);
+		expect(out.dirtyAfterUnrelated, "unrelated summary mutates no working tree").toBe("");
 	});
 
 	test("the ledger-sealed audit task drives one exact-byte bounded launch (OMP-168)", () => {
@@ -566,10 +577,40 @@ describe("HOME-122 workflow sequence", () => {
 
 	test("terminal guidance persists across checkpoint deliveries and refusals (OMP-140)", () => {
 		const out = run("omp140-terminal-guidance");
-		const extras = list(out.terminalExtras);
-		expect(extras.some(l => l.includes("CLOSE ATTEMPT: remediation_required (needs_fix) — fix the findings"))).toBe(true);
+		// NEEDS_FIX settlement event
+		const settleEvent = record(out.settleEvent);
+		expect(settleEvent.legal_next_actions).toEqual([
+			"fix the findings",
+			"after fixing: if code changed, enter /plan then /summary; otherwise enter /summary",
+		]);
+		expect(String(settleEvent.rendered_text)).toContain(
+			"next: fix the findings; after fixing: if code changed, enter /plan then /summary; otherwise enter /summary",
+		);
+		expect(settleEvent.requires_fresh_authorization).toBe(true);
+
+		// Unchanged HEAD re-entry guidance
+		const unchangedExtras = list(out.terminalExtras);
+		expect(
+			unchangedExtras.some(l =>
+				l.includes("CLOSE ATTEMPT: remediation_required (needs_fix) — code still matches the reviewed snapshot — enter /summary for a fresh attempt"),
+			),
+		).toBe(true);
+
+		// Descendant remediation commit re-entry guidance
+		const descendantExtras = list(out.descendantExtras);
+		expect(
+			descendantExtras.some(l =>
+				l.includes("CLOSE ATTEMPT: remediation_required (needs_fix) — code changed since the reviewed snapshot — enter /plan, then /summary"),
+			),
+		).toBe(true);
+
+		// Sibling terminal state (budget_exhausted) receives descendant guidance
 		const budgetExtras = list(out.budgetExtras);
-		expect(budgetExtras.some(l => l.includes("CLOSE ATTEMPT: budget_exhausted (auditor_budget_exhausted) — enter /summary again for a fresh bounded attempt"))).toBe(true);
+		expect(
+			budgetExtras.some(l =>
+				l.includes("CLOSE ATTEMPT: budget_exhausted (auditor_budget_exhausted) — code changed since the reviewed snapshot — enter /plan, then /summary"),
+			),
+		).toBe(true);
 	});
 });
 

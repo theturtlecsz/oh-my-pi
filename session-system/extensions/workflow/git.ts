@@ -64,6 +64,24 @@ export function parentCommit(cwd: string, commit: string): string | null {
 	return parent.ok && /^[0-9a-f]{40,64}$/.test(parent.out) ? parent.out : null;
 }
 
+export type CandidateDriftShape = "unchanged" | "fixes-on-top" | "unrelated";
+
+/** Relationship between the current HEAD and a reviewed candidate commit. */
+export function candidateDrift(cwd: string, candidateCommit: string): { shape: CandidateDriftShape; head: string | null } {
+	const head = headCommit(cwd);
+	if (!head) {
+		return { shape: "unrelated", head: null };
+	}
+	if (head === candidateCommit) {
+		return { shape: "unchanged", head };
+	}
+	const ancestor = runGit(cwd, ["merge-base", "--is-ancestor", candidateCommit, head]);
+	if (ancestor.ok) {
+		return { shape: "fixes-on-top", head };
+	}
+	return { shape: "unrelated", head };
+}
+
 
 /** SHA-256 of the canonical `git diff --binary --full-index <start>..<final> --`
  *  byte stream — the range-diff manifest hash sealed into the close attempt

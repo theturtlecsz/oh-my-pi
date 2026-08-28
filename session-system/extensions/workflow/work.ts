@@ -66,7 +66,7 @@ import {
 	type WorkflowCheckpoint,
 } from "./backend";
 import { pendingOpsDir, type WorkClientConfig } from "./config";
-import { freezeCandidateCommit, headCommit, pushCandidate } from "./git";
+import { candidateDrift, type CandidateDriftShape, freezeCandidateCommit, headCommit, pushCandidate } from "./git";
 import { ackOps as ackClaimOps, claimPendingOp, dropPendingOp, intentFingerprint, resolvePendingOp } from "./pending-ops";
 import { bounded, healthWord, oneRecovery, redactSecrets } from "./status";
 
@@ -75,7 +75,20 @@ const DRAIN_MAX_AGE_DAYS = 14;
 /** /center row bound — matches the existing queue digest bound (DRAIN_MAX_QUEUE). */
 const CENTER_MAX_ROWS = 8;
 
-function attemptNextAction(state: string): string {
+function terminalNextAction(shape?: CandidateDriftShape): string {
+	switch (shape) {
+		case "unchanged":
+			return "code still matches the reviewed snapshot — enter /summary for a fresh attempt";
+		case "fixes-on-top":
+			return "code changed since the reviewed snapshot — enter /plan, then /summary";
+		case "unrelated":
+			return "current code is not based on the reviewed snapshot — restore the reviewed snapshot or enter /plan, then /summary";
+		default:
+			return "if code changed since the reviewed snapshot, enter /plan then /summary; otherwise enter /summary";
+	}
+}
+
+function attemptNextAction(state: string, shape?: CandidateDriftShape): string {
 	switch (state) {
 		case "active":
 			return 'append verification evidence (work action:"append_evidence", kind:"verification")';
@@ -87,14 +100,17 @@ function attemptNextAction(state: string): string {
 			return 'append closeout review (work action:"append_evidence", kind:"closeout")';
 		case "closeout_requested":
 			return "owner /done closes";
-		case "remediation_required":
-			return "remediation required — enter /summary for a fresh attempt";
-		case "blocked":
-			return "attempt blocked — resolve blocker and enter /summary for a fresh attempt";
+		case "remediation_required": {
+			const action = terminalNextAction(shape);
+			return shape ? action : `fix the findings; ${action}`;
+		}
+		case "blocked": {
+			const action = terminalNextAction(shape);
+			return shape ? action : `resolve the blocker; ${action}`;
+		}
 		case "budget_exhausted":
-			return "attempt budget exhausted — enter /summary for a fresh attempt";
 		case "superseded":
-			return "attempt superseded — enter /summary for a fresh attempt";
+			return terminalNextAction(shape);
 		case "completed":
 			return "attempt completed";
 		default:
@@ -647,7 +663,7 @@ export function createWorkBackend(
 			return { goal: project.name, ...(project.health ? { health: project.health } : {}), items, counts };
 		},
 
-		async digestExtras(): Promise<string[]> {
+		async digestExtras(cwd: string): Promise<string[]> {
 			const [tree, slot] = await Promise.all([client.tree(), client.focus(config.ownerId)]);
 			const names = projectNames(tree);
 			const inflight = tree.items.find(i => i.work_id === slot.work_id);
@@ -690,11 +706,9 @@ export function createWorkBackend(
 					}
 				} else {
 					const terminal = (view.close_attempts ?? []).slice().sort((a, b) => b.requested_at.localeCompare(a.requested_at))[0];
-					if (terminal && ["remediation_required", "blocked", "budget_exhausted"].includes(terminal.state)) {
-						const terminalEvent = (view.close_attempt_events ?? [])
-							.filter(e => e.attempt_id === terminal.attempt_id && (e.event_type === "auditor_launch_settled" || (e.event_type === "close_attempt_refused" && (e.reason_code === "budget_exhausted" || e.reason_code === "auditor_budget_exhausted"))))
-							.sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
-						const nextAction = terminalEvent?.legal_next_actions?.[0] ?? "enter /summary for a fresh attempt";
+					if (terminal && ["remediation_required", "blocked", "budget_exhausted", "superseded"].includes(terminal.state)) {
+						const drift = candidateDrift(cwd, terminal.candidate_commit);
+						const nextAction = attemptNextAction(terminal.state, drift.shape);
 						extraLines.push(`CLOSE ATTEMPT: ${terminal.state} (${terminal.terminal_reason ?? "terminal"}) — ${nextAction}`);
 					}
 				}
@@ -1207,12 +1221,23 @@ export function createWorkBackend(
 			const item = await client.workItem(now.key);
 			const current = item.candidate;
 			if (current?.kind === "final" && current.commit_sha) {
-				const head = headCommit(hooks.cwd);
-				if (!head || head !== current.commit_sha) {
-					const observed = head ? head.slice(0, 12) : "unreadable";
+				const drift = candidateDrift(hooks.cwd, current.commit_sha);
+				if (drift.shape === "fixes-on-top") {
 					return {
 						ok: false,
-						reason: `candidate drift: Work Ledger has finalized candidate ${current.commit_sha.slice(0, 12)} (${current.commit_sha}), but git HEAD is ${observed} (${head ?? "missing"}). Restore the frozen commit or stamp and freeze a fresh candidate through owner-entered /plan and /summary.`,
+						reason: `Code changed after the reviewed snapshot. Run /plan to approve the current code, then run /summary.\nDetails: reviewed commit ${current.commit_sha}; current commit ${drift.head}.`,
+					};
+				}
+				if (drift.shape === "unrelated") {
+					if (!drift.head) {
+						return {
+							ok: false,
+							reason: `Current code position could not be read. Restore the reviewed snapshot, or run /plan to approve the current code and then run /summary.\nDetails: reviewed commit ${current.commit_sha}; current commit unreadable.`,
+						};
+					}
+					return {
+						ok: false,
+						reason: `Current code is on a different history from the reviewed snapshot. Restore the reviewed snapshot, or run /plan to approve the current code and then run /summary.\nDetails: reviewed commit ${current.commit_sha}; current commit ${drift.head}.`,
 					};
 				}
 				const push = await pushAndRecordCandidate(now, current.commit_sha, hooks);
