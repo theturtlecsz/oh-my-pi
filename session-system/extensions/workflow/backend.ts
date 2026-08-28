@@ -76,7 +76,7 @@ export interface CloseAttemptOutcome {
 	event: CloseEventView;
 }
 
-/** The sealed auditor task get_work must render byte-for-byte (OMP-50). */
+/** OMP-50 / OMP-168: sealed task bytes are internal input to run_audit only, never model-facing. */
 export interface SealedAuditTask {
 	attemptId: string;
 	attemptState: string;
