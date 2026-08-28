@@ -1048,11 +1048,23 @@ if (mode === "intake") {
 
 	// 1. Missing blueprint refuses before preview
 	out.missingBlueprint = await execute({ action: "create_work", title: "First", description: "one", project: "The Bookends" });
+	out.writesAfterMissing = { ...writes };
+
+	// 1b. Symlink to external file is ignored and refuses before preview
+	const externalFile = path.join(probe, "external-blueprint.md");
+	fs.writeFileSync(externalFile, "# External\n\nNot local\n");
+	const symlinkPath = resolveLocalUrlToPath("local://intake-external.md", localProtocolOptions);
+	fs.mkdirSync(path.dirname(symlinkPath), { recursive: true });
+	try { fs.symlinkSync(externalFile, symlinkPath); } catch {}
+	out.symlinkRefusal = await execute({ action: "create_work", title: "First", description: "# External\n\nNot local\n", project: "The Bookends" });
+	out.writesAfterSymlink = { ...writes };
+	try { fs.unlinkSync(symlinkPath); } catch {}
 
 	// 2. Mismatch payload refuses
 	const blueprint1 = "# First Complaint\n\nProblem: one\n";
 	writeIntakeBlueprint("intake-first.md", blueprint1);
 	out.mismatchPayload = await execute({ action: "create_work", title: "First", description: "different", project: "The Bookends" });
+	out.writesAfterMismatch = { ...writes };
 
 	// 3. Exact preview, artifact drift invalidates confirm, restore permits confirmation
 	const firstPreviewRaw = await execute({ action: "create_work", title: "First", description: blueprint1, project: "The Bookends" });
@@ -1061,8 +1073,10 @@ if (mode === "intake") {
 	const confirmId1 = confirmIdMatch ? confirmIdMatch[1] : "";
 	writeIntakeBlueprint("intake-first.md", `${blueprint1}\nmutated\n`);
 	out.confirmAfterDrift = await execute({ action: "create_work", title: "First", description: blueprint1, project: "The Bookends", confirm: true, confirmation_id: confirmId1 });
+	out.writesAfterDrift = { ...writes };
 	writeIntakeBlueprint("intake-first.md", blueprint1);
 	out.confirmed = await execute({ action: "create_work", title: "First", description: blueprint1, project: "The Bookends", confirm: true, confirmation_id: confirmId1 });
+	out.writesAfterFirst = { ...writes };
 
 	// 4. OMP-166 multi-deliverable bundle refusal
 	const omp166Blueprint = [
@@ -1124,7 +1138,7 @@ if (mode === "intake") {
 	].join("\n");
 	writeIntakeBlueprint("intake-omp166.md", omp166Blueprint);
 	out.omp166Refusal = await execute({ action: "create_work", title: "Bundled", description: omp166Blueprint, project: "The Bookends" });
-
+	out.writesAfterOmp166 = { ...writes };
 	// 5. Unlinked batch child refusal & 6. Linked batch acceptance
 	const batchBlueprint = "# Batch Parent\n\nParent description\n";
 	writeIntakeBlueprint("intake-batch.md", batchBlueprint);
@@ -1139,6 +1153,8 @@ if (mode === "intake") {
 			{ title: "Child 2" },
 		],
 	});
+	out.writesAfterUnlinkedBatch = { ...writes };
+
 	const linkedBatch = await confirmRoundTrip(execute, {
 		action: "create_work",
 		title: "Batch Parent",
@@ -1152,12 +1168,15 @@ if (mode === "intake") {
 	});
 	out.linkedBatchPreview = linkedBatch.preview;
 	out.linkedBatchConfirmed = linkedBatch.confirmed;
+	out.writesAfterLinkedBatch = { ...writes };
 
 	// 7. Second single-issue blueprint creates HOME-6 without replacing NOW
 	const blueprint2 = "# Second Complaint\n\nProblem: two\n";
 	writeIntakeBlueprint("intake-second.md", blueprint2);
 	const second = await confirmRoundTrip(execute, { action: "create_work", title: "Second", description: blueprint2, project: "The Bookends" });
 	out.second = second.confirmed;
+	out.writesAfterSecond = { ...writes };
+
 	const stop = await extension.handlers.get("session_stop")?.[0]?.({ type: "session_stop", stop_hook_active: false }, ctx);
 	out.stop = stop ?? null;
 	out.writes = writes;

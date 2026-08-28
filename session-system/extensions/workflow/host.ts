@@ -9,7 +9,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { type Dirent, readFileSync, realpathSync } from "node:fs";
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
@@ -401,11 +401,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 		const pattern = /^intake-[a-z0-9][a-z0-9_-]*\.md$/i;
 		const candidates: Array<{ name: string; fullPath: string; mtimeMs: number }> = [];
 		for (const dirent of dirents) {
-			if (!dirent.isFile() && !dirent.isSymbolicLink()) continue;
+			if (!dirent.isFile()) continue;
 			if (!pattern.test(dirent.name)) continue;
 			const fullPath = join(localRoot, dirent.name);
 			try {
-				const st = await stat(fullPath);
+				const st = await lstat(fullPath);
 				if (st.isFile()) {
 					candidates.push({ name: dirent.name, fullPath, mtimeMs: st.mtimeMs });
 				}
