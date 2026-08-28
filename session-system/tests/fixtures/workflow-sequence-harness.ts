@@ -11,7 +11,7 @@ import { createWorkBackend } from "../../extensions/workflow/work";
 import { riderBatchPath } from "../../extensions/workflow/rider-batch";
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-begin-refused", "summary-refusal-durable", "summary-rider-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger-reads", "ledger-reads-subagent", "closeout-pending-recovery", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
+const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-final-reuse", "summary-begin-refused", "summary-refusal-durable", "summary-rider-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger-reads", "ledger-reads-subagent", "closeout-pending-recovery", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -70,6 +70,7 @@ const settleCalls: Array<Record<string, unknown>> = [];
 const cancelCalls: Array<Record<string, unknown>> = [];
 const attestCalls: Array<Record<string, unknown>> = [];
 const sscCalls: Array<Record<string, unknown>> = [];
+const capturedEntries: Array<{ customType: string; data?: unknown }> = [];
 // Deterministic attestation rendezvous (OMP-154): fixtures await the exact
 // attest_checkpoint_delivery arrival instead of sleeping on wall-clock timers.
 const attestWaiters: Array<() => void> = [];
@@ -509,7 +510,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 		}
 		if (cmdType === "finalize_candidate") {
 			const it = items.get("HOME-1") ?? initialItem;
-			const finalCandId = (payload.candidate_id as string) ?? "cand-1";
+			const finalCandId = mode === "summary-final-reuse" ? "reused-final-candidate" : ((payload.candidate_id as string) ?? "cand-1");
 			const plannedCandId = (payload.planned_candidate_id as string) ?? it.candidate?.candidate_id;
 			const commitSha = (payload.commit_sha as string) ?? "commit-1";
 			const finalCand = {
@@ -871,7 +872,9 @@ const runner = new ExtensionRunner(
 );
 runner.initialize(
 	{
-		appendEntry: () => {},
+		appendEntry: (customType: string, data?: unknown) => {
+			capturedEntries.push({ customType, data });
+		},
 		getSessionId: () => currentSessionId,
 		deliverMessage: async (payload: unknown) => {
 			if (throwNextDeliverMessage) {
@@ -1923,6 +1926,16 @@ if (mode === "intake") {
 	out.unrelatedDriftNotice = uiCalls.at(-1) ?? null;
 	out.headAfterUnrelated = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
 	out.dirtyAfterUnrelated = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: probe }).stdout.toString().trim();
+} else if (mode === "summary-final-reuse") {
+	await setNow();
+	await approve(planA);
+	fs.writeFileSync(path.join(probe, "work.txt"), "candidate work\n");
+	await enterSummary();
+	const workNowEntries = capturedEntries.filter(e => e.customType === "work-now");
+	const lastWorkNow = workNowEntries.at(-1);
+	const data = (lastWorkNow?.data ?? {}) as Record<string, unknown>;
+	const carrier = (data.carrier ?? {}) as Record<string, unknown>;
+	out.carrierCandidateId = carrier.candidateId ?? null;
 } else if (mode === "done-cancel" || mode === "done-cancel-decline") {
 	await setNow();
 	await approve(planA);

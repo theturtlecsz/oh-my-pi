@@ -11,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-begin-refused" | "summary-refusal-durable" | "summary-rider-refusal-durable" | "stop-continuation-states" | "atomic-child" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "now-canceled" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "ledger-reads" | "ledger-reads-subagent" | "closeout-pending-recovery" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-final-reuse" | "summary-begin-refused" | "summary-refusal-durable" | "summary-rider-refusal-durable" | "stop-continuation-states" | "atomic-child" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "now-canceled" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "ledger-reads" | "ledger-reads-subagent" | "closeout-pending-recovery" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -373,6 +373,11 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.headAfterUnrelated, "unrelated summary mutates no HEAD commit").toBe(out.commitOrphan);
 		expect(out.dirtyAfterUnrelated, "unrelated summary mutates no working tree").toBe("");
 	});
+	test("summary persists service-selected final candidate identity on reuse", () => {
+		const out = run("summary-final-reuse");
+		expect(out.carrierCandidateId).toBe("reused-final-candidate");
+	});
+
 
 	test("the ledger-sealed audit task drives one exact-byte bounded launch (OMP-168)", () => {
 		const out = run("audit");

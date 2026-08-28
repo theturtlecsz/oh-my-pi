@@ -1285,7 +1285,7 @@ export function createWorkBackend(
 			if ("refused" in freeze) return { ok: false, reason: freeze.reason };
 			const candidateId = stableId("final-candidate", item.work_id, item.revision.revision_id, current.candidate_id, freeze.commitSha);
 			const frozenSha = candidateSha256(freeze.commitSha, freeze.paths);
-			await run("finalize_candidate", {
+			const finalized = await run("finalize_candidate", {
 				work_id: item.work_id,
 				revision_id: item.revision.revision_id,
 				planned_candidate_id: current.candidate_id,
@@ -1310,7 +1310,7 @@ export function createWorkBackend(
 				...(packet ? { planHash: packet.planSha256 } : {}),
 				...(auditBaseCommit ? { auditBaseCommit } : {}),
 				...(auditBaseDirtyPaths ? { auditBaseDirtyPaths } : {}),
-				carrier: { candidateId: view.item.candidate?.candidate_id ?? candidateId, candidateSha: frozenSha, commitSha: freeze.commitSha },
+				carrier: { candidateId: finalized.candidate.candidate_id, candidateSha: finalized.candidate.candidate_sha256, commitSha: freeze.commitSha },
 			};
 		},
 
