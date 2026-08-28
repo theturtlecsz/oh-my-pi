@@ -35,6 +35,9 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext): Promise<N
 	if (!agent) {
 		throw new Error('Installed "auditor" agent definition not found');
 	}
+	if (!agent.output) {
+		throw new Error('Installed "auditor" agent definition is missing required output schema');
+	}
 
 	const auditModel = ctx.models.resolve("@audit");
 	if (!auditModel) {
@@ -61,6 +64,9 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext): Promise<N
 				modelOverride: agent.model,
 				modelRegistry: ctx.modelRegistry,
 				modelRole: "audit",
+				outputSchema: agent.output,
+				outputSchemaSource: "agent",
+				outputSchemaMode: "strict",
 				taskDepth: ctx.taskDepth,
 				restrictToolNames: true,
 				enableMCP: false,

@@ -63,11 +63,13 @@ describe("native auditor runner (OMP-168)", () => {
 		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "test/auditor" } });
 		const settingsSpy = vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(sentinelSettings);
 
+		const sentinelOutputSchema = { properties: { report: { type: "string" } } };
 		const fakeAgent = {
 			name: "auditor",
 			description: "Auditor agent",
 			systemPrompt: "Audit prompt",
 			model: "@audit",
+			output: sentinelOutputSchema,
 			source: "bundle" as const,
 		};
 		const discoverSpy = vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
@@ -75,6 +77,9 @@ describe("native auditor runner (OMP-168)", () => {
 		});
 
 		let capturedOptions: executorModule.ExecutorOptions | undefined;
+		const wrappedPayload = JSON.stringify({
+			report: "VERDICT: PASS\nAll acceptance criteria verified.",
+		});
 		const runSubprocessSpy = vi
 			.spyOn(executorModule, "runSubprocess")
 			.mockImplementation(async (options) => {
@@ -86,7 +91,7 @@ describe("native auditor runner (OMP-168)", () => {
 					agentSource: options.agent.source,
 					task: options.task,
 					exitCode: 0,
-					output: "VERDICT: PASS\nAll acceptance criteria verified.",
+					output: wrappedPayload,
 					stderr: "",
 					truncated: false,
 					durationMs: 120,
@@ -121,8 +126,37 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(capturedOptions?.modelOverride).toBe("@audit");
 		expect(capturedOptions?.modelRole).toBe("audit");
 		expect(capturedOptions?.modelRegistry).toBe(sentinelRegistry);
+		expect(capturedOptions?.outputSchema).toBe(sentinelOutputSchema);
+		expect(capturedOptions?.outputSchemaSource).toBe("agent");
+		expect(capturedOptions?.outputSchemaMode).toBe("strict");
 		expect(result.started).toBe(true);
-		expect(result.payload).toBe("VERDICT: PASS\nAll acceptance criteria verified.");
+		expect(result.payload).toBe(wrappedPayload);
+	});
+
+	test("fails if the auditor output schema is missing", async () => {
+		const fakeAgent = {
+			name: "auditor",
+			description: "Auditor agent",
+			systemPrompt: "Audit prompt",
+			model: "@audit",
+			source: "bundle" as const,
+		};
+		vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
+			agents: [fakeAgent],
+		});
+
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const fakeCtx = {
+			cwd: repoRoot,
+			models: {
+				resolve: (role: string) =>
+					role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined,
+			},
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow("output schema");
 	});
 });
 

@@ -8,6 +8,8 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
+import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task";
+import { finalizeSubprocessOutput } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { createWorkBackend } from "../../extensions/workflow/work";
 import { loadBearer, loadWorkConfig } from "../../extensions/workflow/config";
 import { confirmRoundTrip } from "./two-phase";
@@ -213,11 +215,29 @@ if (phase === "audit") {
 		"none",
 	].join("\n");
 
+	// Discover auditor agent, require its output schema, and run yield through finalizeSubprocessOutput
+	const discovery = await discoverAgents(probe);
+	const auditorAgent = getAgent(discovery.agents, "auditor");
+	if (!auditorAgent || !auditorAgent.output) {
+		throw new Error("discovered auditor agent is missing required output schema");
+	}
+	const finalized = finalizeSubprocessOutput({
+		rawOutput: "",
+		exitCode: 0,
+		stderr: "",
+		yieldItems: [{ data: { report: REPORT } }],
+		outputSchema: auditorAgent.output,
+		outputSchemaSource: "agent",
+		outputSchemaMode: "strict",
+	});
+	const transportPayload = finalized.rawOutput;
+	out.transportPayload = transportPayload;
+
 	// Reserve and settle launch directly against work service
 	const detail = await harnessBackend.issueDetail(key);
 	const manifest = (await harnessBackend.sealedAuditTask(key))!;
 	const reservation = await harnessBackend.reserveAuditorLaunch(key, manifest.taskSha256, "smoke-call-1");
-	const settle = await harnessBackend.settleAuditorLaunch(key, reservation.launchId!, { payload: REPORT });
+	const settle = await harnessBackend.settleAuditorLaunch(key, reservation.launchId!, { payload: transportPayload });
 	out.audit = settle.event.renderedText;
 	if (settle.event.requiresDelivery) {
 		await harnessBackend.attestDelivery(settle.event.eventId, sessionId, settle.event.renderedSha256, "delivered");

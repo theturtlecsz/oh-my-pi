@@ -198,6 +198,14 @@ try {
 	const auditReceipts = (auditWorkflow.receipts ?? []).filter(r => r.kind === "audit");
 	assert.equal(auditReceipts.length, 1, "exactly one audit receipt");
 	assert.equal(auditReceipts[0].verdict, "PASS", "audit receipt verdict is PASS");
+	const transportPayload = auditOut.transportPayload;
+	assert.ok(typeof transportPayload === "string", "transport payload is a string");
+	const parsedTransport = JSON.parse(transportPayload as string);
+	assert.deepEqual(Object.keys(parsedTransport), ["report"], "transport payload has exactly one report key");
+	assert.ok(
+		typeof parsedTransport.report === "string" && parsedTransport.report.startsWith("VERDICT: PASS"),
+		"transport report string starts with VERDICT: PASS",
+	);
 
 	// Phase 2: closeout (fresh process restart, resumes attempt)
 	const closeoutOut = runHarness("closeout", key);
