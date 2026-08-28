@@ -475,4 +475,11 @@ describe("candidateDrift", () => {
 		const result = candidateDrift(nonRepo, "0123456789abcdef0123456789abcdef01234567");
 		expect(result).toEqual({ shape: "unrelated", head: null });
 	});
+
+	test("handles null or undefined candidate commit", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		expect(candidateDrift(repo, null)).toEqual({ shape: "unrelated", head });
+		expect(candidateDrift(repo, undefined)).toEqual({ shape: "unrelated", head });
+	});
 });

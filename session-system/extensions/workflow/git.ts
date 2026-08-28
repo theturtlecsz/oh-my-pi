@@ -67,10 +67,10 @@ export function parentCommit(cwd: string, commit: string): string | null {
 export type CandidateDriftShape = "unchanged" | "fixes-on-top" | "unrelated";
 
 /** Relationship between the current HEAD and a reviewed candidate commit. */
-export function candidateDrift(cwd: string, candidateCommit: string): { shape: CandidateDriftShape; head: string | null } {
+export function candidateDrift(cwd: string, candidateCommit: string | null | undefined): { shape: CandidateDriftShape; head: string | null } {
 	const head = headCommit(cwd);
-	if (!head) {
-		return { shape: "unrelated", head: null };
+	if (!head || !candidateCommit) {
+		return { shape: "unrelated", head: head ?? null };
 	}
 	if (head === candidateCommit) {
 		return { shape: "unchanged", head };
