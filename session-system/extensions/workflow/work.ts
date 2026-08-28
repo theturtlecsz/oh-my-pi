@@ -1310,7 +1310,7 @@ export function createWorkBackend(
 				...(packet ? { planHash: packet.planSha256 } : {}),
 				...(auditBaseCommit ? { auditBaseCommit } : {}),
 				...(auditBaseDirtyPaths ? { auditBaseDirtyPaths } : {}),
-				carrier: { candidateId, candidateSha: frozenSha, commitSha: freeze.commitSha },
+				carrier: { candidateId: view.item.candidate?.candidate_id ?? candidateId, candidateSha: frozenSha, commitSha: freeze.commitSha },
 			};
 		},
 

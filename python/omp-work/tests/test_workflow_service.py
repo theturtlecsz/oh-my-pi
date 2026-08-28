@@ -699,6 +699,61 @@ def test_replan_supersedes_live_attempt(service) -> None:
     assert len(live) == 1 and live[0]["attempt_id"] != old_attempt["attempt_id"]
 
 
+def test_replan_refinalize_same_candidate_commit_succeeds(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "replan refinalize target")
+    candidate_hash = secrets.token_hex(32)
+    commit = secrets.token_hex(20)
+    plan1 = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan1["candidate_id"], candidate_hash=candidate_hash, commit=commit)
+    assert status == 200, body
+    final1 = body["result"]["candidate"]
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied"
+
+    # Replan without changing revision or code commit
+    plan2 = _plan(service, workspace_id, item)
+    assert plan2["candidate_id"] != plan1["candidate_id"]
+
+    # Finalize again with the same candidate_hash and commit
+    status, body = _finalize(service, workspace_id, item, plan2["candidate_id"], candidate_hash=candidate_hash, commit=commit)
+    assert status == 200, body
+    final2 = body["result"]["candidate"]
+    assert final2["candidate_id"] == final1["candidate_id"]
+
+    # Begin close attempt succeeds under new plan
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied"
+
+def test_finalize_rejects_collision_with_planned_candidate(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "collision planned target")
+    candidate_hash = secrets.token_hex(32)
+    plan = _plan(service, workspace_id, item, candidate_hash=candidate_hash)
+    # Attempting to finalize using the exact candidate_hash that was allocated to the planned row
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"], candidate_hash=candidate_hash)
+    assert status == 409 and body["error"]["code"] == "stale_evidence", body
+
+def test_finalize_rejects_same_candidate_hash_different_commit(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "hash match commit mismatch target")
+    candidate_hash = secrets.token_hex(32)
+    commit1 = secrets.token_hex(20)
+    commit2 = secrets.token_hex(20)
+    plan1 = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan1["candidate_id"], candidate_hash=candidate_hash, commit=commit1)
+    assert status == 200, body
+    status, body = _begin(service, workspace_id, item)
+    assert status == 200 and body["result"]["status"] == "applied"
+
+    # Replan, then attempt to finalize with the same candidate_hash but a different commit
+    plan2 = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan2["candidate_id"], candidate_hash=candidate_hash, commit=commit2)
+    assert status == 409 and body["error"]["code"] == "stale_evidence", body
+
 def test_replan_supersedes_in_flight_attempt_after_revision_clear(service) -> None:
     # OMP-124 (Sol-xhigh escalation review): supersession is unconditional — a
     # live attempt is superseded even when a revision change has cleared the

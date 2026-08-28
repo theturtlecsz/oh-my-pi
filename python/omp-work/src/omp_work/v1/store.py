@@ -506,11 +506,30 @@ class PostgresWorkStore:
         if plan is None:
             raise WorkStoreError("stale_evidence")
         now = datetime.now(timezone.utc)
-        cur.execute("INSERT INTO omp_work.candidates(candidate_id,workspace_id,work_id,revision_id,candidate_sha256,commit_sha,kind,allocated_at) VALUES(%s,%s,%s,%s,%s,%s,'final',%s)", (payload.candidate_id, envelope.workspace_id, payload.work_id, payload.revision_id, payload.candidate_sha256, payload.commit_sha, now))
+        cur.execute(
+            "SELECT candidate_id, commit_sha, kind, allocated_at FROM omp_work.candidates WHERE workspace_id=%s AND work_id=%s AND revision_id=%s AND candidate_sha256=%s",
+            (envelope.workspace_id, payload.work_id, payload.revision_id, payload.candidate_sha256),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            if existing["kind"] != "final" or existing["commit_sha"] != payload.commit_sha:
+                raise WorkStoreError("stale_evidence", ("candidate_sha256 collides with an incompatible existing candidate on this revision",))
+            target_candidate_id = existing["candidate_id"]
+            allocated_at = existing["allocated_at"]
+        else:
+            target_candidate_id = payload.candidate_id
+            allocated_at = now
+            cur.execute(
+                "INSERT INTO omp_work.candidates(candidate_id,workspace_id,work_id,revision_id,candidate_sha256,commit_sha,kind,allocated_at) VALUES(%s,%s,%s,%s,%s,%s,'final',%s)",
+                (target_candidate_id, envelope.workspace_id, payload.work_id, payload.revision_id, payload.candidate_sha256, payload.commit_sha, now),
+            )
         derived_receipt_id = uuid4()
-        cur.execute("INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit) VALUES(%s,%s,%s,%s,%s,'plan',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (derived_receipt_id, envelope.workspace_id, payload.work_id, payload.revision_id, payload.candidate_id, canonical_json(plan["payload"]), plan["payload_sha256"], plan["artifact_sha256"], plan["issuer"], now, payload.candidate_sha256, payload.commit_sha, plan["verdict"], plan["independent"], plan["remote_ref"], plan["remote_commit"]))
-        cur.execute("UPDATE omp_work.work_items SET current_candidate_id=%s WHERE workspace_id=%s AND work_id=%s", (payload.candidate_id, envelope.workspace_id, payload.work_id))
-        candidate = {"candidate_id": str(payload.candidate_id), "work_id": str(payload.work_id), "revision_id": str(payload.revision_id), "candidate_sha256": payload.candidate_sha256, "commit_sha": payload.commit_sha, "kind": "final", "allocated_at": now.isoformat()}
+        cur.execute(
+            "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit) VALUES(%s,%s,%s,%s,%s,'plan',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (derived_receipt_id, envelope.workspace_id, payload.work_id, payload.revision_id, target_candidate_id, canonical_json(plan["payload"]), plan["payload_sha256"], plan["artifact_sha256"], plan["issuer"], now, payload.candidate_sha256, payload.commit_sha, plan["verdict"], plan["independent"], plan["remote_ref"], plan["remote_commit"]),
+        )
+        cur.execute("UPDATE omp_work.work_items SET current_candidate_id=%s WHERE workspace_id=%s AND work_id=%s", (target_candidate_id, envelope.workspace_id, payload.work_id))
+        candidate = {"candidate_id": str(target_candidate_id), "work_id": str(payload.work_id), "revision_id": str(payload.revision_id), "candidate_sha256": payload.candidate_sha256, "commit_sha": payload.commit_sha, "kind": "final", "allocated_at": allocated_at.isoformat()}
         return {"type": "finalize_candidate", "candidate": candidate}
 
     # ---- OMP-47 close attempts: shared helpers ----
