@@ -31,11 +31,21 @@ const runnerBytes = readFileSync(join(workflowDir, "auditor-runner.ts"));
 const runnerSha256 = new Bun.CryptoHasher("sha256").update(runnerBytes).digest("hex");
 
 function getExecutorSha(): string {
-	const specifier = "@oh-my-pi/pi-coding-agent/task/executor";
-	const resolved = import.meta.resolve(specifier);
-	const filePath = resolved.startsWith("file://") ? resolved.slice(7) : resolved;
-	const bytes = readFileSync(filePath);
-	return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+	const hasher = new Bun.CryptoHasher("sha256");
+	const requiredSpecifiers = [
+		"@oh-my-pi/pi-coding-agent/task/executor",
+		"@oh-my-pi/pi-coding-agent/task/yield-assembly",
+	];
+	for (const specifier of requiredSpecifiers) {
+		const resolved = import.meta.resolve(specifier);
+		if (!resolved) {
+			throw new Error(`Failed to resolve required audit transport source: ${specifier}`);
+		}
+		const filePath = resolved.startsWith("file://") ? resolved.slice(7) : resolved;
+		const bytes = readFileSync(filePath);
+		hasher.update(`file:${specifier}\n`).update(bytes);
+	}
+	return hasher.digest("hex");
 }
 const executorSha256 = getExecutorSha();
 

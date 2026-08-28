@@ -1561,15 +1561,20 @@ export function createWorkBackend(
 				if (currentItem) targetProjectId = currentItem.project_id;
 			}
 
-			const eligibleItems = tree.items.filter(item => {
+			const isEligible = (item: WorkItemView): boolean => {
 				if (item.archived) return false;
 				if (["DONE", "CANCELED", "CANCELLED", "TRIAGE", "BLOCKED"].includes(item.state)) return false;
 				if (extractOwnerQuestion(item.revision.description)) return false;
 				if (blockedWorkIds.has(item.work_id)) return false;
 				if (targetProjectId !== null && item.project_id !== targetProjectId) return false;
 				return true;
-			});
+			};
 
+			if (currentItem && !isEligible(currentItem)) {
+				currentItem = null;
+			}
+
+			const eligibleItems = tree.items.filter(isEligible);
 			const remaining = eligibleItems.filter(i => !currentItem || i.work_id !== currentItem.work_id);
 			remaining.sort((a, b) => {
 				const numA = parseKeyNumber(a.alias.key);

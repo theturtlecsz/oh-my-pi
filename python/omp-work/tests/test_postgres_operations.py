@@ -46,7 +46,7 @@ def config(tmp_path: Path) -> OperationsConfig:
 
 def test_pinned_migration_set_is_forward_only() -> None:
     files = migrations()
-    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
     assert all(path.name.startswith(f"{ordinal:04d}_") for ordinal, path in files)
     assert len(migration_set_sha256()) == 64
 
@@ -485,3 +485,127 @@ def test_authorization_uses_security_and_constraints(config: OperationsConfig, m
                 cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(other_workspace_id), str(actor_id)))
                 cursor.execute("SELECT count(*) FROM omp_work.authorization_uses WHERE authorization_ref = 'token-1'")
                 assert cursor.fetchone()[0] == 0
+
+
+def test_execution_grant_triggers_enforce_immutability_and_monotonicity(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("omp_work.operations.database.validate_bundle", lambda **kw: None)
+    with native_postgres(config.state_dir, config.port):
+        bootstrap(config)
+        workspace_id = uuid4()
+        actor_id = config.actor_id()
+        seed_authority(config.connection_kwargs("postgres"), workspace_id, actor_id)
+        with psycopg.connect(**config.connection_kwargs("postgres")) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                cursor.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)", (workspace_id,))
+        work_id = uuid4()
+        rev_id = uuid4()
+        grant_id = uuid4()
+        item_id = uuid4()
+        now = datetime.now(timezone.utc)
+        app_kwargs = config.connection_kwargs("omp_work_app")
+
+        with psycopg.connect(**app_kwargs) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                cursor.execute("INSERT INTO omp_work.work_items(work_id, workspace_id, state) VALUES (%s, %s, 'OPEN')", (work_id, workspace_id))
+                cursor.execute(
+                    "INSERT INTO omp_work.work_revisions(revision_id, work_id, workspace_id, revision_number, title, description, scope, content_sha256, created_by, supplied_at)"
+                    " VALUES (%s, %s, %s, 1, 'T', 'D', 'S', %s, 'test', clock_timestamp())",
+                    (rev_id, work_id, workspace_id, "0" * 64),
+                )
+                cursor.execute("UPDATE omp_work.work_items SET current_revision_id = %s WHERE work_id = %s", (rev_id, work_id))
+                cursor.execute(
+                    "INSERT INTO omp_work.execution_grants(grant_id, workspace_id, owner_id, repository, mode, max_continuations, max_close_attempts, max_no_progress, authorization_hash, provenance, judge_sha256, judge_manifest, focus_version_at_grant, created_at, expires_at, state)"
+                    " VALUES (%s, %s, %s, 'oh-my-pi', 'single', 8, 3, 3, %s, '{}'::jsonb, %s, '{}'::jsonb, 0, %s, %s + interval '7 days', 'active')",
+                    (grant_id, workspace_id, actor_id, "a" * 64, "b" * 64, now, now),
+                )
+                cursor.execute(
+                    "INSERT INTO omp_work.execution_grant_items(item_id, workspace_id, grant_id, work_id, position, claimed_revision_id, initial_git_baseline, original_request, original_request_sha256, phase, activated_at)"
+                    " VALUES (%s, %s, %s, %s, 0, %s, %s, 'req', %s, 'planning', %s)",
+                    (item_id, workspace_id, grant_id, work_id, rev_id, "c" * 40, "d" * 64, now),
+                )
+
+        # 1. DELETE rejected on grants and items via trigger
+        with psycopg.connect(**config.connection_kwargs("postgres")) as connection:
+            with pytest.raises(psycopg.Error, match="execution grants are immutable history"):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("DELETE FROM omp_work.execution_grants WHERE grant_id = %s", (grant_id,))
+            with pytest.raises(psycopg.Error, match="execution grant items are immutable history"):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("DELETE FROM omp_work.execution_grant_items WHERE item_id = %s", (item_id,))
+
+        # 2. Immutable grant identity & admission columns
+        for col, val in [
+            ("grant_id", f"'{uuid4()}'"),
+            ("workspace_id", f"'{uuid4()}'"),
+            ("owner_id", f"'{uuid4()}'"),
+            ("repository", "'other-repo'"),
+            ("mode", "'queue'"),
+            ("max_continuations", "10"),
+            ("max_close_attempts", "5"),
+            ("max_no_progress", "5"),
+            ("authorization_hash", f"'{'f' * 64}'"),
+            ("provenance", "'{\"tampered\": true}'::jsonb"),
+            ("judge_sha256", f"'{'e' * 64}'"),
+            ("judge_manifest", "'{\"tampered\": true}'::jsonb"),
+            ("focus_version_at_grant", "5"),
+            ("created_at", "clock_timestamp()"),
+        ]:
+            with psycopg.connect(**app_kwargs) as connection:
+                with pytest.raises(psycopg.Error, match="identity and admission parameters are immutable"):
+                    with connection.transaction(), connection.cursor() as cursor:
+                        cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                        cursor.execute(f"UPDATE omp_work.execution_grants SET {col} = {val} WHERE grant_id = %s", (grant_id,))
+
+        # 3. Monotonic grant counters
+        with psycopg.connect(**app_kwargs) as connection:
+            with pytest.raises(psycopg.Error, match="grant_version must be monotonic"):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("UPDATE omp_work.execution_grants SET grant_version = -1 WHERE grant_id = %s", (grant_id,))
+            with pytest.raises(psycopg.Error, match="continuations_scheduled must be monotonic"):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("UPDATE omp_work.execution_grants SET continuations_scheduled = -1 WHERE grant_id = %s", (grant_id,))
+
+        # 4. Immutable item identity & admission columns
+        for col, val in [
+            ("item_id", f"'{uuid4()}'"),
+            ("workspace_id", f"'{uuid4()}'"),
+            ("grant_id", f"'{uuid4()}'"),
+            ("work_id", f"'{uuid4()}'"),
+            ("position", "1"),
+            ("claimed_revision_id", f"'{uuid4()}'"),
+            ("initial_git_baseline", f"'{'0' * 40}'"),
+            ("original_request", "'tampered'"),
+            ("original_request_sha256", f"'{'1' * 64}'"),
+        ]:
+            with psycopg.connect(**app_kwargs) as connection:
+                with pytest.raises(psycopg.Error, match="identity and admission claims are immutable"):
+                    with connection.transaction(), connection.cursor() as cursor:
+                        cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                        cursor.execute(f"UPDATE omp_work.execution_grant_items SET {col} = {val} WHERE item_id = %s", (item_id,))
+
+        # 5. Legal transitions and write-once terminal timestamps
+        with psycopg.connect(**app_kwargs) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                cursor.execute(
+                    "UPDATE omp_work.execution_grants SET state='paused', paused_at=clock_timestamp(), grant_version=grant_version+1 WHERE grant_id = %s",
+                    (grant_id,),
+                )
+                cursor.execute(
+                    "UPDATE omp_work.execution_grants SET state='active', paused_at=NULL, continuations_scheduled=continuations_scheduled+1, grant_version=grant_version+1 WHERE grant_id = %s",
+                    (grant_id,),
+                )
+                cursor.execute(
+                    "UPDATE omp_work.execution_grants SET state='stopped', terminal_reason='stopped', stopped_at=clock_timestamp(), grant_version=grant_version+1 WHERE grant_id = %s",
+                    (grant_id,),
+                )
+
+        # 6. Terminal state immutability
+        with psycopg.connect(**app_kwargs) as connection:
+            with pytest.raises(psycopg.Error, match="terminal execution grant is immutable"):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("UPDATE omp_work.execution_grants SET state='active', grant_version=grant_version+1 WHERE grant_id = %s", (grant_id,))

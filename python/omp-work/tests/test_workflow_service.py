@@ -3400,3 +3400,495 @@ def test_execution_grant_no_progress_cap(service) -> None:
     assert resp.status_code == 200, resp.json()
     assert resp.json()["grant"]["state"] == "stopped"
     assert resp.json()["grant"]["terminal_reason"] == "max_no_progress_exceeded"
+
+
+def test_execution_grant_continuation_cap(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+
+    item = _create(service, workspace_id, "Continuation cap test item", description="desc")
+    work_id, rev_id = item["work_id"], item["revision_id"]
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    head_commit = "0" * 40
+
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": {
+                    "owner_input_id": str(uuid4()),
+                    "owner_session_id": "session-1",
+                    "normalized_command": "/execute OMP-1",
+                    "workspace_id": str(workspace_id),
+                    "repository": "oh-my-pi",
+                    "nonce": str(uuid4()),
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(work_id),
+                        "revision_id": str(rev_id),
+                        "position": 0,
+                        "original_request": "desc",
+                        "original_request_sha256": text_sha256("desc"),
+                        "initial_git_baseline": head_commit,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+
+    # Schedule continuations 1 through 8
+    for i in range(1, 9):
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "set_execution_state",
+                "payload": {
+                    "grant_id": grant_id,
+                    "target_state": "active",
+                    "expected_grant_version": i,
+                    "judge_sha256": judge_sha,
+                },
+            },
+        )
+        assert status == 200, body
+        assert body["result"]["grant"]["state"] == "active"
+        assert body["result"]["grant"]["continuations_scheduled"] == i
+        assert body["result"]["grant"]["grant_version"] == i + 1
+
+    # 9th continuation exceeds cap of 8 -> atomically returns stopped
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "target_state": "active",
+                "expected_grant_version": 9,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["state"] == "stopped"
+    assert body["result"]["grant"]["terminal_reason"] == "max_continuations_exceeded"
+
+
+def test_execution_grant_pause_resume_contract_approval(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+
+    item = _create(service, workspace_id, "Contract approval test item", description="desc")
+    work_id, rev_id = item["work_id"], item["revision_id"]
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    head_commit = "0" * 40
+
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": {
+                    "owner_input_id": str(uuid4()),
+                    "owner_session_id": "session-1",
+                    "normalized_command": "/execute OMP-1",
+                    "workspace_id": str(workspace_id),
+                    "repository": "oh-my-pi",
+                    "nonce": str(uuid4()),
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(work_id),
+                        "revision_id": str(rev_id),
+                        "position": 0,
+                        "original_request": "desc",
+                        "original_request_sha256": text_sha256("desc"),
+                        "initial_git_baseline": head_commit,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+
+    # Pause for contract approval
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "target_state": "paused",
+                "expected_grant_version": 1,
+                "reason": "contract_approval_required: contract hash mismatch",
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["state"] == "paused"
+    assert body["result"]["grant"]["paused_at"] is not None
+
+    resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{grant_id}",
+        headers=_owner_headers(workspace_id),
+    )
+    assert resp.json()["items"][0]["phase"] == "awaiting_contract_approval"
+
+    # Resume returns to active and item returns to planning
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "target_state": "active",
+                "expected_grant_version": 2,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["state"] == "active"
+    assert body["result"]["grant"]["paused_at"] is None
+
+    resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{grant_id}",
+        headers=_owner_headers(workspace_id),
+    )
+    assert resp.json()["items"][0]["phase"] == "planning"
+
+    # Pause and then cancel
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "target_state": "paused",
+                "expected_grant_version": 3,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "target_state": "canceled",
+                "expected_grant_version": 4,
+                "reason": "owner_canceled",
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["state"] == "canceled"
+    assert body["result"]["grant"]["paused_at"] is None
+    assert body["result"]["grant"]["canceled_at"] is not None
+
+
+def test_execution_grant_completion_push_binding_enforcement(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+
+    item = _create(service, workspace_id, "Push binding test item", description="desc")
+    work_id, rev_id = item["work_id"], item["revision_id"]
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    head_commit = "0" * 40
+
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": {
+                    "owner_input_id": str(uuid4()),
+                    "owner_session_id": "session-1",
+                    "normalized_command": "/execute OMP-1",
+                    "workspace_id": str(workspace_id),
+                    "repository": "oh-my-pi",
+                    "nonce": str(uuid4()),
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(work_id),
+                        "revision_id": str(rev_id),
+                        "position": 0,
+                        "original_request": "desc",
+                        "original_request_sha256": text_sha256("desc"),
+                        "initial_git_baseline": head_commit,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+
+    status, seal_body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_execution_criteria",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 1,
+                "work_id": str(work_id),
+                "expected_revision_id": str(rev_id),
+                "criteria": ["AC-1: test"],
+                "description_sha256": text_sha256("desc"),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    new_rev_id = seal_body["result"]["revision"]["revision_id"]
+    cand_id = str(uuid4())
+    _, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 2,
+                "work_id": str(work_id),
+                "revision_id": str(new_rev_id),
+                "candidate_id": cand_id,
+                "plan_file": "local://p.md",
+                "plan_body": "## Approach\n1. a\n\n## Verification\n1. v",
+                "plan_sha256": sha256("p"),
+                "approach": ["1. a"],
+                "verification": ["1. v"],
+                "paths": ["a.ts"],
+                "candidate_sha256": "1" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    plan_stamp_sha = body["result"]["item"]["plan_stamp_sha256"]
+    final_cand_sha = "f" * 64
+    final_commit = "c" * 40
+    final_id = str(uuid4())
+    _finalize(
+        service,
+        workspace_id,
+        {"work_id": work_id, "revision_id": new_rev_id},
+        cand_id,
+        commit=final_commit,
+        final_id=final_id,
+        candidate_hash=final_cand_sha,
+    )
+    att_id = str(uuid4())
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_close_attempt",
+            "payload": {
+                "work_id": str(work_id),
+                "attempt_id": att_id,
+                "authorization_ref": f"execution:{grant_id}:0:1",
+                "owner_session_id": "session-1",
+                "owner_session_started_at": datetime.now(timezone.utc).isoformat(),
+                "owner_session_start_commit": head_commit,
+                "repository": "oh-my-pi",
+                "diff_sha256": "d" * 64,
+                "starting_dirty_paths": [],
+                "authorization_kind": "execution",
+                "execution_grant_id": grant_id,
+                "candidate_tree_sha": final_cand_sha,
+                "original_request_sha256": text_sha256("desc"),
+                "criteria_sha256": sha256(["AC-1: test"]),
+                "plan_stamp_sha256": plan_stamp_sha,
+                "judge_sha256": judge_sha,
+                "riders": [],
+            },
+        },
+    )
+    v_id = str(uuid4())
+    assert status == 200, body
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "append_evidence",
+            "payload": {
+                "receipt": {
+                    "receipt_id": v_id,
+                    "work_id": str(work_id),
+                    "revision_id": str(new_rev_id),
+                    "candidate_id": str(final_id),
+                    "kind": "verification",
+                    "payload": {"body": "v"},
+                    "payload_sha256": sha256({"body": "v"}),
+                    "issuer": "test",
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                    "candidate_sha256": final_cand_sha,
+                    "candidate_commit": final_commit,
+                },
+            },
+        },
+    )
+    assert status == 200, body
+    status, m_body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_audit_manifest",
+            "payload": {"attempt_id": att_id, "verification_receipt_id": v_id},
+        },
+    )
+    assert status == 200, m_body
+    status, l_body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "reserve_auditor_launch",
+            "payload": {
+                "attempt_id": att_id,
+                "task_sha256": m_body["result"]["manifest"]["task_sha256"],
+                "tool_call_id": "c-1",
+            },
+        },
+    )
+    assert status == 200, l_body
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "settle_auditor_launch",
+            "payload": {
+                "attempt_id": att_id,
+                "launch_id": l_body["result"]["launch"]["launch_id"],
+                "transport_payload": PASS_REPORT,
+            },
+        },
+    )
+    assert status == 200, body
+
+    # Push receipt with mismatched remote commit fails
+    bad_push_id = str(uuid4())
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "append_evidence",
+            "payload": {
+                "receipt": {
+                    "receipt_id": bad_push_id,
+                    "work_id": str(work_id),
+                    "revision_id": str(new_rev_id),
+                    "candidate_id": str(final_id),
+                    "kind": "push",
+                    "payload": {
+                        "remote_ref": "refs/heads/main",
+                        "remote_commit": "bad" + "0" * 37,
+                    },
+                    "payload_sha256": sha256({"remote_commit": "bad" + "0" * 37}),
+                    "issuer": "test",
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                    "candidate_sha256": final_cand_sha,
+                    "candidate_commit": final_commit,
+                    "remote_ref": "refs/heads/main",
+                    "remote_commit": "bad" + "0" * 37,
+                },
+            },
+        },
+    )
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": str(work_id),
+                "attempt_id": att_id,
+                "push_receipt_id": bad_push_id,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "completion_blocked"
+    # Push receipt with matching remote commit succeeds
+    good_push_id = str(uuid4())
+    good_push_payload = {
+        "remote_ref": "refs/heads/main",
+        "remote_commit": final_commit,
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "append_evidence",
+            "payload": {
+                "receipt": {
+                    "receipt_id": good_push_id,
+                    "work_id": str(work_id),
+                    "revision_id": str(new_rev_id),
+                    "candidate_id": str(final_id),
+                    "kind": "push",
+                    "payload": good_push_payload,
+                    "payload_sha256": sha256(good_push_payload),
+                    "issuer": "test",
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                    "candidate_sha256": final_cand_sha,
+                    "candidate_commit": final_commit,
+                    "remote_ref": "refs/heads/main",
+                    "remote_commit": final_commit,
+                },
+            },
+        },
+    )
+    assert status == 200, body
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": str(work_id),
+                "attempt_id": att_id,
+                "push_receipt_id": good_push_id,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["state"] == "DONE"
+    assert body["result"]["grant"]["state"] == "completed"

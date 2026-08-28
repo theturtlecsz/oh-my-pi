@@ -972,7 +972,7 @@ try {
 	assert.equal(contractOut.pausedExecution?.items?.[0]?.phase, "awaiting_contract_approval", "item phase is awaiting_contract_approval");
 	assert.ok((contractOut.resumeDeniedNotices as string[])?.length > 0, "resume without approval denied");
 	assert.equal(contractOut.resumedExecution?.grant?.state, "active", "grant resumed to active after approval");
-	assert.equal(contractOut.resumedExecution?.items?.[0]?.phase, "executing", "item resumed to executing after approval");
+	assert.equal(contractOut.resumedExecution?.items?.[0]?.phase, "planning", "item resumed to planning after approval");
 
 	// Verify audit receipt count remained unchanged after tamper attempts
 	const postTamperView = (await (await fetch(`${baseUrl}/v1/work-items/${item1.key}/workflow`, { headers })).json()) as {

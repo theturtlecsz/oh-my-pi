@@ -4274,6 +4274,75 @@ class PostgresWorkStore:
             "receipt": receipt_json,
         }
 
+    def _terminalize_execution_grant(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        envelope: CommandEnvelope,
+        grant: dict[str, object],
+        target_state: str,
+        reason: str | None,
+        now: datetime,
+    ) -> dict[str, object]:
+        cur.execute(
+            f"UPDATE omp_work.execution_grants SET state=%s, terminal_reason=%s, {target_state}_at=%s, paused_at=NULL, grant_version=grant_version+1 WHERE workspace_id=%s AND grant_id=%s RETURNING {_GRANT_FIELDS}",
+            (
+                target_state,
+                reason or target_state,
+                now,
+                envelope.workspace_id,
+                grant["grant_id"],
+            ),
+        )
+        updated_grant = cur.fetchone()
+
+        # 1. Skip pending items before abandoning active items
+        cur.execute(
+            "UPDATE omp_work.execution_grant_items SET phase='skipped', skipped_at=%s, terminal_reason='grant_stopped' WHERE workspace_id=%s AND grant_id=%s AND phase='pending'",
+            (
+                now,
+                envelope.workspace_id,
+                grant["grant_id"],
+            ),
+        )
+
+        # 2. Abandon active/in-flight items
+        cur.execute(
+            "UPDATE omp_work.execution_grant_items SET phase='abandoned', abandoned_at=%s, terminal_reason=%s WHERE workspace_id=%s AND grant_id=%s AND phase NOT IN ('completed', 'abandoned', 'skipped')",
+            (
+                now,
+                reason or target_state,
+                envelope.workspace_id,
+                grant["grant_id"],
+            ),
+        )
+
+        # 3. Cancel any in-flight auditor launches on attempts belonging to this grant
+        cur.execute(
+            "SELECT attempt_id, in_flight_launch_id FROM omp_work.close_attempts WHERE workspace_id=%s AND execution_grant_id=%s AND state='auditor_in_flight'",
+            (envelope.workspace_id, grant["grant_id"]),
+        )
+        for in_flight in cur.fetchall():
+            if in_flight.get("in_flight_launch_id"):
+                self._transition_attempt(
+                    cur,
+                    envelope.workspace_id,
+                    in_flight["attempt_id"],
+                    "state='audit_ready', in_flight_launch_id=NULL, cancelled_launch_count=cancelled_launch_count+1",
+                )
+
+        # 4. CAS-clear focus slot only if it points to a work item claimed by this grant
+        cur.execute(
+            "SELECT work_id FROM omp_work.execution_grant_items WHERE workspace_id=%s AND grant_id=%s",
+            (envelope.workspace_id, grant["grant_id"]),
+        )
+        claimed_work_ids = [row["work_id"] for row in cur.fetchall()]
+        if claimed_work_ids:
+            cur.execute(
+                "UPDATE omp_work.focus_slots SET work_id=NULL, version=version+1 WHERE workspace_id=%s AND owner_id=%s AND work_id = ANY(%s)",
+                (envelope.workspace_id, grant["owner_id"], claimed_work_ids),
+            )
+        return updated_grant
+
     def _set_execution_state(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -4311,80 +4380,29 @@ class PostgresWorkStore:
                     (envelope.workspace_id, payload.grant_id),
                 )
         elif target == "active":
-            if grant["state"] != "paused":
+            if grant["state"] not in ("active", "paused"):
                 raise WorkStoreError(
                     "invalid_request",
-                    (f"cannot resume grant in state {grant['state']}",),
+                    (f"cannot resume or continue grant in state {grant['state']}",),
                 )
-            cur.execute(
-                f"UPDATE omp_work.execution_grants SET state='active', paused_at=NULL, grant_version=grant_version+1 WHERE workspace_id=%s AND grant_id=%s RETURNING {_GRANT_FIELDS}",
-                (envelope.workspace_id, payload.grant_id),
-            )
-            updated_grant = cur.fetchone()
-            cur.execute(
-                "UPDATE omp_work.execution_grant_items SET phase='executing' WHERE workspace_id=%s AND grant_id=%s AND phase='awaiting_contract_approval'",
-                (envelope.workspace_id, payload.grant_id),
-            )
-        elif target in ("stopped", "canceled"):
-            cur.execute(
-                f"UPDATE omp_work.execution_grants SET state=%s, terminal_reason=%s, {target}_at=%s, grant_version=grant_version+1 WHERE workspace_id=%s AND grant_id=%s RETURNING {_GRANT_FIELDS}",
-                (
-                    target,
-                    payload.reason or target,
-                    now,
-                    envelope.workspace_id,
-                    payload.grant_id,
-                ),
-            )
-            updated_grant = cur.fetchone()
-
-            # 1. Skip pending items before abandoning active items
-            cur.execute(
-                "UPDATE omp_work.execution_grant_items SET phase='skipped', skipped_at=%s, terminal_reason=%s WHERE workspace_id=%s AND grant_id=%s AND phase='pending'",
-                (
-                    now,
-                    payload.reason or target,
-                    envelope.workspace_id,
-                    payload.grant_id,
-                ),
-            )
-
-            # 2. Abandon active/in-flight items
-            cur.execute(
-                "UPDATE omp_work.execution_grant_items SET phase='abandoned', abandoned_at=%s, terminal_reason=%s WHERE workspace_id=%s AND grant_id=%s AND phase NOT IN ('completed', 'abandoned', 'skipped')",
-                (
-                    now,
-                    payload.reason or target,
-                    envelope.workspace_id,
-                    payload.grant_id,
-                ),
-            )
-
-            # 3. Cancel any in-flight auditor launches on attempts belonging to this grant
-            cur.execute(
-                "SELECT attempt_id, in_flight_launch_id FROM omp_work.close_attempts WHERE workspace_id=%s AND execution_grant_id=%s AND state='auditor_in_flight'",
-                (envelope.workspace_id, payload.grant_id),
-            )
-            for in_flight in cur.fetchall():
-                if in_flight.get("in_flight_launch_id"):
-                    self._transition_attempt(
-                        cur,
-                        envelope.workspace_id,
-                        in_flight["attempt_id"],
-                        "state='audit_ready', in_flight_launch_id=NULL, cancelled_launch_count=cancelled_launch_count+1",
-                    )
-
-            # 4. CAS-clear focus slot only if it points to a work item claimed by this grant
-            cur.execute(
-                "SELECT work_id FROM omp_work.execution_grant_items WHERE workspace_id=%s AND grant_id=%s",
-                (envelope.workspace_id, payload.grant_id),
-            )
-            claimed_work_ids = [row["work_id"] for row in cur.fetchall()]
-            if claimed_work_ids:
+            if int(grant.get("continuations_scheduled", 0)) >= int(grant.get("max_continuations", 8)):
+                updated_grant = self._terminalize_execution_grant(
+                    cur, envelope, grant, "stopped", "max_continuations_exceeded", now
+                )
+            else:
                 cur.execute(
-                    "UPDATE omp_work.focus_slots SET work_id=NULL, version=version+1 WHERE workspace_id=%s AND owner_id=%s AND work_id = ANY(%s)",
-                    (envelope.workspace_id, grant["owner_id"], claimed_work_ids),
+                    f"UPDATE omp_work.execution_grants SET state='active', paused_at=NULL, continuations_scheduled=continuations_scheduled+1, grant_version=grant_version+1 WHERE workspace_id=%s AND grant_id=%s RETURNING {_GRANT_FIELDS}",
+                    (envelope.workspace_id, payload.grant_id),
                 )
+                updated_grant = cur.fetchone()
+                cur.execute(
+                    "UPDATE omp_work.execution_grant_items SET phase='planning' WHERE workspace_id=%s AND grant_id=%s AND phase='awaiting_contract_approval'",
+                    (envelope.workspace_id, payload.grant_id),
+                )
+        elif target in ("stopped", "canceled"):
+            updated_grant = self._terminalize_execution_grant(
+                cur, envelope, grant, target, payload.reason, now
+            )
         else:
             raise WorkStoreError(
                 "invalid_request", (f"unsupported target state {target}",)
@@ -4477,13 +4495,7 @@ class PostgresWorkStore:
             or push["work_id"] != payload.work_id
             or push["candidate_id"] != attempt["candidate_id"]
             or not push.get("remote_ref")
-            or not (
-                push.get("remote_commit") == attempt["candidate_commit"]
-                or (
-                    push.get("candidate_commit") == attempt["candidate_commit"]
-                    and push.get("remote_commit") is not None
-                )
-            )
+            or push.get("remote_commit") != attempt["candidate_commit"]
         ):
             raise WorkStoreError(
                 "completion_blocked",
@@ -4586,7 +4598,10 @@ class PostgresWorkStore:
                 (envelope.workspace_id, payload.grant_id),
             )
             updated_grant = cur.fetchone()
-
+            cur.execute(
+                "UPDATE omp_work.focus_slots SET work_id=NULL, version=version+1 WHERE workspace_id=%s AND owner_id=%s AND work_id=%s",
+                (envelope.workspace_id, grant["owner_id"], payload.work_id),
+            )
         closeout_receipt_json = {
             "receipt_id": str(closeout_receipt_id),
             "work_id": str(payload.work_id),

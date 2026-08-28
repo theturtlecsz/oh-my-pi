@@ -354,6 +354,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 	}
 
 	let state: HostNowState = {};
+	const resumedExecutionVersions = new Set<string>();
 	let digestPending = false;
 	let digestInjectedThisSession = false;
 	let intakeActive = false;
@@ -1357,6 +1358,58 @@ export function createWorkflowHost(cfg: HostConfig) {
 						/* headless */
 					}
 				}
+			}
+			if (ownerSession(ctx) && backend.workClient) {
+				try {
+					const exec = await backend.getExecution();
+					if (exec && exec.grant.state === "active" && exec.activeItem) {
+						const head = headCommit(ctx.cwd);
+						const dirt = dirtyPaths(ctx.cwd);
+						const tcb = await computeAuditTcb(ctx, backend.workClient);
+						const targetIssue = await backend.findIssue(exec.activeItem.work_id);
+						const item = await backend.workClient.workItem(targetIssue.key);
+						const expectedRev = exec.activeItem.criteria_revision_id ?? exec.activeItem.claimed_revision_id;
+						const workflow = await backend.workClient.workflow(targetIssue.key);
+						const activeBlockers = (workflow?.relations ?? []).filter(r => r.active && r.kind === "blocks" && r.target_work_id === item.work_id);
+
+						let expectedHead: string | undefined;
+						if (["reviewing", "remediating"].includes(exec.activeItem.phase) && item?.candidate?.commit_sha) {
+							expectedHead = item.candidate.commit_sha;
+						} else {
+							expectedHead = exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline;
+						}
+
+						if (
+							dirt.length === 0 &&
+							head === expectedHead &&
+							tcb.judgeSha256 === exec.grant.judge_sha256 &&
+							exec.grant.continuations_scheduled < exec.grant.max_continuations &&
+							item &&
+							item.revision.revision_id === expectedRev &&
+							!["DONE", "CANCELED", "CANCELLED", "TRIAGE", "BLOCKED"].includes(item.state) &&
+							(!exec.activeItem.project_id || item.project_id === exec.activeItem.project_id) &&
+							activeBlockers.length === 0
+						) {
+							const resumeKey = `${exec.grant.grant_id}:${exec.grant.grant_version}`;
+							if (!resumedExecutionVersions.has(resumeKey)) {
+								resumedExecutionVersions.add(resumeKey);
+								const updated = await backend.setExecutionState({
+									grantId: exec.grant.grant_id,
+									expectedGrantVersion: exec.grant.grant_version,
+									targetState: "active",
+									reason: "session_start_recovery",
+									judgeSha256: tcb.judgeSha256,
+								});
+								if (updated && updated.grant.state === "active") {
+									pi.sendMessage({
+										customType: `${TOOL_NAME}-execute`,
+										content: prompt.render(executePromptTemplate, { key: exec.activeItem.work_id }),
+									}, { deliverAs: "nextTurn" });
+								}
+							}
+						}
+					}
+				} catch {}
 			}
 			footer(ctx);
 		});

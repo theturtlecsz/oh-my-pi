@@ -10,7 +10,7 @@
  * contracts/v1/candidate-hash.json and are pinned by commit-step.test.ts.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { join as joinPath } from "node:path";
 
 /** Run git in cwd; timeoutMs guards network ops (push). `raw` is untrimmed stdout —
@@ -334,29 +334,41 @@ export async function freezeCandidateCommit(
 				}
 				return refuse("nothing", "nothing to freeze for execution candidate", "warning");
 			}
+			for (const p of committable) {
+				const full = joinPath(root, p);
+				try {
+					const buf = readFileSync(full);
+					if (buf.includes(0)) {
+						return refuse("failed", `execution freeze refused: binary file staged (${p})`, "error");
+					}
+				} catch (err) {
+					return refuse("failed", `execution freeze refused: unreadable file for credential scan (${p}): ${String(err)}`, "error");
+				}
+			}
 			const add = runGit(root, ["--literal-pathspecs", "add", "--", ...committable]);
 			if (!add.ok) return refuse("failed", `execution freeze staging failed: ${add.err}`, "error");
 			const cached = runGit(root, ["diff", "--cached"]);
 			if (!cached.ok) {
-				runGit(root, ["--literal-pathspecs", "reset", "-q", "--", ...committable]);
-				return refuse("failed", "execution freeze diff unreadable", "error");
+				return refuse("failed", `execution freeze diff unreadable: ${cached.err}`, "error");
 			}
 			const secrets = findSecrets(cached.out);
 			if (secrets.length) {
-				runGit(root, ["--literal-pathspecs", "reset", "-q", "--", ...committable]);
 				return refuse("failed", `execution freeze secret detected: ${secrets.join(", ")}`, "error");
 			}
 			const scannedTree = runGit(root, ["write-tree"]);
 			if (!scannedTree.ok) {
-				runGit(root, ["--literal-pathspecs", "reset", "-q", "--", ...committable]);
-				return refuse("failed", "execution freeze write-tree failed", "error");
+				return refuse("failed", `execution freeze write-tree failed: ${scannedTree.err}`, "error");
 			}
-			const commit = runGit(root, ["commit", "-m", `session candidate: ${key}\n\nWork-Candidate: ${candidateId}`]);
-			if (!commit.ok) {
-				runGit(root, ["--literal-pathspecs", "reset", "-q", "--", ...committable]);
-				return refuse("failed", `execution freeze commit failed: ${commit.err}`, "error");
+			const preCommitHead = runGit(root, ["rev-parse", "HEAD"]).out;
+			const commitTree = runGit(root, ["commit-tree", scannedTree.out, "-p", preCommitHead, "-m", `session candidate: ${key}\n\nWork-Candidate: ${candidateId}`]);
+			if (!commitTree.ok) {
+				return refuse("failed", `execution freeze commit-tree failed: ${commitTree.err}`, "error");
 			}
-			const commitSha = runGit(root, ["rev-parse", "HEAD"]).out;
+			const commitSha = commitTree.out;
+			const updateRef = runGit(root, ["update-ref", "HEAD", commitSha, preCommitHead]);
+			if (!updateRef.ok) {
+				return refuse("failed", `execution freeze update-ref failed: ${updateRef.err}`, "error");
+			}
 			const afterStatus = runGit(root, ["status", "--porcelain", "-z", "--untracked-files=all"]);
 			if (!afterStatus.ok || parsePorcelain(afterStatus.raw).length > 0) {
 				return refuse("failed", "execution freeze repository not clean after candidate commit", "error");
