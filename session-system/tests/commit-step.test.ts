@@ -464,7 +464,7 @@ describe("candidateDrift", () => {
 		const head = git(repo, "rev-parse", "HEAD");
 		expect(head).not.toBe(candidate);
 		// Candidate object still exists in repo
-		const checkCandidate = git(repo, "cat-file", "-e", candidate);
+		expect(Bun.spawnSync(["git", "cat-file", "-e", candidate], { cwd: repo }).exitCode).toBe(0);
 		const result = candidateDrift(repo, candidate);
 		expect(result).toEqual({ shape: "unrelated", head });
 	});
