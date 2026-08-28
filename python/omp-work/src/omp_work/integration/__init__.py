@@ -1,4 +1,4 @@
-from .importer import LinearImportMap, LinearImporter
+from .importer import LinearImporter, LinearImportMap
 from .legacy_artifacts import ExportManifest, LinearStream, load_export, load_manifest
 
 __all__ = [

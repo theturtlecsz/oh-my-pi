@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import Field
 
-from .models import AuditManifest, AuditorLaunch, Candidate, CheckpointDelivery, CloseAttempt, CloseAttemptEvent, EvidenceReceipt, FocusSlot, OperationReceipt, RelationEdge, StrictModel, WorkAlias, WorkRevision
+from .models import (
+    AuditManifest,
+    AuditorLaunch,
+    Candidate,
+    CheckpointDelivery,
+    CloseAttempt,
+    CloseAttemptEvent,
+    EvidenceReceipt,
+    OperationReceipt,
+    RelationEdge,
+    StrictModel,
+    WorkAlias,
+    WorkRevision,
+)
 
 
 class AcceptanceCriterionView(StrictModel):
@@ -28,7 +41,15 @@ class WorkItemView(StrictModel):
 class CloseAttemptResult(StrictModel):
     """Shared typed result for close-ritual commands: expected gate failures
     are refusals WITH an event, never generic exceptions (OMP-47)."""
-    type: Literal["begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "cancel_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery"]
+
+    type: Literal[
+        "begin_close_attempt",
+        "seal_audit_manifest",
+        "reserve_auditor_launch",
+        "cancel_auditor_launch",
+        "settle_auditor_launch",
+        "attest_checkpoint_delivery",
+    ]
     status: Literal["applied", "refused"]
     attempt: CloseAttempt | None = None
     manifest: AuditManifest | None = None
@@ -90,6 +111,7 @@ class CreateWorkBatchResult(StrictModel):
 
 class CreateSameSessionChildResult(StrictModel):
     """OMP-139: the atomic filing returns the created child and its minted receipt."""
+
     type: Literal["create_same_session_child"]
     item: CreatedWorkItem
     receipt: EvidenceReceipt
@@ -117,6 +139,7 @@ class CompleteWorkResult(StrictModel):
     completed_work_ids: tuple[UUID, ...] = ()
     canceled_work_ids: tuple[UUID, ...] = ()
     event: CloseAttemptEvent | None = None
+
 
 class RelationResult(StrictModel):
     type: Literal["put_relation", "remove_relation"]
@@ -149,6 +172,108 @@ class HealthView(StrictModel):
     live: bool
     ready: bool
     alerts: tuple[str, ...] = ()
+    service_fingerprint: str | None = None
+
+
+class ExecutionGrantView(StrictModel):
+    grant_id: UUID
+    workspace_id: UUID
+    owner_id: UUID
+    repository: str
+    state: str
+    mode: str
+    grant_version: int
+    max_continuations: int
+    max_close_attempts: int
+    max_no_progress: int
+    continuations_scheduled: int
+    terminal_reason: str | None = None
+    authorization_hash: str
+    judge_sha256: str
+    created_at: datetime
+    expires_at: datetime
+    completed_at: datetime | None = None
+    paused_at: datetime | None = None
+    stopped_at: datetime | None = None
+    canceled_at: datetime | None = None
+
+
+class ExecutionGrantItemView(StrictModel):
+    item_id: UUID
+    workspace_id: UUID
+    grant_id: UUID
+    work_id: UUID
+    position: int
+    phase: str
+    claimed_revision_id: UUID
+    project_id: UUID | None = None
+    active_blocker_ids: tuple[UUID, ...] = ()
+    initial_git_baseline: str
+    current_git_baseline: str | None = None
+    criteria_revision_id: UUID | None = None
+    original_request: str
+    original_request_sha256: str
+    criteria_sha256: str | None = None
+    plan_stamp_sha256: str | None = None
+    plan_stamp: dict[str, Any] | None = None
+    close_attempts_started: int
+    consecutive_no_progress: int
+    last_reviewed_tree_sha: str | None = None
+    last_findings_hash: str | None = None
+    push_receipt_id: UUID | None = None
+    closeout_receipt_id: UUID | None = None
+    activated_at: datetime | None = None
+    completed_at: datetime | None = None
+    abandoned_at: datetime | None = None
+    skipped_at: datetime | None = None
+    terminal_reason: str | None = None
+
+
+class ExecutionView(StrictModel):
+    grant: ExecutionGrantView
+    items: tuple[ExecutionGrantItemView, ...]
+    active_item: ExecutionGrantItemView | None = None
+
+
+class BeginExecutionResult(StrictModel):
+    type: Literal["begin_execution"]
+    grant: ExecutionGrantView
+    items: tuple[ExecutionGrantItemView, ...]
+
+
+class ActivateExecutionItemResult(StrictModel):
+    type: Literal["activate_execution_item"]
+    grant: ExecutionGrantView
+    item: ExecutionGrantItemView
+
+
+class SealExecutionCriteriaResult(StrictModel):
+    type: Literal["seal_execution_criteria"]
+    grant: ExecutionGrantView
+    item: ExecutionGrantItemView
+    revision: WorkRevision
+
+
+class StampExecutionPlanResult(StrictModel):
+    type: Literal["stamp_execution_plan"]
+    grant: ExecutionGrantView
+    item: ExecutionGrantItemView
+    candidate: Candidate
+    receipt: EvidenceReceipt
+
+
+class SetExecutionStateResult(StrictModel):
+    type: Literal["set_execution_state"]
+    grant: ExecutionGrantView
+
+
+class CompleteExecutionItemResult(StrictModel):
+    type: Literal["complete_execution_item"]
+    grant: ExecutionGrantView
+    item: ExecutionGrantItemView
+    work_id: UUID
+    state: str
+    closeout_receipt: EvidenceReceipt
 
 
 class RecordCloseoutReviewResult(StrictModel):
@@ -188,7 +313,26 @@ class AuthorityView(StrictModel):
 
 
 CommandResult = Annotated[
-    CreateWorkBatchResult | CreateSameSessionChildResult | ReviseWorkResult | WorkItemResult | CompleteWorkResult | RelationResult | FocusResult | EvidenceResult | FinalizeCandidateResult | CloseAttemptResult | RecordCloseoutReviewResult | ProjectHealthResult | ActivateCutoverResult | AttestCutoverPlanResult,
+    CreateWorkBatchResult
+    | CreateSameSessionChildResult
+    | ReviseWorkResult
+    | WorkItemResult
+    | CompleteWorkResult
+    | RelationResult
+    | FocusResult
+    | EvidenceResult
+    | FinalizeCandidateResult
+    | CloseAttemptResult
+    | RecordCloseoutReviewResult
+    | ProjectHealthResult
+    | ActivateCutoverResult
+    | AttestCutoverPlanResult
+    | BeginExecutionResult
+    | ActivateExecutionItemResult
+    | SealExecutionCriteriaResult
+    | StampExecutionPlanResult
+    | SetExecutionStateResult
+    | CompleteExecutionItemResult,
     Field(discriminator="type"),
 ]
 

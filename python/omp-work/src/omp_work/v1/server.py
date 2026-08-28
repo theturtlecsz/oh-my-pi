@@ -14,7 +14,11 @@ from fastapi.responses import JSONResponse
 from omp_work import contract_sha256
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import collect_health, migration_set_sha256
-from omp_work.operations.fingerprints import code_fingerprint
+from omp_work.operations.fingerprints import (
+    code_fingerprint,
+    service_runtime_fingerprint,
+)
+
 from .api_models import CommandResponse
 from .models import CommandEnvelope
 from .service import Principal, WorkError, WorkService
@@ -34,19 +38,37 @@ def _principal(request: Request, capabilities_dir: Path) -> Principal:
                 continue
             data = json.loads(path.read_text())
             if hmac.compare_digest(str(data["token"]), token):
-                candidate_ids = frozenset(UUID(value) for value in data.get("candidate_ids", ())) or None
+                candidate_ids = (
+                    frozenset(UUID(value) for value in data.get("candidate_ids", ()))
+                    or None
+                )
                 scopes = frozenset(data["scopes"])
                 if "work.candidate.read" in scopes and candidate_ids is None:
                     continue
-                return Principal(actor_id=UUID(data["actor_id"]), actor_kind=str(data["actor_kind"]), workspaces=frozenset(UUID(value) for value in data["workspaces"]), scopes=scopes, candidate_ids=candidate_ids)
+                return Principal(
+                    actor_id=UUID(data["actor_id"]),
+                    actor_kind=str(data["actor_kind"]),
+                    workspaces=frozenset(UUID(value) for value in data["workspaces"]),
+                    scopes=scopes,
+                    candidate_ids=candidate_ids,
+                )
     except (OSError, KeyError, ValueError, json.JSONDecodeError):
         pass
     raise HTTPException(401, "unauthenticated")
 
 
 def _error(error: WorkError, request_id: UUID, correlation_id: UUID) -> JSONResponse:
-    return JSONResponse({"error": {"code": error.code, "request_id": str(request_id), "correlation_id": str(correlation_id), "diagnostics": list(error.diagnostics[:8])}}, status_code=error.status)
-
+    return JSONResponse(
+        {
+            "error": {
+                "code": error.code,
+                "request_id": str(request_id),
+                "correlation_id": str(correlation_id),
+                "diagnostics": list(error.diagnostics[:8]),
+            }
+        },
+        status_code=error.status,
+    )
 
 
 def _require_contract(request: Request, service_digest: str) -> None:
@@ -64,12 +86,27 @@ def _require_contract(request: Request, service_digest: str) -> None:
                 "restart the OMP session",
             ),
         )
-def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkStore | None = None) -> FastAPI:
+
+
+def create_app(
+    config: OperationsConfig, *, capabilities_dir: Path, store: WorkStore | None = None
+) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.exception_handler(RequestValidationError)
-    async def invalid_request(_: Request, __: RequestValidationError) -> JSONResponse:
-        return JSONResponse({"error": {"code": "invalid_request", "request_id": None, "correlation_id": None, "diagnostics": []}}, status_code=400)
+    async def invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "invalid_request",
+                    "request_id": None,
+                    "correlation_id": None,
+                    "diagnostics": [str(err) for err in exc.errors()[:8]],
+                }
+            },
+            status_code=400,
+        )
+
     service = WorkService(store or PostgresWorkStore(config))
     # OMP-89: writes fail closed when the on-disk source or migration set no
     # longer matches what this process loaded — an editable install can change
@@ -83,27 +120,58 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
 
     @app.get("/v1/health/live")
     def live() -> dict[str, object]:
-        return {"live": collect_health(config, role="omp_work_app").live, "ready": False, "alerts": []}
+        return {
+            "live": collect_health(config, role="omp_work_app").live,
+            "ready": False,
+            "alerts": [],
+        }
 
     @app.get("/v1/health/ready")
     def ready() -> dict[str, object]:
         report = collect_health(config, role="omp_work_app")
-        return {"live": report.live, "ready": report.ready, "alerts": report.alerts}
+        return {
+            "live": report.live,
+            "ready": report.ready,
+            "alerts": report.alerts,
+            "service_fingerprint": service_runtime_fingerprint(),
+        }
 
-    def read_route(request: Request, workspace_id: UUID, kind: str, value: str) -> JSONResponse:
+    def read_route(
+        request: Request, workspace_id: UUID, kind: str, value: str
+    ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
             principal = _principal(request, capabilities_dir)
-            return JSONResponse(jsonable_encoder(service.read(principal, workspace_id, kind, value)))
+            return JSONResponse(
+                jsonable_encoder(service.read(principal, workspace_id, kind, value))
+            )
         except WorkError as error:
-            return JSONResponse({"error": {"code": error.code, "request_id": None, "correlation_id": None, "diagnostics": list(error.diagnostics[:8])}}, status_code=error.status)
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
 
     @app.get("/v1/work-items/{key}")
-    def item(request: Request, key: str, x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID")) -> JSONResponse:
+    def item(
+        request: Request,
+        key: str,
+        x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
+    ) -> JSONResponse:
         return read_route(request, x_omp_workspace_id, "item", key)
 
     @app.get("/v1/work-items/{key}/workflow")
-    def workflow(request: Request, key: str, x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID")) -> JSONResponse:
+    def workflow(
+        request: Request,
+        key: str,
+        x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
+    ) -> JSONResponse:
         return read_route(request, x_omp_workspace_id, "workflow", key)
 
     @app.get("/v1/workspaces/{workspace_id}/tree")
@@ -118,18 +186,49 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
     def authority(request: Request, workspace_id: UUID) -> JSONResponse:
         return read_route(request, workspace_id, "authority", "")
 
+    @app.get("/v1/workspaces/{workspace_id}/execution")
+    @app.get("/v1/workspaces/{workspace_id}/execution/{grant_id}")
+    def execution(request: Request, workspace_id: UUID, grant_id: str = "") -> JSONResponse:
+        return read_route(request, workspace_id, "execution", grant_id)
+
     @app.get("/v1/workspaces/{workspace_id}/activity")
-    def activity(request: Request, workspace_id: UUID, project_id: UUID | None = None, limit: int = Query(8, ge=1, le=20)) -> JSONResponse:
+    def activity(
+        request: Request,
+        workspace_id: UUID,
+        project_id: UUID | None = None,
+        limit: int = Query(8, ge=1, le=20),
+    ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
             principal = _principal(request, capabilities_dir)
-            return JSONResponse(jsonable_encoder(service.activity(principal, workspace_id, project_id=project_id, limit=limit)))
+            return JSONResponse(
+                jsonable_encoder(
+                    service.activity(
+                        principal, workspace_id, project_id=project_id, limit=limit
+                    )
+                )
+            )
         except WorkError as error:
-            return JSONResponse({"error": {"code": error.code, "request_id": None, "correlation_id": None, "diagnostics": list(error.diagnostics[:8])}}, status_code=error.status)
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
 
     @app.get("/v1/operations/{operation_id}")
-    def operation(request: Request, operation_id: UUID, x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID")) -> JSONResponse:
+    def operation(
+        request: Request,
+        operation_id: UUID,
+        x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
+    ) -> JSONResponse:
         return read_route(request, x_omp_workspace_id, "operation", str(operation_id))
+
     @app.post("/v1/commands")
     async def command(request: Request) -> JSONResponse:
         envelope: CommandEnvelope | None = None
@@ -149,15 +248,47 @@ def create_app(config: OperationsConfig, *, capabilities_dir: Path, store: WorkS
                     ),
                 )
             receipt, result = service.execute(principal, envelope)
-            response = CommandResponse.model_validate({"receipt": receipt, "result": result})
+            response = CommandResponse.model_validate(
+                {"receipt": receipt, "result": result}
+            )
             return JSONResponse(response.model_dump(mode="json"))
         except WorkError as error:
             if envelope is None:
-                return JSONResponse({"error": {"code": error.code, "request_id": None, "correlation_id": None, "diagnostics": list(error.diagnostics[:8])}}, status_code=error.status)
+                return JSONResponse(
+                    {
+                        "error": {
+                            "code": error.code,
+                            "request_id": None,
+                            "correlation_id": None,
+                            "diagnostics": list(error.diagnostics[:8]),
+                        }
+                    },
+                    status_code=error.status,
+                )
             return _error(error, envelope.request_id, envelope.correlation_id)
         except HTTPException as error:
-            return JSONResponse({"error": {"code": error.detail, "request_id": None, "correlation_id": None, "diagnostics": []}}, status_code=error.status_code)
-        except Exception:
-            return JSONResponse({"error": {"code": "invalid_request", "request_id": None, "correlation_id": None, "diagnostics": []}}, status_code=400)
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.detail,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": [],
+                    }
+                },
+                status_code=error.status_code,
+            )
+        except Exception as ex:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "invalid_request",
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": [f"{type(ex).__name__}: {ex}"],
+                    }
+                },
+                status_code=400,
+            )
 
     return app

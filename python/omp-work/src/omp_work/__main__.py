@@ -4,17 +4,25 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import uvicorn
 
-from . import CONTRACT_VERSION, _contract_dir, contract_sha256, generate_api_schema, generate_schema, validate_bundle
-from .operations.config import OperationsConfig
+from . import (
+    CONTRACT_VERSION,
+    _contract_dir,
+    contract_sha256,
+    generate_api_schema,
+    generate_schema,
+    validate_bundle,
+)
 from .operations import cli as operations_cli
+from .operations.config import OperationsConfig
 from .operations.database import collect_health
 from .v1.models import Approval
 from .v1.server import create_app
+
 _SAFE_OPERATION_ERRORS = {
     "artifact cryptography failed",
     "pagination_count_hash_gap",
@@ -32,7 +40,7 @@ def _approve(issue: str) -> None:
     if not sys.stdin.isatty():
         raise SystemExit("owner approval requires an interactive terminal")
     digest = contract_sha256()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     approved_at = now.isoformat()
     payload = {
         "contract_version": CONTRACT_VERSION,
@@ -78,6 +86,7 @@ def _approve(issue: str) -> None:
         raise SystemExit(str(error)) from error
     print(f"approved {digest} for {issue}")
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m omp_work")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -104,18 +113,35 @@ def main() -> None:
         report = collect_health(OperationsConfig.defaults(), role="omp_work_app")
         if not report.ready:
             raise SystemExit("service database is not ready")
-        uvicorn.run(create_app(OperationsConfig.defaults(), capabilities_dir=Path(args.capabilities_dir)), host=args.host, port=args.port, access_log=False)
+        uvicorn.run(
+            create_app(
+                OperationsConfig.defaults(),
+                capabilities_dir=Path(args.capabilities_dir),
+            ),
+            host=args.host,
+            port=args.port,
+            access_log=False,
+        )
         return
     if args.command == "ops":
         try:
             operations_cli.run(args)
         except Exception as error:
             code = str(error)
-            raise SystemExit(code if code in _SAFE_OPERATION_ERRORS else "operation_failed") from None
+            raise SystemExit(
+                code if code in _SAFE_OPERATION_ERRORS else "operation_failed"
+            ) from None
         return
     if args.command == "schema":
         path = _contract_dir() / ("api-schema.json" if args.api else "schema.json")
-        content = json.dumps(generate_api_schema() if args.api else generate_schema(), indent=2, sort_keys=True) + "\n"
+        content = (
+            json.dumps(
+                generate_api_schema() if args.api else generate_schema(),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
         if args.write:
             path.write_text(content)
         if args.check and path.read_text() != content:

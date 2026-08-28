@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from hashlib import sha256 as bytes_sha256
 import json
 import os
+from hashlib import sha256 as bytes_sha256
 from pathlib import Path
 from subprocess import CalledProcessError, run
 
@@ -27,26 +27,58 @@ def _install(temporary: Path, destination: Path, mode: int) -> None:
     destination.chmod(mode)
 
 
-def encrypt_file(source: Path, destination: Path, passphrase_file: Path, *, mode: int = 0o600) -> str:
+def encrypt_file(
+    source: Path, destination: Path, passphrase_file: Path, *, mode: int = 0o600
+) -> str:
     temporary = destination.with_name(f".{destination.name}.next")
     try:
-        _run(["gpg", "--batch", "--yes", "--symmetric", "--cipher-algo", "AES256", "--passphrase-file", str(passphrase_file), "--output", str(temporary), str(source)])
+        _run(
+            [
+                "gpg",
+                "--batch",
+                "--yes",
+                "--symmetric",
+                "--cipher-algo",
+                "AES256",
+                "--passphrase-file",
+                str(passphrase_file),
+                "--output",
+                str(temporary),
+                str(source),
+            ]
+        )
         _install(temporary, destination, mode)
         return bytes_sha256(destination.read_bytes()).hexdigest()
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def decrypt_file(source: Path, destination: Path, passphrase_file: Path, *, mode: int = 0o600) -> None:
+def decrypt_file(
+    source: Path, destination: Path, passphrase_file: Path, *, mode: int = 0o600
+) -> None:
     temporary = destination.with_name(f".{destination.name}.next")
     try:
-        _run(["gpg", "--batch", "--yes", "--decrypt", "--passphrase-file", str(passphrase_file), "--output", str(temporary), str(source)])
+        _run(
+            [
+                "gpg",
+                "--batch",
+                "--yes",
+                "--decrypt",
+                "--passphrase-file",
+                str(passphrase_file),
+                "--output",
+                str(temporary),
+                str(source),
+            ]
+        )
         _install(temporary, destination, mode)
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def resolve_artifact_path(relative: str, data_dir: Path, expected_root: Path | None = None) -> Path:
+def resolve_artifact_path(
+    relative: str, data_dir: Path, expected_root: Path | None = None
+) -> Path:
     path = Path(relative)
     if path.is_absolute() or ".." in path.parts:
         raise RuntimeError("pagination_count_hash_gap")
@@ -59,6 +91,7 @@ def resolve_artifact_path(relative: str, data_dir: Path, expected_root: Path | N
     except ValueError:
         raise RuntimeError("pagination_count_hash_gap") from None
     return resolved
+
 
 def write_json_artifact(
     root: Path,
@@ -96,7 +129,9 @@ def write_json_artifact(
             )
     finally:
         plain.unlink(missing_ok=True)
-    relative_path = str(encrypted.relative_to(data_dir)) if data_dir is not None else str(encrypted)
+    relative_path = (
+        str(encrypted.relative_to(data_dir)) if data_dir is not None else str(encrypted)
+    )
     return relative_path, digest, ciphertext_hash
 
 
@@ -125,7 +160,11 @@ def read_json_artifact(
 
     if not encrypted.is_file() or encrypted.stat().st_mode & 0o777 != 0o400:
         raise RuntimeError("pagination_count_hash_gap")
-    if expected_ciphertext_sha256 is not None and bytes_sha256(encrypted.read_bytes()).hexdigest() != expected_ciphertext_sha256:
+    if (
+        expected_ciphertext_sha256 is not None
+        and bytes_sha256(encrypted.read_bytes()).hexdigest()
+        != expected_ciphertext_sha256
+    ):
         raise RuntimeError("pagination_count_hash_gap")
     destination.unlink(missing_ok=True)
     try:
@@ -134,7 +173,10 @@ def read_json_artifact(
             payload = json.loads(destination.read_text(encoding="utf-8"))
         except Exception:
             raise RuntimeError("pagination_count_hash_gap") from None
-        if expected_plaintext_sha256 is not None and sha256(payload) != expected_plaintext_sha256:
+        if (
+            expected_plaintext_sha256 is not None
+            and sha256(payload) != expected_plaintext_sha256
+        ):
             raise RuntimeError("pagination_count_hash_gap")
         return payload
     finally:

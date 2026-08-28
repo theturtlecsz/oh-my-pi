@@ -179,7 +179,13 @@ export type CloseAttempt = {
 	repository: string | null;
 	diff_sha256: string | null;
 	starting_dirty_paths: string[] | null;
-	authorization_kind: "summary" | "legacy";
+	authorization_kind: "summary" | "legacy" | "execution";
+	execution_grant_id?: UUID | null;
+	candidate_tree_sha?: string | null;
+	original_request_sha256?: string | null;
+	criteria_sha256?: string | null;
+	plan_stamp_sha256?: string | null;
+	judge_sha256?: string | null;
 	authorization_ref: string;
 	launch_count: number;
 	cancelled_launch_count: number;
@@ -197,8 +203,8 @@ export type AuditManifest = {
 	manifest_id: UUID;
 	work_id: UUID;
 	attempt_id: UUID;
-	/** v2 = v1's five sections plus the Riders section (OMP-93). */
-	manifest_version: 1 | 2;
+	/** v2 = v1 + Riders (OMP-93); v3 = v2 + Original request (OMP-180). */
+	manifest_version: 1 | 2 | 3;
 	plan_receipt_id: UUID;
 	verification_receipt_id: UUID;
 	candidate_id: UUID;
@@ -311,6 +317,13 @@ export type BeginCloseAttemptPayload = {
 	diff_sha256: string;
 	riders?: RiderProof[];
 	starting_dirty_paths?: string[];
+	authorization_kind?: "summary" | "legacy" | "execution";
+	execution_grant_id?: UUID | null;
+	candidate_tree_sha?: string | null;
+	original_request_sha256?: string | null;
+	criteria_sha256?: string | null;
+	plan_stamp_sha256?: string | null;
+	judge_sha256?: string | null;
 };
 export type SealAuditManifestPayload = { attempt_id: UUID; verification_receipt_id: UUID };
 export type ReserveAuditorLaunchPayload = { attempt_id: UUID; task_sha256: string; tool_call_id: string };
@@ -373,6 +386,120 @@ export type CutoverManifest = {
 };
 export type ActivateCutoverPayload = { manifest: CutoverManifest };
 
+export type ExecutionState = "active" | "paused" | "stopped" | "completed" | "canceled";
+export type ExecutionMode = "single" | "queue";
+export type ExecutionItemPhase =
+	| "pending"
+	| "criteria_pending"
+	| "planning"
+	| "executing"
+	| "reviewing"
+	| "remediating"
+	| "awaiting_contract_approval"
+	| "completed"
+	| "abandoned"
+	| "skipped";
+
+export type ExecutionProvenanceEnvelope = {
+	owner_input_id: string;
+	owner_session_id: string;
+	normalized_command: string;
+	workspace_id: UUID;
+	repository: string;
+	nonce: string;
+	issued_at: string;
+};
+
+export type ExecutionGrantItemClaim = {
+	work_id: UUID;
+	revision_id: UUID;
+	position: number;
+	original_request: string;
+	original_request_sha256: string;
+	initial_git_baseline: string;
+	project_id?: UUID | null;
+	active_blocker_ids?: UUID[];
+};
+
+export type ExecutionJudgeManifest = {
+	auditor_agent_sha256: string;
+	host_sha256: string;
+	adapter_sha256: string;
+	freeze_sha256: string;
+	runner_sha256: string;
+	executor_sha256: string;
+	contract_sha256: string;
+	service_fingerprint: string;
+	service_code_fingerprint: string;
+	service_migration_sha256: string;
+};
+
+export type BeginExecutionPayload = {
+	grant_id: UUID;
+	provenance: ExecutionProvenanceEnvelope;
+	mode: ExecutionMode;
+	items: ExecutionGrantItemClaim[];
+	expected_focus_version: number;
+	judge_sha256: string;
+	judge_manifest: ExecutionJudgeManifest;
+};
+
+export type ActivateExecutionItemPayload = {
+	grant_id: UUID;
+	expected_grant_version: number;
+	position: number;
+	work_id: UUID;
+	expected_revision_id: UUID;
+	git_baseline: string;
+	judge_sha256: string;
+	expected_focus_version: number;
+	expected_project_id?: UUID | null;
+	expected_blocker_ids?: UUID[];
+};
+
+export type SealExecutionCriteriaPayload = {
+	grant_id: UUID;
+	expected_grant_version: number;
+	work_id: UUID;
+	expected_revision_id: UUID;
+	criteria: string[];
+	description_sha256: string;
+	judge_sha256: string;
+};
+
+export type StampExecutionPlanPayload = {
+	grant_id: UUID;
+	expected_grant_version: number;
+	work_id: UUID;
+	revision_id: UUID;
+	candidate_id: UUID;
+	plan_file: string;
+	plan_body: string;
+	plan_sha256: string;
+	approach: string[];
+	verification: string[];
+	paths: string[];
+	candidate_sha256: string;
+	judge_sha256: string;
+};
+
+export type SetExecutionStatePayload = {
+	grant_id: UUID;
+	expected_grant_version: number;
+	target_state: "active" | "paused" | "stopped" | "canceled";
+	reason?: string | null;
+	judge_sha256: string;
+};
+
+export type CompleteExecutionItemPayload = {
+	grant_id: UUID;
+	expected_grant_version: number;
+	work_id: UUID;
+	attempt_id: UUID;
+	push_receipt_id: UUID;
+	judge_sha256: string;
+};
+
 export type Command =
 	| { type: "create_work_batch"; payload: CreateWorkBatchPayload }
 	| { type: "create_same_session_child"; payload: CreateSameSessionChildPayload }
@@ -393,7 +520,13 @@ export type Command =
 	| { type: "record_closeout_review"; payload: RecordCloseoutReviewPayload }
 	| { type: "complete_work"; payload: CompleteWorkPayload }
 	| { type: "record_project_health"; payload: RecordProjectHealthPayload }
-	| { type: "activate_cutover"; payload: ActivateCutoverPayload };
+	| { type: "activate_cutover"; payload: ActivateCutoverPayload }
+	| { type: "begin_execution"; payload: BeginExecutionPayload }
+	| { type: "activate_execution_item"; payload: ActivateExecutionItemPayload }
+	| { type: "seal_execution_criteria"; payload: SealExecutionCriteriaPayload }
+	| { type: "stamp_execution_plan"; payload: StampExecutionPlanPayload }
+	| { type: "set_execution_state"; payload: SetExecutionStatePayload }
+	| { type: "complete_execution_item"; payload: CompleteExecutionItemPayload };
 
 // ---- command results ----
 
@@ -461,7 +594,91 @@ export type CommandResult =
 			authority: "work";
 			candidate_manifest_sha256: string;
 			activated_at: string;
+	  }
+	| { type: "begin_execution"; grant: ExecutionGrantView; items: ExecutionGrantItemView[] }
+	| { type: "activate_execution_item"; grant: ExecutionGrantView; item: ExecutionGrantItemView }
+	| {
+			type: "seal_execution_criteria";
+			grant: ExecutionGrantView;
+			item: ExecutionGrantItemView;
+			revision: WorkRevision;
+	  }
+	| {
+			type: "stamp_execution_plan";
+			grant: ExecutionGrantView;
+			item: ExecutionGrantItemView;
+			candidate: Candidate;
+			receipt: EvidenceReceipt;
+	  }
+	| { type: "set_execution_state"; grant: ExecutionGrantView }
+	| {
+			type: "complete_execution_item";
+			grant: ExecutionGrantView;
+			item: ExecutionGrantItemView;
+			work_id: UUID;
+			state: string;
+			closeout_receipt: EvidenceReceipt;
 	  };
+
+export type ExecutionGrantView = {
+	grant_id: UUID;
+	workspace_id: UUID;
+	owner_id: UUID;
+	repository: string;
+	state: ExecutionState;
+	mode: ExecutionMode;
+	grant_version: number;
+	max_continuations: number;
+	max_close_attempts: number;
+	max_no_progress: number;
+	continuations_scheduled: number;
+	terminal_reason?: string | null;
+	authorization_hash: string;
+	judge_sha256: string;
+	created_at: string;
+	expires_at: string;
+	completed_at?: string | null;
+	paused_at?: string | null;
+	stopped_at?: string | null;
+	canceled_at?: string | null;
+};
+
+export type ExecutionGrantItemView = {
+	item_id: UUID;
+	workspace_id: UUID;
+	grant_id: UUID;
+	work_id: UUID;
+	position: number;
+	phase: ExecutionItemPhase;
+	claimed_revision_id: UUID;
+	project_id?: UUID | null;
+	active_blocker_ids?: UUID[];
+	initial_git_baseline: string;
+	current_git_baseline?: string | null;
+	criteria_revision_id?: UUID | null;
+	original_request: string;
+	original_request_sha256: string;
+	criteria_sha256?: string | null;
+	plan_stamp_sha256?: string | null;
+	plan_stamp?: Record<string, unknown> | null;
+	close_attempts_started: number;
+	consecutive_no_progress: number;
+	last_reviewed_tree_sha?: string | null;
+	last_findings_hash?: string | null;
+	push_receipt_id?: UUID | null;
+	closeout_receipt_id?: UUID | null;
+	activated_at?: string | null;
+	completed_at?: string | null;
+	abandoned_at?: string | null;
+	skipped_at?: string | null;
+	terminal_reason?: string | null;
+};
+
+export type ExecutionView = {
+	grant: ExecutionGrantView;
+	items: ExecutionGrantItemView[];
+	active_item?: ExecutionGrantItemView | null;
+};
 
 export type AuthorityView = {
 	authority: "linear" | "work";
@@ -501,6 +718,8 @@ export type WorkflowView = {
 	close_attempt_events: CloseAttemptEvent[];
 	checkpoint_deliveries: CheckpointDelivery[];
 	project: ProjectView | null;
+	execution_grant?: ExecutionGrantView | null;
+	execution_grant_item?: ExecutionGrantItemView | null;
 };
 export type WorkspaceTree = {
 	workspace_id: UUID;
@@ -516,7 +735,7 @@ export type StoredOperation = {
 	correlation_id: UUID;
 	result: CommandResult | null;
 };
-export type HealthView = { live: boolean; ready: boolean; alerts: string[] };
+export type HealthView = { live: boolean; ready: boolean; alerts: string[]; service_fingerprint?: string | null };
 
 /** /center recent-activity projection (OMP-25) — normalized event metadata
  *  only; receipt bodies and audit payloads never cross this read. */
@@ -673,5 +892,9 @@ export class WorkClient {
 
 	healthReady(): Promise<HealthView> {
 		return this.request("GET", "/v1/health/ready", undefined, false) as Promise<HealthView>;
+	}
+	execution(grantIdOrKey?: string): Promise<ExecutionView> {
+		const suffix = grantIdOrKey ? `/${encodeURIComponent(grantIdOrKey)}` : "";
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/execution${suffix}`) as Promise<ExecutionView>;
 	}
 }

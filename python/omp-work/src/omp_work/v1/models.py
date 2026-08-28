@@ -12,7 +12,6 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-
 class WorkAlias(StrictModel):
     work_id: UUID
     key: str = Field(pattern=r"^(HOME|OMP)-[1-9][0-9]*$")
@@ -22,8 +21,11 @@ class WorkAlias(StrictModel):
     @model_validator(mode="after")
     def validate_origin_key(self) -> WorkAlias:
         if (self.origin == "imported") != self.key.startswith("HOME-"):
-            raise ValueError("imported aliases use HOME keys and local aliases use OMP keys")
+            raise ValueError(
+                "imported aliases use HOME keys and local aliases use OMP keys"
+            )
         return self
+
 
 class RelationKind(StrEnum):
     PARENT = "parent"
@@ -55,13 +57,15 @@ class CloseAttemptState(StrEnum):
     COMPLETED = "completed"
 
 
-LIVE_CLOSE_ATTEMPT_STATES: frozenset[CloseAttemptState] = frozenset({
-    CloseAttemptState.ACTIVE,
-    CloseAttemptState.AUDIT_READY,
-    CloseAttemptState.AUDITOR_IN_FLIGHT,
-    CloseAttemptState.AUDITED,
-    CloseAttemptState.CLOSEOUT_REQUESTED,
-})
+LIVE_CLOSE_ATTEMPT_STATES: frozenset[CloseAttemptState] = frozenset(
+    {
+        CloseAttemptState.ACTIVE,
+        CloseAttemptState.AUDIT_READY,
+        CloseAttemptState.AUDITOR_IN_FLIGHT,
+        CloseAttemptState.AUDITED,
+        CloseAttemptState.CLOSEOUT_REQUESTED,
+    }
+)
 
 MAX_AUDITOR_LAUNCHES = 3
 MAX_ACCEPTED_REPORTS = 2
@@ -107,7 +111,9 @@ class Candidate(StrictModel):
     work_id: UUID
     revision_id: UUID
     candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    commit_sha: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    commit_sha: str | None = Field(
+        default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    )
     kind: Literal["planned", "final"] = "planned"
     allocated_at: datetime
 
@@ -130,11 +136,15 @@ class EvidenceReceipt(StrictModel):
     issuer: str
     issued_at: datetime
     candidate_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    candidate_commit: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    candidate_commit: str | None = Field(
+        default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    )
     verdict: Literal["PASS", "NEEDS_FIX", "BLOCKED"] | None = None
     independent: bool = False
     remote_ref: str | None = None
-    remote_commit: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    remote_commit: str | None = Field(
+        default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    )
 
     @model_validator(mode="after")
     def validate_payload_size(self) -> EvidenceReceipt:
@@ -152,14 +162,24 @@ class CloseAttempt(StrictModel):
     candidate_id: UUID
     plan_receipt_id: UUID | None = None
     candidate_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    candidate_commit: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    candidate_commit: str | None = Field(
+        default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    )
     owner_session_id: str | None = None
     owner_session_started_at: datetime | None = None
-    owner_session_start_commit: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    owner_session_start_commit: str | None = Field(
+        default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    )
     repository: str | None = None
     diff_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     starting_dirty_paths: tuple[str, ...] | None = None
-    authorization_kind: Literal["summary", "legacy"]
+    execution_grant_id: UUID | None = None
+    candidate_tree_sha: str | None = None
+    original_request_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    criteria_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    plan_stamp_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    judge_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    authorization_kind: Literal["summary", "legacy", "execution"]
     authorization_ref: str = Field(min_length=1)
     launch_count: int = Field(ge=0)
     cancelled_launch_count: int = Field(default=0, ge=0)
@@ -178,7 +198,7 @@ class AuditManifest(StrictModel):
     manifest_id: UUID
     work_id: UUID
     attempt_id: UUID
-    manifest_version: Literal[1, 2] = 1
+    manifest_version: Literal[1, 2, 3] = 1
     plan_receipt_id: UUID
     verification_receipt_id: UUID
     candidate_id: UUID
@@ -232,7 +252,9 @@ class CheckpointDelivery(StrictModel):
     @model_validator(mode="after")
     def validate_waiver_authorization(self) -> CheckpointDelivery:
         if (self.status == "waived") != (self.authorization_ref is not None):
-            raise ValueError("waived deliveries carry an owner authorization reference; others never do")
+            raise ValueError(
+                "waived deliveries carry an owner authorization reference; others never do"
+            )
         return self
 
 
@@ -240,6 +262,7 @@ class SameSessionFoundFixedPayload(StrictModel):
     """Typed payload contract for kind=same_session_found_fixed receipts (OMP-52):
     binds the child's fix to one parent close attempt's owner session, baseline
     commit, and final candidate — validated at append AND at complete_work."""
+
     attempt_id: UUID
     owner_session_id: str = Field(min_length=1)
     base_commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
@@ -264,7 +287,19 @@ class CompletionInput(StrictModel):
 
 
 class CompletionBlocker(StrictModel):
-    code: Literal["plan_missing", "verification_missing", "audit_missing", "push_unverified", "stale_evidence", "closeout_missing", "candidate_not_final", "attempt_missing", "attempt_not_requested", "delivery_pending", "child_receipt_invalid"]
+    code: Literal[
+        "plan_missing",
+        "verification_missing",
+        "audit_missing",
+        "push_unverified",
+        "stale_evidence",
+        "closeout_missing",
+        "candidate_not_final",
+        "attempt_missing",
+        "attempt_not_requested",
+        "delivery_pending",
+        "child_receipt_invalid",
+    ]
     detail: str
 
 
@@ -301,7 +336,17 @@ class AuditEvent(StrictModel):
 
 
 class Anomaly(StrictModel):
-    code: Literal["pagination_count_hash_gap", "duplicate_uuid_key_mapping", "missing_relation_endpoint", "relation_cycle", "multiple_focus_slots", "source_local_conflict", "legacy_authority_claim", "attachment_content_unavailable", "unsupported_non_workflow_object"]
+    code: Literal[
+        "pagination_count_hash_gap",
+        "duplicate_uuid_key_mapping",
+        "missing_relation_endpoint",
+        "relation_cycle",
+        "multiple_focus_slots",
+        "source_local_conflict",
+        "legacy_authority_claim",
+        "attachment_content_unavailable",
+        "unsupported_non_workflow_object",
+    ]
     disposition: Literal["blocking", "quarantined"]
 
 
@@ -404,7 +449,9 @@ class CreateWorkBatchPayload(StrictModel):
         known = set(refs)
         for relation in self.relations:
             if relation.source_ref not in known or relation.target_ref not in known:
-                raise ValueError("batch relations must reference items in the same request")
+                raise ValueError(
+                    "batch relations must reference items in the same request"
+                )
             if relation.source_ref == relation.target_ref:
                 raise ValueError("batch relations must not be self edges")
         return self
@@ -415,6 +462,7 @@ class CreateSameSessionChildPayload(StrictModel):
     child, its active child→parent edge, and the typed same_session_found_fixed
     receipt bound to the live attempt's identity land in ONE serializable
     transaction or not at all."""
+
     parent_work_id: UUID
     attempt_id: UUID
     owner_session_id: str = Field(min_length=1)
@@ -477,15 +525,17 @@ class RecordCloseoutReviewPayload(StrictModel):
     attempt_id: UUID
     authorization_ref: str = Field(min_length=1)
 
+
 class CancellationProof(StrictModel):
     """Owner ruling 2026-08-23 (staged cancel batches, OMP-111): one historical work
     item canceled atomically with the primary's completion."""
+
     work_id: UUID
     revision_id: UUID
     reason: str = Field(min_length=1, max_length=4096)
 
     @model_validator(mode="after")
-    def _reason_bounds(self) -> "CancellationProof":
+    def _reason_bounds(self) -> CancellationProof:
         if len(self.reason.encode("utf-8")) > 4096:
             raise ValueError("cancellation reason exceeds 4096 UTF-8 bytes")
         if "\x00" in self.reason:
@@ -503,22 +553,24 @@ class CompleteWorkPayload(StrictModel):
     cancellations: tuple[CancellationProof, ...] = Field(default=(), max_length=128)
 
     @model_validator(mode="after")
-    def _cancellations_unique(self) -> "CompleteWorkPayload":
+    def _cancellations_unique(self) -> CompleteWorkPayload:
         ids = [proof.work_id for proof in self.cancellations]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate cancellation work_id")
         return self
 
+
 class RiderProof(StrictModel):
     """Owner ruling 2026-08-22 (close asymmetry, OMP-93): one historical work
     item riding a close attempt. evidence is batch-owned proof text; it enters
     the audited task body as indented data so the accepted report attests it."""
+
     work_id: UUID
     revision_id: UUID
     evidence: str = Field(min_length=1, max_length=4096)
 
     @model_validator(mode="after")
-    def _evidence_bounds(self) -> "RiderProof":
+    def _evidence_bounds(self) -> RiderProof:
         if len(self.evidence.encode("utf-8")) > 4096:
             raise ValueError("rider evidence exceeds 4096 UTF-8 bytes")
         if "\x00" in self.evidence:
@@ -530,6 +582,7 @@ class SealedRider(RiderProof):
     """Rider as sealed into the attempt at begin: title and acceptance-criteria
     snapshot plus the service-computed evidence digest. Completion requires
     this exact tuple."""
+
     title: str = Field(min_length=1)
     criteria: tuple[str, ...] = ()
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -538,6 +591,7 @@ class SealedRider(RiderProof):
 class BeginCloseAttemptPayload(StrictModel):
     """Host-issued at literal owner /summary, AFTER candidate finalization: every
     field is host-computed identity, never model-supplied task text."""
+
     work_id: UUID
     attempt_id: UUID
     authorization_ref: str = Field(min_length=1)
@@ -548,11 +602,19 @@ class BeginCloseAttemptPayload(StrictModel):
     diff_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     starting_dirty_paths: tuple[str, ...] = ()
     riders: tuple[RiderProof, ...] = Field(default=(), max_length=32)
+    authorization_kind: Literal["summary", "legacy", "execution"] = "summary"
+    execution_grant_id: UUID | None = None
+    candidate_tree_sha: str | None = None
+    original_request_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    criteria_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    plan_stamp_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    judge_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class SealAuditManifestPayload(StrictModel):
     """manifest_id is server-minted inside the transaction; operation-envelope
     replay preserves it (same for launch and delivery ids below)."""
+
     attempt_id: UUID
     verification_receipt_id: UUID
 
@@ -561,6 +623,7 @@ class ReserveAuditorLaunchPayload(StrictModel):
     attempt_id: UUID
     task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     tool_call_id: str = Field(min_length=1)
+
 
 class CancelAuditorLaunchPayload(StrictModel):
     attempt_id: UUID
@@ -572,6 +635,7 @@ class SettleAuditorLaunchPayload(StrictModel):
     {"text"}, arrays, extra-key objects, nested wrappers, and error envelopes
     must ALL reach WorkService normalization and earn a stable typed refusal —
     envelope validation never rejects a malformed report shape first."""
+
     attempt_id: UUID
     launch_id: UUID
     transport_payload: Any = None
@@ -594,7 +658,9 @@ class AttestCheckpointDeliveryPayload(StrictModel):
     @model_validator(mode="after")
     def validate_waiver(self) -> AttestCheckpointDeliveryPayload:
         if (self.status == "waived") != (self.authorization_ref is not None):
-            raise ValueError("waived deliveries carry an owner authorization reference; others never do")
+            raise ValueError(
+                "waived deliveries carry an owner authorization reference; others never do"
+            )
         return self
 
 
@@ -620,11 +686,142 @@ class AttestCutoverPlanPayload(StrictModel):
     """The anointed first WorkService mutation: binds the approved plan bytes to the
     imported ledger item. Non-candidate-mutating so the gate-nominated request can
     never be rejected by domain candidate rules."""
+
     epoch_id: UUID
     work_id: UUID
     plan_name: str
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     plan_artifact: str
+
+
+class ExecutionProvenanceEnvelope(StrictModel):
+    owner_input_id: str = Field(min_length=1)
+    owner_session_id: str = Field(min_length=1)
+    normalized_command: str = Field(min_length=1)
+    workspace_id: UUID
+    repository: str = Field(min_length=1)
+    nonce: str = Field(min_length=1)
+    issued_at: datetime
+
+
+class ExecutionGrantItemClaim(StrictModel):
+    work_id: UUID
+    revision_id: UUID
+    position: int = Field(ge=0)
+    original_request: str = Field(min_length=1)
+    original_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    initial_git_baseline: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    project_id: UUID | None = None
+    active_blocker_ids: tuple[UUID, ...] = ()
+
+
+class ExecutionJudgeManifest(StrictModel):
+    auditor_agent_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    host_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    adapter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    freeze_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runner_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    executor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    service_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    service_code_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    service_migration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class BeginExecutionPayload(StrictModel):
+    grant_id: UUID
+    provenance: ExecutionProvenanceEnvelope
+    mode: Literal["single", "queue"]
+    items: tuple[ExecutionGrantItemClaim, ...] = Field(min_length=1)
+    expected_focus_version: int = Field(ge=0)
+    judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    judge_manifest: ExecutionJudgeManifest
+
+
+class ActivateExecutionItemPayload(StrictModel):
+    grant_id: UUID
+    expected_grant_version: int = Field(ge=1)
+    position: int = Field(ge=0)
+    work_id: UUID
+    expected_revision_id: UUID
+    git_baseline: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_focus_version: int = Field(ge=0)
+    expected_project_id: UUID | None = None
+    expected_blocker_ids: tuple[UUID, ...] = ()
+
+
+class SealExecutionCriteriaPayload(StrictModel):
+    grant_id: UUID
+    expected_grant_version: int = Field(ge=1)
+    work_id: UUID
+    expected_revision_id: UUID
+    criteria: tuple[str, ...] = Field(min_length=1)
+    description_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class StampExecutionPlanPayload(StrictModel):
+    grant_id: UUID
+    expected_grant_version: int = Field(ge=1)
+    work_id: UUID
+    revision_id: UUID
+    candidate_id: UUID
+    plan_file: str = Field(min_length=1)
+    plan_body: str = Field(min_length=1)
+    plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    approach: tuple[str, ...] = Field(min_length=1)
+    verification: tuple[str, ...] = Field(min_length=1)
+    paths: tuple[str, ...] = Field(min_length=1)
+    candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class SetExecutionStatePayload(StrictModel):
+    grant_id: UUID
+    expected_grant_version: int = Field(ge=1)
+    target_state: Literal["active", "paused", "stopped", "canceled"]
+    reason: str | None = None
+    judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CompleteExecutionItemPayload(StrictModel):
+    grant_id: UUID
+    expected_grant_version: int = Field(ge=1)
+    work_id: UUID
+    attempt_id: UUID
+    push_receipt_id: UUID
+    judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class BeginExecutionCommand(StrictModel):
+    type: Literal["begin_execution"]
+    payload: BeginExecutionPayload
+
+
+class ActivateExecutionItemCommand(StrictModel):
+    type: Literal["activate_execution_item"]
+    payload: ActivateExecutionItemPayload
+
+
+class SealExecutionCriteriaCommand(StrictModel):
+    type: Literal["seal_execution_criteria"]
+    payload: SealExecutionCriteriaPayload
+
+
+class StampExecutionPlanCommand(StrictModel):
+    type: Literal["stamp_execution_plan"]
+    payload: StampExecutionPlanPayload
+
+
+class SetExecutionStateCommand(StrictModel):
+    type: Literal["set_execution_state"]
+    payload: SetExecutionStatePayload
+
+
+class CompleteExecutionItemCommand(StrictModel):
+    type: Literal["complete_execution_item"]
+    payload: CompleteExecutionItemPayload
 
 
 class CreateWorkBatchCommand(StrictModel):
@@ -676,15 +873,16 @@ class RecordCloseoutReviewCommand(StrictModel):
     type: Literal["record_closeout_review"]
     payload: RecordCloseoutReviewPayload
 
+
 class CompleteWorkCommand(StrictModel):
     type: Literal["complete_work"]
     payload: CompleteWorkPayload
 
 
-
 class CreateSameSessionChildCommand(StrictModel):
     type: Literal["create_same_session_child"]
     payload: CreateSameSessionChildPayload
+
 
 class BeginCloseAttemptCommand(StrictModel):
     type: Literal["begin_close_attempt"]
@@ -699,6 +897,7 @@ class SealAuditManifestCommand(StrictModel):
 class ReserveAuditorLaunchCommand(StrictModel):
     type: Literal["reserve_auditor_launch"]
     payload: ReserveAuditorLaunchPayload
+
 
 class CancelAuditorLaunchCommand(StrictModel):
     type: Literal["cancel_auditor_launch"]
@@ -741,7 +940,35 @@ class AttestCutoverPlanCommand(StrictModel):
 
 
 Command = Annotated[
-    CreateWorkBatchCommand | CreateSameSessionChildCommand | ReviseWorkCommand | SetWorkStateCommand | PutRelationCommand | RemoveRelationCommand | SetFocusCommand | ClearFocusCommand | AppendEvidenceCommand | FinalizeCandidateCommand | BeginCloseAttemptCommand | SealAuditManifestCommand | ReserveAuditorLaunchCommand | CancelAuditorLaunchCommand | SettleAuditorLaunchCommand | AttestCheckpointDeliveryCommand | RecordCloseoutReviewCommand | CompleteWorkCommand | RecordProjectHealthCommand | StageImportBatchCommand | PromoteImportBatchCommand | ActivateCutoverCommand | AttestCutoverPlanCommand,
+    CreateWorkBatchCommand
+    | CreateSameSessionChildCommand
+    | ReviseWorkCommand
+    | SetWorkStateCommand
+    | PutRelationCommand
+    | RemoveRelationCommand
+    | SetFocusCommand
+    | ClearFocusCommand
+    | AppendEvidenceCommand
+    | FinalizeCandidateCommand
+    | BeginCloseAttemptCommand
+    | SealAuditManifestCommand
+    | ReserveAuditorLaunchCommand
+    | CancelAuditorLaunchCommand
+    | SettleAuditorLaunchCommand
+    | AttestCheckpointDeliveryCommand
+    | RecordCloseoutReviewCommand
+    | CompleteWorkCommand
+    | RecordProjectHealthCommand
+    | StageImportBatchCommand
+    | PromoteImportBatchCommand
+    | ActivateCutoverCommand
+    | AttestCutoverPlanCommand
+    | BeginExecutionCommand
+    | ActivateExecutionItemCommand
+    | SealExecutionCriteriaCommand
+    | StampExecutionPlanCommand
+    | SetExecutionStateCommand
+    | CompleteExecutionItemCommand,
     Field(discriminator="type"),
 ]
 
@@ -760,8 +987,13 @@ class WorkflowMapping(StrictModel):
     capture: Literal["create_work_batch"] = Field(alias="/capture")
     plan: Literal["candidate allocation plus plan evidence"] = Field(alias="/plan")
     now: Literal["focus reads/set/clear"] = Field(alias="/now")
-    summary: Literal["close attempt: finalize, seal manifest, bounded audit, closeout review"] = Field(alias="/summary")
+    summary: Literal[
+        "close attempt: finalize, seal manifest, bounded audit, closeout review"
+    ] = Field(alias="/summary")
     done: Literal["complete_work"] = Field(alias="/done")
+    execute: Literal["autonomous single or queue delivery cycle"] = Field(
+        alias="/execute"
+    )
 
 
 class SourceScope(StrictModel):
@@ -770,18 +1002,32 @@ class SourceScope(StrictModel):
 
 
 class SecurityPolicy(StrictModel):
-    database_roles: tuple[Literal["omp_work_owner", "omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup"], ...]
+    database_roles: tuple[
+        Literal[
+            "omp_work_owner",
+            "omp_work_migrator",
+            "omp_work_app",
+            "omp_work_importer",
+            "omp_work_readonly",
+            "omp_work_backup",
+        ],
+        ...,
+    ]
     owner_host_scopes: tuple[str, ...]
     task_agent_scopes: tuple[Literal["work.candidate.read"], ...]
     auditor_scopes: tuple[Literal["work.candidate.read"], ...]
     importer_scopes: tuple[Literal["work.import"], ...]
     operator_scopes: tuple[Literal["work.operate"], ...]
     rls: Literal["force_workspace_actor_claims_no_public_no_bypassrls"]
-    credentials: Literal["operator_managed_mode_0600_host_only_no_agent_or_postgres_dsn"]
+    credentials: Literal[
+        "operator_managed_mode_0600_host_only_no_agent_or_postgres_dsn"
+    ]
 
 
 class DependencyGraph(StrictModel):
-    home_142: tuple[Literal["HOME-143", "HOME-144", "HOME-145"], ...] = Field(alias="HOME-142")
+    home_142: tuple[Literal["HOME-143", "HOME-144", "HOME-145"], ...] = Field(
+        alias="HOME-142"
+    )
     home_143: tuple[Literal["HOME-144", "HOME-146"], ...] = Field(alias="HOME-143")
     home_144: tuple[Literal["HOME-146", "HOME-147"], ...] = Field(alias="HOME-144")
     home_145: tuple[Literal["HOME-146"], ...] = Field(alias="HOME-145")
@@ -801,6 +1047,7 @@ class Contract(StrictModel):
     source_scope: SourceScope
     dependency_graph: DependencyGraph
     security_policy: SecurityPolicy
+
 
 class ImmutableRevisionExample(StrictModel):
     current_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -845,8 +1092,27 @@ class PushedBranchExample(StrictModel):
 
 class CloseAttemptExample(StrictModel):
     """OMP-47: one live attempt per work item; every refusal is a typed event."""
-    live_states: tuple[Literal["active", "audit_ready", "auditor_in_flight", "audited", "closeout_requested"], ...]
-    terminal_states: tuple[Literal["remediation_required", "blocked", "budget_exhausted", "superseded", "completed"], ...]
+
+    live_states: tuple[
+        Literal[
+            "active",
+            "audit_ready",
+            "auditor_in_flight",
+            "audited",
+            "closeout_requested",
+        ],
+        ...,
+    ]
+    terminal_states: tuple[
+        Literal[
+            "remediation_required",
+            "blocked",
+            "budget_exhausted",
+            "superseded",
+            "completed",
+        ],
+        ...,
+    ]
     max_launches: Literal[3]
     max_accepted_reports: Literal[2]
     refusal_shape: Literal["status_refused_with_typed_event"]
@@ -855,11 +1121,26 @@ class CloseAttemptExample(StrictModel):
 
 class SameSessionExample(StrictModel):
     """OMP-52: the child fix rides the parent attempt's audited candidate."""
+
     child_created: Literal["at_or_after_owner_session_start"]
     parent_relation: Literal["active_child_to_parent"]
-    binds: tuple[Literal["attempt_id", "owner_session_id", "base_commit", "fix_commit", "candidate_sha256"], ...]
+    binds: tuple[
+        Literal[
+            "attempt_id",
+            "owner_session_id",
+            "base_commit",
+            "fix_commit",
+            "candidate_sha256",
+        ],
+        ...,
+    ]
     replaces: tuple[Literal["plan", "candidate", "verification", "audit"], ...]
-    never_bypasses: tuple[Literal["owner_done", "parent_pass_audit", "delivery", "push", "candidate_freshness"], ...]
+    never_bypasses: tuple[
+        Literal[
+            "owner_done", "parent_pass_audit", "delivery", "push", "candidate_freshness"
+        ],
+        ...,
+    ]
 
 
 class CutoverExample(StrictModel):
@@ -887,4 +1168,18 @@ class Approval(StrictModel):
     contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_by: Literal["owner"]
     approved_at: datetime
-    issue: Literal["HOME-142", "HOME-147", "HOME-148", "OMP-47", "OMP-67", "OMP-93", "OMP-99", "OMP-106", "OMP-123", "OMP-124", "OMP-140", "OMP-147"]
+    issue: Literal[
+        "HOME-142",
+        "HOME-147",
+        "HOME-148",
+        "OMP-47",
+        "OMP-67",
+        "OMP-93",
+        "OMP-99",
+        "OMP-106",
+        "OMP-123",
+        "OMP-124",
+        "OMP-140",
+        "OMP-147",
+        "OMP-180",
+    ]

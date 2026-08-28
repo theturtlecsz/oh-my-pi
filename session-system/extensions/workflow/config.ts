@@ -78,3 +78,42 @@ export function loadBearer(config: WorkClientConfig): string | null {
 		return null;
 	}
 }
+
+/** Compute the prospective contract SHA256 from the contract files on disk. */
+export function computeContractSha256FromDisk(contractDir: string): string {
+	const manifestPath = join(contractDir, "manifest.json");
+	try {
+		const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] };
+		const hasher = new Bun.CryptoHasher("sha256");
+		for (const relPath of manifest.paths) {
+			const filePath = join(contractDir, relPath);
+			const fileBytes = readFileSync(filePath);
+			const fileSha = new Bun.CryptoHasher("sha256").update(fileBytes).digest("hex");
+			hasher.update(relPath);
+			hasher.update("\0");
+			hasher.update(fileSha);
+			hasher.update("\n");
+		}
+		return hasher.digest("hex");
+	} catch {
+		return "";
+	}
+}
+
+/** Check if prospective Work contract changes in the working tree match owner approval in approval.json. */
+export function checkProspectiveContract(cwd: string): { prospectiveDigest: string; approvedDigest: string; approved: boolean } {
+	const contractDir = join(cwd, "python/omp-work/src/omp_work/contracts/v1");
+	const prospectiveDigest = computeContractSha256FromDisk(contractDir);
+	const approvalPath = join(contractDir, "approval.json");
+	try {
+		const approval = JSON.parse(readFileSync(approvalPath, "utf8")) as { contract_sha256?: string };
+		const approvedDigest = approval?.contract_sha256 ?? "";
+		return {
+			prospectiveDigest,
+			approvedDigest,
+			approved: Boolean(prospectiveDigest && approvedDigest && prospectiveDigest === approvedDigest),
+		};
+	} catch {
+		return { prospectiveDigest, approvedDigest: "", approved: false };
+	}
+}

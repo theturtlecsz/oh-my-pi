@@ -819,6 +819,185 @@
       "title": "ActivateCutoverPayload",
       "type": "object"
     },
+    "ActivateExecutionItemCommand": {
+      "$defs": {
+        "ActivateExecutionItemPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Expected Blocker Ids",
+              "type": "array"
+            },
+            "expected_focus_version": {
+              "minimum": 0,
+              "title": "Expected Focus Version",
+              "type": "integer"
+            },
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "expected_project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected Project Id"
+            },
+            "expected_revision_id": {
+              "format": "uuid",
+              "title": "Expected Revision Id",
+              "type": "string"
+            },
+            "git_baseline": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Git Baseline",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "position": {
+              "minimum": 0,
+              "title": "Position",
+              "type": "integer"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "position",
+            "work_id",
+            "expected_revision_id",
+            "git_baseline",
+            "judge_sha256",
+            "expected_focus_version"
+          ],
+          "title": "ActivateExecutionItemPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ActivateExecutionItemPayload"
+        },
+        "type": {
+          "const": "activate_execution_item",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ActivateExecutionItemCommand",
+      "type": "object"
+    },
+    "ActivateExecutionItemPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_blocker_ids": {
+          "default": [],
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": "Expected Blocker Ids",
+          "type": "array"
+        },
+        "expected_focus_version": {
+          "minimum": 0,
+          "title": "Expected Focus Version",
+          "type": "integer"
+        },
+        "expected_grant_version": {
+          "minimum": 1,
+          "title": "Expected Grant Version",
+          "type": "integer"
+        },
+        "expected_project_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Project Id"
+        },
+        "expected_revision_id": {
+          "format": "uuid",
+          "title": "Expected Revision Id",
+          "type": "string"
+        },
+        "git_baseline": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Git Baseline",
+          "type": "string"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "judge_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Sha256",
+          "type": "string"
+        },
+        "position": {
+          "minimum": 0,
+          "title": "Position",
+          "type": "integer"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant_id",
+        "expected_grant_version",
+        "position",
+        "work_id",
+        "expected_revision_id",
+        "git_baseline",
+        "judge_sha256",
+        "expected_focus_version"
+      ],
+      "title": "ActivateExecutionItemPayload",
+      "type": "object"
+    },
     "Anomaly": {
       "additionalProperties": false,
       "properties": {
@@ -1254,7 +1433,8 @@
             "OMP-123",
             "OMP-124",
             "OMP-140",
-            "OMP-147"
+            "OMP-147",
+            "OMP-180"
           ],
           "title": "Issue",
           "type": "string"
@@ -1675,7 +1855,8 @@
           "default": 1,
           "enum": [
             1,
-            2
+            2,
+            3
           ],
           "title": "Manifest Version",
           "type": "integer"
@@ -1792,15 +1973,89 @@
               "title": "Attempt Id",
               "type": "string"
             },
+            "authorization_kind": {
+              "default": "summary",
+              "enum": [
+                "summary",
+                "legacy",
+                "execution"
+              ],
+              "title": "Authorization Kind",
+              "type": "string"
+            },
             "authorization_ref": {
               "minLength": 1,
               "title": "Authorization Ref",
               "type": "string"
             },
+            "candidate_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Tree Sha"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
             "diff_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Diff Sha256",
               "type": "string"
+            },
+            "execution_grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Execution Grant Id"
+            },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
+            "original_request_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Original Request Sha256"
             },
             "owner_session_id": {
               "minLength": 1,
@@ -1816,6 +2071,19 @@
               "format": "date-time",
               "title": "Owner Session Started At",
               "type": "string"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
             },
             "repository": {
               "minLength": 1,
@@ -1946,15 +2214,89 @@
           "title": "Attempt Id",
           "type": "string"
         },
+        "authorization_kind": {
+          "default": "summary",
+          "enum": [
+            "summary",
+            "legacy",
+            "execution"
+          ],
+          "title": "Authorization Kind",
+          "type": "string"
+        },
         "authorization_ref": {
           "minLength": 1,
           "title": "Authorization Ref",
           "type": "string"
         },
+        "candidate_tree_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Tree Sha"
+        },
+        "criteria_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Criteria Sha256"
+        },
         "diff_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Diff Sha256",
           "type": "string"
+        },
+        "execution_grant_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Grant Id"
+        },
+        "judge_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Judge Sha256"
+        },
+        "original_request_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Request Sha256"
         },
         "owner_session_id": {
           "minLength": 1,
@@ -1970,6 +2312,19 @@
           "format": "date-time",
           "title": "Owner Session Started At",
           "type": "string"
+        },
+        "plan_stamp_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan Stamp Sha256"
         },
         "repository": {
           "minLength": 1,
@@ -2010,6 +2365,509 @@
         "diff_sha256"
       ],
       "title": "BeginCloseAttemptPayload",
+      "type": "object"
+    },
+    "BeginExecutionCommand": {
+      "$defs": {
+        "BeginExecutionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_focus_version": {
+              "minimum": 0,
+              "title": "Expected Focus Version",
+              "type": "integer"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ExecutionGrantItemClaim"
+              },
+              "minItems": 1,
+              "title": "Items",
+              "type": "array"
+            },
+            "judge_manifest": {
+              "$ref": "#/$defs/ExecutionJudgeManifest"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "single",
+                "queue"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "provenance": {
+              "$ref": "#/$defs/ExecutionProvenanceEnvelope"
+            }
+          },
+          "required": [
+            "grant_id",
+            "provenance",
+            "mode",
+            "items",
+            "expected_focus_version",
+            "judge_sha256",
+            "judge_manifest"
+          ],
+          "title": "BeginExecutionPayload",
+          "type": "object"
+        },
+        "ExecutionGrantItemClaim": {
+          "additionalProperties": false,
+          "properties": {
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "initial_git_baseline": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "original_request": {
+              "minLength": 1,
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "position": {
+              "minimum": 0,
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "position",
+            "original_request",
+            "original_request_sha256",
+            "initial_git_baseline"
+          ],
+          "title": "ExecutionGrantItemClaim",
+          "type": "object"
+        },
+        "ExecutionJudgeManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "adapter_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Adapter Sha256",
+              "type": "string"
+            },
+            "auditor_agent_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Auditor Agent Sha256",
+              "type": "string"
+            },
+            "contract_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Contract Sha256",
+              "type": "string"
+            },
+            "executor_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Executor Sha256",
+              "type": "string"
+            },
+            "freeze_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Freeze Sha256",
+              "type": "string"
+            },
+            "host_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Host Sha256",
+              "type": "string"
+            },
+            "runner_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Runner Sha256",
+              "type": "string"
+            },
+            "service_code_fingerprint": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Service Code Fingerprint",
+              "type": "string"
+            },
+            "service_fingerprint": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Service Fingerprint",
+              "type": "string"
+            },
+            "service_migration_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Service Migration Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "auditor_agent_sha256",
+            "host_sha256",
+            "adapter_sha256",
+            "freeze_sha256",
+            "runner_sha256",
+            "executor_sha256",
+            "contract_sha256",
+            "service_fingerprint",
+            "service_code_fingerprint",
+            "service_migration_sha256"
+          ],
+          "title": "ExecutionJudgeManifest",
+          "type": "object"
+        },
+        "ExecutionProvenanceEnvelope": {
+          "additionalProperties": false,
+          "properties": {
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "nonce": {
+              "minLength": 1,
+              "title": "Nonce",
+              "type": "string"
+            },
+            "normalized_command": {
+              "minLength": 1,
+              "title": "Normalized Command",
+              "type": "string"
+            },
+            "owner_input_id": {
+              "minLength": 1,
+              "title": "Owner Input Id",
+              "type": "string"
+            },
+            "owner_session_id": {
+              "minLength": 1,
+              "title": "Owner Session Id",
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "title": "Repository",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "owner_input_id",
+            "owner_session_id",
+            "normalized_command",
+            "workspace_id",
+            "repository",
+            "nonce",
+            "issued_at"
+          ],
+          "title": "ExecutionProvenanceEnvelope",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/BeginExecutionPayload"
+        },
+        "type": {
+          "const": "begin_execution",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "BeginExecutionCommand",
+      "type": "object"
+    },
+    "BeginExecutionPayload": {
+      "$defs": {
+        "ExecutionGrantItemClaim": {
+          "additionalProperties": false,
+          "properties": {
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "initial_git_baseline": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "original_request": {
+              "minLength": 1,
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "position": {
+              "minimum": 0,
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "position",
+            "original_request",
+            "original_request_sha256",
+            "initial_git_baseline"
+          ],
+          "title": "ExecutionGrantItemClaim",
+          "type": "object"
+        },
+        "ExecutionJudgeManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "adapter_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Adapter Sha256",
+              "type": "string"
+            },
+            "auditor_agent_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Auditor Agent Sha256",
+              "type": "string"
+            },
+            "contract_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Contract Sha256",
+              "type": "string"
+            },
+            "executor_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Executor Sha256",
+              "type": "string"
+            },
+            "freeze_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Freeze Sha256",
+              "type": "string"
+            },
+            "host_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Host Sha256",
+              "type": "string"
+            },
+            "runner_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Runner Sha256",
+              "type": "string"
+            },
+            "service_code_fingerprint": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Service Code Fingerprint",
+              "type": "string"
+            },
+            "service_fingerprint": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Service Fingerprint",
+              "type": "string"
+            },
+            "service_migration_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Service Migration Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "auditor_agent_sha256",
+            "host_sha256",
+            "adapter_sha256",
+            "freeze_sha256",
+            "runner_sha256",
+            "executor_sha256",
+            "contract_sha256",
+            "service_fingerprint",
+            "service_code_fingerprint",
+            "service_migration_sha256"
+          ],
+          "title": "ExecutionJudgeManifest",
+          "type": "object"
+        },
+        "ExecutionProvenanceEnvelope": {
+          "additionalProperties": false,
+          "properties": {
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "nonce": {
+              "minLength": 1,
+              "title": "Nonce",
+              "type": "string"
+            },
+            "normalized_command": {
+              "minLength": 1,
+              "title": "Normalized Command",
+              "type": "string"
+            },
+            "owner_input_id": {
+              "minLength": 1,
+              "title": "Owner Input Id",
+              "type": "string"
+            },
+            "owner_session_id": {
+              "minLength": 1,
+              "title": "Owner Session Id",
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "title": "Repository",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "owner_input_id",
+            "owner_session_id",
+            "normalized_command",
+            "workspace_id",
+            "repository",
+            "nonce",
+            "issued_at"
+          ],
+          "title": "ExecutionProvenanceEnvelope",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "expected_focus_version": {
+          "minimum": 0,
+          "title": "Expected Focus Version",
+          "type": "integer"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ExecutionGrantItemClaim"
+          },
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        },
+        "judge_manifest": {
+          "$ref": "#/$defs/ExecutionJudgeManifest"
+        },
+        "judge_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Sha256",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "single",
+            "queue"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/ExecutionProvenanceEnvelope"
+        }
+      },
+      "required": [
+        "grant_id",
+        "provenance",
+        "mode",
+        "items",
+        "expected_focus_version",
+        "judge_sha256",
+        "judge_manifest"
+      ],
+      "title": "BeginExecutionPayload",
       "type": "object"
     },
     "BindingManifest": {
@@ -2407,7 +3265,8 @@
         "authorization_kind": {
           "enum": [
             "summary",
-            "legacy"
+            "legacy",
+            "execution"
           ],
           "title": "Authorization Kind",
           "type": "string"
@@ -2454,6 +3313,18 @@
           "default": null,
           "title": "Candidate Sha256"
         },
+        "candidate_tree_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Tree Sha"
+        },
         "closeout_requested_at": {
           "anyOf": [
             {
@@ -2492,6 +3363,19 @@
           "default": null,
           "title": "Completion Authorization Ref"
         },
+        "criteria_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Criteria Sha256"
+        },
         "diff_sha256": {
           "anyOf": [
             {
@@ -2504,6 +3388,19 @@
           ],
           "default": null,
           "title": "Diff Sha256"
+        },
+        "execution_grant_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Grant Id"
         },
         "in_flight_launch_id": {
           "anyOf": [
@@ -2518,10 +3415,36 @@
           "default": null,
           "title": "In Flight Launch Id"
         },
+        "judge_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Judge Sha256"
+        },
         "launch_count": {
           "minimum": 0,
           "title": "Launch Count",
           "type": "integer"
+        },
+        "original_request_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Request Sha256"
         },
         "owner_session_id": {
           "anyOf": [
@@ -2573,6 +3496,19 @@
           ],
           "default": null,
           "title": "Plan Receipt Id"
+        },
+        "plan_stamp_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan Stamp Sha256"
         },
         "repository": {
           "anyOf": [
@@ -2877,6 +3813,104 @@
           "title": "ActivateCutoverPayload",
           "type": "object"
         },
+        "ActivateExecutionItemCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ActivateExecutionItemPayload"
+            },
+            "type": {
+              "const": "activate_execution_item",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ActivateExecutionItemCommand",
+          "type": "object"
+        },
+        "ActivateExecutionItemPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Expected Blocker Ids",
+              "type": "array"
+            },
+            "expected_focus_version": {
+              "minimum": 0,
+              "title": "Expected Focus Version",
+              "type": "integer"
+            },
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "expected_project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected Project Id"
+            },
+            "expected_revision_id": {
+              "format": "uuid",
+              "title": "Expected Revision Id",
+              "type": "string"
+            },
+            "git_baseline": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Git Baseline",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "position": {
+              "minimum": 0,
+              "title": "Position",
+              "type": "integer"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "position",
+            "work_id",
+            "expected_revision_id",
+            "git_baseline",
+            "judge_sha256",
+            "expected_focus_version"
+          ],
+          "title": "ActivateExecutionItemPayload",
+          "type": "object"
+        },
         "Anomaly": {
           "additionalProperties": false,
           "properties": {
@@ -3096,15 +4130,89 @@
               "title": "Attempt Id",
               "type": "string"
             },
+            "authorization_kind": {
+              "default": "summary",
+              "enum": [
+                "summary",
+                "legacy",
+                "execution"
+              ],
+              "title": "Authorization Kind",
+              "type": "string"
+            },
             "authorization_ref": {
               "minLength": 1,
               "title": "Authorization Ref",
               "type": "string"
             },
+            "candidate_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Tree Sha"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
             "diff_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Diff Sha256",
               "type": "string"
+            },
+            "execution_grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Execution Grant Id"
+            },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
+            "original_request_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Original Request Sha256"
             },
             "owner_session_id": {
               "minLength": 1,
@@ -3120,6 +4228,19 @@
               "format": "date-time",
               "title": "Owner Session Started At",
               "type": "string"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
             },
             "repository": {
               "minLength": 1,
@@ -3160,6 +4281,78 @@
             "diff_sha256"
           ],
           "title": "BeginCloseAttemptPayload",
+          "type": "object"
+        },
+        "BeginExecutionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/BeginExecutionPayload"
+            },
+            "type": {
+              "const": "begin_execution",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "BeginExecutionCommand",
+          "type": "object"
+        },
+        "BeginExecutionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_focus_version": {
+              "minimum": 0,
+              "title": "Expected Focus Version",
+              "type": "integer"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ExecutionGrantItemClaim"
+              },
+              "minItems": 1,
+              "title": "Items",
+              "type": "array"
+            },
+            "judge_manifest": {
+              "$ref": "#/$defs/ExecutionJudgeManifest"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "single",
+                "queue"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "provenance": {
+              "$ref": "#/$defs/ExecutionProvenanceEnvelope"
+            }
+          },
+          "required": [
+            "grant_id",
+            "provenance",
+            "mode",
+            "items",
+            "expected_focus_version",
+            "judge_sha256",
+            "judge_manifest"
+          ],
+          "title": "BeginExecutionPayload",
           "type": "object"
         },
         "CancelAuditorLaunchCommand": {
@@ -3355,6 +4548,70 @@
             "passed"
           ],
           "title": "CommandSmokeResult",
+          "type": "object"
+        },
+        "CompleteExecutionItemCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/CompleteExecutionItemPayload"
+            },
+            "type": {
+              "const": "complete_execution_item",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "CompleteExecutionItemCommand",
+          "type": "object"
+        },
+        "CompleteExecutionItemPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "push_receipt_id": {
+              "format": "uuid",
+              "title": "Push Receipt Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "work_id",
+            "attempt_id",
+            "push_receipt_id",
+            "judge_sha256"
+          ],
+          "title": "CompleteExecutionItemPayload",
           "type": "object"
         },
         "CompleteWorkCommand": {
@@ -4000,6 +5257,193 @@
           "title": "EvidenceReceipt",
           "type": "object"
         },
+        "ExecutionGrantItemClaim": {
+          "additionalProperties": false,
+          "properties": {
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "initial_git_baseline": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "original_request": {
+              "minLength": 1,
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "position": {
+              "minimum": 0,
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "position",
+            "original_request",
+            "original_request_sha256",
+            "initial_git_baseline"
+          ],
+          "title": "ExecutionGrantItemClaim",
+          "type": "object"
+        },
+        "ExecutionJudgeManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "adapter_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Adapter Sha256",
+              "type": "string"
+            },
+            "auditor_agent_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Auditor Agent Sha256",
+              "type": "string"
+            },
+            "contract_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Contract Sha256",
+              "type": "string"
+            },
+            "executor_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Executor Sha256",
+              "type": "string"
+            },
+            "freeze_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Freeze Sha256",
+              "type": "string"
+            },
+            "host_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Host Sha256",
+              "type": "string"
+            },
+            "runner_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Runner Sha256",
+              "type": "string"
+            },
+            "service_code_fingerprint": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Service Code Fingerprint",
+              "type": "string"
+            },
+            "service_fingerprint": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Service Fingerprint",
+              "type": "string"
+            },
+            "service_migration_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Service Migration Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "auditor_agent_sha256",
+            "host_sha256",
+            "adapter_sha256",
+            "freeze_sha256",
+            "runner_sha256",
+            "executor_sha256",
+            "contract_sha256",
+            "service_fingerprint",
+            "service_code_fingerprint",
+            "service_migration_sha256"
+          ],
+          "title": "ExecutionJudgeManifest",
+          "type": "object"
+        },
+        "ExecutionProvenanceEnvelope": {
+          "additionalProperties": false,
+          "properties": {
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "nonce": {
+              "minLength": 1,
+              "title": "Nonce",
+              "type": "string"
+            },
+            "normalized_command": {
+              "minLength": 1,
+              "title": "Normalized Command",
+              "type": "string"
+            },
+            "owner_input_id": {
+              "minLength": 1,
+              "title": "Owner Input Id",
+              "type": "string"
+            },
+            "owner_session_id": {
+              "minLength": 1,
+              "title": "Owner Session Id",
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "title": "Repository",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "owner_input_id",
+            "owner_session_id",
+            "normalized_command",
+            "workspace_id",
+            "repository",
+            "nonce",
+            "issued_at"
+          ],
+          "title": "ExecutionProvenanceEnvelope",
+          "type": "object"
+        },
         "FinalizeCandidateCommand": {
           "additionalProperties": false,
           "properties": {
@@ -4634,6 +6078,148 @@
           "title": "SealAuditManifestPayload",
           "type": "object"
         },
+        "SealExecutionCriteriaCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/SealExecutionCriteriaPayload"
+            },
+            "type": {
+              "const": "seal_execution_criteria",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "SealExecutionCriteriaCommand",
+          "type": "object"
+        },
+        "SealExecutionCriteriaPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "criteria": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Criteria",
+              "type": "array"
+            },
+            "description_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Description Sha256",
+              "type": "string"
+            },
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "expected_revision_id": {
+              "format": "uuid",
+              "title": "Expected Revision Id",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "work_id",
+            "expected_revision_id",
+            "criteria",
+            "description_sha256",
+            "judge_sha256"
+          ],
+          "title": "SealExecutionCriteriaPayload",
+          "type": "object"
+        },
+        "SetExecutionStateCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/SetExecutionStatePayload"
+            },
+            "type": {
+              "const": "set_execution_state",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "SetExecutionStateCommand",
+          "type": "object"
+        },
+        "SetExecutionStatePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "target_state": {
+              "enum": [
+                "active",
+                "paused",
+                "stopped",
+                "canceled"
+              ],
+              "title": "Target State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "target_state",
+            "judge_sha256"
+          ],
+          "title": "SetExecutionStatePayload",
+          "type": "object"
+        },
         "SetFocusCommand": {
           "additionalProperties": false,
           "properties": {
@@ -4801,6 +6387,121 @@
           "title": "StageImportBatchPayload",
           "type": "object"
         },
+        "StampExecutionPlanCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/StampExecutionPlanPayload"
+            },
+            "type": {
+              "const": "stamp_execution_plan",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "StampExecutionPlanCommand",
+          "type": "object"
+        },
+        "StampExecutionPlanPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "approach": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Approach",
+              "type": "array"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Paths",
+              "type": "array"
+            },
+            "plan_body": {
+              "minLength": 1,
+              "title": "Plan Body",
+              "type": "string"
+            },
+            "plan_file": {
+              "minLength": 1,
+              "title": "Plan File",
+              "type": "string"
+            },
+            "plan_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Plan Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verification": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Verification",
+              "type": "array"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "plan_file",
+            "plan_body",
+            "plan_sha256",
+            "approach",
+            "verification",
+            "paths",
+            "candidate_sha256",
+            "judge_sha256"
+          ],
+          "title": "StampExecutionPlanPayload",
+          "type": "object"
+        },
         "WorkRevision": {
           "additionalProperties": false,
           "properties": {
@@ -4880,12 +6581,15 @@
           "discriminator": {
             "mapping": {
               "activate_cutover": "#/$defs/ActivateCutoverCommand",
+              "activate_execution_item": "#/$defs/ActivateExecutionItemCommand",
               "append_evidence": "#/$defs/AppendEvidenceCommand",
               "attest_checkpoint_delivery": "#/$defs/AttestCheckpointDeliveryCommand",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanCommand",
               "begin_close_attempt": "#/$defs/BeginCloseAttemptCommand",
+              "begin_execution": "#/$defs/BeginExecutionCommand",
               "cancel_auditor_launch": "#/$defs/CancelAuditorLaunchCommand",
               "clear_focus": "#/$defs/ClearFocusCommand",
+              "complete_execution_item": "#/$defs/CompleteExecutionItemCommand",
               "complete_work": "#/$defs/CompleteWorkCommand",
               "create_same_session_child": "#/$defs/CreateSameSessionChildCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
@@ -4898,10 +6602,13 @@
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
               "revise_work": "#/$defs/ReviseWorkCommand",
               "seal_audit_manifest": "#/$defs/SealAuditManifestCommand",
+              "seal_execution_criteria": "#/$defs/SealExecutionCriteriaCommand",
+              "set_execution_state": "#/$defs/SetExecutionStateCommand",
               "set_focus": "#/$defs/SetFocusCommand",
               "set_work_state": "#/$defs/SetWorkStateCommand",
               "settle_auditor_launch": "#/$defs/SettleAuditorLaunchCommand",
-              "stage_import_batch": "#/$defs/StageImportBatchCommand"
+              "stage_import_batch": "#/$defs/StageImportBatchCommand",
+              "stamp_execution_plan": "#/$defs/StampExecutionPlanCommand"
             },
             "propertyName": "type"
           },
@@ -4974,6 +6681,24 @@
             },
             {
               "$ref": "#/$defs/AttestCutoverPlanCommand"
+            },
+            {
+              "$ref": "#/$defs/BeginExecutionCommand"
+            },
+            {
+              "$ref": "#/$defs/ActivateExecutionItemCommand"
+            },
+            {
+              "$ref": "#/$defs/SealExecutionCriteriaCommand"
+            },
+            {
+              "$ref": "#/$defs/StampExecutionPlanCommand"
+            },
+            {
+              "$ref": "#/$defs/SetExecutionStateCommand"
+            },
+            {
+              "$ref": "#/$defs/CompleteExecutionItemCommand"
             }
           ],
           "title": "Command"
@@ -5027,6 +6752,117 @@
         "passed"
       ],
       "title": "CommandSmokeResult",
+      "type": "object"
+    },
+    "CompleteExecutionItemCommand": {
+      "$defs": {
+        "CompleteExecutionItemPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "format": "uuid",
+              "title": "Attempt Id",
+              "type": "string"
+            },
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "push_receipt_id": {
+              "format": "uuid",
+              "title": "Push Receipt Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "work_id",
+            "attempt_id",
+            "push_receipt_id",
+            "judge_sha256"
+          ],
+          "title": "CompleteExecutionItemPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CompleteExecutionItemPayload"
+        },
+        "type": {
+          "const": "complete_execution_item",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "CompleteExecutionItemCommand",
+      "type": "object"
+    },
+    "CompleteExecutionItemPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "expected_grant_version": {
+          "minimum": 1,
+          "title": "Expected Grant Version",
+          "type": "integer"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "judge_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Sha256",
+          "type": "string"
+        },
+        "push_receipt_id": {
+          "format": "uuid",
+          "title": "Push Receipt Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant_id",
+        "expected_grant_version",
+        "work_id",
+        "attempt_id",
+        "push_receipt_id",
+        "judge_sha256"
+      ],
+      "title": "CompleteExecutionItemPayload",
       "type": "object"
     },
     "CompleteWorkCommand": {
@@ -6204,6 +8040,11 @@
               "title": "/Done",
               "type": "string"
             },
+            "/execute": {
+              "const": "autonomous single or queue delivery cycle",
+              "title": "/Execute",
+              "type": "string"
+            },
             "/intake": {
               "const": "create_work_batch",
               "title": "/Intake",
@@ -6231,7 +8072,8 @@
             "/plan",
             "/now",
             "/summary",
-            "/done"
+            "/done",
+            "/execute"
           ],
           "title": "WorkflowMapping",
           "type": "object"
@@ -8014,6 +9856,193 @@
         "issued_at"
       ],
       "title": "EvidenceReceipt",
+      "type": "object"
+    },
+    "ExecutionGrantItemClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "active_blocker_ids": {
+          "default": [],
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": "Active Blocker Ids",
+          "type": "array"
+        },
+        "initial_git_baseline": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Initial Git Baseline",
+          "type": "string"
+        },
+        "original_request": {
+          "minLength": 1,
+          "title": "Original Request",
+          "type": "string"
+        },
+        "original_request_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Request Sha256",
+          "type": "string"
+        },
+        "position": {
+          "minimum": 0,
+          "title": "Position",
+          "type": "integer"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "position",
+        "original_request",
+        "original_request_sha256",
+        "initial_git_baseline"
+      ],
+      "title": "ExecutionGrantItemClaim",
+      "type": "object"
+    },
+    "ExecutionJudgeManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Adapter Sha256",
+          "type": "string"
+        },
+        "auditor_agent_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Auditor Agent Sha256",
+          "type": "string"
+        },
+        "contract_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Contract Sha256",
+          "type": "string"
+        },
+        "executor_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Executor Sha256",
+          "type": "string"
+        },
+        "freeze_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Freeze Sha256",
+          "type": "string"
+        },
+        "host_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Host Sha256",
+          "type": "string"
+        },
+        "runner_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Runner Sha256",
+          "type": "string"
+        },
+        "service_code_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Service Code Fingerprint",
+          "type": "string"
+        },
+        "service_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Service Fingerprint",
+          "type": "string"
+        },
+        "service_migration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Service Migration Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "auditor_agent_sha256",
+        "host_sha256",
+        "adapter_sha256",
+        "freeze_sha256",
+        "runner_sha256",
+        "executor_sha256",
+        "contract_sha256",
+        "service_fingerprint",
+        "service_code_fingerprint",
+        "service_migration_sha256"
+      ],
+      "title": "ExecutionJudgeManifest",
+      "type": "object"
+    },
+    "ExecutionProvenanceEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "issued_at": {
+          "format": "date-time",
+          "title": "Issued At",
+          "type": "string"
+        },
+        "nonce": {
+          "minLength": 1,
+          "title": "Nonce",
+          "type": "string"
+        },
+        "normalized_command": {
+          "minLength": 1,
+          "title": "Normalized Command",
+          "type": "string"
+        },
+        "owner_input_id": {
+          "minLength": 1,
+          "title": "Owner Input Id",
+          "type": "string"
+        },
+        "owner_session_id": {
+          "minLength": 1,
+          "title": "Owner Session Id",
+          "type": "string"
+        },
+        "repository": {
+          "minLength": 1,
+          "title": "Repository",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_input_id",
+        "owner_session_id",
+        "normalized_command",
+        "workspace_id",
+        "repository",
+        "nonce",
+        "issued_at"
+      ],
+      "title": "ExecutionProvenanceEnvelope",
       "type": "object"
     },
     "FinalizeCandidateCommand": {
@@ -9873,6 +11902,135 @@
       "title": "SealAuditManifestPayload",
       "type": "object"
     },
+    "SealExecutionCriteriaCommand": {
+      "$defs": {
+        "SealExecutionCriteriaPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "criteria": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Criteria",
+              "type": "array"
+            },
+            "description_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Description Sha256",
+              "type": "string"
+            },
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "expected_revision_id": {
+              "format": "uuid",
+              "title": "Expected Revision Id",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "work_id",
+            "expected_revision_id",
+            "criteria",
+            "description_sha256",
+            "judge_sha256"
+          ],
+          "title": "SealExecutionCriteriaPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SealExecutionCriteriaPayload"
+        },
+        "type": {
+          "const": "seal_execution_criteria",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "SealExecutionCriteriaCommand",
+      "type": "object"
+    },
+    "SealExecutionCriteriaPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "criteria": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Criteria",
+          "type": "array"
+        },
+        "description_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Description Sha256",
+          "type": "string"
+        },
+        "expected_grant_version": {
+          "minimum": 1,
+          "title": "Expected Grant Version",
+          "type": "integer"
+        },
+        "expected_revision_id": {
+          "format": "uuid",
+          "title": "Expected Revision Id",
+          "type": "string"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "judge_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Sha256",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant_id",
+        "expected_grant_version",
+        "work_id",
+        "expected_revision_id",
+        "criteria",
+        "description_sha256",
+        "judge_sha256"
+      ],
+      "title": "SealExecutionCriteriaPayload",
+      "type": "object"
+    },
     "SealedRider": {
       "additionalProperties": false,
       "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
@@ -10001,6 +12159,127 @@
         "credentials"
       ],
       "title": "SecurityPolicy",
+      "type": "object"
+    },
+    "SetExecutionStateCommand": {
+      "$defs": {
+        "SetExecutionStatePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "target_state": {
+              "enum": [
+                "active",
+                "paused",
+                "stopped",
+                "canceled"
+              ],
+              "title": "Target State",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "target_state",
+            "judge_sha256"
+          ],
+          "title": "SetExecutionStatePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SetExecutionStatePayload"
+        },
+        "type": {
+          "const": "set_execution_state",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "SetExecutionStateCommand",
+      "type": "object"
+    },
+    "SetExecutionStatePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_grant_version": {
+          "minimum": 1,
+          "title": "Expected Grant Version",
+          "type": "integer"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "judge_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "target_state": {
+          "enum": [
+            "active",
+            "paused",
+            "stopped",
+            "canceled"
+          ],
+          "title": "Target State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant_id",
+        "expected_grant_version",
+        "target_state",
+        "judge_sha256"
+      ],
+      "title": "SetExecutionStatePayload",
       "type": "object"
     },
     "SetFocusCommand": {
@@ -10403,6 +12682,219 @@
       "title": "StaleEvidenceExample",
       "type": "object"
     },
+    "StampExecutionPlanCommand": {
+      "$defs": {
+        "StampExecutionPlanPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "approach": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Approach",
+              "type": "array"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Paths",
+              "type": "array"
+            },
+            "plan_body": {
+              "minLength": 1,
+              "title": "Plan Body",
+              "type": "string"
+            },
+            "plan_file": {
+              "minLength": 1,
+              "title": "Plan File",
+              "type": "string"
+            },
+            "plan_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Plan Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verification": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Verification",
+              "type": "array"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "plan_file",
+            "plan_body",
+            "plan_sha256",
+            "approach",
+            "verification",
+            "paths",
+            "candidate_sha256",
+            "judge_sha256"
+          ],
+          "title": "StampExecutionPlanPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/StampExecutionPlanPayload"
+        },
+        "type": {
+          "const": "stamp_execution_plan",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "StampExecutionPlanCommand",
+      "type": "object"
+    },
+    "StampExecutionPlanPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "approach": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Approach",
+          "type": "array"
+        },
+        "candidate_id": {
+          "format": "uuid",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "candidate_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Sha256",
+          "type": "string"
+        },
+        "expected_grant_version": {
+          "minimum": 1,
+          "title": "Expected Grant Version",
+          "type": "integer"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "judge_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Sha256",
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Paths",
+          "type": "array"
+        },
+        "plan_body": {
+          "minLength": 1,
+          "title": "Plan Body",
+          "type": "string"
+        },
+        "plan_file": {
+          "minLength": 1,
+          "title": "Plan File",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "verification": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Verification",
+          "type": "array"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant_id",
+        "expected_grant_version",
+        "work_id",
+        "revision_id",
+        "candidate_id",
+        "plan_file",
+        "plan_body",
+        "plan_sha256",
+        "approach",
+        "verification",
+        "paths",
+        "candidate_sha256",
+        "judge_sha256"
+      ],
+      "title": "StampExecutionPlanPayload",
+      "type": "object"
+    },
     "StrictModel": {
       "additionalProperties": false,
       "properties": {},
@@ -10525,6 +13017,11 @@
           "title": "/Done",
           "type": "string"
         },
+        "/execute": {
+          "const": "autonomous single or queue delivery cycle",
+          "title": "/Execute",
+          "type": "string"
+        },
         "/intake": {
           "const": "create_work_batch",
           "title": "/Intake",
@@ -10552,7 +13049,8 @@
         "/plan",
         "/now",
         "/summary",
-        "/done"
+        "/done",
+        "/execute"
       ],
       "title": "WorkflowMapping",
       "type": "object"

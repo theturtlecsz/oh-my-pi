@@ -1,22 +1,43 @@
 from __future__ import annotations
 
+import re
+import shutil
 from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256 as bytes_sha256
-import re
-import shutil
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from omp_work.operations.artifacts import decrypt_file, read_json_artifact, resolve_artifact_path
+from omp_work.operations.artifacts import (
+    decrypt_file,
+    read_json_artifact,
+    resolve_artifact_path,
+)
 from omp_work.operations.config import OperationsConfig
 from omp_work.v1.canonical import sha256
 from omp_work.v1.models import Anomaly, ReconciliationCounts, ReconciliationHashes
 
-DIMENSIONS = ("worlds", "surfaces", "promises", "work_items", "states", "labels", "relations", "comments", "attachments", "users")
-WORKFLOW_PREFIXES = ("**Plan approved**", "**Execution handoff**", "**Session review**", "**Close proposed**", "**Owner verdict in session:")
+DIMENSIONS = (
+    "worlds",
+    "surfaces",
+    "promises",
+    "work_items",
+    "states",
+    "labels",
+    "relations",
+    "comments",
+    "attachments",
+    "users",
+)
+WORKFLOW_PREFIXES = (
+    "**Plan approved**",
+    "**Execution handoff**",
+    "**Session review**",
+    "**Close proposed**",
+    "**Owner verdict in session:",
+)
 SCHEMA_VERSION = "linear-export/v1"
 
 
@@ -160,11 +181,17 @@ class ExportManifest(_Strict):
 def page_sort_key(item: tuple[str, ArtifactRecord]) -> tuple[int, int, int]:
     key, _ = item
     phase, stream, index = key.rsplit(":", 2)
-    return (("baseline", "overlap", "delta").index(phase), list(LinearStream).index(LinearStream(stream)), int(index))
+    return (
+        ("baseline", "overlap", "delta").index(phase),
+        list(LinearStream).index(LinearStream(stream)),
+        int(index),
+    )
 
 
 def load_manifest(config: OperationsConfig, export_id: UUID) -> ExportManifest:
-    matches = list((config.data_dir / "linear-exports").glob(f"*/{export_id}/manifest-*.json.gpg"))
+    matches = list(
+        (config.data_dir / "linear-exports").glob(f"*/{export_id}/manifest-*.json.gpg")
+    )
     if len(matches) != 1:
         raise ValueError("linear_manifest_missing")
     encrypted = matches[0]
@@ -177,22 +204,31 @@ def load_manifest(config: OperationsConfig, export_id: UUID) -> ExportManifest:
         plain = staging / "manifest.json"
         decrypt_file(encrypted, plain, config.secret_path("gpg-passphrase"))
         try:
-            manifest = ExportManifest.model_validate_json(plain.read_text(encoding="utf-8"))
+            manifest = ExportManifest.model_validate_json(
+                plain.read_text(encoding="utf-8")
+            )
         except Exception:
             raise RuntimeError("pagination_count_hash_gap") from None
-        if sha256(manifest.model_dump(mode="json", exclude={"manifest_sha256"})) != manifest.manifest_sha256:
+        if (
+            sha256(manifest.model_dump(mode="json", exclude={"manifest_sha256"}))
+            != manifest.manifest_sha256
+        ):
             raise RuntimeError("pagination_count_hash_gap")
         artifact = ArtifactRecord(
             path=str(encrypted.relative_to(config.data_dir)),
             plaintext_sha256=sha256(manifest.model_dump(mode="json")),
             ciphertext_sha256=bytes_sha256(encrypted.read_bytes()).hexdigest(),
         )
-        return manifest.model_copy(update={"artifacts": {**manifest.artifacts, "manifest": artifact}})
+        return manifest.model_copy(
+            update={"artifacts": {**manifest.artifacts, "manifest": artifact}}
+        )
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def load_export(config: OperationsConfig, export_id: UUID) -> tuple[ExportManifest, SourceHashIndex, tuple[SourcePage, ...]]:
+def load_export(
+    config: OperationsConfig, export_id: UUID
+) -> tuple[ExportManifest, SourceHashIndex, tuple[SourcePage, ...]]:
     manifest = load_manifest(config, export_id)
     artifact = manifest.artifacts.get("source-hashes")
     if artifact is None:
@@ -218,7 +254,11 @@ def load_export(config: OperationsConfig, export_id: UUID) -> tuple[ExportManife
         if source_hashes != manifest.source_hashes:
             raise RuntimeError("pagination_count_hash_gap")
 
-        page_items = [(key, art) for key, art in manifest.artifacts.items() if re.fullmatch(r"(?:baseline|overlap|delta):[^:]+:\d+", key)]
+        page_items = [
+            (key, art)
+            for key, art in manifest.artifacts.items()
+            if re.fullmatch(r"(?:baseline|overlap|delta):[^:]+:\d+", key)
+        ]
         page_items.sort(key=page_sort_key)
         pages: list[SourcePage] = []
         for idx, (key, page_artifact) in enumerate(page_items):
@@ -238,7 +278,11 @@ def load_export(config: OperationsConfig, export_id: UUID) -> tuple[ExportManife
                 LinearStream(stream_name)
             except Exception:
                 raise RuntimeError("pagination_count_hash_gap") from None
-            if page.export_id != export_id or page.stream != key.rsplit(":", 1)[0] or page.page_index != int(page_index):
+            if (
+                page.export_id != export_id
+                or page.stream != key.rsplit(":", 1)[0]
+                or page.page_index != int(page_index)
+            ):
                 raise RuntimeError("pagination_count_hash_gap")
             pages.append(page)
         return manifest, source_hashes, tuple(pages)

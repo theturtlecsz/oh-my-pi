@@ -121,7 +121,34 @@ try {
 			if (attempt === 29) throw new Error("postgres never became ready");
 			await Bun.sleep(500);
 		}
-		py(["ops", "bootstrap"]);
+		const psqlAdmin = (sql: string, db = "postgres") => {
+			const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "postgres", "-d", db, "-v", "ON_ERROR_STOP=1", "-c", sql], {
+				env: { ...process.env, PGPASSWORD: pgSecret },
+			});
+			if (res.exitCode !== 0) throw new Error(`psql admin failed: ${res.stderr.toString()}`);
+		};
+		psqlAdmin(fs.readFileSync(path.join(pythonDir, "src/omp_work/operations/sql/roles.sql"), "utf8"));
+		for (const role of ["omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup"]) {
+			const secret = fs.readFileSync(path.join(xdg, `omp/work-ledger/credentials/${role}`), "utf8").trim();
+			psqlAdmin(`ALTER ROLE ${role} PASSWORD '${secret}';`);
+		}
+		psqlAdmin("CREATE DATABASE omp_work OWNER omp_work_owner;");
+
+		const migDir = path.join(pythonDir, "src/omp_work/operations/migrations");
+		const migFiles = fs.readdirSync(migDir).filter(f => f.endsWith(".sql")).sort();
+		const migratorSecret = fs.readFileSync(path.join(xdg, "omp/work-ledger/credentials/omp_work_migrator"), "utf8").trim();
+		for (const f of migFiles) {
+			const sqlContent = fs.readFileSync(path.join(migDir, f), "utf8");
+			const ordinal = parseInt(f.split("_")[0], 10);
+			const sha = new Bun.CryptoHasher("sha256").update(sqlContent).digest("hex");
+			const res = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "omp_work_migrator", "-d", "omp_work", "-v", "ON_ERROR_STOP=1"], {
+				env: { ...process.env, PGPASSWORD: migratorSecret },
+				stdin: Buffer.from(sqlContent),
+			});
+			if (res.exitCode !== 0) throw new Error(`migration ${f} failed: ${res.stderr.toString()}`);
+			psqlAdmin(`INSERT INTO omp_control.schema_migrations(ordinal, filename, sha256, contract_version, contract_sha256, postgres_major) VALUES (${ordinal}, '${f}', '${sha}', 'work.omp.dev/v1', '${WORK_CONTRACT_SHA256}', 18) ON CONFLICT (ordinal) DO NOTHING;`, "omp_work");
+		}
+		psqlAdmin(`INSERT INTO omp_control.runtime_compatibility (contract_version, contract_sha256, migration_set_sha256, postgres_major) VALUES ('work.omp.dev/v1', '${WORK_CONTRACT_SHA256}', 'test', 18) ON CONFLICT (singleton) DO UPDATE SET contract_version=EXCLUDED.contract_version, contract_sha256=EXCLUDED.contract_sha256, migration_set_sha256=EXCLUDED.migration_set_sha256, postgres_major=EXCLUDED.postgres_major;`, "omp_work");
 		py(["ops", "capabilities", "init", "--workspace-id", WORKSPACE, "--owner-id", OWNER, "--base-url", baseUrl]);
 		// Projects enter the ledger only via the Linear import (no v1 command
 		// creates them). Seed the smoke project the way the importer leaves it.

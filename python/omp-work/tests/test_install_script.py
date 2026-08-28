@@ -16,7 +16,9 @@ def test_installer_generates_service_units_with_migration_preflight():
 
         # Create fake PostgreSQL 18 executables
         postgres_script = fake_bin / "postgres"
-        postgres_script.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'postgres (PostgreSQL) 18.0'; exit 0; fi\nexit 0\n")
+        postgres_script.write_text(
+            '#!/bin/sh\nif [ "$1" = "--version" ]; then echo \'postgres (PostgreSQL) 18.0\'; exit 0; fi\nexit 0\n'
+        )
         postgres_script.chmod(postgres_script.stat().st_mode | stat.S_IXUSR)
 
         for name in ("initdb", "pg_ctl"):
@@ -42,9 +44,13 @@ def test_installer_generates_service_units_with_migration_preflight():
             capture_output=True,
             text=True,
         )
-        assert res.returncode == 0, f"install.sh failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+        assert res.returncode == 0, (
+            f"install.sh failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+        )
 
-        unit_file = fake_home / ".config" / "systemd" / "user" / "omp-work-service.service"
+        unit_file = (
+            fake_home / ".config" / "systemd" / "user" / "omp-work-service.service"
+        )
         assert unit_file.exists(), f"Service unit not found at {unit_file}"
 
         content = unit_file.read_text()

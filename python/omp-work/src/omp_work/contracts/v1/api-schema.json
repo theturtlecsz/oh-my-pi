@@ -60,6 +60,456 @@
       "title": "ActivateCutoverResult",
       "type": "object"
     },
+    "ActivateExecutionItemResult": {
+      "$defs": {
+        "ExecutionGrantItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "abandoned_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Abandoned At"
+            },
+            "activated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activated At"
+            },
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "claimed_revision_id": {
+              "format": "uuid",
+              "title": "Claimed Revision Id",
+              "type": "string"
+            },
+            "close_attempts_started": {
+              "title": "Close Attempts Started",
+              "type": "integer"
+            },
+            "closeout_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closeout Receipt Id"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "consecutive_no_progress": {
+              "title": "Consecutive No Progress",
+              "type": "integer"
+            },
+            "criteria_revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Revision Id"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
+            "current_git_baseline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Git Baseline"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "initial_git_baseline": {
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "item_id": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            },
+            "last_findings_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Findings Hash"
+            },
+            "last_reviewed_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Reviewed Tree Sha"
+            },
+            "original_request": {
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "plan_stamp": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
+            },
+            "position": {
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "push_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Receipt Id"
+            },
+            "skipped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skipped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "workspace_id",
+            "grant_id",
+            "work_id",
+            "position",
+            "phase",
+            "claimed_revision_id",
+            "initial_git_baseline",
+            "original_request",
+            "original_request_sha256",
+            "close_attempts_started",
+            "consecutive_no_progress"
+          ],
+          "title": "ExecutionGrantItemView",
+          "type": "object"
+        },
+        "ExecutionGrantView": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_hash": {
+              "title": "Authorization Hash",
+              "type": "string"
+            },
+            "canceled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Canceled At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "continuations_scheduled": {
+              "title": "Continuations Scheduled",
+              "type": "integer"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "grant_version": {
+              "title": "Grant Version",
+              "type": "integer"
+            },
+            "judge_sha256": {
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "max_close_attempts": {
+              "title": "Max Close Attempts",
+              "type": "integer"
+            },
+            "max_continuations": {
+              "title": "Max Continuations",
+              "type": "integer"
+            },
+            "max_no_progress": {
+              "title": "Max No Progress",
+              "type": "integer"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "paused_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paused At"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "workspace_id",
+            "owner_id",
+            "repository",
+            "state",
+            "mode",
+            "grant_version",
+            "max_continuations",
+            "max_close_attempts",
+            "max_no_progress",
+            "continuations_scheduled",
+            "authorization_hash",
+            "judge_sha256",
+            "created_at",
+            "expires_at"
+          ],
+          "title": "ExecutionGrantView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "grant": {
+          "$ref": "#/$defs/ExecutionGrantView"
+        },
+        "item": {
+          "$ref": "#/$defs/ExecutionGrantItemView"
+        },
+        "type": {
+          "const": "activate_execution_item",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "grant",
+        "item"
+      ],
+      "title": "ActivateExecutionItemResult",
+      "type": "object"
+    },
     "ApiError": {
       "additionalProperties": false,
       "properties": {
@@ -178,7 +628,8 @@
           "default": 1,
           "enum": [
             1,
-            2
+            2,
+            3
           ],
           "title": "Manifest Version",
           "type": "integer"
@@ -356,6 +807,460 @@
         "authority"
       ],
       "title": "AuthorityView",
+      "type": "object"
+    },
+    "BeginExecutionResult": {
+      "$defs": {
+        "ExecutionGrantItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "abandoned_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Abandoned At"
+            },
+            "activated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activated At"
+            },
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "claimed_revision_id": {
+              "format": "uuid",
+              "title": "Claimed Revision Id",
+              "type": "string"
+            },
+            "close_attempts_started": {
+              "title": "Close Attempts Started",
+              "type": "integer"
+            },
+            "closeout_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closeout Receipt Id"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "consecutive_no_progress": {
+              "title": "Consecutive No Progress",
+              "type": "integer"
+            },
+            "criteria_revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Revision Id"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
+            "current_git_baseline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Git Baseline"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "initial_git_baseline": {
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "item_id": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            },
+            "last_findings_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Findings Hash"
+            },
+            "last_reviewed_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Reviewed Tree Sha"
+            },
+            "original_request": {
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "plan_stamp": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
+            },
+            "position": {
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "push_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Receipt Id"
+            },
+            "skipped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skipped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "workspace_id",
+            "grant_id",
+            "work_id",
+            "position",
+            "phase",
+            "claimed_revision_id",
+            "initial_git_baseline",
+            "original_request",
+            "original_request_sha256",
+            "close_attempts_started",
+            "consecutive_no_progress"
+          ],
+          "title": "ExecutionGrantItemView",
+          "type": "object"
+        },
+        "ExecutionGrantView": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_hash": {
+              "title": "Authorization Hash",
+              "type": "string"
+            },
+            "canceled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Canceled At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "continuations_scheduled": {
+              "title": "Continuations Scheduled",
+              "type": "integer"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "grant_version": {
+              "title": "Grant Version",
+              "type": "integer"
+            },
+            "judge_sha256": {
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "max_close_attempts": {
+              "title": "Max Close Attempts",
+              "type": "integer"
+            },
+            "max_continuations": {
+              "title": "Max Continuations",
+              "type": "integer"
+            },
+            "max_no_progress": {
+              "title": "Max No Progress",
+              "type": "integer"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "paused_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paused At"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "workspace_id",
+            "owner_id",
+            "repository",
+            "state",
+            "mode",
+            "grant_version",
+            "max_continuations",
+            "max_close_attempts",
+            "max_no_progress",
+            "continuations_scheduled",
+            "authorization_hash",
+            "judge_sha256",
+            "created_at",
+            "expires_at"
+          ],
+          "title": "ExecutionGrantView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "grant": {
+          "$ref": "#/$defs/ExecutionGrantView"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ExecutionGrantItemView"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "type": {
+          "const": "begin_execution",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "grant",
+        "items"
+      ],
+      "title": "BeginExecutionResult",
       "type": "object"
     },
     "Candidate": {
@@ -569,7 +1474,8 @@
         "authorization_kind": {
           "enum": [
             "summary",
-            "legacy"
+            "legacy",
+            "execution"
           ],
           "title": "Authorization Kind",
           "type": "string"
@@ -616,6 +1522,18 @@
           "default": null,
           "title": "Candidate Sha256"
         },
+        "candidate_tree_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Tree Sha"
+        },
         "closeout_requested_at": {
           "anyOf": [
             {
@@ -654,6 +1572,19 @@
           "default": null,
           "title": "Completion Authorization Ref"
         },
+        "criteria_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Criteria Sha256"
+        },
         "diff_sha256": {
           "anyOf": [
             {
@@ -666,6 +1597,19 @@
           ],
           "default": null,
           "title": "Diff Sha256"
+        },
+        "execution_grant_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Grant Id"
         },
         "in_flight_launch_id": {
           "anyOf": [
@@ -680,10 +1624,36 @@
           "default": null,
           "title": "In Flight Launch Id"
         },
+        "judge_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Judge Sha256"
+        },
         "launch_count": {
           "minimum": 0,
           "title": "Launch Count",
           "type": "integer"
+        },
+        "original_request_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Request Sha256"
         },
         "owner_session_id": {
           "anyOf": [
@@ -735,6 +1705,19 @@
           ],
           "default": null,
           "title": "Plan Receipt Id"
+        },
+        "plan_stamp_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan Stamp Sha256"
         },
         "repository": {
           "anyOf": [
@@ -980,7 +1963,8 @@
               "default": 1,
               "enum": [
                 1,
-                2
+                2,
+                3
               ],
               "title": "Manifest Version",
               "type": "integer"
@@ -1169,7 +2153,8 @@
             "authorization_kind": {
               "enum": [
                 "summary",
-                "legacy"
+                "legacy",
+                "execution"
               ],
               "title": "Authorization Kind",
               "type": "string"
@@ -1216,6 +2201,18 @@
               "default": null,
               "title": "Candidate Sha256"
             },
+            "candidate_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Tree Sha"
+            },
             "closeout_requested_at": {
               "anyOf": [
                 {
@@ -1254,6 +2251,19 @@
               "default": null,
               "title": "Completion Authorization Ref"
             },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
             "diff_sha256": {
               "anyOf": [
                 {
@@ -1266,6 +2276,19 @@
               ],
               "default": null,
               "title": "Diff Sha256"
+            },
+            "execution_grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Execution Grant Id"
             },
             "in_flight_launch_id": {
               "anyOf": [
@@ -1280,10 +2303,36 @@
               "default": null,
               "title": "In Flight Launch Id"
             },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
             "launch_count": {
               "minimum": 0,
               "title": "Launch Count",
               "type": "integer"
+            },
+            "original_request_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Original Request Sha256"
             },
             "owner_session_id": {
               "anyOf": [
@@ -1335,6 +2384,19 @@
               ],
               "default": null,
               "title": "Plan Receipt Id"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
             },
             "repository": {
               "anyOf": [
@@ -1913,6 +2975,29 @@
           "title": "ActivateCutoverResult",
           "type": "object"
         },
+        "ActivateExecutionItemResult": {
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "item": {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            "type": {
+              "const": "activate_execution_item",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "item"
+          ],
+          "title": "ActivateExecutionItemResult",
+          "type": "object"
+        },
         "AttestCutoverPlanResult": {
           "additionalProperties": false,
           "properties": {
@@ -1983,7 +3068,8 @@
               "default": 1,
               "enum": [
                 1,
-                2
+                2,
+                3
               ],
               "title": "Manifest Version",
               "type": "integer"
@@ -2087,6 +3173,33 @@
             "reserved_at"
           ],
           "title": "AuditorLaunch",
+          "type": "object"
+        },
+        "BeginExecutionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ExecutionGrantItemView"
+              },
+              "title": "Items",
+              "type": "array"
+            },
+            "type": {
+              "const": "begin_execution",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "items"
+          ],
+          "title": "BeginExecutionResult",
           "type": "object"
         },
         "Candidate": {
@@ -2233,7 +3346,8 @@
             "authorization_kind": {
               "enum": [
                 "summary",
-                "legacy"
+                "legacy",
+                "execution"
               ],
               "title": "Authorization Kind",
               "type": "string"
@@ -2280,6 +3394,18 @@
               "default": null,
               "title": "Candidate Sha256"
             },
+            "candidate_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Tree Sha"
+            },
             "closeout_requested_at": {
               "anyOf": [
                 {
@@ -2318,6 +3444,19 @@
               "default": null,
               "title": "Completion Authorization Ref"
             },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
             "diff_sha256": {
               "anyOf": [
                 {
@@ -2330,6 +3469,19 @@
               ],
               "default": null,
               "title": "Diff Sha256"
+            },
+            "execution_grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Execution Grant Id"
             },
             "in_flight_launch_id": {
               "anyOf": [
@@ -2344,10 +3496,36 @@
               "default": null,
               "title": "In Flight Launch Id"
             },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
             "launch_count": {
               "minimum": 0,
               "title": "Launch Count",
               "type": "integer"
+            },
+            "original_request_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Original Request Sha256"
             },
             "owner_session_id": {
               "anyOf": [
@@ -2399,6 +3577,19 @@
               ],
               "default": null,
               "title": "Plan Receipt Id"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
             },
             "repository": {
               "anyOf": [
@@ -2728,6 +3919,44 @@
           ],
           "title": "CloseAttemptState",
           "type": "string"
+        },
+        "CompleteExecutionItemResult": {
+          "additionalProperties": false,
+          "properties": {
+            "closeout_receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "item": {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "type": {
+              "const": "complete_execution_item",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "item",
+            "work_id",
+            "state",
+            "closeout_receipt"
+          ],
+          "title": "CompleteExecutionItemResult",
+          "type": "object"
         },
         "CompleteWorkResult": {
           "additionalProperties": false,
@@ -3088,6 +4317,431 @@
           "title": "EvidenceResult",
           "type": "object"
         },
+        "ExecutionGrantItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "abandoned_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Abandoned At"
+            },
+            "activated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activated At"
+            },
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "claimed_revision_id": {
+              "format": "uuid",
+              "title": "Claimed Revision Id",
+              "type": "string"
+            },
+            "close_attempts_started": {
+              "title": "Close Attempts Started",
+              "type": "integer"
+            },
+            "closeout_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closeout Receipt Id"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "consecutive_no_progress": {
+              "title": "Consecutive No Progress",
+              "type": "integer"
+            },
+            "criteria_revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Revision Id"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
+            "current_git_baseline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Git Baseline"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "initial_git_baseline": {
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "item_id": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            },
+            "last_findings_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Findings Hash"
+            },
+            "last_reviewed_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Reviewed Tree Sha"
+            },
+            "original_request": {
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "plan_stamp": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
+            },
+            "position": {
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "push_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Receipt Id"
+            },
+            "skipped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skipped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "workspace_id",
+            "grant_id",
+            "work_id",
+            "position",
+            "phase",
+            "claimed_revision_id",
+            "initial_git_baseline",
+            "original_request",
+            "original_request_sha256",
+            "close_attempts_started",
+            "consecutive_no_progress"
+          ],
+          "title": "ExecutionGrantItemView",
+          "type": "object"
+        },
+        "ExecutionGrantView": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_hash": {
+              "title": "Authorization Hash",
+              "type": "string"
+            },
+            "canceled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Canceled At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "continuations_scheduled": {
+              "title": "Continuations Scheduled",
+              "type": "integer"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "grant_version": {
+              "title": "Grant Version",
+              "type": "integer"
+            },
+            "judge_sha256": {
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "max_close_attempts": {
+              "title": "Max Close Attempts",
+              "type": "integer"
+            },
+            "max_continuations": {
+              "title": "Max Continuations",
+              "type": "integer"
+            },
+            "max_no_progress": {
+              "title": "Max No Progress",
+              "type": "integer"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "paused_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paused At"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "workspace_id",
+            "owner_id",
+            "repository",
+            "state",
+            "mode",
+            "grant_version",
+            "max_continuations",
+            "max_close_attempts",
+            "max_no_progress",
+            "continuations_scheduled",
+            "authorization_hash",
+            "judge_sha256",
+            "created_at",
+            "expires_at"
+          ],
+          "title": "ExecutionGrantView",
+          "type": "object"
+        },
         "FinalizeCandidateResult": {
           "additionalProperties": false,
           "properties": {
@@ -3389,6 +5043,33 @@
           "title": "ReviseWorkResult",
           "type": "object"
         },
+        "SealExecutionCriteriaResult": {
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "item": {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            "revision": {
+              "$ref": "#/$defs/WorkRevision"
+            },
+            "type": {
+              "const": "seal_execution_criteria",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "item",
+            "revision"
+          ],
+          "title": "SealExecutionCriteriaResult",
+          "type": "object"
+        },
         "SealedRider": {
           "additionalProperties": false,
           "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
@@ -3438,6 +5119,56 @@
           "title": "SealedRider",
           "type": "object"
         },
+        "SetExecutionStateResult": {
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "type": {
+              "const": "set_execution_state",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant"
+          ],
+          "title": "SetExecutionStateResult",
+          "type": "object"
+        },
+        "StampExecutionPlanResult": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate": {
+              "$ref": "#/$defs/Candidate"
+            },
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "item": {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "stamp_execution_plan",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "item",
+            "candidate",
+            "receipt"
+          ],
+          "title": "StampExecutionPlanResult",
+          "type": "object"
+        },
         "WorkItemResult": {
           "additionalProperties": false,
           "properties": {
@@ -3468,6 +5199,73 @@
           ],
           "title": "WorkItemResult",
           "type": "object"
+        },
+        "WorkRevision": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "created_by": {
+              "title": "Created By",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "revision_number": {
+              "minimum": 1,
+              "title": "Revision Number",
+              "type": "integer"
+            },
+            "scope": {
+              "title": "Scope",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision_id",
+            "work_id",
+            "revision_number",
+            "title",
+            "description",
+            "scope",
+            "acceptance_criteria",
+            "content_sha256",
+            "created_by",
+            "created_at"
+          ],
+          "title": "WorkRevision",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -3479,12 +5277,15 @@
           "discriminator": {
             "mapping": {
               "activate_cutover": "#/$defs/ActivateCutoverResult",
+              "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
               "append_evidence": "#/$defs/EvidenceResult",
               "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
               "begin_close_attempt": "#/$defs/CloseAttemptResult",
+              "begin_execution": "#/$defs/BeginExecutionResult",
               "cancel_auditor_launch": "#/$defs/CloseAttemptResult",
               "clear_focus": "#/$defs/FocusResult",
+              "complete_execution_item": "#/$defs/CompleteExecutionItemResult",
               "complete_work": "#/$defs/CompleteWorkResult",
               "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
@@ -3496,9 +5297,12 @@
               "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
               "revise_work": "#/$defs/ReviseWorkResult",
               "seal_audit_manifest": "#/$defs/CloseAttemptResult",
+              "seal_execution_criteria": "#/$defs/SealExecutionCriteriaResult",
+              "set_execution_state": "#/$defs/SetExecutionStateResult",
               "set_focus": "#/$defs/FocusResult",
               "set_work_state": "#/$defs/WorkItemResult",
-              "settle_auditor_launch": "#/$defs/CloseAttemptResult"
+              "settle_auditor_launch": "#/$defs/CloseAttemptResult",
+              "stamp_execution_plan": "#/$defs/StampExecutionPlanResult"
             },
             "propertyName": "type"
           },
@@ -3544,6 +5348,24 @@
             },
             {
               "$ref": "#/$defs/AttestCutoverPlanResult"
+            },
+            {
+              "$ref": "#/$defs/BeginExecutionResult"
+            },
+            {
+              "$ref": "#/$defs/ActivateExecutionItemResult"
+            },
+            {
+              "$ref": "#/$defs/SealExecutionCriteriaResult"
+            },
+            {
+              "$ref": "#/$defs/StampExecutionPlanResult"
+            },
+            {
+              "$ref": "#/$defs/SetExecutionStateResult"
+            },
+            {
+              "$ref": "#/$defs/CompleteExecutionItemResult"
             }
           ],
           "title": "Result"
@@ -3554,6 +5376,629 @@
         "result"
       ],
       "title": "CommandResponse",
+      "type": "object"
+    },
+    "CompleteExecutionItemResult": {
+      "$defs": {
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout",
+            "handoff",
+            "same_session_found_fixed"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        },
+        "ExecutionGrantItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "abandoned_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Abandoned At"
+            },
+            "activated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activated At"
+            },
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "claimed_revision_id": {
+              "format": "uuid",
+              "title": "Claimed Revision Id",
+              "type": "string"
+            },
+            "close_attempts_started": {
+              "title": "Close Attempts Started",
+              "type": "integer"
+            },
+            "closeout_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closeout Receipt Id"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "consecutive_no_progress": {
+              "title": "Consecutive No Progress",
+              "type": "integer"
+            },
+            "criteria_revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Revision Id"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
+            "current_git_baseline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Git Baseline"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "initial_git_baseline": {
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "item_id": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            },
+            "last_findings_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Findings Hash"
+            },
+            "last_reviewed_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Reviewed Tree Sha"
+            },
+            "original_request": {
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "plan_stamp": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
+            },
+            "position": {
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "push_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Receipt Id"
+            },
+            "skipped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skipped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "workspace_id",
+            "grant_id",
+            "work_id",
+            "position",
+            "phase",
+            "claimed_revision_id",
+            "initial_git_baseline",
+            "original_request",
+            "original_request_sha256",
+            "close_attempts_started",
+            "consecutive_no_progress"
+          ],
+          "title": "ExecutionGrantItemView",
+          "type": "object"
+        },
+        "ExecutionGrantView": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_hash": {
+              "title": "Authorization Hash",
+              "type": "string"
+            },
+            "canceled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Canceled At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "continuations_scheduled": {
+              "title": "Continuations Scheduled",
+              "type": "integer"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "grant_version": {
+              "title": "Grant Version",
+              "type": "integer"
+            },
+            "judge_sha256": {
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "max_close_attempts": {
+              "title": "Max Close Attempts",
+              "type": "integer"
+            },
+            "max_continuations": {
+              "title": "Max Continuations",
+              "type": "integer"
+            },
+            "max_no_progress": {
+              "title": "Max No Progress",
+              "type": "integer"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "paused_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paused At"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "workspace_id",
+            "owner_id",
+            "repository",
+            "state",
+            "mode",
+            "grant_version",
+            "max_continuations",
+            "max_close_attempts",
+            "max_no_progress",
+            "continuations_scheduled",
+            "authorization_hash",
+            "judge_sha256",
+            "created_at",
+            "expires_at"
+          ],
+          "title": "ExecutionGrantView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "closeout_receipt": {
+          "$ref": "#/$defs/EvidenceReceipt"
+        },
+        "grant": {
+          "$ref": "#/$defs/ExecutionGrantView"
+        },
+        "item": {
+          "$ref": "#/$defs/ExecutionGrantItemView"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "type": {
+          "const": "complete_execution_item",
+          "title": "Type",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "grant",
+        "item",
+        "work_id",
+        "state",
+        "closeout_receipt"
+      ],
+      "title": "CompleteExecutionItemResult",
       "type": "object"
     },
     "CompleteWorkResult": {
@@ -4571,6 +7016,890 @@
       "title": "EvidenceResult",
       "type": "object"
     },
+    "ExecutionGrantItemView": {
+      "additionalProperties": false,
+      "properties": {
+        "abandoned_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Abandoned At"
+        },
+        "activated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Activated At"
+        },
+        "active_blocker_ids": {
+          "default": [],
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": "Active Blocker Ids",
+          "type": "array"
+        },
+        "claimed_revision_id": {
+          "format": "uuid",
+          "title": "Claimed Revision Id",
+          "type": "string"
+        },
+        "close_attempts_started": {
+          "title": "Close Attempts Started",
+          "type": "integer"
+        },
+        "closeout_receipt_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Closeout Receipt Id"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "consecutive_no_progress": {
+          "title": "Consecutive No Progress",
+          "type": "integer"
+        },
+        "criteria_revision_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Criteria Revision Id"
+        },
+        "criteria_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Criteria Sha256"
+        },
+        "current_git_baseline": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Git Baseline"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "initial_git_baseline": {
+          "title": "Initial Git Baseline",
+          "type": "string"
+        },
+        "item_id": {
+          "format": "uuid",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "last_findings_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Findings Hash"
+        },
+        "last_reviewed_tree_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Reviewed Tree Sha"
+        },
+        "original_request": {
+          "title": "Original Request",
+          "type": "string"
+        },
+        "original_request_sha256": {
+          "title": "Original Request Sha256",
+          "type": "string"
+        },
+        "phase": {
+          "title": "Phase",
+          "type": "string"
+        },
+        "plan_stamp": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan Stamp"
+        },
+        "plan_stamp_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan Stamp Sha256"
+        },
+        "position": {
+          "title": "Position",
+          "type": "integer"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "push_receipt_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Push Receipt Id"
+        },
+        "skipped_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skipped At"
+        },
+        "terminal_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Reason"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "workspace_id",
+        "grant_id",
+        "work_id",
+        "position",
+        "phase",
+        "claimed_revision_id",
+        "initial_git_baseline",
+        "original_request",
+        "original_request_sha256",
+        "close_attempts_started",
+        "consecutive_no_progress"
+      ],
+      "title": "ExecutionGrantItemView",
+      "type": "object"
+    },
+    "ExecutionGrantView": {
+      "additionalProperties": false,
+      "properties": {
+        "authorization_hash": {
+          "title": "Authorization Hash",
+          "type": "string"
+        },
+        "canceled_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canceled At"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "continuations_scheduled": {
+          "title": "Continuations Scheduled",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "grant_version": {
+          "title": "Grant Version",
+          "type": "integer"
+        },
+        "judge_sha256": {
+          "title": "Judge Sha256",
+          "type": "string"
+        },
+        "max_close_attempts": {
+          "title": "Max Close Attempts",
+          "type": "integer"
+        },
+        "max_continuations": {
+          "title": "Max Continuations",
+          "type": "integer"
+        },
+        "max_no_progress": {
+          "title": "Max No Progress",
+          "type": "integer"
+        },
+        "mode": {
+          "title": "Mode",
+          "type": "string"
+        },
+        "owner_id": {
+          "format": "uuid",
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "paused_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Paused At"
+        },
+        "repository": {
+          "title": "Repository",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "stopped_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stopped At"
+        },
+        "terminal_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Reason"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant_id",
+        "workspace_id",
+        "owner_id",
+        "repository",
+        "state",
+        "mode",
+        "grant_version",
+        "max_continuations",
+        "max_close_attempts",
+        "max_no_progress",
+        "continuations_scheduled",
+        "authorization_hash",
+        "judge_sha256",
+        "created_at",
+        "expires_at"
+      ],
+      "title": "ExecutionGrantView",
+      "type": "object"
+    },
+    "ExecutionView": {
+      "$defs": {
+        "ExecutionGrantItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "abandoned_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Abandoned At"
+            },
+            "activated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activated At"
+            },
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "claimed_revision_id": {
+              "format": "uuid",
+              "title": "Claimed Revision Id",
+              "type": "string"
+            },
+            "close_attempts_started": {
+              "title": "Close Attempts Started",
+              "type": "integer"
+            },
+            "closeout_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closeout Receipt Id"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "consecutive_no_progress": {
+              "title": "Consecutive No Progress",
+              "type": "integer"
+            },
+            "criteria_revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Revision Id"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
+            "current_git_baseline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Git Baseline"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "initial_git_baseline": {
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "item_id": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            },
+            "last_findings_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Findings Hash"
+            },
+            "last_reviewed_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Reviewed Tree Sha"
+            },
+            "original_request": {
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "plan_stamp": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
+            },
+            "position": {
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "push_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Receipt Id"
+            },
+            "skipped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skipped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "workspace_id",
+            "grant_id",
+            "work_id",
+            "position",
+            "phase",
+            "claimed_revision_id",
+            "initial_git_baseline",
+            "original_request",
+            "original_request_sha256",
+            "close_attempts_started",
+            "consecutive_no_progress"
+          ],
+          "title": "ExecutionGrantItemView",
+          "type": "object"
+        },
+        "ExecutionGrantView": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_hash": {
+              "title": "Authorization Hash",
+              "type": "string"
+            },
+            "canceled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Canceled At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "continuations_scheduled": {
+              "title": "Continuations Scheduled",
+              "type": "integer"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "grant_version": {
+              "title": "Grant Version",
+              "type": "integer"
+            },
+            "judge_sha256": {
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "max_close_attempts": {
+              "title": "Max Close Attempts",
+              "type": "integer"
+            },
+            "max_continuations": {
+              "title": "Max Continuations",
+              "type": "integer"
+            },
+            "max_no_progress": {
+              "title": "Max No Progress",
+              "type": "integer"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "paused_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paused At"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "workspace_id",
+            "owner_id",
+            "repository",
+            "state",
+            "mode",
+            "grant_version",
+            "max_continuations",
+            "max_close_attempts",
+            "max_no_progress",
+            "continuations_scheduled",
+            "authorization_hash",
+            "judge_sha256",
+            "created_at",
+            "expires_at"
+          ],
+          "title": "ExecutionGrantView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "active_item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "grant": {
+          "$ref": "#/$defs/ExecutionGrantView"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ExecutionGrantItemView"
+          },
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "grant",
+        "items"
+      ],
+      "title": "ExecutionView",
+      "type": "object"
+    },
     "FinalizeCandidateResult": {
       "$defs": {
         "Candidate": {
@@ -4701,46 +8030,6 @@
       "title": "FocusResult",
       "type": "object"
     },
-    "FocusSlot": {
-      "additionalProperties": false,
-      "properties": {
-        "owner_id": {
-          "format": "uuid",
-          "title": "Owner Id",
-          "type": "string"
-        },
-        "version": {
-          "minimum": 0,
-          "title": "Version",
-          "type": "integer"
-        },
-        "work_id": {
-          "anyOf": [
-            {
-              "format": "uuid",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Work Id"
-        },
-        "workspace_id": {
-          "format": "uuid",
-          "title": "Workspace Id",
-          "type": "string"
-        }
-      },
-      "required": [
-        "workspace_id",
-        "owner_id",
-        "version"
-      ],
-      "title": "FocusSlot",
-      "type": "object"
-    },
     "HealthView": {
       "additionalProperties": false,
       "properties": {
@@ -4759,6 +8048,18 @@
         "ready": {
           "title": "Ready",
           "type": "boolean"
+        },
+        "service_fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Fingerprint"
         }
       },
       "required": [
@@ -5008,7 +8309,8 @@
             "authorization_kind": {
               "enum": [
                 "summary",
-                "legacy"
+                "legacy",
+                "execution"
               ],
               "title": "Authorization Kind",
               "type": "string"
@@ -5055,6 +8357,18 @@
               "default": null,
               "title": "Candidate Sha256"
             },
+            "candidate_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Tree Sha"
+            },
             "closeout_requested_at": {
               "anyOf": [
                 {
@@ -5093,6 +8407,19 @@
               "default": null,
               "title": "Completion Authorization Ref"
             },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
             "diff_sha256": {
               "anyOf": [
                 {
@@ -5105,6 +8432,19 @@
               ],
               "default": null,
               "title": "Diff Sha256"
+            },
+            "execution_grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Execution Grant Id"
             },
             "in_flight_launch_id": {
               "anyOf": [
@@ -5119,10 +8459,36 @@
               "default": null,
               "title": "In Flight Launch Id"
             },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
             "launch_count": {
               "minimum": 0,
               "title": "Launch Count",
               "type": "integer"
+            },
+            "original_request_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Original Request Sha256"
             },
             "owner_session_id": {
               "anyOf": [
@@ -5174,6 +8540,19 @@
               ],
               "default": null,
               "title": "Plan Receipt Id"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
             },
             "repository": {
               "anyOf": [
@@ -5773,6 +9152,1378 @@
       "title": "ReviseWorkResult",
       "type": "object"
     },
+    "SealExecutionCriteriaResult": {
+      "$defs": {
+        "ExecutionGrantItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "abandoned_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Abandoned At"
+            },
+            "activated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activated At"
+            },
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "claimed_revision_id": {
+              "format": "uuid",
+              "title": "Claimed Revision Id",
+              "type": "string"
+            },
+            "close_attempts_started": {
+              "title": "Close Attempts Started",
+              "type": "integer"
+            },
+            "closeout_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closeout Receipt Id"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "consecutive_no_progress": {
+              "title": "Consecutive No Progress",
+              "type": "integer"
+            },
+            "criteria_revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Revision Id"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
+            "current_git_baseline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Git Baseline"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "initial_git_baseline": {
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "item_id": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            },
+            "last_findings_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Findings Hash"
+            },
+            "last_reviewed_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Reviewed Tree Sha"
+            },
+            "original_request": {
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "plan_stamp": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
+            },
+            "position": {
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "push_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Receipt Id"
+            },
+            "skipped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skipped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "workspace_id",
+            "grant_id",
+            "work_id",
+            "position",
+            "phase",
+            "claimed_revision_id",
+            "initial_git_baseline",
+            "original_request",
+            "original_request_sha256",
+            "close_attempts_started",
+            "consecutive_no_progress"
+          ],
+          "title": "ExecutionGrantItemView",
+          "type": "object"
+        },
+        "ExecutionGrantView": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_hash": {
+              "title": "Authorization Hash",
+              "type": "string"
+            },
+            "canceled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Canceled At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "continuations_scheduled": {
+              "title": "Continuations Scheduled",
+              "type": "integer"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "grant_version": {
+              "title": "Grant Version",
+              "type": "integer"
+            },
+            "judge_sha256": {
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "max_close_attempts": {
+              "title": "Max Close Attempts",
+              "type": "integer"
+            },
+            "max_continuations": {
+              "title": "Max Continuations",
+              "type": "integer"
+            },
+            "max_no_progress": {
+              "title": "Max No Progress",
+              "type": "integer"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "paused_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paused At"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "workspace_id",
+            "owner_id",
+            "repository",
+            "state",
+            "mode",
+            "grant_version",
+            "max_continuations",
+            "max_close_attempts",
+            "max_no_progress",
+            "continuations_scheduled",
+            "authorization_hash",
+            "judge_sha256",
+            "created_at",
+            "expires_at"
+          ],
+          "title": "ExecutionGrantView",
+          "type": "object"
+        },
+        "WorkRevision": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "created_by": {
+              "title": "Created By",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "revision_number": {
+              "minimum": 1,
+              "title": "Revision Number",
+              "type": "integer"
+            },
+            "scope": {
+              "title": "Scope",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision_id",
+            "work_id",
+            "revision_number",
+            "title",
+            "description",
+            "scope",
+            "acceptance_criteria",
+            "content_sha256",
+            "created_by",
+            "created_at"
+          ],
+          "title": "WorkRevision",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "grant": {
+          "$ref": "#/$defs/ExecutionGrantView"
+        },
+        "item": {
+          "$ref": "#/$defs/ExecutionGrantItemView"
+        },
+        "revision": {
+          "$ref": "#/$defs/WorkRevision"
+        },
+        "type": {
+          "const": "seal_execution_criteria",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "grant",
+        "item",
+        "revision"
+      ],
+      "title": "SealExecutionCriteriaResult",
+      "type": "object"
+    },
+    "SetExecutionStateResult": {
+      "$defs": {
+        "ExecutionGrantView": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_hash": {
+              "title": "Authorization Hash",
+              "type": "string"
+            },
+            "canceled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Canceled At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "continuations_scheduled": {
+              "title": "Continuations Scheduled",
+              "type": "integer"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "grant_version": {
+              "title": "Grant Version",
+              "type": "integer"
+            },
+            "judge_sha256": {
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "max_close_attempts": {
+              "title": "Max Close Attempts",
+              "type": "integer"
+            },
+            "max_continuations": {
+              "title": "Max Continuations",
+              "type": "integer"
+            },
+            "max_no_progress": {
+              "title": "Max No Progress",
+              "type": "integer"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "paused_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paused At"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "workspace_id",
+            "owner_id",
+            "repository",
+            "state",
+            "mode",
+            "grant_version",
+            "max_continuations",
+            "max_close_attempts",
+            "max_no_progress",
+            "continuations_scheduled",
+            "authorization_hash",
+            "judge_sha256",
+            "created_at",
+            "expires_at"
+          ],
+          "title": "ExecutionGrantView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "grant": {
+          "$ref": "#/$defs/ExecutionGrantView"
+        },
+        "type": {
+          "const": "set_execution_state",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "grant"
+      ],
+      "title": "SetExecutionStateResult",
+      "type": "object"
+    },
+    "StampExecutionPlanResult": {
+      "$defs": {
+        "Candidate": {
+          "additionalProperties": false,
+          "properties": {
+            "allocated_at": {
+              "format": "date-time",
+              "title": "Allocated At",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "kind": {
+              "default": "planned",
+              "enum": [
+                "planned",
+                "final"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_id",
+            "work_id",
+            "revision_id",
+            "candidate_sha256",
+            "allocated_at"
+          ],
+          "title": "Candidate",
+          "type": "object"
+        },
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout",
+            "handoff",
+            "same_session_found_fixed"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        },
+        "ExecutionGrantItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "abandoned_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Abandoned At"
+            },
+            "activated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activated At"
+            },
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "claimed_revision_id": {
+              "format": "uuid",
+              "title": "Claimed Revision Id",
+              "type": "string"
+            },
+            "close_attempts_started": {
+              "title": "Close Attempts Started",
+              "type": "integer"
+            },
+            "closeout_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closeout Receipt Id"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "consecutive_no_progress": {
+              "title": "Consecutive No Progress",
+              "type": "integer"
+            },
+            "criteria_revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Revision Id"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
+            "current_git_baseline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Git Baseline"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "initial_git_baseline": {
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "item_id": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            },
+            "last_findings_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Findings Hash"
+            },
+            "last_reviewed_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Reviewed Tree Sha"
+            },
+            "original_request": {
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "plan_stamp": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
+            },
+            "position": {
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "push_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Receipt Id"
+            },
+            "skipped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skipped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "workspace_id",
+            "grant_id",
+            "work_id",
+            "position",
+            "phase",
+            "claimed_revision_id",
+            "initial_git_baseline",
+            "original_request",
+            "original_request_sha256",
+            "close_attempts_started",
+            "consecutive_no_progress"
+          ],
+          "title": "ExecutionGrantItemView",
+          "type": "object"
+        },
+        "ExecutionGrantView": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_hash": {
+              "title": "Authorization Hash",
+              "type": "string"
+            },
+            "canceled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Canceled At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "continuations_scheduled": {
+              "title": "Continuations Scheduled",
+              "type": "integer"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "grant_version": {
+              "title": "Grant Version",
+              "type": "integer"
+            },
+            "judge_sha256": {
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "max_close_attempts": {
+              "title": "Max Close Attempts",
+              "type": "integer"
+            },
+            "max_continuations": {
+              "title": "Max Continuations",
+              "type": "integer"
+            },
+            "max_no_progress": {
+              "title": "Max No Progress",
+              "type": "integer"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "paused_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paused At"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "workspace_id",
+            "owner_id",
+            "repository",
+            "state",
+            "mode",
+            "grant_version",
+            "max_continuations",
+            "max_close_attempts",
+            "max_no_progress",
+            "continuations_scheduled",
+            "authorization_hash",
+            "judge_sha256",
+            "created_at",
+            "expires_at"
+          ],
+          "title": "ExecutionGrantView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/Candidate"
+        },
+        "grant": {
+          "$ref": "#/$defs/ExecutionGrantView"
+        },
+        "item": {
+          "$ref": "#/$defs/ExecutionGrantItemView"
+        },
+        "receipt": {
+          "$ref": "#/$defs/EvidenceReceipt"
+        },
+        "type": {
+          "const": "stamp_execution_plan",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "grant",
+        "item",
+        "candidate",
+        "receipt"
+      ],
+      "title": "StampExecutionPlanResult",
+      "type": "object"
+    },
     "StoredOperationView": {
       "$defs": {
         "ActivateCutoverResult": {
@@ -5812,6 +10563,29 @@
             "activated_at"
           ],
           "title": "ActivateCutoverResult",
+          "type": "object"
+        },
+        "ActivateExecutionItemResult": {
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "item": {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            "type": {
+              "const": "activate_execution_item",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "item"
+          ],
+          "title": "ActivateExecutionItemResult",
           "type": "object"
         },
         "AttestCutoverPlanResult": {
@@ -5884,7 +10658,8 @@
               "default": 1,
               "enum": [
                 1,
-                2
+                2,
+                3
               ],
               "title": "Manifest Version",
               "type": "integer"
@@ -5988,6 +10763,33 @@
             "reserved_at"
           ],
           "title": "AuditorLaunch",
+          "type": "object"
+        },
+        "BeginExecutionResult": {
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ExecutionGrantItemView"
+              },
+              "title": "Items",
+              "type": "array"
+            },
+            "type": {
+              "const": "begin_execution",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "items"
+          ],
+          "title": "BeginExecutionResult",
           "type": "object"
         },
         "Candidate": {
@@ -6134,7 +10936,8 @@
             "authorization_kind": {
               "enum": [
                 "summary",
-                "legacy"
+                "legacy",
+                "execution"
               ],
               "title": "Authorization Kind",
               "type": "string"
@@ -6181,6 +10984,18 @@
               "default": null,
               "title": "Candidate Sha256"
             },
+            "candidate_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Tree Sha"
+            },
             "closeout_requested_at": {
               "anyOf": [
                 {
@@ -6219,6 +11034,19 @@
               "default": null,
               "title": "Completion Authorization Ref"
             },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
             "diff_sha256": {
               "anyOf": [
                 {
@@ -6231,6 +11059,19 @@
               ],
               "default": null,
               "title": "Diff Sha256"
+            },
+            "execution_grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Execution Grant Id"
             },
             "in_flight_launch_id": {
               "anyOf": [
@@ -6245,10 +11086,36 @@
               "default": null,
               "title": "In Flight Launch Id"
             },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
             "launch_count": {
               "minimum": 0,
               "title": "Launch Count",
               "type": "integer"
+            },
+            "original_request_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Original Request Sha256"
             },
             "owner_session_id": {
               "anyOf": [
@@ -6300,6 +11167,19 @@
               ],
               "default": null,
               "title": "Plan Receipt Id"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
             },
             "repository": {
               "anyOf": [
@@ -6629,6 +11509,44 @@
           ],
           "title": "CloseAttemptState",
           "type": "string"
+        },
+        "CompleteExecutionItemResult": {
+          "additionalProperties": false,
+          "properties": {
+            "closeout_receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "item": {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "type": {
+              "const": "complete_execution_item",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "item",
+            "work_id",
+            "state",
+            "closeout_receipt"
+          ],
+          "title": "CompleteExecutionItemResult",
+          "type": "object"
         },
         "CompleteWorkResult": {
           "additionalProperties": false,
@@ -6989,6 +11907,431 @@
           "title": "EvidenceResult",
           "type": "object"
         },
+        "ExecutionGrantItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "abandoned_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Abandoned At"
+            },
+            "activated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activated At"
+            },
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "claimed_revision_id": {
+              "format": "uuid",
+              "title": "Claimed Revision Id",
+              "type": "string"
+            },
+            "close_attempts_started": {
+              "title": "Close Attempts Started",
+              "type": "integer"
+            },
+            "closeout_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closeout Receipt Id"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "consecutive_no_progress": {
+              "title": "Consecutive No Progress",
+              "type": "integer"
+            },
+            "criteria_revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Revision Id"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
+            "current_git_baseline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Git Baseline"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "initial_git_baseline": {
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "item_id": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            },
+            "last_findings_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Findings Hash"
+            },
+            "last_reviewed_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Reviewed Tree Sha"
+            },
+            "original_request": {
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "plan_stamp": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
+            },
+            "position": {
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "push_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Receipt Id"
+            },
+            "skipped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skipped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "workspace_id",
+            "grant_id",
+            "work_id",
+            "position",
+            "phase",
+            "claimed_revision_id",
+            "initial_git_baseline",
+            "original_request",
+            "original_request_sha256",
+            "close_attempts_started",
+            "consecutive_no_progress"
+          ],
+          "title": "ExecutionGrantItemView",
+          "type": "object"
+        },
+        "ExecutionGrantView": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_hash": {
+              "title": "Authorization Hash",
+              "type": "string"
+            },
+            "canceled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Canceled At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "continuations_scheduled": {
+              "title": "Continuations Scheduled",
+              "type": "integer"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "grant_version": {
+              "title": "Grant Version",
+              "type": "integer"
+            },
+            "judge_sha256": {
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "max_close_attempts": {
+              "title": "Max Close Attempts",
+              "type": "integer"
+            },
+            "max_continuations": {
+              "title": "Max Continuations",
+              "type": "integer"
+            },
+            "max_no_progress": {
+              "title": "Max No Progress",
+              "type": "integer"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "paused_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paused At"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "workspace_id",
+            "owner_id",
+            "repository",
+            "state",
+            "mode",
+            "grant_version",
+            "max_continuations",
+            "max_close_attempts",
+            "max_no_progress",
+            "continuations_scheduled",
+            "authorization_hash",
+            "judge_sha256",
+            "created_at",
+            "expires_at"
+          ],
+          "title": "ExecutionGrantView",
+          "type": "object"
+        },
         "FinalizeCandidateResult": {
           "additionalProperties": false,
           "properties": {
@@ -7290,6 +12633,33 @@
           "title": "ReviseWorkResult",
           "type": "object"
         },
+        "SealExecutionCriteriaResult": {
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "item": {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            "revision": {
+              "$ref": "#/$defs/WorkRevision"
+            },
+            "type": {
+              "const": "seal_execution_criteria",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "item",
+            "revision"
+          ],
+          "title": "SealExecutionCriteriaResult",
+          "type": "object"
+        },
         "SealedRider": {
           "additionalProperties": false,
           "description": "Rider as sealed into the attempt at begin: title and acceptance-criteria\nsnapshot plus the service-computed evidence digest. Completion requires\nthis exact tuple.",
@@ -7339,6 +12709,56 @@
           "title": "SealedRider",
           "type": "object"
         },
+        "SetExecutionStateResult": {
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "type": {
+              "const": "set_execution_state",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant"
+          ],
+          "title": "SetExecutionStateResult",
+          "type": "object"
+        },
+        "StampExecutionPlanResult": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate": {
+              "$ref": "#/$defs/Candidate"
+            },
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "item": {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "stamp_execution_plan",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "item",
+            "candidate",
+            "receipt"
+          ],
+          "title": "StampExecutionPlanResult",
+          "type": "object"
+        },
         "WorkItemResult": {
           "additionalProperties": false,
           "properties": {
@@ -7369,6 +12789,73 @@
           ],
           "title": "WorkItemResult",
           "type": "object"
+        },
+        "WorkRevision": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Acceptance Criteria",
+              "type": "array"
+            },
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "created_by": {
+              "title": "Created By",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "revision_number": {
+              "minimum": 1,
+              "title": "Revision Number",
+              "type": "integer"
+            },
+            "scope": {
+              "title": "Scope",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "revision_id",
+            "work_id",
+            "revision_number",
+            "title",
+            "description",
+            "scope",
+            "acceptance_criteria",
+            "content_sha256",
+            "created_by",
+            "created_at"
+          ],
+          "title": "WorkRevision",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -7396,12 +12883,15 @@
               "discriminator": {
                 "mapping": {
                   "activate_cutover": "#/$defs/ActivateCutoverResult",
+                  "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
                   "append_evidence": "#/$defs/EvidenceResult",
                   "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
                   "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
                   "begin_close_attempt": "#/$defs/CloseAttemptResult",
+                  "begin_execution": "#/$defs/BeginExecutionResult",
                   "cancel_auditor_launch": "#/$defs/CloseAttemptResult",
                   "clear_focus": "#/$defs/FocusResult",
+                  "complete_execution_item": "#/$defs/CompleteExecutionItemResult",
                   "complete_work": "#/$defs/CompleteWorkResult",
                   "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
@@ -7413,9 +12903,12 @@
                   "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
                   "revise_work": "#/$defs/ReviseWorkResult",
                   "seal_audit_manifest": "#/$defs/CloseAttemptResult",
+                  "seal_execution_criteria": "#/$defs/SealExecutionCriteriaResult",
+                  "set_execution_state": "#/$defs/SetExecutionStateResult",
                   "set_focus": "#/$defs/FocusResult",
                   "set_work_state": "#/$defs/WorkItemResult",
-                  "settle_auditor_launch": "#/$defs/CloseAttemptResult"
+                  "settle_auditor_launch": "#/$defs/CloseAttemptResult",
+                  "stamp_execution_plan": "#/$defs/StampExecutionPlanResult"
                 },
                 "propertyName": "type"
               },
@@ -7461,6 +12954,24 @@
                 },
                 {
                   "$ref": "#/$defs/AttestCutoverPlanResult"
+                },
+                {
+                  "$ref": "#/$defs/BeginExecutionResult"
+                },
+                {
+                  "$ref": "#/$defs/ActivateExecutionItemResult"
+                },
+                {
+                  "$ref": "#/$defs/SealExecutionCriteriaResult"
+                },
+                {
+                  "$ref": "#/$defs/StampExecutionPlanResult"
+                },
+                {
+                  "$ref": "#/$defs/SetExecutionStateResult"
+                },
+                {
+                  "$ref": "#/$defs/CompleteExecutionItemResult"
                 }
               ]
             },
@@ -7889,7 +13400,8 @@
               "default": 1,
               "enum": [
                 1,
-                2
+                2,
+                3
               ],
               "title": "Manifest Version",
               "type": "integer"
@@ -8139,7 +13651,8 @@
             "authorization_kind": {
               "enum": [
                 "summary",
-                "legacy"
+                "legacy",
+                "execution"
               ],
               "title": "Authorization Kind",
               "type": "string"
@@ -8186,6 +13699,18 @@
               "default": null,
               "title": "Candidate Sha256"
             },
+            "candidate_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Tree Sha"
+            },
             "closeout_requested_at": {
               "anyOf": [
                 {
@@ -8224,6 +13749,19 @@
               "default": null,
               "title": "Completion Authorization Ref"
             },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
             "diff_sha256": {
               "anyOf": [
                 {
@@ -8236,6 +13774,19 @@
               ],
               "default": null,
               "title": "Diff Sha256"
+            },
+            "execution_grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Execution Grant Id"
             },
             "in_flight_launch_id": {
               "anyOf": [
@@ -8250,10 +13801,36 @@
               "default": null,
               "title": "In Flight Launch Id"
             },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
             "launch_count": {
               "minimum": 0,
               "title": "Launch Count",
               "type": "integer"
+            },
+            "original_request_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Original Request Sha256"
             },
             "owner_session_id": {
               "anyOf": [
@@ -8305,6 +13882,19 @@
               ],
               "default": null,
               "title": "Plan Receipt Id"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
             },
             "repository": {
               "anyOf": [

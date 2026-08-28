@@ -46,7 +46,7 @@ def config(tmp_path: Path) -> OperationsConfig:
 
 def test_pinned_migration_set_is_forward_only() -> None:
     files = migrations()
-    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     assert all(path.name.startswith(f"{ordinal:04d}_") for ordinal, path in files)
     assert len(migration_set_sha256()) == 64
 
@@ -183,7 +183,8 @@ def test_populated_v13_to_v14_upgrade_migrates_legacy_closeout_intents(config: O
 
     with native_postgres(config.state_dir, config.port):
         original_migrate = database_module.migrate
-        monkeypatch.setattr(database_module, "migrate", lambda cfg: original_migrate(cfg, target=13))
+        monkeypatch.setattr(database_module, "validate_bundle", lambda **kw: None)
+        monkeypatch.setattr(database_module, "migrate", lambda cfg, **kw: original_migrate(cfg, target=13, **kw))
         bootstrap(config)
         monkeypatch.setattr(database_module, "migrate", original_migrate)
         workspace_id = uuid4()
@@ -243,6 +244,7 @@ def test_populated_v13_to_v14_upgrade_migrates_legacy_closeout_intents(config: O
 
 
 def test_bootstrap_migrates_pinned_postgres(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("omp_work.operations.database.validate_bundle", lambda **kw: None)
     with native_postgres(config.state_dir, config.port):
         bootstrap(config)
         with psycopg.connect(**config.connection_kwargs("postgres"), autocommit=True) as connection:
@@ -362,7 +364,8 @@ def test_bootstrap_migrates_pinned_postgres(config: OperationsConfig, monkeypatc
 
 
 
-def test_store_creates_and_replays_batch(config: OperationsConfig) -> None:
+def test_store_creates_and_replays_batch(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("omp_work.operations.database.validate_bundle", lambda **kw: None)
     with native_postgres(config.state_dir, config.port):
         bootstrap(config)
         workspace_id, operation_id, actor_id = uuid4(), uuid4(), uuid4()
@@ -385,7 +388,8 @@ def test_store_creates_and_replays_batch(config: OperationsConfig) -> None:
                 assert cursor.fetchone() == (1,)
 
 
-def test_authorization_uses_security_and_constraints(config: OperationsConfig) -> None:
+def test_authorization_uses_security_and_constraints(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("omp_work.operations.database.validate_bundle", lambda **kw: None)
     with native_postgres(config.state_dir, config.port):
         bootstrap(config)
         workspace_id = uuid4()

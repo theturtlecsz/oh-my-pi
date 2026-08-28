@@ -35,9 +35,19 @@ from omp_work.integration.legacy_artifacts import (
     StreamSummary,
     load_export,
 )
-from omp_work.integration.importer import ImportBatchSummary, LinearImporter, parse_acceptance_criteria
+from omp_work.integration.importer import (
+    ImportBatchSummary,
+    LinearImporter,
+    parse_acceptance_criteria,
+)
 from omp_work.operations import cli as operations_cli
-from omp_work.operations.artifacts import decrypt_file, encrypt_file, read_json_artifact, resolve_artifact_path, write_json_artifact
+from omp_work.operations.artifacts import (
+    decrypt_file,
+    encrypt_file,
+    read_json_artifact,
+    resolve_artifact_path,
+    write_json_artifact,
+)
 from omp_work.operations.config import OperationsConfig
 from pg_native import native_postgres, seed_authority
 from omp_work.operations.database import bootstrap, _connect
@@ -45,7 +55,10 @@ from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.models import RelationEdge, RelationKind
 from omp_work.v1.semantics import would_create_cycle
 
-pytestmark = pytest.mark.skipif(os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1", reason="set OMP_WORK_POSTGRES_INTEGRATION=1")
+pytestmark = pytest.mark.skipif(
+    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+)
 
 
 def _free_port() -> int:
@@ -58,7 +71,15 @@ def _free_port() -> int:
 def config(tmp_path: Path) -> OperationsConfig:
     credentials = tmp_path / "config" / "credentials"
     credentials.mkdir(parents=True, mode=0o700)
-    for role in ("postgres", "omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup", "gpg-passphrase"):
+    for role in (
+        "postgres",
+        "omp_work_migrator",
+        "omp_work_app",
+        "omp_work_importer",
+        "omp_work_readonly",
+        "omp_work_backup",
+        "gpg-passphrase",
+    ):
         path = credentials / role
         path.write_text(secrets.token_urlsafe(24))
         path.chmod(0o600)
@@ -66,9 +87,25 @@ def config(tmp_path: Path) -> OperationsConfig:
     op_path.write_text(str(uuid4()))
     op_path.chmod(0o600)
     linear = credentials / "linear-export.json"
-    linear.write_text(json.dumps({"kind": "oauth", "access_token": "read-only-token", "refresh_token": "refresh-token", "client_id": "test-client", "scopes": ["read"], "expires_at": "2099-01-01T00:00:00Z"}))
+    linear.write_text(
+        json.dumps(
+            {
+                "kind": "oauth",
+                "access_token": "read-only-token",
+                "refresh_token": "refresh-token",
+                "client_id": "test-client",
+                "scopes": ["read"],
+                "expires_at": "2099-01-01T00:00:00Z",
+            }
+        )
+    )
     linear.chmod(0o600)
-    return OperationsConfig(config_dir=tmp_path / "config", state_dir=tmp_path / "state", data_dir=tmp_path / "data", port=_free_port())
+    return OperationsConfig(
+        config_dir=tmp_path / "config",
+        state_dir=tmp_path / "state",
+        data_dir=tmp_path / "data",
+        port=_free_port(),
+    )
 
 
 @pytest.fixture
@@ -104,11 +141,15 @@ def _make_mapping_file(tmp_path: Path, filename: str = "mapping.json") -> Path:
     return path
 
 
-def _sample_nodes(operation: str, variables: dict[str, object], call_index: int = 0) -> list[dict[str, object]]:
+def _sample_nodes(
+    operation: str, variables: dict[str, object], call_index: int = 0
+) -> list[dict[str, object]]:
     del call_index
     filter_val = variables.get("filter")
     bounded = isinstance(filter_val, dict) and "updatedAt" in filter_val
-    updated = str(filter_val["updatedAt"]["gte"]) if bounded else "2026-08-01T00:00:00+00:00"
+    updated = (
+        str(filter_val["updatedAt"]["gte"]) if bounded else "2026-08-01T00:00:00+00:00"
+    )
 
     desc = """Summary of task.
 
@@ -121,11 +162,56 @@ def _sample_nodes(operation: str, variables: dict[str, object], call_index: int 
 """
 
     values: dict[str, list[dict[str, object]]] = {
-        "teams": [{"id": "team-home", "key": "HOME", "name": "Home", "updatedAt": updated}],
-        "initiatives": [{"id": "initiative-home", "name": "The Initiative", "updatedAt": updated, "targetDate": "2026-12-31"}],
-        "projects": [{"id": "project-home", "name": "The Surface", "updatedAt": updated, "targetDate": "2026-10-31", "teams": {"nodes": [{"key": "HOME"}]}, "lead": {"id": "user-lead", "name": "Lead User", "displayName": "Lead", "active": True}}],
-        "projectUpdates": [{"id": "update-1", "body": "Update text", "health": "onTrack", "updatedAt": updated, "project": {"id": "project-home"}, "user": {"id": "user-lead", "name": "Lead User", "displayName": "Lead", "active": True}}],
-        "projectMilestones": [{"id": "milestone-1", "name": "The Promise", "targetDate": "2026-09-30", "updatedAt": updated, "project": {"id": "project-home"}}],
+        "teams": [
+            {"id": "team-home", "key": "HOME", "name": "Home", "updatedAt": updated}
+        ],
+        "initiatives": [
+            {
+                "id": "initiative-home",
+                "name": "The Initiative",
+                "updatedAt": updated,
+                "targetDate": "2026-12-31",
+            }
+        ],
+        "projects": [
+            {
+                "id": "project-home",
+                "name": "The Surface",
+                "updatedAt": updated,
+                "targetDate": "2026-10-31",
+                "teams": {"nodes": [{"key": "HOME"}]},
+                "lead": {
+                    "id": "user-lead",
+                    "name": "Lead User",
+                    "displayName": "Lead",
+                    "active": True,
+                },
+            }
+        ],
+        "projectUpdates": [
+            {
+                "id": "update-1",
+                "body": "Update text",
+                "health": "onTrack",
+                "updatedAt": updated,
+                "project": {"id": "project-home"},
+                "user": {
+                    "id": "user-lead",
+                    "name": "Lead User",
+                    "displayName": "Lead",
+                    "active": True,
+                },
+            }
+        ],
+        "projectMilestones": [
+            {
+                "id": "milestone-1",
+                "name": "The Promise",
+                "targetDate": "2026-09-30",
+                "updatedAt": updated,
+                "project": {"id": "project-home"},
+            }
+        ],
         "issues": [
             {
                 "id": "issue-1",
@@ -135,10 +221,21 @@ def _sample_nodes(operation: str, variables: dict[str, object], call_index: int 
                 "priority": 1,
                 "updatedAt": updated,
                 "team": {"key": "HOME"},
-                "state": {"id": "state-in-progress", "type": "started", "name": "In Progress"},
+                "state": {
+                    "id": "state-in-progress",
+                    "type": "started",
+                    "name": "In Progress",
+                },
                 "project": {"id": "project-home"},
-                "assignee": {"id": "user-lead", "name": "Lead User", "displayName": "Lead", "active": True},
-                "labels": {"nodes": [{"id": "label-now", "name": "now", "color": "#ff0000"}]},
+                "assignee": {
+                    "id": "user-lead",
+                    "name": "Lead User",
+                    "displayName": "Lead",
+                    "active": True,
+                },
+                "labels": {
+                    "nodes": [{"id": "label-now", "name": "now", "color": "#ff0000"}]
+                },
                 "parent": None,
                 "previousIdentifiers": [],
                 "url": "https://linear.app/issue/HOME-146",
@@ -154,7 +251,12 @@ def _sample_nodes(operation: str, variables: dict[str, object], call_index: int 
                 "state": {"id": "state-done", "type": "completed", "name": "Done"},
                 "completedAt": updated,
                 "project": {"id": "project-home"},
-                "assignee": {"id": "user-lead", "name": "Lead User", "displayName": "Lead", "active": True},
+                "assignee": {
+                    "id": "user-lead",
+                    "name": "Lead User",
+                    "displayName": "Lead",
+                    "active": True,
+                },
                 "labels": {"nodes": []},
                 "parent": {"id": "issue-1"},
                 "previousIdentifiers": [],
@@ -162,14 +264,39 @@ def _sample_nodes(operation: str, variables: dict[str, object], call_index: int 
             },
         ],
         "workflowStates": [
-            {"id": "state-in-progress", "name": "In Progress", "type": "started", "position": 1, "updatedAt": updated, "team": {"key": "HOME"}},
-            {"id": "state-done", "name": "Done", "type": "completed", "position": 2, "updatedAt": updated, "team": {"key": "HOME"}},
+            {
+                "id": "state-in-progress",
+                "name": "In Progress",
+                "type": "started",
+                "position": 1,
+                "updatedAt": updated,
+                "team": {"key": "HOME"},
+            },
+            {
+                "id": "state-done",
+                "name": "Done",
+                "type": "completed",
+                "position": 2,
+                "updatedAt": updated,
+                "team": {"key": "HOME"},
+            },
         ],
         "issueLabels": [
-            {"id": "label-now", "name": "now", "color": "#ff0000", "updatedAt": updated, "team": {"key": "HOME"}},
+            {
+                "id": "label-now",
+                "name": "now",
+                "color": "#ff0000",
+                "updatedAt": updated,
+                "team": {"key": "HOME"},
+            },
         ],
         "initiativeToProjects": [
-            {"id": "init-to-proj-1", "updatedAt": updated, "initiative": {"id": "initiative-home"}, "project": {"id": "project-home"}},
+            {
+                "id": "init-to-proj-1",
+                "updatedAt": updated,
+                "initiative": {"id": "initiative-home"},
+                "project": {"id": "project-home"},
+            },
         ],
         "issueRelations": [],
         "comments": [
@@ -179,7 +306,12 @@ def _sample_nodes(operation: str, variables: dict[str, object], call_index: int 
                 "createdAt": updated,
                 "updatedAt": updated,
                 "issue": {"id": "issue-1"},
-                "user": {"id": "user-lead", "name": "Lead User", "displayName": "Lead", "active": True},
+                "user": {
+                    "id": "user-lead",
+                    "name": "Lead User",
+                    "displayName": "Lead",
+                    "active": True,
+                },
             },
             {
                 "id": "comment-2",
@@ -187,7 +319,12 @@ def _sample_nodes(operation: str, variables: dict[str, object], call_index: int 
                 "createdAt": updated,
                 "updatedAt": updated,
                 "issue": {"id": "issue-1"},
-                "user": {"id": "user-lead", "name": "Lead User", "displayName": "Lead", "active": True},
+                "user": {
+                    "id": "user-lead",
+                    "name": "Lead User",
+                    "displayName": "Lead",
+                    "active": True,
+                },
             },
         ],
         "attachments": [
@@ -197,7 +334,12 @@ def _sample_nodes(operation: str, variables: dict[str, object], call_index: int 
                 "url": "https://example.com/doc",
                 "updatedAt": updated,
                 "issue": {"id": "issue-1"},
-                "creator": {"id": "user-lead", "name": "Lead User", "displayName": "Lead", "active": True},
+                "creator": {
+                    "id": "user-lead",
+                    "name": "Lead User",
+                    "displayName": "Lead",
+                    "active": True,
+                },
             }
         ],
     }
@@ -206,6 +348,7 @@ def _sample_nodes(operation: str, variables: dict[str, object], call_index: int 
 
 def _normalize_node(stream: LinearStream, node: dict[str, Any]) -> dict[str, Any]:
     return dict(node)
+
 
 def _synthesize_export(
     config: OperationsConfig,
@@ -220,7 +363,11 @@ def _synthesize_export(
 ) -> ExportManifest:
     export_id = export_id or uuid4()
     started = started or datetime(2026, 8, 1, 0, 0, tzinfo=timezone.utc)
-    boundary = boundary or (datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc) if mode == "full" else datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc))
+    boundary = boundary or (
+        datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+        if mode == "full"
+        else datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+    )
     root = config.data_dir / "linear-exports" / str(workspace_id) / str(export_id)
     staging = config.state_dir / "staging" / str(export_id)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -234,18 +381,30 @@ def _synthesize_export(
 
     for stream in LinearStream:
         stream_key = f"{phase}:{stream.value}"
-        raw_nodes = node_builder(stream.value, {}, 1) if callable(node_builder) else node_builder.get(stream.value, [])
+        raw_nodes = (
+            node_builder(stream.value, {}, 1)
+            if callable(node_builder)
+            else node_builder.get(stream.value, [])
+        )
         norm_nodes = tuple(_normalize_node(stream, n) for n in raw_nodes)
         records[stream].extend(norm_nodes)
 
-        page = SourcePage(export_id=export_id, stream=stream_key, page_index=0, has_next_page=False, nodes=norm_nodes)
+        page = SourcePage(
+            export_id=export_id,
+            stream=stream_key,
+            page_index=0,
+            has_next_page=False,
+            nodes=norm_nodes,
+        )
         payload = page.model_dump(mode="json")
         plaintext_hash = sha256(payload)
         encrypted = root / f"{phase}-{stream.value}-0-{plaintext_hash}.json.gpg"
         plain = staging / encrypted.name.removesuffix(".gpg")
         plain.write_text(canonical_json(payload), encoding="utf-8")
         plain.chmod(0o600)
-        c_hash = encrypt_file(plain, encrypted, config.secret_path("gpg-passphrase"), mode=0o400)
+        c_hash = encrypt_file(
+            plain, encrypted, config.secret_path("gpg-passphrase"), mode=0o400
+        )
         plain.unlink(missing_ok=True)
 
         rel_path = str(encrypted.relative_to(config.data_dir))
@@ -257,13 +416,17 @@ def _synthesize_export(
             path=rel_path,
             plaintext_sha256=plaintext_hash,
             ciphertext_sha256=c_hash,
-            variables_sha256=bytes_sha256(json.dumps({"first": 50, "after": None}, sort_keys=True).encode()).hexdigest(),
+            variables_sha256=bytes_sha256(
+                json.dumps({"first": 50, "after": None}, sort_keys=True).encode()
+            ).hexdigest(),
             stream=stream_key,
             page_index=0,
             has_next_page=False,
         )
         artifacts[f"{stream_key}:0"] = artifact
-        summaries[stream.value] = StreamSummary(scanned=len(norm_nodes), retained=len(norm_nodes), excluded=0)
+        summaries[stream.value] = StreamSummary(
+            scanned=len(norm_nodes), retained=len(norm_nodes), excluded=0
+        )
 
     # Build source hashes
     mappings = {
@@ -279,15 +442,27 @@ def _synthesize_export(
         LinearStream.comments: "comments",
         LinearStream.attachments: "attachments",
     }
-    data: dict[str, dict[str, SourceHashEntry]] = {name: {} for name in (*DIMENSIONS, "project_updates")}
+    data: dict[str, dict[str, SourceHashEntry]] = {
+        name: {} for name in (*DIMENSIONS, "project_updates")
+    }
     for stream, dim in mappings.items():
         for node in records[stream]:
             ident = str(node.get("id", ""))
-            if not ident: continue
+            if not ident:
+                continue
             dt_str = node.get("updatedAt")
-            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00")) if isinstance(dt_str, str) else None
+            dt = (
+                datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                if isinstance(dt_str, str)
+                else None
+            )
             s_hash = sha256(node)
-            owner = str((node.get("project") or {}).get("id")) if stream is LinearStream.project_updates and (node.get("project") or {}).get("id") else None
+            owner = (
+                str((node.get("project") or {}).get("id"))
+                if stream is LinearStream.project_updates
+                and (node.get("project") or {}).get("id")
+                else None
+            )
             entry = SourceHashEntry(
                 id=ident,
                 key=node.get("identifier") if dim == "work_items" else None,
@@ -313,19 +488,41 @@ def _synthesize_export(
                     p_id = str(p["id"])
                     data["users"][p_id] = SourceHashEntry(
                         id=p_id,
-                        record_sha256=sha256({k: p.get(k) for k in ("id", "name", "displayName", "active")}),
-                        artifact_ref=provenance.get((stream, str(node.get("id", ""))), ""),
+                        record_sha256=sha256(
+                            {
+                                k: p.get(k)
+                                for k in ("id", "name", "displayName", "active")
+                            }
+                        ),
+                        artifact_ref=provenance.get(
+                            (stream, str(node.get("id", ""))), ""
+                        ),
                     )
 
     # Fold project updates
     by_proj: dict[str, list[SourceHashEntry]] = defaultdict(list)
     for up in data["project_updates"].values():
-        if up.owner_id: by_proj[up.owner_id].append(up)
+        if up.owner_id:
+            by_proj[up.owner_id].append(up)
     for p_id, proj in tuple(data["surfaces"].items()):
         s_hash = proj.source_sha256 or proj.record_sha256
         ups = by_proj.get(p_id, [])
-        r_hash = s_hash if not ups else sha256({"project": s_hash, "updates": [{"id": e.id, "record_sha256": e.record_sha256} for e in sorted(ups, key=lambda x: x.id)]})
-        data["surfaces"][p_id] = proj.model_copy(update={"source_sha256": s_hash, "record_sha256": r_hash})
+        r_hash = (
+            s_hash
+            if not ups
+            else sha256(
+                {
+                    "project": s_hash,
+                    "updates": [
+                        {"id": e.id, "record_sha256": e.record_sha256}
+                        for e in sorted(ups, key=lambda x: x.id)
+                    ],
+                }
+            )
+        )
+        data["surfaces"][p_id] = proj.model_copy(
+            update={"source_sha256": s_hash, "record_sha256": r_hash}
+        )
 
     source_hashes = SourceHashIndex(**data)
     base_records: dict[LinearStream, list[dict[str, Any]]] = defaultdict(list)
@@ -355,8 +552,19 @@ def _synthesize_export(
 
     # Write reports
     def write_rep(name: str, payload_obj: object) -> ArtifactRecord:
-        rel, plain_h, cipher_h = write_json_artifact(root, staging, name, payload_obj, config.secret_path("gpg-passphrase"), config.data_dir, encrypt_fn=encrypt_file, decrypt_fn=decrypt_file)
-        rec = ArtifactRecord(path=rel, plaintext_sha256=plain_h, ciphertext_sha256=cipher_h)
+        rel, plain_h, cipher_h = write_json_artifact(
+            root,
+            staging,
+            name,
+            payload_obj,
+            config.secret_path("gpg-passphrase"),
+            config.data_dir,
+            encrypt_fn=encrypt_file,
+            decrypt_fn=decrypt_file,
+        )
+        rec = ArtifactRecord(
+            path=rel, plaintext_sha256=plain_h, ciphertext_sha256=cipher_h
+        )
         artifacts[name] = rec
         return rec
 
@@ -378,9 +586,16 @@ def _synthesize_export(
         "comments": set(source_hashes.comments),
         "users": set(source_hashes.users),
     }
+
     def missing(target: str, value: Any) -> None:
-        if isinstance(value, dict) and value.get("id") and str(value["id"]) not in found_ids[target]:
-            anomalies_list.append(Anomaly(code="missing_relation_endpoint", disposition="blocking"))
+        if (
+            isinstance(value, dict)
+            and value.get("id")
+            and str(value["id"]) not in found_ids[target]
+        ):
+            anomalies_list.append(
+                Anomaly(code="missing_relation_endpoint", disposition="blocking")
+            )
 
     for link in validation_records[LinearStream.initiative_projects]:
         missing("initiatives", link.get("initiative"))
@@ -416,74 +631,138 @@ def _synthesize_export(
         key = str(issue.get("identifier", ""))
         ident = str(issue.get("id", ""))
         if key and key in seen and seen[key] != ident:
-            anomalies_list.append(Anomaly(code="duplicate_uuid_key_mapping", disposition="blocking"))
-        if key: seen[key] = ident
+            anomalies_list.append(
+                Anomaly(code="duplicate_uuid_key_mapping", disposition="blocking")
+            )
+        if key:
+            seen[key] = ident
 
     for state in validation_records[LinearStream.states]:
-        if str(state.get("type", "")) not in ("started", "completed", "canceled", "triage", "backlog", "unstarted"):
-            anomalies_list.append(Anomaly(code="unsupported_non_workflow_object", disposition="blocking"))
+        if str(state.get("type", "")) not in (
+            "started",
+            "completed",
+            "canceled",
+            "triage",
+            "backlog",
+            "unstarted",
+        ):
+            anomalies_list.append(
+                Anomaly(code="unsupported_non_workflow_object", disposition="blocking")
+            )
 
     edges: list[RelationEdge] = []
     for relation in validation_records[LinearStream.relations]:
         raw_kind = str(relation.get("type", "")).lower()
-        kind_map = {"blocks": RelationKind.BLOCKS, "duplicate": RelationKind.DUPLICATE_OF, "duplicate_of": RelationKind.DUPLICATE_OF, "related": RelationKind.RELATED}
+        kind_map = {
+            "blocks": RelationKind.BLOCKS,
+            "duplicate": RelationKind.DUPLICATE_OF,
+            "duplicate_of": RelationKind.DUPLICATE_OF,
+            "related": RelationKind.RELATED,
+        }
         kind = kind_map.get(raw_kind)
         if kind is None:
-            anomalies_list.append(Anomaly(code="unsupported_non_workflow_object", disposition="quarantined"))
+            anomalies_list.append(
+                Anomaly(
+                    code="unsupported_non_workflow_object", disposition="quarantined"
+                )
+            )
             continue
         try:
-            e = RelationEdge(workspace_id=UUID(int=0), source_work_id=UUID(str(relation["issue"]["id"])), target_work_id=UUID(str(relation["relatedIssue"]["id"])), kind=kind)
+            e = RelationEdge(
+                workspace_id=UUID(int=0),
+                source_work_id=UUID(str(relation["issue"]["id"])),
+                target_work_id=UUID(str(relation["relatedIssue"]["id"])),
+                kind=kind,
+            )
             if would_create_cycle(tuple(edges), e):
-                anomalies_list.append(Anomaly(code="relation_cycle", disposition="blocking"))
+                anomalies_list.append(
+                    Anomaly(code="relation_cycle", disposition="blocking")
+                )
             else:
                 edges.append(e)
         except Exception:
             pass
 
     for issue in validation_records[LinearStream.issues]:
-        if not isinstance(issue.get("parent"), dict): continue
+        if not isinstance(issue.get("parent"), dict):
+            continue
         try:
-            e = RelationEdge(workspace_id=UUID(int=0), source_work_id=UUID(str(issue["id"])), target_work_id=UUID(str(issue["parent"]["id"])), kind=RelationKind.PARENT)
+            e = RelationEdge(
+                workspace_id=UUID(int=0),
+                source_work_id=UUID(str(issue["id"])),
+                target_work_id=UUID(str(issue["parent"]["id"])),
+                kind=RelationKind.PARENT,
+            )
             if would_create_cycle(tuple(edges), e):
-                anomalies_list.append(Anomaly(code="relation_cycle", disposition="blocking"))
+                anomalies_list.append(
+                    Anomaly(code="relation_cycle", disposition="blocking")
+                )
             else:
                 edges.append(e)
         except Exception:
             pass
 
     plans: dict[str, tuple[str, str]] = {}
-    for comment in sorted(validation_records[LinearStream.comments], key=lambda item: (str(item.get("createdAt", "")), str(item.get("id", "")))):
+    for comment in sorted(
+        validation_records[LinearStream.comments],
+        key=lambda item: (str(item.get("createdAt", "")), str(item.get("id", ""))),
+    ):
         body = str(comment.get("body", ""))
         created = str(comment.get("createdAt", ""))
         issue_id = str((comment.get("issue") or {}).get("id", ""))
-        if not issue_id: continue
+        if not issue_id:
+            continue
         if body.startswith("**Plan approved**"):
             match = re.search(r"SHA-256: `([a-f0-9]{64})`", body)
-            if match: plans[issue_id] = match.group(1), created
+            if match:
+                plans[issue_id] = match.group(1), created
             continue
         plan = plans.get(issue_id)
-        if plan is None or created <= plan[1]: continue
+        if plan is None or created <= plan[1]:
+            continue
         if body.startswith("**Session review**"):
             match = re.search(r"Plan SHA-256: `([a-f0-9]{64})`", body)
             if match and match.group(1) != plan[0]:
-                anomalies_list.append(Anomaly(code="legacy_authority_claim", disposition="blocking"))
+                anomalies_list.append(
+                    Anomaly(code="legacy_authority_claim", disposition="blocking")
+                )
 
-    now_label_ids = {str(label["id"]) for label in validation_records[LinearStream.labels] if label.get("id") and str(label.get("name", "")).casefold() == "now"}
+    now_label_ids = {
+        str(label["id"])
+        for label in validation_records[LinearStream.labels]
+        if label.get("id") and str(label.get("name", "")).casefold() == "now"
+    }
     focused = [
-        issue for issue in validation_records[LinearStream.issues]
-        if not issue.get("archivedAt") and not issue.get("completedAt") and not issue.get("canceledAt")
-        and any(str(label.get("id")) in now_label_ids for label in (issue.get("labels") or {}).get("nodes", []))
+        issue
+        for issue in validation_records[LinearStream.issues]
+        if not issue.get("archivedAt")
+        and not issue.get("completedAt")
+        and not issue.get("canceledAt")
+        and any(
+            str(label.get("id")) in now_label_ids
+            for label in (issue.get("labels") or {}).get("nodes", [])
+        )
     ]
     if len(focused) > 1:
-        anomalies_list.append(Anomaly(code="multiple_focus_slots", disposition="blocking"))
+        anomalies_list.append(
+            Anomaly(code="multiple_focus_slots", disposition="blocking")
+        )
 
     metadata_only = former_metadata = quarantined = 0
     for attachment in validation_records[LinearStream.attachments]:
         issue_id = str((attachment.get("issue") or {}).get("id", ""))
-        usable = bool(attachment.get("id") and issue_id in source_hashes.work_items and (attachment.get("url") or attachment.get("metadata")))
+        usable = bool(
+            attachment.get("id")
+            and issue_id in source_hashes.work_items
+            and (attachment.get("url") or attachment.get("metadata"))
+        )
         if not usable:
             quarantined += 1
-            anomalies_list.append(Anomaly(code="attachment_content_unavailable", disposition="quarantined"))
+            anomalies_list.append(
+                Anomaly(
+                    code="attachment_content_unavailable", disposition="quarantined"
+                )
+            )
         elif attachment.get("archivedAt"):
             former_metadata += 1
         else:
@@ -493,9 +772,33 @@ def _synthesize_export(
     anomalies_tuple = tuple(unique_anomalies[k] for k in sorted(unique_anomalies))
     write_rep("anomaly-report", [a.model_dump(mode="json") for a in anomalies_tuple])
 
-    counts = ReconciliationCounts(**{name: len(getattr(source_hashes, name)) for name in DIMENSIONS})
-    hashes = ReconciliationHashes(**{name: sha256([{"id": e.id, "record_sha256": e.record_sha256} for e in sorted(getattr(source_hashes, name).values(), key=lambda x: x.id)]) for name in DIMENSIONS})
-    raw_hash = sha256({"source_hashes": source_hashes.model_dump(mode="json"), "pages": [a.plaintext_sha256 for _, a in sorted(artifacts.items()) if not _ in ("source-hashes", "scope-report", "privacy-report", "anomaly-report")]})
+    counts = ReconciliationCounts(
+        **{name: len(getattr(source_hashes, name)) for name in DIMENSIONS}
+    )
+    hashes = ReconciliationHashes(
+        **{
+            name: sha256(
+                [
+                    {"id": e.id, "record_sha256": e.record_sha256}
+                    for e in sorted(
+                        getattr(source_hashes, name).values(), key=lambda x: x.id
+                    )
+                ]
+            )
+            for name in DIMENSIONS
+        }
+    )
+    raw_hash = sha256(
+        {
+            "source_hashes": source_hashes.model_dump(mode="json"),
+            "pages": [
+                a.plaintext_sha256
+                for _, a in sorted(artifacts.items())
+                if not _
+                in ("source-hashes", "scope-report", "privacy-report", "anomaly-report")
+            ],
+        }
+    )
 
     manifest_draft = ExportManifest(
         export_id=export_id,
@@ -512,20 +815,49 @@ def _synthesize_export(
         artifacts=artifacts,
         scope_report=scope,
         privacy_report=privacy,
-        attachment_dispositions=AttachmentDisposition(metadata_only=metadata_only, former_metadata=former_metadata, quarantined=quarantined),
+        attachment_dispositions=AttachmentDisposition(
+            metadata_only=metadata_only,
+            former_metadata=former_metadata,
+            quarantined=quarantined,
+        ),
         anomalies=anomalies_tuple,
     )
-    manifest_hash = sha256(manifest_draft.model_dump(mode="json", exclude={"manifest_sha256"}))
+    manifest_hash = sha256(
+        manifest_draft.model_dump(mode="json", exclude={"manifest_sha256"})
+    )
     manifest = manifest_draft.model_copy(update={"manifest_sha256": manifest_hash})
     man_art = write_rep(f"manifest-{manifest_hash}", manifest.model_dump(mode="json"))
-    final_manifest = manifest.model_copy(update={"artifacts": {**artifacts, "manifest": man_art}})
+    final_manifest = manifest.model_copy(
+        update={"artifacts": {**artifacts, "manifest": man_art}}
+    )
 
     # Insert DB record
-    with _connect(config, "omp_work_importer") as conn, conn.transaction(), conn.cursor() as cur:
-        cur.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(config.actor_id())))
+    with (
+        _connect(config, "omp_work_importer") as conn,
+        conn.transaction(),
+        conn.cursor() as cur,
+    ):
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)",
+            (str(workspace_id), str(config.actor_id())),
+        )
         cur.execute(
             "INSERT INTO omp_integration.raw_exports (export_id, workspace_id, team_key, mode, base_export_id, source_started_at, source_lower_bound, source_boundary, state, storage_root, raw_export_sha256, manifest_sha256, completed_at) VALUES (%s, %s, 'HOME', %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp()) ON CONFLICT (export_id, workspace_id) DO NOTHING",
-            (export_id, workspace_id, mode, base_export_id, started, started if mode == "delta" else None, boundary, "blocked" if any(a.disposition == "blocking" for a in anomalies_tuple) else "complete", str(root.relative_to(config.data_dir)), raw_hash, manifest_hash),
+            (
+                export_id,
+                workspace_id,
+                mode,
+                base_export_id,
+                started,
+                started if mode == "delta" else None,
+                boundary,
+                "blocked"
+                if any(a.disposition == "blocking" for a in anomalies_tuple)
+                else "complete",
+                str(root.relative_to(config.data_dir)),
+                raw_hash,
+                manifest_hash,
+            ),
         )
     shutil.rmtree(staging, ignore_errors=True)
     return final_manifest
@@ -537,16 +869,33 @@ class StaticExportFixture:
         self.node_builder = node_builder
 
     def full(self, workspace_id: UUID) -> ExportManifest:
-        return _synthesize_export(self.config, workspace_id, self.node_builder, mode="full")
+        return _synthesize_export(
+            self.config, workspace_id, self.node_builder, mode="full"
+        )
 
     def delta(self, workspace_id: UUID) -> ExportManifest:
         with _connect(self.config, "omp_work_importer") as conn, conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(self.config.actor_id())))
-            cur.execute("SELECT export_id, source_boundary FROM omp_integration.raw_exports WHERE workspace_id=%s AND state='complete' ORDER BY completed_at DESC LIMIT 1", (workspace_id,))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)",
+                (str(workspace_id), str(self.config.actor_id())),
+            )
+            cur.execute(
+                "SELECT export_id, source_boundary FROM omp_integration.raw_exports WHERE workspace_id=%s AND state='complete' ORDER BY completed_at DESC LIMIT 1",
+                (workspace_id,),
+            )
             row = cur.fetchone()
             base_id = row[0] if row else None
             lower = row[1] if row else None
-        return _synthesize_export(self.config, workspace_id, self.node_builder, mode="delta", base_export_id=base_id, started=lower)
+        return _synthesize_export(
+            self.config,
+            workspace_id,
+            self.node_builder,
+            mode="delta",
+            base_export_id=base_id,
+            started=lower,
+        )
+
+
 def test_parse_acceptance_criteria() -> None:
     desc = """## Overview
 Some notes.
@@ -563,12 +912,19 @@ Some notes.
 Not here.
 """
     criteria = parse_acceptance_criteria(desc)
-    assert criteria == ("Task one", "Task two with continuation line", "Bullet task three", "Numbered task four")
+    assert criteria == (
+        "Task one",
+        "Task two with continuation line",
+        "Bullet task three",
+        "Numbered task four",
+    )
 
 
 def test_linear_import_map_validation(tmp_path: Path) -> None:
     valid = _make_mapping_file(tmp_path)
-    importer = LinearImporter(OperationsConfig(config_dir=tmp_path, state_dir=tmp_path, data_dir=tmp_path))
+    importer = LinearImporter(
+        OperationsConfig(config_dir=tmp_path, state_dir=tmp_path, data_dir=tmp_path)
+    )
     mapping, map_hash = importer._read_mapping(valid)
     assert mapping.unprojected_repository == "side"
     assert len(map_hash) == 64
@@ -586,26 +942,40 @@ def test_linear_import_map_validation(tmp_path: Path) -> None:
         importer._read_mapping(invalid_json)
 
 
-def test_full_export_stage_reconcile_promote_end_to_end(postgres_service: OperationsConfig, tmp_path: Path) -> None:
+def test_full_export_stage_reconcile_promote_end_to_end(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
 
     exporter = StaticExportFixture(config)
     export_manifest = exporter.full(workspace_id)
     mapping_file = _make_mapping_file(tmp_path)
     importer = LinearImporter(config)
-    summary_staged = importer.stage(workspace_id, export_manifest.export_id, mapping_file)
+    summary_staged = importer.stage(
+        workspace_id, export_manifest.export_id, mapping_file
+    )
     assert summary_staged.state == "staged"
     assert summary_staged.export_id == export_manifest.export_id
 
-    summary_staged_again = importer.stage(workspace_id, export_manifest.export_id, mapping_file)
+    summary_staged_again = importer.stage(
+        workspace_id, export_manifest.export_id, mapping_file
+    )
     assert summary_staged_again.batch_id == summary_staged.batch_id
     assert summary_staged_again.state == "staged"
 
@@ -621,51 +991,93 @@ def test_full_export_stage_reconcile_promote_end_to_end(postgres_service: Operat
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
 
-            cur.execute("SELECT COUNT(*) FROM omp_work.work_items WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.work_items WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] == 2
 
-            cur.execute("SELECT COUNT(*) FROM omp_work.projects WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.projects WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] == 3
 
-            cur.execute("SELECT COUNT(*) FROM omp_work.repositories WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.repositories WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] == 2
 
-            cur.execute("SELECT COUNT(*) FROM omp_work.principals WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.principals WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] >= 1
 
-            cur.execute("SELECT COUNT(*) FROM omp_work.workflow_states WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.workflow_states WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] == 2
 
-            cur.execute("SELECT COUNT(*) FROM omp_work.labels WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.labels WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] >= 1
 
-            cur.execute("SELECT work_id FROM omp_work.focus_slots WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT work_id FROM omp_work.focus_slots WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             focus_work_id = cur.fetchone()[0]
             assert focus_work_id is not None
 
-            cur.execute("SELECT health FROM omp_work.project_health WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT health FROM omp_work.project_health WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] == "onTrack"
 
-            cur.execute("SELECT COUNT(*) FROM omp_work.work_relations WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.work_relations WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] == 1
 
-            cur.execute("SELECT COUNT(*) FROM omp_integration.external_refs WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_integration.external_refs WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] >= 5
 
 
-def test_delta_import_and_revision_advancement(postgres_service: OperationsConfig, tmp_path: Path) -> None:
+def test_delta_import_and_revision_advancement(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
 
     exporter = StaticExportFixture(config)
     base_export = exporter.full(workspace_id)
@@ -676,11 +1088,17 @@ def test_delta_import_and_revision_advancement(postgres_service: OperationsConfi
     importer.reconcile(summary_base.batch_id)
     importer.promote(summary_base.batch_id)
 
-    def delta_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def delta_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         del call_index
         filter_val = variables.get("filter")
         bounded = isinstance(filter_val, dict) and "updatedAt" in filter_val
-        updated = str(filter_val["updatedAt"]["gte"]) if bounded else "2026-08-05T00:00:00+00:00"
+        updated = (
+            str(filter_val["updatedAt"]["gte"])
+            if bounded
+            else "2026-08-05T00:00:00+00:00"
+        )
 
         if operation == "issues":
             return [
@@ -692,10 +1110,23 @@ def test_delta_import_and_revision_advancement(postgres_service: OperationsConfi
                     "priority": 1,
                     "updatedAt": updated,
                     "team": {"key": "HOME"},
-                    "state": {"id": "state-in-progress", "type": "started", "name": "In Progress"},
+                    "state": {
+                        "id": "state-in-progress",
+                        "type": "started",
+                        "name": "In Progress",
+                    },
                     "project": {"id": "project-home"},
-                    "assignee": {"id": "user-lead", "name": "Lead User", "displayName": "Lead", "active": True},
-                    "labels": {"nodes": [{"id": "label-now", "name": "now", "color": "#ff0000"}]},
+                    "assignee": {
+                        "id": "user-lead",
+                        "name": "Lead User",
+                        "displayName": "Lead",
+                        "active": True,
+                    },
+                    "labels": {
+                        "nodes": [
+                            {"id": "label-now", "name": "now", "color": "#ff0000"}
+                        ]
+                    },
                     "parent": None,
                     "previousIdentifiers": [],
                     "url": "https://linear.app/issue/HOME-146",
@@ -717,7 +1148,9 @@ def test_delta_import_and_revision_advancement(postgres_service: OperationsConfi
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
 
             cur.execute(
@@ -737,7 +1170,9 @@ def test_delta_import_and_revision_advancement(postgres_service: OperationsConfi
             assert "revised title" in row[2]
 
 
-def test_source_local_conflict_blocks_and_preserves_local_row(postgres_service: OperationsConfig, tmp_path: Path) -> None:
+def test_source_local_conflict_blocks_and_preserves_local_row(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
     actor_id = uuid4()
@@ -745,9 +1180,17 @@ def test_source_local_conflict_blocks_and_preserves_local_row(postgres_service: 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(actor_id),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(actor_id),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
 
     exporter = StaticExportFixture(config)
     base_export = exporter.full(workspace_id)
@@ -761,10 +1204,18 @@ def test_source_local_conflict_blocks_and_preserves_local_row(postgres_service: 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(actor_id),))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(actor_id),)
+                )
 
-                cur.execute("SELECT work_id FROM omp_work.work_aliases WHERE workspace_id = %s AND key = 'HOME-146'", (workspace_id,))
+                cur.execute(
+                    "SELECT work_id FROM omp_work.work_aliases WHERE workspace_id = %s AND key = 'HOME-146'",
+                    (workspace_id,),
+                )
                 work_id = cur.fetchone()[0]
 
                 cur.execute("SELECT uuidv7()")
@@ -776,18 +1227,36 @@ def test_source_local_conflict_blocks_and_preserves_local_row(postgres_service: 
                         title, description, scope, content_sha256, created_by, supplied_at
                     ) VALUES (%s, %s, %s, 2, 'Local title', 'Local desc', '', %s, 'local_author', clock_timestamp())
                     """,
-                    (local_rev_id, work_id, workspace_id, sha256({"title": "Local title", "description": "Local desc", "scope": "", "acceptance_criteria": ()})),
+                    (
+                        local_rev_id,
+                        work_id,
+                        workspace_id,
+                        sha256(
+                            {
+                                "title": "Local title",
+                                "description": "Local desc",
+                                "scope": "",
+                                "acceptance_criteria": (),
+                            }
+                        ),
+                    ),
                 )
                 cur.execute(
                     "UPDATE omp_work.work_items SET current_revision_id = %s, row_version = 2 WHERE workspace_id = %s AND work_id = %s",
                     (local_rev_id, workspace_id, work_id),
                 )
 
-    def conflicting_delta_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def conflicting_delta_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         del call_index
         filter_val = variables.get("filter")
         bounded = isinstance(filter_val, dict) and "updatedAt" in filter_val
-        updated = str(filter_val["updatedAt"]["gte"]) if bounded else "2026-08-05T00:00:00+00:00"
+        updated = (
+            str(filter_val["updatedAt"]["gte"])
+            if bounded
+            else "2026-08-05T00:00:00+00:00"
+        )
 
         if operation == "issues":
             return [
@@ -799,10 +1268,23 @@ def test_source_local_conflict_blocks_and_preserves_local_row(postgres_service: 
                     "priority": 1,
                     "updatedAt": updated,
                     "team": {"key": "HOME"},
-                    "state": {"id": "state-in-progress", "type": "started", "name": "In Progress"},
+                    "state": {
+                        "id": "state-in-progress",
+                        "type": "started",
+                        "name": "In Progress",
+                    },
                     "project": {"id": "project-home"},
-                    "assignee": {"id": "user-lead", "name": "Lead User", "displayName": "Lead", "active": True},
-                    "labels": {"nodes": [{"id": "label-now", "name": "now", "color": "#ff0000"}]},
+                    "assignee": {
+                        "id": "user-lead",
+                        "name": "Lead User",
+                        "displayName": "Lead",
+                        "active": True,
+                    },
+                    "labels": {
+                        "nodes": [
+                            {"id": "label-now", "name": "now", "color": "#ff0000"}
+                        ]
+                    },
                     "parent": None,
                     "previousIdentifiers": [],
                     "url": "https://linear.app/issue/HOME-146",
@@ -825,7 +1307,9 @@ def test_source_local_conflict_blocks_and_preserves_local_row(postgres_service: 
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(actor_id),))
             cur.execute(
                 "SELECT wr.title FROM omp_work.work_items wi JOIN omp_work.work_revisions wr ON wi.current_revision_id = wr.revision_id WHERE wi.workspace_id = %s",
@@ -834,18 +1318,30 @@ def test_source_local_conflict_blocks_and_preserves_local_row(postgres_service: 
             assert cur.fetchone()[0] == "Local title"
 
 
-def test_relation_cycle_detection_blocks_reconciliation(postgres_service: OperationsConfig, tmp_path: Path) -> None:
+def test_relation_cycle_detection_blocks_reconciliation(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
 
-    def cyclic_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def cyclic_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, variables, call_index)
         if operation == "issues":
             return [
@@ -869,16 +1365,26 @@ def test_relation_cycle_detection_blocks_reconciliation(postgres_service: Operat
         importer.promote(staged.batch_id)
 
 
-def test_unchanged_source_preserves_local_canonical_edits(postgres_service: OperationsConfig, tmp_path: Path) -> None:
+def test_unchanged_source_preserves_local_canonical_edits(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
 
     exporter = StaticExportFixture(config)
     first_export = exporter.full(workspace_id)
@@ -891,7 +1397,9 @@ def test_unchanged_source_preserves_local_canonical_edits(postgres_service: Oper
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT local_id FROM omp_integration.external_refs WHERE workspace_id = %s AND external_id = 'issue-1'",
@@ -902,8 +1410,13 @@ def test_unchanged_source_preserves_local_canonical_edits(postgres_service: Oper
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
                 cur.execute(
                     """
                     UPDATE omp_work.work_items
@@ -915,7 +1428,9 @@ def test_unchanged_source_preserves_local_canonical_edits(postgres_service: Oper
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT * FROM omp_work.work_items WHERE workspace_id = %s AND work_id = %s",
@@ -939,7 +1454,9 @@ def test_unchanged_source_preserves_local_canonical_edits(postgres_service: Oper
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT * FROM omp_work.work_items WHERE workspace_id = %s AND work_id = %s",
@@ -963,16 +1480,26 @@ def test_unchanged_source_preserves_local_canonical_edits(postgres_service: Oper
             assert cur.fetchone()[0] == work_id
 
 
-def test_source_label_removal_deactivates_imported_join(postgres_service: OperationsConfig, tmp_path: Path) -> None:
+def test_source_label_removal_deactivates_imported_join(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
 
     exporter = StaticExportFixture(config)
     first_export = exporter.full(workspace_id)
@@ -985,7 +1512,9 @@ def test_source_label_removal_deactivates_imported_join(postgres_service: Operat
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT local_id FROM omp_integration.external_refs WHERE workspace_id = %s AND external_id = 'issue-1'",
@@ -998,11 +1527,17 @@ def test_source_label_removal_deactivates_imported_join(postgres_service: Operat
             )
             assert cur.fetchone()[0] == 1
 
-    def no_label_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def no_label_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "issues":
             return [
-                {**base[0], "labels": {"nodes": []}, "updatedAt": "2026-08-06T00:00:00+00:00"},
+                {
+                    **base[0],
+                    "labels": {"nodes": []},
+                    "updatedAt": "2026-08-06T00:00:00+00:00",
+                },
                 base[1],
             ]
         return base
@@ -1018,7 +1553,9 @@ def test_source_label_removal_deactivates_imported_join(postgres_service: Operat
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT active, origin FROM omp_work.work_item_labels WHERE workspace_id = %s AND work_id = %s",
@@ -1036,38 +1573,67 @@ def test_source_label_removal_deactivates_imported_join(postgres_service: Operat
     assert third_promoted.disposition_counts.get("revised", 0) == 0
 
 
-def test_repeated_full_and_no_change_delta_parity(postgres_service: OperationsConfig, tmp_path: Path) -> None:
+def test_repeated_full_and_no_change_delta_parity(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
 
     def _canonical_snapshot() -> tuple[list[tuple], int, int, int, int]:
         with _connect(config, "omp_work_readonly") as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
                 cur.execute(
                     "SELECT system, external_id, local_id FROM omp_integration.external_refs WHERE workspace_id = %s ORDER BY system, external_id",
                     (workspace_id,),
                 )
                 refs = cur.fetchall()
-                cur.execute("SELECT COUNT(*) FROM omp_work.work_revisions WHERE workspace_id = %s", (workspace_id,))
+                cur.execute(
+                    "SELECT COUNT(*) FROM omp_work.work_revisions WHERE workspace_id = %s",
+                    (workspace_id,),
+                )
                 revisions = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM omp_work.work_relations WHERE workspace_id = %s", (workspace_id,))
+                cur.execute(
+                    "SELECT COUNT(*) FROM omp_work.work_relations WHERE workspace_id = %s",
+                    (workspace_id,),
+                )
                 relations = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM omp_work.project_relations WHERE workspace_id = %s", (workspace_id,))
+                cur.execute(
+                    "SELECT COUNT(*) FROM omp_work.project_relations WHERE workspace_id = %s",
+                    (workspace_id,),
+                )
                 project_relations = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM omp_work.work_item_labels WHERE workspace_id = %s AND active", (workspace_id,))
+                cur.execute(
+                    "SELECT COUNT(*) FROM omp_work.work_item_labels WHERE workspace_id = %s AND active",
+                    (workspace_id,),
+                )
                 label_joins = cur.fetchone()[0]
         return refs, revisions, relations, project_relations, label_joins
 
-    def static_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def static_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         # Force the default static timestamps so repeated exports are byte-identical.
         return _sample_nodes(operation, {}, 0)
 
@@ -1091,7 +1657,9 @@ def test_repeated_full_and_no_change_delta_parity(postgres_service: OperationsCo
     assert second_promoted.disposition_counts.get("revised", 0) == 0
     assert snapshot_second == snapshot_first
 
-    def empty_delta_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def empty_delta_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         return []
 
     delta_export = StaticExportFixture(config, empty_delta_nodes).delta(workspace_id)
@@ -1108,20 +1676,34 @@ def test_repeated_full_and_no_change_delta_parity(postgres_service: OperationsCo
     assert snapshot_delta == snapshot_first
 
     staging_root = config.state_dir / "staging"
-    leftover_plaintext = [path for path in staging_root.rglob("*") if path.is_file()] if staging_root.exists() else []
+    leftover_plaintext = (
+        [path for path in staging_root.rglob("*") if path.is_file()]
+        if staging_root.exists()
+        else []
+    )
     assert leftover_plaintext == []
 
 
-def test_duplicate_alias_mapping_blocks_import(postgres_service: OperationsConfig, tmp_path: Path) -> None:
+def test_duplicate_alias_mapping_blocks_import(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
                 cur.execute("SELECT uuidv7()")
                 local_work_id = cur.fetchone()[0]
                 cur.execute("SELECT uuidv7()")
@@ -1140,7 +1722,19 @@ def test_duplicate_alias_mapping_blocks_import(postgres_service: OperationsConfi
                         title, description, scope, content_sha256, created_by, supplied_at
                     ) VALUES (%s, %s, %s, 1, 'Local item', '', '', %s, 'local_author', clock_timestamp())
                     """,
-                    (local_revision_id, local_work_id, workspace_id, sha256({"title": "Local item", "description": "", "scope": "", "acceptance_criteria": ()})),
+                    (
+                        local_revision_id,
+                        local_work_id,
+                        workspace_id,
+                        sha256(
+                            {
+                                "title": "Local item",
+                                "description": "",
+                                "scope": "",
+                                "acceptance_criteria": (),
+                            }
+                        ),
+                    ),
                 )
                 cur.execute(
                     """
@@ -1150,7 +1744,9 @@ def test_duplicate_alias_mapping_blocks_import(postgres_service: OperationsConfi
                     (local_work_id, workspace_id),
                 )
 
-    def static_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def static_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         return _sample_nodes(operation, {}, 0)
 
     exporter = StaticExportFixture(config, static_nodes)
@@ -1168,7 +1764,9 @@ def test_duplicate_alias_mapping_blocks_import(postgres_service: OperationsConfi
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT work_id FROM omp_work.work_aliases WHERE workspace_id = %s AND key = 'HOME-146'",
@@ -1177,23 +1775,41 @@ def test_duplicate_alias_mapping_blocks_import(postgres_service: OperationsConfi
             assert cur.fetchone()[0] == local_work_id
 
 
-def _stage_with_nodes(postgres_service: OperationsConfig, tmp_path: Path, node_builder) -> tuple[OperationsConfig, UUID, LinearImporter, ImportBatchSummary]:
+def _stage_with_nodes(
+    postgres_service: OperationsConfig, tmp_path: Path, node_builder
+) -> tuple[OperationsConfig, UUID, LinearImporter, ImportBatchSummary]:
     config = postgres_service
     workspace_id = uuid4()
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
     exporter = StaticExportFixture(config, node_builder)
     export_manifest = exporter.full(workspace_id)
     importer = LinearImporter(config)
-    staged = importer.stage(workspace_id, export_manifest.export_id, _make_mapping_file(tmp_path))
+    staged = importer.stage(
+        workspace_id, export_manifest.export_id, _make_mapping_file(tmp_path)
+    )
     return config, workspace_id, importer, staged
 
 
-def _assert_blocked_preserves_canonical(config: OperationsConfig, workspace_id: UUID, importer: LinearImporter, staged: ImportBatchSummary, expected_code: str) -> None:
+def _assert_blocked_preserves_canonical(
+    config: OperationsConfig,
+    workspace_id: UUID,
+    importer: LinearImporter,
+    staged: ImportBatchSummary,
+    expected_code: str,
+) -> None:
     reconciled = importer.reconcile(staged.batch_id)
     assert reconciled.state == "blocked"
     assert expected_code in reconciled.anomaly_codes
@@ -1201,14 +1817,23 @@ def _assert_blocked_preserves_canonical(config: OperationsConfig, workspace_id: 
         importer.promote(staged.batch_id)
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-            cur.execute("SELECT COUNT(*) FROM omp_work.work_items WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.work_items WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] == 0
 
 
-def test_multiple_now_labels_block_focus(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    def nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def test_multiple_now_labels_block_focus(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    def nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "issues":
             second_now = {
@@ -1220,26 +1845,45 @@ def test_multiple_now_labels_block_focus(postgres_service: OperationsConfig, tmp
             return [*base, second_now]
         return base
 
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, nodes)
-    _assert_blocked_preserves_canonical(config, workspace_id, importer, staged, "multiple_focus_slots")
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, nodes
+    )
+    _assert_blocked_preserves_canonical(
+        config, workspace_id, importer, staged, "multiple_focus_slots"
+    )
 
 
-def test_mismatched_legacy_review_blocks(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    def nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def test_mismatched_legacy_review_blocks(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    def nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "comments":
             return [
                 base[0],
-                {**base[1], "body": "**Session review**\n- Plan SHA-256: `" + "b" * 64 + "`"},
+                {
+                    **base[1],
+                    "body": "**Session review**\n- Plan SHA-256: `" + "b" * 64 + "`",
+                },
             ]
         return base
 
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, nodes)
-    _assert_blocked_preserves_canonical(config, workspace_id, importer, staged, "legacy_authority_claim")
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, nodes
+    )
+    _assert_blocked_preserves_canonical(
+        config, workspace_id, importer, staged, "legacy_authority_claim"
+    )
 
 
-def test_missing_relation_endpoint_blocks(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    def nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def test_missing_relation_endpoint_blocks(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    def nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "issueRelations":
             return [
@@ -1253,22 +1897,38 @@ def test_missing_relation_endpoint_blocks(postgres_service: OperationsConfig, tm
             ]
         return base
 
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, nodes)
-    _assert_blocked_preserves_canonical(config, workspace_id, importer, staged, "missing_relation_endpoint")
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, nodes
+    )
+    _assert_blocked_preserves_canonical(
+        config, workspace_id, importer, staged, "missing_relation_endpoint"
+    )
 
 
-def test_previous_identifier_only_change_imports_alias(postgres_service: OperationsConfig, tmp_path: Path) -> None:
+def test_previous_identifier_only_change_imports_alias(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
 
-    def static_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def static_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         return _sample_nodes(operation, {}, 0)
 
     mapping_file = _make_mapping_file(tmp_path)
@@ -1278,12 +1938,16 @@ def test_previous_identifier_only_change_imports_alias(postgres_service: Operati
     first_batch = importer.stage(workspace_id, first_export.export_id, mapping_file)
     importer.reconcile(first_batch.batch_id)
     importer.promote(first_batch.batch_id)
-    def aliased_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+
+    def aliased_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "issues":
             # Only previousIdentifiers changes: content hash and projections are identical.
             return [{**base[0], "previousIdentifiers": ["HOME-100"]}, base[1]]
         return base
+
     second_export = StaticExportFixture(config, aliased_nodes).full(workspace_id)
     second_batch = importer.stage(workspace_id, second_export.export_id, mapping_file)
     reconciled = importer.reconcile(second_batch.batch_id)
@@ -1294,7 +1958,9 @@ def test_previous_identifier_only_change_imports_alias(postgres_service: Operati
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT local_id FROM omp_integration.external_refs WHERE workspace_id = %s AND external_id = 'issue-1'",
@@ -1319,16 +1985,26 @@ def test_previous_identifier_only_change_imports_alias(postgres_service: Operati
             assert cur.fetchone()[0] == 1
 
 
-def test_same_owner_local_alias_stays_unchanged(postgres_service: OperationsConfig, tmp_path: Path) -> None:
+def test_same_owner_local_alias_stays_unchanged(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
                 cur.execute("SELECT uuidv7()")
                 work_id = cur.fetchone()[0]
                 cur.execute("SELECT uuidv7()")
@@ -1347,7 +2023,19 @@ def test_same_owner_local_alias_stays_unchanged(postgres_service: OperationsConf
                         title, description, scope, content_sha256, created_by, supplied_at
                     ) VALUES (%s, %s, %s, 1, 'Local item', '', '', %s, 'local_author', clock_timestamp())
                     """,
-                    (revision_id, work_id, workspace_id, sha256({"title": "Local item", "description": "", "scope": "", "acceptance_criteria": ()})),
+                    (
+                        revision_id,
+                        work_id,
+                        workspace_id,
+                        sha256(
+                            {
+                                "title": "Local item",
+                                "description": "",
+                                "scope": "",
+                                "acceptance_criteria": (),
+                            }
+                        ),
+                    ),
                 )
                 cur.execute(
                     """
@@ -1360,8 +2048,13 @@ def test_same_owner_local_alias_stays_unchanged(postgres_service: OperationsConf
     with _connect(config, "omp_work_importer") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
                 cur.execute(
                     """
                     INSERT INTO omp_integration.external_refs (
@@ -1371,7 +2064,9 @@ def test_same_owner_local_alias_stays_unchanged(postgres_service: OperationsConf
                     (workspace_id, work_id),
                 )
 
-    def static_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def static_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         return _sample_nodes(operation, {}, 0)
 
     mapping_file = _make_mapping_file(tmp_path)
@@ -1385,8 +2080,13 @@ def test_same_owner_local_alias_stays_unchanged(postgres_service: OperationsConf
         importer.promote(batch.batch_id)
         with _connect(config, "omp_work_readonly") as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
                 cur.execute(
                     "SELECT disposition FROM omp_integration.import_record_results WHERE batch_id = %s AND entity_type = 'work_items' AND source_id = 'issue-1'",
                     (batch.batch_id,),
@@ -1399,7 +2099,9 @@ def test_same_owner_local_alias_stays_unchanged(postgres_service: OperationsConf
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT origin, work_id FROM omp_work.work_aliases WHERE workspace_id = %s AND key = 'HOME-146'",
@@ -1408,8 +2110,12 @@ def test_same_owner_local_alias_stays_unchanged(postgres_service: OperationsConf
             assert cur.fetchall() == [("local", work_id)]
 
 
-def test_foreign_team_previous_identifier_filtered(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, _foreign_alias_nodes)
+def test_foreign_team_previous_identifier_filtered(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, _foreign_alias_nodes
+    )
     reconciled = importer.reconcile(staged.batch_id)
     assert reconciled.state == "reconciled"
     promoted = importer.promote(staged.batch_id)
@@ -1417,7 +2123,9 @@ def test_foreign_team_previous_identifier_filtered(postgres_service: OperationsC
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT local_id FROM omp_integration.external_refs WHERE workspace_id = %s AND external_id = 'issue-1'",
@@ -1438,19 +2146,29 @@ def test_foreign_team_previous_identifier_filtered(postgres_service: OperationsC
             assert "HOME-100" in raw_previous
 
 
-def _foreign_alias_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def _foreign_alias_nodes(
+    operation: str, variables: dict[str, object], call_index: int
+) -> list[dict[str, object]]:
     base = _sample_nodes(operation, {}, 0)
     if operation == "issues":
         return [{**base[0], "previousIdentifiers": ["ENG-42", "HOME-100"]}, base[1]]
     return base
 
 
-def test_transformation_version_bump_restages_export(postgres_service: OperationsConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config, workspace_id, importer, staged_v0 = _stage_with_nodes(postgres_service, tmp_path, lambda op, v, i: _sample_nodes(op, {}, 0))
+def test_transformation_version_bump_restages_export(
+    postgres_service: OperationsConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, workspace_id, importer, staged_v0 = _stage_with_nodes(
+        postgres_service, tmp_path, lambda op, v, i: _sample_nodes(op, {}, 0)
+    )
     assert staged_v0.transformation_version == importer_module.TRANSFORMATION_VERSION
 
-    monkeypatch.setattr(importer_module, "TRANSFORMATION_VERSION", "linear-transform/v0-legacy")
-    legacy = importer.stage(workspace_id, staged_v0.export_id, _make_mapping_file(tmp_path))
+    monkeypatch.setattr(
+        importer_module, "TRANSFORMATION_VERSION", "linear-transform/v0-legacy"
+    )
+    legacy = importer.stage(
+        workspace_id, staged_v0.export_id, _make_mapping_file(tmp_path)
+    )
     assert legacy.batch_id != staged_v0.batch_id
     assert legacy.transformation_version == "linear-transform/v0-legacy"
     assert legacy.state == "staged"
@@ -1463,7 +2181,9 @@ def test_transformation_version_bump_restages_export(postgres_service: Operation
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT key FROM omp_work.work_aliases WHERE workspace_id = %s ORDER BY key",
@@ -1472,16 +2192,26 @@ def test_transformation_version_bump_restages_export(postgres_service: Operation
             assert [r[0] for r in cur.fetchall()] == ["HOME-145", "HOME-146"]
 
 
-def test_delta_base_resolves_current_transformation_version(postgres_service: OperationsConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def static_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def test_delta_base_resolves_current_transformation_version(
+    postgres_service: OperationsConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def static_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         return _sample_nodes(operation, {}, 0)
 
-    config, workspace_id, importer, current_base = _stage_with_nodes(postgres_service, tmp_path, static_nodes)
+    config, workspace_id, importer, current_base = _stage_with_nodes(
+        postgres_service, tmp_path, static_nodes
+    )
 
     # A legacy-version batch for the same base export, left unpromoted: the delta must
     # still bind to the current-version batch, never to this one.
-    monkeypatch.setattr(importer_module, "TRANSFORMATION_VERSION", "linear-transform/v0-legacy")
-    legacy_base = importer.stage(workspace_id, current_base.export_id, _make_mapping_file(tmp_path))
+    monkeypatch.setattr(
+        importer_module, "TRANSFORMATION_VERSION", "linear-transform/v0-legacy"
+    )
+    legacy_base = importer.stage(
+        workspace_id, current_base.export_id, _make_mapping_file(tmp_path)
+    )
     assert legacy_base.batch_id != current_base.batch_id
     monkeypatch.undo()
 
@@ -1489,7 +2219,9 @@ def test_delta_base_resolves_current_transformation_version(postgres_service: Op
     importer.promote(current_base.batch_id)
 
     delta_export = StaticExportFixture(config, lambda op, v, i: []).delta(workspace_id)
-    delta_batch = importer.stage(workspace_id, delta_export.export_id, _make_mapping_file(tmp_path))
+    delta_batch = importer.stage(
+        workspace_id, delta_export.export_id, _make_mapping_file(tmp_path)
+    )
     assert delta_batch.base_batch_id == current_base.batch_id
     reconciled = importer.reconcile(delta_batch.batch_id)
     assert reconciled.state == "reconciled"
@@ -1497,8 +2229,12 @@ def test_delta_base_resolves_current_transformation_version(postgres_service: Op
     assert promoted.state == "promoted"
 
 
-def test_canonical_mutation_between_reconcile_and_promote(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, lambda op, v, i: _sample_nodes(op, {}, 0))
+def test_canonical_mutation_between_reconcile_and_promote(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, lambda op, v, i: _sample_nodes(op, {}, 0)
+    )
     reconciled = importer.reconcile(staged.batch_id)
     assert reconciled.state == "reconciled"
 
@@ -1506,8 +2242,13 @@ def test_canonical_mutation_between_reconcile_and_promote(postgres_service: Oper
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
                 cur.execute("SELECT uuidv7()")
                 local_work_id = cur.fetchone()[0]
                 cur.execute("SELECT uuidv7()")
@@ -1526,7 +2267,19 @@ def test_canonical_mutation_between_reconcile_and_promote(postgres_service: Oper
                         title, description, scope, content_sha256, created_by, supplied_at
                     ) VALUES (%s, %s, %s, 1, 'Local item', '', '', %s, 'local_author', clock_timestamp())
                     """,
-                    (local_revision_id, local_work_id, workspace_id, sha256({"title": "Local item", "description": "", "scope": "", "acceptance_criteria": ()})),
+                    (
+                        local_revision_id,
+                        local_work_id,
+                        workspace_id,
+                        sha256(
+                            {
+                                "title": "Local item",
+                                "description": "",
+                                "scope": "",
+                                "acceptance_criteria": (),
+                            }
+                        ),
+                    ),
                 )
                 cur.execute(
                     """
@@ -1541,20 +2294,30 @@ def test_canonical_mutation_between_reconcile_and_promote(postgres_service: Oper
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-            cur.execute("SELECT COUNT(*) FROM omp_work.work_items WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.work_items WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] == 1
             cur.execute(
                 "SELECT work_id FROM omp_work.work_aliases WHERE workspace_id = %s AND key = 'HOME-146'",
                 (workspace_id,),
             )
             assert cur.fetchone()[0] == local_work_id
-            cur.execute("SELECT state FROM omp_integration.import_batches WHERE batch_id = %s", (staged.batch_id,))
+            cur.execute(
+                "SELECT state FROM omp_integration.import_batches WHERE batch_id = %s",
+                (staged.batch_id,),
+            )
             assert cur.fetchone()[0] == "reconciled"
 
 
-def _related_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def _related_nodes(
+    operation: str, variables: dict[str, object], call_index: int
+) -> list[dict[str, object]]:
     base = _sample_nodes(operation, {}, 0)
     if operation == "issueRelations":
         return [
@@ -1571,14 +2334,20 @@ def _related_nodes(operation: str, variables: dict[str, object], call_index: int
     return base
 
 
-def test_relation_deactivation_after_reconcile_trips_drift(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    config, workspace_id, importer, first = _stage_with_nodes(postgres_service, tmp_path, _related_nodes)
+def test_relation_deactivation_after_reconcile_trips_drift(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    config, workspace_id, importer, first = _stage_with_nodes(
+        postgres_service, tmp_path, _related_nodes
+    )
     importer.reconcile(first.batch_id)
     importer.promote(first.batch_id)
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT COUNT(*) FROM omp_work.work_relations WHERE workspace_id = %s AND active",
@@ -1599,8 +2368,13 @@ def test_relation_deactivation_after_reconcile_trips_drift(postgres_service: Ope
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
                 cur.execute(
                     "UPDATE omp_work.work_relations SET active = false, revoked_at = clock_timestamp() WHERE workspace_id = %s",
                     (workspace_id,),
@@ -1611,9 +2385,14 @@ def test_relation_deactivation_after_reconcile_trips_drift(postgres_service: Ope
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-            cur.execute("SELECT state FROM omp_integration.import_batches WHERE batch_id = %s", (second.batch_id,))
+            cur.execute(
+                "SELECT state FROM omp_integration.import_batches WHERE batch_id = %s",
+                (second.batch_id,),
+            )
             assert cur.fetchone()[0] == "reconciled"
             cur.execute(
                 "SELECT COUNT(*) FROM omp_integration.import_record_results WHERE batch_id = %s",
@@ -1622,26 +2401,41 @@ def test_relation_deactivation_after_reconcile_trips_drift(postgres_service: Ope
             assert cur.fetchone()[0] == 0
 
 
-def test_source_count_hash_discrepancy_blocks(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, lambda op, v, i: _sample_nodes(op, {}, 0))
+def test_source_count_hash_discrepancy_blocks(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, lambda op, v, i: _sample_nodes(op, {}, 0)
+    )
 
     # Perturb the staged record set after staging: one extra work_items record makes the
     # dimension count/hash check fail at reconcile.
     with _connect(config, "omp_work_importer") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
                 cur.execute("SELECT uuidv7()")
                 ghost_id = cur.fetchone()[0]
-                ghost_transformed = json.dumps({
-                    "state": "BACKLOG",
-                    "acceptance_criteria": [],
-                    "label_ids": [],
-                    "source_label_ids": [],
-                    "content_sha256": sha256("ghost-content"),
-                    "provenance": {"import_batch_id": str(staged.batch_id), "source_id": "issue-ghost", "identifier": "HOME-999"},
-                })
+                ghost_transformed = json.dumps(
+                    {
+                        "state": "BACKLOG",
+                        "acceptance_criteria": [],
+                        "label_ids": [],
+                        "source_label_ids": [],
+                        "content_sha256": sha256("ghost-content"),
+                        "provenance": {
+                            "import_batch_id": str(staged.batch_id),
+                            "source_id": "issue-ghost",
+                            "identifier": "HOME-999",
+                        },
+                    }
+                )
                 cur.execute(
                     """
                     INSERT INTO omp_integration.import_records (
@@ -1649,7 +2443,14 @@ def test_source_count_hash_discrepancy_blocks(postgres_service: OperationsConfig
                         artifact_ref, source_sha256, logical_sha256, transformed_json
                     ) VALUES (%s, %s, 'work_items', 'issue-ghost', %s, 'work_item', 'pages', %s, %s, %s)
                     """,
-                    (staged.batch_id, workspace_id, ghost_id, sha256("ghost-source"), sha256("ghost-logical"), ghost_transformed),
+                    (
+                        staged.batch_id,
+                        workspace_id,
+                        ghost_id,
+                        sha256("ghost-source"),
+                        sha256("ghost-logical"),
+                        ghost_transformed,
+                    ),
                 )
 
     reconciled = importer.reconcile(staged.batch_id)
@@ -1660,22 +2461,36 @@ def test_source_count_hash_discrepancy_blocks(postgres_service: OperationsConfig
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-            cur.execute("SELECT COUNT(*) FROM omp_work.work_items WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.work_items WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] == 0
 
 
-def test_importer_relation_pass_flags_missing_endpoint(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, lambda op, v, i: _sample_nodes(op, {}, 0))
+def test_importer_relation_pass_flags_missing_endpoint(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, lambda op, v, i: _sample_nodes(op, {}, 0)
+    )
 
     # The export itself is clean; a pending relation with a missing target is injected
     # into the staged second pass so the importer's own endpoint check must fire.
     with _connect(config, "omp_work_importer") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
                 cur.execute("SELECT uuidv7()")
                 rel_id = cur.fetchone()[0]
                 cur.execute(
@@ -1694,7 +2509,9 @@ def test_importer_relation_pass_flags_missing_endpoint(postgres_service: Operati
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT origin FROM omp_integration.migration_anomalies WHERE batch_id = %s AND code = 'missing_relation_endpoint'",
@@ -1705,8 +2522,12 @@ def test_importer_relation_pass_flags_missing_endpoint(postgres_service: Operati
         importer.promote(staged.batch_id)
 
 
-def test_quarantined_attachment_excluded_from_parity(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    def nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def test_quarantined_attachment_excluded_from_parity(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    def nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "attachments":
             # No URL and no metadata: unusable, quarantined without blocking.
@@ -1716,12 +2537,19 @@ def test_quarantined_attachment_excluded_from_parity(postgres_service: Operation
                     "title": "Attachment",
                     "updatedAt": "2026-08-01T00:00:00+00:00",
                     "issue": {"id": "issue-1"},
-                    "creator": {"id": "user-lead", "name": "Lead User", "displayName": "Lead", "active": True},
+                    "creator": {
+                        "id": "user-lead",
+                        "name": "Lead User",
+                        "displayName": "Lead",
+                        "active": True,
+                    },
                 }
             ]
         return base
 
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, nodes)
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, nodes
+    )
     reconciled = importer.reconcile(staged.batch_id)
     assert reconciled.state == "reconciled"
 
@@ -1729,7 +2557,9 @@ def test_quarantined_attachment_excluded_from_parity(postgres_service: Operation
     staging.mkdir(mode=0o700)
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT name, artifact_path, plaintext_sha256, ciphertext_sha256 FROM omp_integration.import_artifacts WHERE batch_id = %s",
@@ -1760,18 +2590,26 @@ def test_quarantined_attachment_excluded_from_parity(postgres_service: Operation
     assert parity["counts"]["relation_type"] == 6
 
 
-def test_reverse_edge_added_after_reconcile_blocks_promote(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    def no_relation_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def test_reverse_edge_added_after_reconcile_blocks_promote(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    def no_relation_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "issues":
             return [base[0], {**base[1], "parent": None}]
         return base
 
-    config, workspace_id, importer, first = _stage_with_nodes(postgres_service, tmp_path, no_relation_nodes)
+    config, workspace_id, importer, first = _stage_with_nodes(
+        postgres_service, tmp_path, no_relation_nodes
+    )
     importer.reconcile(first.batch_id)
     importer.promote(first.batch_id)
 
-    def with_blocks_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def with_blocks_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = no_relation_nodes(operation, variables, call_index)
         if operation == "issueRelations":
             return [
@@ -1795,7 +2633,9 @@ def test_reverse_edge_added_after_reconcile_blocks_promote(postgres_service: Ope
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT external_id, local_id FROM omp_integration.external_refs WHERE workspace_id = %s AND external_id IN ('issue-1', 'issue-2')",
@@ -1807,8 +2647,13 @@ def test_reverse_edge_added_after_reconcile_blocks_promote(postgres_service: Ope
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
                 cur.execute("SELECT uuidv7()")
                 reverse_rel_id = cur.fetchone()[0]
                 cur.execute(
@@ -1816,7 +2661,12 @@ def test_reverse_edge_added_after_reconcile_blocks_promote(postgres_service: Ope
                     INSERT INTO omp_work.work_relations (relation_id, workspace_id, source_work_id, target_work_id, kind, active)
                     VALUES (%s, %s, %s, %s, 'blocks', true)
                     """,
-                    (reverse_rel_id, workspace_id, local_ids["issue-2"], local_ids["issue-1"]),
+                    (
+                        reverse_rel_id,
+                        workspace_id,
+                        local_ids["issue-2"],
+                        local_ids["issue-1"],
+                    ),
                 )
 
     with pytest.raises(ValueError, match="linear_import_blocked"):
@@ -1824,30 +2674,54 @@ def test_reverse_edge_added_after_reconcile_blocks_promote(postgres_service: Ope
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT relation_id FROM omp_work.work_relations WHERE workspace_id = %s AND active",
                 (workspace_id,),
             )
             assert [row[0] for row in cur.fetchall()] == [reverse_rel_id]
-            cur.execute("SELECT state FROM omp_integration.import_batches WHERE batch_id = %s", (second.batch_id,))
+            cur.execute(
+                "SELECT state FROM omp_integration.import_batches WHERE batch_id = %s",
+                (second.batch_id,),
+            )
             assert cur.fetchone()[0] == "reconciled"
 
 
-def test_unknown_state_type_blocks_batch_at_staging(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    def nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def test_unknown_state_type_blocks_batch_at_staging(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    def nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "issues":
             return [
-                {**base[0], "state": {"id": "state-weird", "type": "mystery", "name": "Weird"}},
+                {
+                    **base[0],
+                    "state": {"id": "state-weird", "type": "mystery", "name": "Weird"},
+                },
                 base[1],
             ]
         if operation == "workflowStates":
-            return [*base, {"id": "state-weird", "name": "Weird", "type": "mystery", "position": 3, "updatedAt": "2026-08-01T00:00:00+00:00", "team": {"key": "HOME"}}]
+            return [
+                *base,
+                {
+                    "id": "state-weird",
+                    "name": "Weird",
+                    "type": "mystery",
+                    "position": 3,
+                    "updatedAt": "2026-08-01T00:00:00+00:00",
+                    "team": {"key": "HOME"},
+                },
+            ]
         return base
 
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, nodes)
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, nodes
+    )
     assert staged.state == "blocked"
     assert "unsupported_non_workflow_object" in staged.anomaly_codes
 
@@ -1858,14 +2732,23 @@ def test_unknown_state_type_blocks_batch_at_staging(postgres_service: Operations
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-            cur.execute("SELECT COUNT(*) FROM omp_work.work_items WHERE workspace_id = %s", (workspace_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM omp_work.work_items WHERE workspace_id = %s",
+                (workspace_id,),
+            )
             assert cur.fetchone()[0] == 0
 
 
-def test_siblings_sharing_one_parent_import_cleanly(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    def nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def test_siblings_sharing_one_parent_import_cleanly(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    def nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "issues":
             return [
@@ -1883,7 +2766,9 @@ def test_siblings_sharing_one_parent_import_cleanly(postgres_service: Operations
             ]
         return base
 
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, nodes)
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, nodes
+    )
     reconciled = importer.reconcile(staged.batch_id)
     assert reconciled.state == "reconciled"
     assert "relation_cycle" not in reconciled.anomaly_codes
@@ -1892,7 +2777,9 @@ def test_siblings_sharing_one_parent_import_cleanly(postgres_service: Operations
 
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT COUNT(*) FROM omp_work.work_relations WHERE workspace_id = %s AND kind = 'parent' AND active",
@@ -1901,8 +2788,12 @@ def test_siblings_sharing_one_parent_import_cleanly(postgres_service: Operations
             assert cur.fetchone()[0] == 2
 
 
-def test_in_batch_current_previous_alias_collision_blocks(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    def nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def test_in_batch_current_previous_alias_collision_blocks(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    def nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "issues":
             # issue-2 lists issue-1's current identifier among its previous identifiers:
@@ -1910,15 +2801,25 @@ def test_in_batch_current_previous_alias_collision_blocks(postgres_service: Oper
             return [base[0], {**base[1], "previousIdentifiers": ["HOME-146"]}]
         return base
 
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, nodes)
-    _assert_blocked_preserves_canonical(config, workspace_id, importer, staged, "duplicate_uuid_key_mapping")
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, nodes
+    )
+    _assert_blocked_preserves_canonical(
+        config, workspace_id, importer, staged, "duplicate_uuid_key_mapping"
+    )
 
 
-def test_reconcile_rerun_resumes_without_rewrite(postgres_service: OperationsConfig, tmp_path: Path) -> None:
-    def nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+def test_reconcile_rerun_resumes_without_rewrite(
+    postgres_service: OperationsConfig, tmp_path: Path
+) -> None:
+    def nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         return _sample_nodes(operation, {}, 0)
 
-    config, workspace_id, importer, staged = _stage_with_nodes(postgres_service, tmp_path, nodes)
+    config, workspace_id, importer, staged = _stage_with_nodes(
+        postgres_service, tmp_path, nodes
+    )
     first = importer.reconcile(staged.batch_id)
     assert first.state == "reconciled"
     second = importer.reconcile(staged.batch_id)
@@ -1926,7 +2827,9 @@ def test_reconcile_rerun_resumes_without_rewrite(postgres_service: OperationsCon
     assert second.reconciliation_sha256 == first.reconciliation_sha256
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT state, COUNT(*) FROM omp_integration.import_relations WHERE batch_id = %s GROUP BY state",
@@ -1943,7 +2846,9 @@ def test_reconcile_rerun_resumes_without_rewrite(postgres_service: OperationsCon
     assert promoted.state == "promoted"
     with _connect(config, "omp_work_readonly") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),)
+            )
             cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
             cur.execute(
                 "SELECT state, COUNT(*) FROM omp_integration.import_relations WHERE batch_id = %s GROUP BY state",
@@ -1957,16 +2862,28 @@ def test_reconcile_rerun_resumes_without_rewrite(postgres_service: OperationsCon
             assert cur.fetchone()[0] == 3
 
 
-def test_cli_subcommands_redaction_and_exit_codes(postgres_service: OperationsConfig, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_subcommands_redaction_and_exit_codes(
+    postgres_service: OperationsConfig,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     config = postgres_service
     workspace_id = uuid4()
 
     with _connect(config, "omp_work_app") as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),))
-                cur.execute("INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING", (workspace_id,))
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, true)",
+                    (str(workspace_id),),
+                )
+                cur.execute(
+                    "SELECT set_config('omp.actor_id', %s, true)", (str(uuid4()),)
+                )
+                cur.execute(
+                    "INSERT INTO omp_control.workspaces (workspace_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (workspace_id,),
+                )
 
     exporter = StaticExportFixture(config)
     export_manifest = exporter.full(workspace_id)
@@ -1976,20 +2893,35 @@ def test_cli_subcommands_redaction_and_exit_codes(postgres_service: OperationsCo
     parser = argparse.ArgumentParser()
     operations_cli.add_parser(parser)
 
-    args_stage = parser.parse_args(["linear-import", "stage", "--workspace-id", str(workspace_id), "--export-id", str(export_manifest.export_id), "--mapping-file", str(mapping_file)])
+    args_stage = parser.parse_args(
+        [
+            "linear-import",
+            "stage",
+            "--workspace-id",
+            str(workspace_id),
+            "--export-id",
+            str(export_manifest.export_id),
+            "--mapping-file",
+            str(mapping_file),
+        ]
+    )
     operations_cli.run(args_stage, config)
     stage_out = capsys.readouterr().out
     stage_json = json.loads(stage_out)
     assert stage_json["state"] == "staged"
     batch_id = stage_json["batch_id"]
 
-    args_reconcile = parser.parse_args(["linear-import", "reconcile", "--batch-id", batch_id])
+    args_reconcile = parser.parse_args(
+        ["linear-import", "reconcile", "--batch-id", batch_id]
+    )
     operations_cli.run(args_reconcile, config)
     rec_out = capsys.readouterr().out
     rec_json = json.loads(rec_out)
     assert rec_json["state"] == "reconciled"
 
-    args_promote = parser.parse_args(["linear-import", "promote", "--batch-id", batch_id])
+    args_promote = parser.parse_args(
+        ["linear-import", "promote", "--batch-id", batch_id]
+    )
     operations_cli.run(args_promote, config)
     prom_out = capsys.readouterr().out
     prom_json = json.loads(prom_out)
@@ -1998,29 +2930,66 @@ def test_cli_subcommands_redaction_and_exit_codes(postgres_service: OperationsCo
     # Redaction: CLI output carries IDs, hashes, states, counts, and artifact paths only —
     # never source titles, descriptions, comment bodies, or attachment URLs.
     combined_output = stage_out + rec_out + prom_out
-    for leaked in ("Summary of task", "Build the importer", "Plan approved", "Session review", "https://example.com/doc"):
+    for leaked in (
+        "Summary of task",
+        "Build the importer",
+        "Plan approved",
+        "Session review",
+        "https://example.com/doc",
+    ):
         assert leaked not in combined_output
 
     # A blocked batch reports exit code 2 through the CLI, at both stage and reconcile.
-    def weird_state_nodes(operation: str, variables: dict[str, object], call_index: int) -> list[dict[str, object]]:
+    def weird_state_nodes(
+        operation: str, variables: dict[str, object], call_index: int
+    ) -> list[dict[str, object]]:
         base = _sample_nodes(operation, {}, 0)
         if operation == "issues":
             return [
-                {**base[0], "id": "issue-9", "identifier": "HOME-150", "url": "https://linear.app/issue/HOME-150", "state": {"id": "state-weird", "type": "mystery", "name": "Weird"}},
+                {
+                    **base[0],
+                    "id": "issue-9",
+                    "identifier": "HOME-150",
+                    "url": "https://linear.app/issue/HOME-150",
+                    "state": {"id": "state-weird", "type": "mystery", "name": "Weird"},
+                },
                 base[1],
             ]
         if operation == "workflowStates":
-            return [*base, {"id": "state-weird", "name": "Weird", "type": "mystery", "position": 3, "updatedAt": "2026-08-01T00:00:00+00:00", "team": {"key": "HOME"}}]
+            return [
+                *base,
+                {
+                    "id": "state-weird",
+                    "name": "Weird",
+                    "type": "mystery",
+                    "position": 3,
+                    "updatedAt": "2026-08-01T00:00:00+00:00",
+                    "team": {"key": "HOME"},
+                },
+            ]
         return base
 
     blocked_export = StaticExportFixture(config, weird_state_nodes).full(workspace_id)
-    blocked_args = parser.parse_args(["linear-import", "stage", "--workspace-id", str(workspace_id), "--export-id", str(blocked_export.export_id), "--mapping-file", str(mapping_file)])
+    blocked_args = parser.parse_args(
+        [
+            "linear-import",
+            "stage",
+            "--workspace-id",
+            str(workspace_id),
+            "--export-id",
+            str(blocked_export.export_id),
+            "--mapping-file",
+            str(mapping_file),
+        ]
+    )
     with pytest.raises(SystemExit) as stage_exit:
         operations_cli.run(blocked_args, config)
     assert stage_exit.value.code == 2
     blocked_batch_id = json.loads(capsys.readouterr().out)["batch_id"]
 
-    blocked_rec_args = parser.parse_args(["linear-import", "reconcile", "--batch-id", blocked_batch_id])
+    blocked_rec_args = parser.parse_args(
+        ["linear-import", "reconcile", "--batch-id", blocked_batch_id]
+    )
     with pytest.raises(SystemExit) as reconcile_exit:
         operations_cli.run(blocked_rec_args, config)
     assert reconcile_exit.value.code == 2

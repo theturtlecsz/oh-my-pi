@@ -10,22 +10,24 @@
  * contracts/v1/candidate-hash.json and are pinned by commit-step.test.ts.
  */
 import { spawnSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { existsSync, lstatSync, statSync } from "node:fs";
 import { join as joinPath } from "node:path";
 
 /** Run git in cwd; timeoutMs guards network ops (push). `raw` is untrimmed stdout —
  *  porcelain -z parsing needs the leading space of the first `XY path` entry. */
 export function runGit(cwd: string, args: string[], timeoutMs = 10_000): { ok: boolean; out: string; raw: string; err: string } {
-	const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: timeoutMs });
+	const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 });
 	const raw = r.stdout ?? "";
-	return { ok: r.status === 0, out: raw.trim(), raw, err: (r.stderr ?? "").trim() };
+	const err = (r.stderr ?? (r.error ? r.error.message : "")).trim();
+	return { ok: r.status === 0 && !r.error, out: raw.trim(), raw, err };
 }
 
 /** Run git with raw stdout — required where byte fidelity matters (path lists
  *  that must be validated as strict UTF-8 before they bind a candidate). */
 function runGitRaw(cwd: string, args: string[], timeoutMs = 10_000): { ok: boolean; stdout: Buffer; err: string } {
-	const r = spawnSync("git", ["-C", cwd, ...args], { timeout: timeoutMs });
-	return { ok: r.status === 0, stdout: r.stdout ?? Buffer.alloc(0), err: (r.stderr?.toString("utf8") ?? "").trim() };
+	const r = spawnSync("git", ["-C", cwd, ...args], { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 });
+	const err = (r.stderr?.toString("utf8") ?? (r.error ? r.error.message : "")).trim();
+	return { ok: r.status === 0 && !r.error, stdout: r.stdout ?? Buffer.alloc(0), err };
 }
 
 /** Parse `git status --porcelain -z` output → workdir-relative dirty paths.
@@ -118,6 +120,105 @@ export function findSecrets(diff: string): string[] {
  *  (validation + byte-order sort + canonical JSON) lives in the work-client
  *  package, proven byte-identical against contracts/v1/candidate-hash.json. */
 export { candidateSha256 } from "@oh-my-pi/pi-work-client";
+
+export function validateExecutionPath(path: string, root?: string): { valid: boolean; error?: string } {
+	if (!path || typeof path !== "string" || path.trim() !== path) return { valid: false, error: "path is empty or has surrounding whitespace" };
+	if (path !== path.normalize("NFC")) return { valid: false, error: `path must be Unicode NFC normalized: ${path}` };
+	if (path.startsWith("/") || path.startsWith("\\") || /^[a-zA-Z]:/.test(path)) return { valid: false, error: `path must be repository-relative: ${path}` };
+	if (path.startsWith("./") || path.endsWith("/") || path.includes("\\") || path.includes("//")) return { valid: false, error: `path must use POSIX relative separators without redundant slashes or ./: ${path}` };
+	const segments = path.split("/");
+	if (segments.some(segment => segment === "." || segment === ".." || segment === "")) return { valid: false, error: `path must not contain . or .. segments: ${path}` };
+	if (/[\x00-\x1f\x7f]/.test(path)) return { valid: false, error: `path contains control characters: ${path}` };
+	if (/[*?[\]{}]/.test(path)) return { valid: false, error: `path contains glob metacharacters: ${path}` };
+
+	if (root) {
+		let current = root;
+		for (let i = 0; i < segments.length; i++) {
+			const seg = segments[i];
+			const subpath = segments.slice(0, i + 1).join("/");
+			current = joinPath(current, seg);
+
+			// Check git index for submodule (mode 160000)
+			const stageCheck = runGit(root, ["ls-files", "--stage", subpath]);
+			if (stageCheck.ok && stageCheck.out.startsWith("160000")) {
+				return { valid: false, error: `path component is a git submodule: ${seg} in ${path}` };
+			}
+
+			try {
+				const lst = lstatSync(current);
+				if (lst.isSymbolicLink()) {
+					return { valid: false, error: `path component is a symbolic link: ${seg} in ${path}` };
+				}
+				if (i < segments.length - 1) {
+					if (!lst.isDirectory()) {
+						return { valid: false, error: `path parent component is not a directory: ${seg} in ${path}` };
+					}
+					if (existsSync(joinPath(current, ".git"))) {
+						return { valid: false, error: `path component is a git submodule: ${seg} in ${path}` };
+					}
+				}
+				if (i === segments.length - 1 && lst.isDirectory()) {
+					return { valid: false, error: `path is a directory, not a file: ${path}` };
+				}
+				if (i === segments.length - 1 && lst.size >= 50_000_000) {
+					return { valid: false, error: `path is >= 50MB: ${path}` };
+				}
+			} catch (e: unknown) {
+				if (e && typeof e === "object" && "code" in e && e.code === "ENOENT") {
+					if (i < segments.length - 1) {
+						return { valid: false, error: `parent directory does not exist for new file: ${path}` };
+					}
+					const parentDir = joinPath(root, ...segments.slice(0, -1));
+					try {
+						const parentLst = lstatSync(parentDir);
+						if (!parentLst.isDirectory() || parentLst.isSymbolicLink()) {
+							return { valid: false, error: `parent directory is invalid or symlink for new file: ${path}` };
+						}
+						if (existsSync(joinPath(parentDir, ".git"))) {
+							return { valid: false, error: `parent directory is a git submodule: ${path}` };
+						}
+					} catch {
+						return { valid: false, error: `parent directory missing for new file: ${path}` };
+					}
+					break;
+				}
+				return { valid: false, error: `could not stat path component: ${String(e)}` };
+			}
+		}
+	}
+
+	return { valid: true };
+}
+
+export function validateExecutionPaths(paths: readonly string[], root?: string): { valid: boolean; error?: string; normalized: string[] } {
+	if (!paths.length) return { valid: false, error: "paths array must not be empty", normalized: [] };
+	const normalized: string[] = [];
+	const seenExact = new Set<string>();
+	const seenCaseFold = new Set<string>();
+	const seenNfc = new Set<string>();
+	const utf8 = new TextEncoder();
+	for (const p of paths) {
+		const check = validateExecutionPath(p, root);
+		if (!check.valid) return { valid: false, error: check.error, normalized: [] };
+		if (seenExact.has(p)) return { valid: false, error: `duplicate path in plan: ${p}`, normalized: [] };
+		const caseFold = p.toLowerCase();
+		if (seenCaseFold.has(caseFold)) return { valid: false, error: `case collision in paths: ${p}`, normalized: [] };
+		const nfc = p.normalize("NFC");
+		if (seenNfc.has(nfc)) return { valid: false, error: `canonical Unicode collision in paths: ${p}`, normalized: [] };
+		seenExact.add(p);
+		seenCaseFold.add(caseFold);
+		seenNfc.add(nfc);
+		normalized.push(p);
+	}
+	normalized.sort((a, b) => {
+		const x = utf8.encode(a);
+		const y = utf8.encode(b);
+		const n = Math.min(x.length, y.length);
+		for (let i = 0; i < n; i++) if (x[i] !== y[i]) return x[i] - y[i];
+		return x.length - y.length;
+	});
+	return { valid: true, normalized };
+}
 import { candidateSha256 } from "@oh-my-pi/pi-work-client";
 
 export interface CandidateFreeze {
@@ -192,6 +293,7 @@ export async function freezeCandidateCommit(
 	key: string,
 	candidateId: string,
 	preExistingDirtyPaths: readonly string[] = [],
+	options: { mode?: "manual" | "execution"; sealedPaths?: readonly string[] } = {},
 ): Promise<FreezeOutcome> {
 	const refuse = (refused: FreezeRefusal["refused"], reason: string, level: "info" | "warning" | "error" = "warning"): FreezeRefusal => {
 		ui.notify(reason, level);
@@ -204,6 +306,65 @@ export async function freezeCandidateCommit(
 		const status = runGit(root, ["status", "--porcelain", "-z", "--untracked-files=all"]);
 		if (!status.ok) return refuse("failed", `freeze failed — could not enumerate the working tree: ${status.err.split("\n")[0]}`, "error");
 		const all = parsePorcelain(status.raw);
+
+		if (options.mode === "execution") {
+			const sealed = new Set(options.sealedPaths ?? []);
+			if (!sealed.size) return refuse("failed", "execution freeze requires non-empty sealed paths", "error");
+			const staged = runGit(root, ["diff", "--cached", "--name-only"]);
+			if (!staged.ok || staged.out !== "") return refuse("failed", "execution freeze refused: pre-staged entries in index", "error");
+			const unsealed = all.filter(p => !sealed.has(p));
+			if (unsealed.length > 0) return refuse("failed", `execution freeze refused: unsealed modified paths (${unsealed.join(", ")})`, "error");
+			for (const p of sealed) {
+				try {
+					const full = joinPath(root, p);
+					const st = statSync(full);
+					if (st.size >= 50_000_000) return refuse("failed", `execution freeze refused: file >= 50MB (${p})`, "error");
+				} catch { /* deleted file is fine */ }
+			}
+			const committable = all.filter(p => sealed.has(p));
+			if (committable.length === 0) {
+				// Check if current HEAD is already the candidate
+				const head = runGit(root, ["log", "-1", "--format=%H%x00%B"]);
+				const sep = head.ok ? head.out.indexOf("\x00") : -1;
+				const headSha = sep > 0 ? head.out.slice(0, sep) : "";
+				const headLines = sep > 0 ? head.out.slice(sep + 1).split("\n") : [];
+				if (headSha && headLines[0] === `session candidate: ${key}` && headLines.includes(`Work-Candidate: ${candidateId}`)) {
+					const paths = committedPaths(root, headSha);
+					return { root, paths, commitSha: headSha, candidateSha256: candidateSha256(headSha, paths) };
+				}
+				return refuse("nothing", "nothing to freeze for execution candidate", "warning");
+			}
+			const add = runGit(root, ["--literal-pathspecs", "add", "--", ...committable]);
+			if (!add.ok) return refuse("failed", `execution freeze staging failed: ${add.err}`, "error");
+			const cached = runGit(root, ["diff", "--cached"]);
+			if (!cached.ok) {
+				runGit(root, ["--literal-pathspecs", "reset", "-q", "--", ...committable]);
+				return refuse("failed", "execution freeze diff unreadable", "error");
+			}
+			const secrets = findSecrets(cached.out);
+			if (secrets.length) {
+				runGit(root, ["--literal-pathspecs", "reset", "-q", "--", ...committable]);
+				return refuse("failed", `execution freeze secret detected: ${secrets.join(", ")}`, "error");
+			}
+			const scannedTree = runGit(root, ["write-tree"]);
+			if (!scannedTree.ok) {
+				runGit(root, ["--literal-pathspecs", "reset", "-q", "--", ...committable]);
+				return refuse("failed", "execution freeze write-tree failed", "error");
+			}
+			const commit = runGit(root, ["commit", "-m", `session candidate: ${key}\n\nWork-Candidate: ${candidateId}`]);
+			if (!commit.ok) {
+				runGit(root, ["--literal-pathspecs", "reset", "-q", "--", ...committable]);
+				return refuse("failed", `execution freeze commit failed: ${commit.err}`, "error");
+			}
+			const commitSha = runGit(root, ["rev-parse", "HEAD"]).out;
+			const afterStatus = runGit(root, ["status", "--porcelain", "-z", "--untracked-files=all"]);
+			if (!afterStatus.ok || parsePorcelain(afterStatus.raw).length > 0) {
+				return refuse("failed", "execution freeze repository not clean after candidate commit", "error");
+			}
+			const paths = committedPaths(root, commitSha);
+			return { root, paths, commitSha, candidateSha256: candidateSha256(commitSha, paths) };
+		}
+
 		const preExisting = new Set(preExistingDirtyPaths);
 		const lanePaths = all.filter(p => p.startsWith("packages/"));
 		const inheritedPaths = all.filter(p => !p.startsWith("packages/") && preExisting.has(p));

@@ -6,36 +6,99 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from .v1.models import Approval, BindingManifest, Contract, ContractExamples, StrictModel
+from .v1.models import (
+    Approval,
+    BindingManifest,
+    Contract,
+    ContractExamples,
+    StrictModel,
+)
 from .v1.semantics import validate_cutover_manifest, validate_examples
 
 CONTRACT_VERSION = "work.omp.dev/v1"
 
-_READS = frozenset({
-    "GET /v1/work-items/{key}",
-    "GET /v1/work-items/{key}/workflow",
-    "GET /v1/workspaces/{workspace_id}/tree",
-    "GET /v1/workspaces/{workspace_id}/focus/{owner_id}",
-    "GET /v1/operations/{operation_id}",
-    "GET /v1/workspaces/{workspace_id}/authority",
-    "GET /v1/health/live",
-    "GET /v1/health/ready",
-})
-_ERROR_CODES = frozenset({
-    "invalid_request", "unauthenticated", "forbidden", "approval_required", "revision_conflict",
-    "idempotency_conflict", "relation_cycle", "focus_conflict", "stale_evidence", "completion_blocked",
-    "contract_mismatch", "cutover_invariant", "unavailable",
-})
-_SCOPES = frozenset({
-    "work.read", "work.candidate.read", "work.mutate", "work.approve", "work.close", "work.import", "work.operate",
-})
-_COMMAND_TYPES = frozenset({
-    "create_work_batch", "create_same_session_child", "revise_work", "set_work_state", "put_relation", "remove_relation", "set_focus",
-    "clear_focus", "append_evidence", "finalize_candidate", "begin_close_attempt", "seal_audit_manifest",
-    "reserve_auditor_launch", "cancel_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery", "record_closeout_review",
-    "complete_work", "record_project_health",
-    "stage_import_batch", "promote_import_batch", "activate_cutover", "attest_cutover_plan",
-})
+_READS = frozenset(
+    {
+        "GET /v1/work-items/{key}",
+        "GET /v1/work-items/{key}/workflow",
+        "GET /v1/workspaces/{workspace_id}/tree",
+        "GET /v1/workspaces/{workspace_id}/focus/{owner_id}",
+        "GET /v1/operations/{operation_id}",
+        "GET /v1/workspaces/{workspace_id}/authority",
+        "GET /v1/workspaces/{workspace_id}/execution",
+        "GET /v1/workspaces/{workspace_id}/execution/{grant_id}",
+        "GET /v1/health/live",
+        "GET /v1/health/ready",
+    }
+)
+_ERROR_CODES = frozenset(
+    {
+        "invalid_request",
+        "unauthenticated",
+        "forbidden",
+        "approval_required",
+        "revision_conflict",
+        "idempotency_conflict",
+        "relation_cycle",
+        "focus_conflict",
+        "stale_evidence",
+        "completion_blocked",
+        "contract_mismatch",
+        "cutover_invariant",
+        "unavailable",
+        "execution_judge_drift",
+        "execution_worktree_not_clean",
+        "execution_grant_stale",
+        "execution_grant_inactive",
+        "execution_no_progress",
+        "execution_caps_exceeded",
+    }
+)
+_SCOPES = frozenset(
+    {
+        "work.read",
+        "work.candidate.read",
+        "work.mutate",
+        "work.approve",
+        "work.close",
+        "work.execute",
+        "work.import",
+        "work.operate",
+    }
+)
+_COMMAND_TYPES = frozenset(
+    {
+        "create_work_batch",
+        "create_same_session_child",
+        "revise_work",
+        "set_work_state",
+        "put_relation",
+        "remove_relation",
+        "set_focus",
+        "clear_focus",
+        "append_evidence",
+        "finalize_candidate",
+        "begin_close_attempt",
+        "seal_audit_manifest",
+        "reserve_auditor_launch",
+        "cancel_auditor_launch",
+        "settle_auditor_launch",
+        "attest_checkpoint_delivery",
+        "record_closeout_review",
+        "complete_work",
+        "record_project_health",
+        "stage_import_batch",
+        "promote_import_batch",
+        "activate_cutover",
+        "attest_cutover_plan",
+        "begin_execution",
+        "activate_execution_item",
+        "seal_execution_criteria",
+        "stamp_execution_plan",
+        "set_execution_state",
+        "complete_execution_item",
+    }
+)
 
 
 def _contract_dir() -> Path:
@@ -63,7 +126,9 @@ def generate_schema() -> dict[str, object]:
         "models": {
             name: model.model_json_schema()
             for name, model in vars(models).items()
-            if isinstance(model, type) and hasattr(model, "model_json_schema") and issubclass(model, StrictModel)
+            if isinstance(model, type)
+            and hasattr(model, "model_json_schema")
+            and issubclass(model, StrictModel)
         },
     }
 
@@ -77,7 +142,9 @@ def generate_api_schema() -> dict[str, object]:
         "models": {
             name: model.model_json_schema()
             for name, model in vars(api_models).items()
-            if isinstance(model, type) and hasattr(model, "model_json_schema") and issubclass(model, StrictModel)
+            if isinstance(model, type)
+            and hasattr(model, "model_json_schema")
+            and issubclass(model, StrictModel)
         },
     }
 
@@ -121,22 +188,52 @@ def validate_bundle(*, require_approval: bool = True) -> None:
     for path in paths:
         if not (root / path).is_file():
             raise ValueError(f"missing binding file: {path}")
-    if frozenset(contract.reads) != _READS or frozenset(contract.command_types) != _COMMAND_TYPES or frozenset(contract.error_codes) != _ERROR_CODES:
+    if (
+        frozenset(contract.reads) != _READS
+        or frozenset(contract.command_types) != _COMMAND_TYPES
+        or frozenset(contract.error_codes) != _ERROR_CODES
+    ):
         raise ValueError("API reference closure failed")
     if frozenset(contract.scopes) != _SCOPES:
         raise ValueError("capability separation failed")
     policy = contract.security_policy
-    if set(policy.database_roles) != {"omp_work_owner", "omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup"} or set(policy.owner_host_scopes) != {"work.read", "work.mutate", "work.approve", "work.close"}:
+    if set(policy.database_roles) != {
+        "omp_work_owner",
+        "omp_work_migrator",
+        "omp_work_app",
+        "omp_work_importer",
+        "omp_work_readonly",
+        "omp_work_backup",
+    } or set(policy.owner_host_scopes) != {
+        "work.read",
+        "work.mutate",
+        "work.approve",
+        "work.close",
+        "work.execute",
+    }:
         raise ValueError("capability separation failed")
     validate_examples(examples)
-    validate_cutover_manifest(examples.cutover.anomalies, examples.cutover.parity_differences)
+    validate_cutover_manifest(
+        examples.cutover.anomalies, examples.cutover.parity_differences
+    )
     approval_path = _contract_dir() / "approval.json"
     if require_approval:
         if not approval_path.is_file():
             raise ValueError("owner approval is required")
         approval = Approval.model_validate_json(approval_path.read_text())
-        if approval.contract_version != CONTRACT_VERSION or approval.contract_sha256 != contract_sha256():
+        if (
+            approval.contract_version != CONTRACT_VERSION
+            or approval.contract_sha256 != contract_sha256()
+        ):
             raise ValueError("approval hash mismatch")
 
 
-__all__ = ["CONTRACT_VERSION", "contract_sha256", "generate_api_schema", "generate_schema", "load_contract", "load_examples", "validate_bundle"]
+__all__ = [
+    "CONTRACT_VERSION",
+    "contract_sha256",
+    "generate_api_schema",
+    "generate_schema",
+    "load_contract",
+    "load_examples",
+    "validate_bundle",
+]

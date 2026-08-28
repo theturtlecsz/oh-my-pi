@@ -8,18 +8,20 @@
     "GET /v1/workspaces/{workspace_id}/focus/{owner_id}",
     "GET /v1/operations/{operation_id}",
     "GET /v1/workspaces/{workspace_id}/authority",
+    "GET /v1/workspaces/{workspace_id}/execution",
+    "GET /v1/workspaces/{workspace_id}/execution/{grant_id}",
     "GET /v1/health/live",
     "GET /v1/health/ready"
   ],
   "command_types": [
-    "create_work_batch", "create_same_session_child", "revise_work", "set_work_state", "put_relation", "remove_relation", "set_focus", "clear_focus", "append_evidence", "finalize_candidate", "begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "cancel_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery", "record_closeout_review", "complete_work", "record_project_health", "stage_import_batch", "promote_import_batch", "activate_cutover", "attest_cutover_plan"
+    "create_work_batch", "create_same_session_child", "revise_work", "set_work_state", "put_relation", "remove_relation", "set_focus", "clear_focus", "append_evidence", "finalize_candidate", "begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "cancel_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery", "record_closeout_review", "complete_work", "record_project_health", "stage_import_batch", "promote_import_batch", "activate_cutover", "attest_cutover_plan", "begin_execution", "activate_execution_item", "seal_execution_criteria", "stamp_execution_plan", "set_execution_state", "complete_execution_item"
   ],
   "error_codes": [
-    "invalid_request", "unauthenticated", "forbidden", "approval_required", "revision_conflict", "idempotency_conflict", "relation_cycle", "focus_conflict", "stale_evidence", "completion_blocked", "contract_mismatch", "cutover_invariant", "unavailable"
+    "invalid_request", "unauthenticated", "forbidden", "approval_required", "revision_conflict", "idempotency_conflict", "relation_cycle", "focus_conflict", "stale_evidence", "completion_blocked", "contract_mismatch", "cutover_invariant", "unavailable", "execution_judge_drift", "execution_worktree_not_clean", "execution_grant_stale", "execution_grant_inactive", "execution_no_progress", "execution_caps_exceeded"
   ],
-  "scopes": ["work.read", "work.candidate.read", "work.mutate", "work.approve", "work.close", "work.import", "work.operate"],
+  "scopes": ["work.read", "work.candidate.read", "work.mutate", "work.approve", "work.close", "work.execute", "work.import", "work.operate"],
   "workflow_mapping": {
-    "/intake": "create_work_batch", "/capture": "create_work_batch", "/plan": "candidate allocation plus plan evidence", "/now": "focus reads/set/clear", "/summary": "close attempt: finalize, seal manifest, bounded audit, closeout review", "/done": "complete_work"
+    "/intake": "create_work_batch", "/capture": "create_work_batch", "/plan": "candidate allocation plus plan evidence", "/now": "focus reads/set/clear", "/summary": "close attempt: finalize, seal manifest, bounded audit, closeout review", "/done": "complete_work", "/execute": "autonomous single or queue delivery cycle"
   },
   "source_scope": {
     "include": ["HOME team worlds/initiatives", "surfaces/projects and health updates", "promises/milestones", "work/issues across active completed canceled duplicate archived states", "states labels parents dependencies", "comments with OMP markers", "attachment metadata URLs", "referenced users"],
@@ -36,7 +38,7 @@
   },
   "security_policy": {
     "database_roles": ["omp_work_owner", "omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup"],
-    "owner_host_scopes": ["work.read", "work.mutate", "work.approve", "work.close"],
+    "owner_host_scopes": ["work.read", "work.mutate", "work.approve", "work.close", "work.execute"],
     "task_agent_scopes": ["work.candidate.read"],
     "auditor_scopes": ["work.candidate.read"],
     "importer_scopes": ["work.import"],

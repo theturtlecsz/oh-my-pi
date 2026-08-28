@@ -9,6 +9,7 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+	type Candidate,
 	candidateSha256,
 	type CloseAttempt,
 	type CloseAttemptEvent,
@@ -27,8 +28,14 @@ import {
 	type WorkItemView,
 	type WorkflowView,
 	type WorkspaceTree,
+	type ExecutionGrantItemClaim,
+	type ExecutionGrantItemView,
+	type ExecutionGrantView,
+	type ExecutionJudgeManifest,
+	type ExecutionMode,
+	type ExecutionProvenanceEnvelope,
+	type ExecutionView,
 } from "@oh-my-pi/pi-work-client";
-
 import {
 	type BackendHooks,
 	type BatchOutcome,
@@ -64,6 +71,7 @@ import {
 	type WorkStateCarrier,
 	type WorkflowBackend,
 	type WorkflowCheckpoint,
+	type ExecutionSnapshot,
 } from "./backend";
 import { pendingOpsDir, type WorkClientConfig } from "./config";
 import { candidateDrift, type CandidateDriftShape, freezeCandidateCommit, headCommit, pushCandidate } from "./git";
@@ -86,6 +94,11 @@ function terminalNextAction(shape?: CandidateDriftShape): string {
 		default:
 			return "if code changed since the reviewed snapshot, enter /plan then /summary; otherwise enter /summary";
 	}
+}
+
+function parseKeyNumber(key: string): number {
+	const match = key.match(/-(\d+)$/);
+	return match ? parseInt(match[1], 10) : 0;
 }
 
 function attemptNextAction(state: string, shape?: CandidateDriftShape): string {
@@ -138,11 +151,13 @@ const NON_APPLYING_CODES = new Set([
 /** Model-facing kinds map one-for-one onto the service's receipt kinds
  *  (`plan`/`push` are minted internally by stampPlan/closeWithVerdict; `audit`
  *  is minted ONLY by the service's settle transaction — OMP-47). */
-const SERVICE_KIND: Record<EvidenceKind, ServiceEvidenceKind> = {
+const SERVICE_KIND: Record<string, ServiceEvidenceKind> = {
 	handoff: "handoff",
 	verification: "verification",
 	closeout: "closeout",
 	same_session_found_fixed: "same_session_found_fixed",
+	push: "push",
+	plan: "plan",
 };
 
 /** Attempt states that own the single live slot per work item (OMP-47). */
@@ -420,7 +435,16 @@ export function createWorkBackend(
 			independent: false,
 		};
 		if (kind === "verification") {
-			return { ...base, candidate_sha256: candidate.candidate_sha256, ...(candidate.commit_sha ? { candidate_commit: candidate.commit_sha } : {}) };
+			return { ...base, candidate_sha256: _meta?.candidateSha256 ?? candidate.candidate_sha256, ...((_meta?.candidateCommit ?? candidate.commit_sha) ? { candidate_commit: _meta?.candidateCommit ?? candidate.commit_sha } : {}) };
+		}
+		if (kind === "push") {
+			return {
+				...base,
+				candidate_sha256: _meta?.candidateSha256 ?? candidate.candidate_sha256,
+				...((_meta?.candidateCommit ?? candidate.commit_sha) ? { candidate_commit: _meta?.candidateCommit ?? candidate.commit_sha } : {}),
+				...(_meta?.remoteRef ? { remote_ref: _meta.remoteRef } : {}),
+				...(_meta?.remoteCommit ? { remote_commit: _meta.remoteCommit } : {}),
+			};
 		}
 		return base;
 	}
@@ -493,6 +517,8 @@ export function createWorkBackend(
 	const backend: WorkflowBackend = {
 		name: "work",
 		serviceLabel: "Work Ledger",
+		workClient: client,
+		workspaceId: config.workspaceId,
 		markerFile: ".work-project",
 		scopeFix: 'echo "<Exact Project Name>" > .work-project at the repo root',
 		cacheFile: "work-now.json",
@@ -616,8 +642,15 @@ export function createWorkBackend(
 		},
 
 		async findIssue(key: string): Promise<NowRef> {
-			const item = await client.workItem(key);
-			return toRef(item, projectNames(await client.tree()));
+			try {
+				const item = await client.workItem(key);
+				return toRef(item, projectNames(await client.tree()));
+			} catch {
+				const tree = await client.tree();
+				const item = tree.items.find(i => i.work_id === key || i.alias.key === key);
+				if (item) return toRef(item, projectNames(tree));
+				throw new Error(`issue ${key} not found`);
+			}
 		},
 
 		async currentNow(): Promise<NowRef | null> {
@@ -948,6 +981,11 @@ export function createWorkBackend(
 			await run("clear_focus", { workspace_id: config.workspaceId, owner_id: config.ownerId, expected_version: slot.version });
 		},
 
+		async getFocusVersion(): Promise<number> {
+			const slot = await client.focus(config.ownerId);
+			return slot.version;
+		},
+
 		async stampPlan(target: NowRef, stamp: PlanStamp): Promise<{ issue: NowRef; plannedCandidateId: UUID }> {
 			const item = await client.workItem(target.key);
 			// OMP-155: price the packet BEFORE any write — same math as
@@ -991,7 +1029,7 @@ export function createWorkBackend(
 			return { issue: target, plannedCandidateId: candidateId };
 		},
 
-		async appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta, authorizationRef?: string): Promise<CloseAttemptOutcome | void> {
+		async appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta, authorizationRef?: string): Promise<CloseAttemptOutcome | EvidenceReceipt | void> {
 			const r = await receipt(SERVICE_KIND[kind], issue, body, meta);
 			if (kind === "closeout") {
 				const view = await client.workflow(issue.key);
@@ -1009,6 +1047,7 @@ export function createWorkBackend(
 				return outcomeOf(result);
 			}
 			await run("append_evidence", { receipt: r });
+			return r;
 		},
 
 		async createIssue(input: { title: string; description?: string; project?: string; queue?: boolean; question?: string }): Promise<NowRef> {
@@ -1327,6 +1366,13 @@ export function createWorkBackend(
 				repository: session.repository,
 				diff_sha256: session.diffSha256,
 				starting_dirty_paths: session.dirtyPaths,
+				...(session.authorization_kind ? { authorization_kind: session.authorization_kind } : {}),
+				...(session.execution_grant_id ? { execution_grant_id: session.execution_grant_id } : {}),
+				...(session.candidate_tree_sha ? { candidate_tree_sha: session.candidate_tree_sha } : {}),
+				...(session.original_request_sha256 ? { original_request_sha256: session.original_request_sha256 } : {}),
+				...(session.criteria_sha256 ? { criteria_sha256: session.criteria_sha256 } : {}),
+				...(session.plan_stamp_sha256 ? { plan_stamp_sha256: session.plan_stamp_sha256 } : {}),
+				...(session.judge_sha256 ? { judge_sha256: session.judge_sha256 } : {}),
 				...(session.riders?.length ? { riders: session.riders } : {}),
 			});
 			return outcomeOf(result);
@@ -1457,6 +1503,189 @@ export function createWorkBackend(
 				...(authorizationRef ? { authorization_ref: authorizationRef } : {}),
 			});
 			return outcomeOf(result);
+		},
+
+		async getExecution(key?: string): Promise<ExecutionSnapshot | null> {
+			try {
+				const view = await client.execution(key ?? "");
+				return {
+					grant: view.grant,
+					items: view.items,
+					activeItem: view.active_item ?? null,
+				};
+			} catch {
+				return null;
+			}
+		},
+
+		async finalizeExecutionCandidate(key: string, plannedCandidateId: string, freeze: { commitSha: string; candidateSha256: string; paths: string[] }): Promise<Candidate> {
+			const view = await client.workflow(key);
+			const finalCandidateId = randomUUID();
+			const result = await run("finalize_candidate", {
+				work_id: view.item.work_id,
+				revision_id: view.item.revision.revision_id,
+				planned_candidate_id: plannedCandidateId,
+				candidate_id: finalCandidateId,
+				candidate_sha256: freeze.candidateSha256,
+				commit_sha: freeze.commitSha,
+			});
+			if (result.type !== "finalize_candidate") throw new Error(`unexpected result ${result.type}`);
+			return result.candidate;
+		},
+
+		async snapshotQueue(projectFilter?: string, currentKey?: string, cwd?: string): Promise<ExecutionGrantItemClaim[]> {
+			const tree = await client.tree();
+			const relations = tree.relations ?? [];
+			const currentHead = headCommit(cwd ?? process.cwd()) ?? "";
+			const itemById = new Map<string, WorkItemView>();
+			for (const item of tree.items) itemById.set(item.work_id, item);
+
+			const blockedWorkIds = new Set<string>();
+			const activeBlockersByItem = new Map<string, string[]>();
+			for (const rel of relations) {
+				if (rel.active && rel.kind === "blocks") {
+					const list = activeBlockersByItem.get(rel.target_work_id) ?? [];
+					list.push(rel.source_work_id);
+					activeBlockersByItem.set(rel.target_work_id, list);
+					const source = itemById.get(rel.source_work_id);
+					if (source && source.state !== "DONE" && source.state !== "CANCELED" && source.state !== "CANCELLED") {
+						blockedWorkIds.add(rel.target_work_id);
+					}
+				}
+			}
+
+			let targetProjectId: string | null = null;
+			let currentItem: WorkItemView | null = null;
+			if (currentKey) {
+				currentItem = tree.items.find(i => i.alias.key === currentKey) ?? null;
+				if (currentItem) targetProjectId = currentItem.project_id;
+			}
+
+			const eligibleItems = tree.items.filter(item => {
+				if (item.archived) return false;
+				if (["DONE", "CANCELED", "CANCELLED", "TRIAGE", "BLOCKED"].includes(item.state)) return false;
+				if (extractOwnerQuestion(item.revision.description)) return false;
+				if (blockedWorkIds.has(item.work_id)) return false;
+				if (targetProjectId !== null && item.project_id !== targetProjectId) return false;
+				return true;
+			});
+
+			const remaining = eligibleItems.filter(i => !currentItem || i.work_id !== currentItem.work_id);
+			remaining.sort((a, b) => {
+				const numA = parseKeyNumber(a.alias.key);
+				const numB = parseKeyNumber(b.alias.key);
+				if (numA !== numB) return numA - numB;
+				return a.work_id.localeCompare(b.work_id);
+			});
+
+			const ordered = currentItem ? [currentItem, ...remaining] : remaining;
+			return ordered.map((item, idx) => ({
+				work_id: item.work_id,
+				revision_id: item.revision.revision_id,
+				position: idx,
+				original_request: item.revision.description,
+				original_request_sha256: sha256Hex(item.revision.description),
+				initial_git_baseline: currentHead,
+				project_id: item.project_id,
+				active_blocker_ids: (activeBlockersByItem.get(item.work_id) ?? []).sort(),
+			}));
+		},
+
+		async beginExecution(input): Promise<ExecutionSnapshot> {
+			const grantId = randomUUID();
+			const result = await run("begin_execution", {
+				grant_id: grantId,
+				provenance: input.provenance,
+				mode: input.mode,
+				items: input.items,
+				expected_focus_version: input.expectedFocusVersion,
+				judge_sha256: input.judgeSha256,
+				judge_manifest: input.judgeManifest,
+			});
+			if (result.type !== "begin_execution") throw new Error(`unexpected result ${result.type}`);
+			const activeItem = result.items.find(i => i.position === 0) ?? null;
+			return { grant: result.grant, items: result.items, activeItem };
+		},
+
+		async activateExecutionItem(input): Promise<ExecutionSnapshot> {
+			const result = await run("activate_execution_item", {
+				grant_id: input.grantId,
+				expected_grant_version: input.expectedGrantVersion,
+				position: input.position,
+				work_id: input.workId,
+				expected_revision_id: input.expectedRevisionId,
+				git_baseline: input.gitBaseline,
+				judge_sha256: input.judgeSha256,
+				expected_focus_version: input.expectedFocusVersion,
+				...(input.expectedProjectId ? { expected_project_id: input.expectedProjectId } : {}),
+				...(input.expectedBlockerIds ? { expected_blocker_ids: input.expectedBlockerIds } : {}),
+			});
+			if (result.type !== "activate_execution_item") throw new Error(`unexpected result ${result.type}`);
+			const view = await client.execution(input.grantId);
+			return { grant: result.grant, items: view.items, activeItem: result.item };
+		},
+
+		async sealExecutionCriteria(input): Promise<ExecutionSnapshot> {
+			const result = await run("seal_execution_criteria", {
+				grant_id: input.grantId,
+				expected_grant_version: input.expectedGrantVersion,
+				work_id: input.workId,
+				expected_revision_id: input.expectedRevisionId,
+				criteria: input.criteria,
+				description_sha256: input.descriptionSha256,
+				judge_sha256: input.judgeSha256,
+			});
+			if (result.type !== "seal_execution_criteria") throw new Error(`unexpected result ${result.type}`);
+			const view = await client.execution(input.grantId);
+			return { grant: result.grant, items: view.items, activeItem: result.item };
+		},
+
+		async stampExecutionPlan(input): Promise<ExecutionSnapshot> {
+			const result = await run("stamp_execution_plan", {
+				grant_id: input.grantId,
+				expected_grant_version: input.expectedGrantVersion,
+				work_id: input.workId,
+				revision_id: input.revisionId,
+				candidate_id: input.candidateId,
+				plan_file: input.planFile,
+				plan_body: input.planBody,
+				plan_sha256: input.planSha256,
+				approach: input.approach,
+				verification: input.verification,
+				paths: input.paths,
+				candidate_sha256: input.candidateSha256,
+				judge_sha256: input.judgeSha256,
+			});
+			if (result.type !== "stamp_execution_plan") throw new Error(`unexpected result ${result.type}`);
+			const view = await client.execution(input.grantId);
+			return { grant: result.grant, items: view.items, activeItem: result.item };
+		},
+
+		async setExecutionState(input): Promise<ExecutionSnapshot> {
+			const result = await run("set_execution_state", {
+				grant_id: input.grantId,
+				expected_grant_version: input.expectedGrantVersion,
+				target_state: input.targetState,
+				reason: input.reason,
+				judge_sha256: input.judgeSha256,
+			});
+			if (result.type !== "set_execution_state") throw new Error(`unexpected result ${result.type}`);
+			const view = await client.execution(input.grantId);
+			return { grant: result.grant, items: view.items, activeItem: view.active_item ?? null };
+		},
+
+		async completeExecutionItem(input): Promise<ExecutionSnapshot> {
+			const result = await run("complete_execution_item", {
+				grant_id: input.grantId,
+				expected_grant_version: input.expectedGrantVersion,
+				work_id: input.workId,
+				attempt_id: input.attemptId,
+				push_receipt_id: input.pushReceiptId,
+				judge_sha256: input.judgeSha256,
+			});
+			if (result.type !== "complete_execution_item") throw new Error(`unexpected result ${result.type}`);
+			const view = await client.execution(input.grantId);
+			return { grant: result.grant, items: view.items, activeItem: result.item };
 		},
 
 		deliveredOps(): UUID[] {

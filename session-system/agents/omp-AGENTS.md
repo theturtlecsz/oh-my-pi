@@ -109,6 +109,15 @@ Three-part rule:
    `contract_sha256`; approval.json is his attestation and is never minted
    from chat scope.
 
+## Autonomous execution authority (/execute, owner ruling 2026-08-28)
+
+`/execute <key> [--queue]` is the sole one-command exception to manual closeout
+ceremony. A literal owner `/execute` command grants authority to select the
+target item, seal structured criteria derived from the original request, stamp
+the execution plan, freeze, audit/remediation, push, and PASS close authority
+for the bounded grant within bounded continuation, attempt, and progress caps.
+Manual `/plan`, `/summary`, and `/done` retain their explicit-command gates.
+
 ## Task Observer (installed 2026-07-18, owner-approved activation)
 
 At the start of any task-oriented session — any interaction where you will

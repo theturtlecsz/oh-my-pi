@@ -1,24 +1,35 @@
 from __future__ import annotations
 
-from collections import defaultdict
-from datetime import date, datetime, timezone
-from pathlib import Path
 import json
 import re
 import shutil
+from collections import defaultdict
+from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .legacy_artifacts import ExportManifest, LinearStream, SourceHashIndex, SourcePage, load_export
 from omp_work.operations.artifacts import write_json_artifact
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import _connect
 from omp_work.v1.canonical import canonical_json, sha256
-from omp_work.v1.models import Anomaly, ReconciliationCounts, ReconciliationHashes, RelationEdge, RelationKind
+from omp_work.v1.models import (
+    Anomaly,
+    ReconciliationCounts,
+    ReconciliationHashes,
+    RelationEdge,
+    RelationKind,
+)
 from omp_work.v1.semantics import would_create_cycle
 
+from .legacy_artifacts import (
+    ExportManifest,
+    SourceHashIndex,
+    SourcePage,
+    load_export,
+)
 
 MAPPING_SCHEMA_VERSION = "linear-import-map/v1"
 # v2: alias eligibility filtering (alias_identifier / alias_previous_identifiers) and
@@ -26,7 +37,13 @@ MAPPING_SCHEMA_VERSION = "linear-import-map/v1"
 # so a bump re-transforms an existing export under a fresh batch instead of reusing
 # records staged under the old shape.
 TRANSFORMATION_VERSION = "linear-transform/v2"
-WORKFLOW_PREFIXES = ("**Plan approved**", "**Execution handoff**", "**Session review**", "**Close proposed**", "**Owner verdict in session:")
+WORKFLOW_PREFIXES = (
+    "**Plan approved**",
+    "**Execution handoff**",
+    "**Session review**",
+    "**Close proposed**",
+    "**Owner verdict in session:",
+)
 # omp_work.work_aliases.key CHECK constraint: only HOME/OMP keys are alias-eligible.
 _ALIAS_KEY_RE = re.compile(r"^(HOME|OMP)-[1-9][0-9]*$")
 
@@ -98,7 +115,11 @@ def parse_acceptance_criteria(description: str) -> tuple[str, ...]:
             break
         if in_criteria:
             match = re.match(r"^(?:[-*]|\d+\.)\s+(?:\[[ xX]\]\s+)?(.*)$", line.lstrip())
-            if match and (line.startswith("-") or line.startswith("*") or re.match(r"^\d+\.", line)):
+            if match and (
+                line.startswith("-")
+                or line.startswith("*")
+                or re.match(r"^\d+\.", line)
+            ):
                 if current_item:
                     items.append(" ".join(current_item).strip())
                     current_item = []
@@ -114,7 +135,9 @@ def parse_acceptance_criteria(description: str) -> tuple[str, ...]:
     return tuple(item for item in items if item)
 
 
-def map_work_item_state(state_type: str | None, completed_at: str | None, canceled_at: str | None) -> str:
+def map_work_item_state(
+    state_type: str | None, completed_at: str | None, canceled_at: str | None
+) -> str:
     if canceled_at or state_type == "canceled":
         return "CANCELED"
     if completed_at or state_type == "completed":
@@ -149,7 +172,9 @@ def classify_comment_prefix(body: str) -> str | None:
 def _logical_hash(transformed: dict[str, Any]) -> str:
     # Batch-local provenance must never leak into parity hashes: identical exports staged
     # by different batches have to produce identical logical hashes.
-    return sha256({key: value for key, value in transformed.items() if key != "provenance"})
+    return sha256(
+        {key: value for key, value in transformed.items() if key != "provenance"}
+    )
 
 
 _PROJECTION_FIELDS: dict[str, tuple[str, ...]] = {
@@ -179,8 +204,12 @@ def _norm_ts(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).isoformat()
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
+        return value.astimezone(UTC).isoformat()
+    return (
+        datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        .astimezone(UTC)
+        .isoformat()
+    )
 
 
 class LinearImporter:
@@ -205,7 +234,9 @@ class LinearImporter:
         except Exception as error:
             raise RuntimeError("operator_actor_id_missing") from error
 
-    def stage(self, workspace_id: UUID, export_id: UUID, mapping_file: Path) -> ImportBatchSummary:
+    def stage(
+        self, workspace_id: UUID, export_id: UUID, mapping_file: Path
+    ) -> ImportBatchSummary:
         mapping, mapping_hash = self._read_mapping(mapping_file)
         operator_actor_id = self._get_operator_actor_id()
         manifest, source_hashes, pages = load_export(self.config, export_id)
@@ -222,7 +253,10 @@ class LinearImporter:
             for node in page.nodes
             if isinstance(node.get("project"), dict) and node["project"].get("id")
         }
-        if any(project_id not in mapping.project_repositories for project_id in referenced_projects):
+        if any(
+            project_id not in mapping.project_repositories
+            for project_id in referenced_projects
+        ):
             raise ValueError("linear_import_mapping_invalid")
 
         batch_id, base_batch_id, is_already_done = self._init_batch(
@@ -231,15 +265,28 @@ class LinearImporter:
         if is_already_done:
             with _connect(self.config, "omp_work_importer") as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                    cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(operator_actor_id),))
+                    cur.execute(
+                        "SELECT set_config('omp.workspace_id', %s, true)",
+                        (str(workspace_id),),
+                    )
+                    cur.execute(
+                        "SELECT set_config('omp.actor_id', %s, true)",
+                        (str(operator_actor_id),),
+                    )
                     return self._build_summary(cur, workspace_id, batch_id)
 
         for page in pages:
             self._stage_single_page(workspace_id, batch_id, page, operator_actor_id)
 
         return self._finalize_staging(
-            workspace_id, batch_id, export_id, mapping, source_hashes, pages, manifest, operator_actor_id
+            workspace_id,
+            batch_id,
+            export_id,
+            mapping,
+            source_hashes,
+            pages,
+            manifest,
+            operator_actor_id,
         )
 
     def _init_batch(
@@ -254,14 +301,23 @@ class LinearImporter:
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute("SET LOCAL search_path = pg_catalog")
-                    cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                    cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(operator_actor_id),))
+                    cur.execute(
+                        "SELECT set_config('omp.workspace_id', %s, true)",
+                        (str(workspace_id),),
+                    )
+                    cur.execute(
+                        "SELECT set_config('omp.actor_id', %s, true)",
+                        (str(operator_actor_id),),
+                    )
                     cur.execute(
                         "SELECT state FROM omp_integration.raw_exports WHERE workspace_id = %s AND export_id = %s",
                         (workspace_id, export_id),
                     )
                     raw_export_row = cur.fetchone()
-                    if not raw_export_row or raw_export_row[0] not in ("complete", "blocked"):
+                    if not raw_export_row or raw_export_row[0] not in (
+                        "complete",
+                        "blocked",
+                    ):
                         raise ValueError("linear_import_missing")
                     raw_export_state = raw_export_row[0]
 
@@ -271,15 +327,28 @@ class LinearImporter:
                             raise ValueError("linear_import_base_invalid")
                         cur.execute(
                             "SELECT batch_id, state, parity_hashes FROM omp_integration.import_batches WHERE workspace_id = %s AND export_id = %s AND transformation_version = %s",
-                            (workspace_id, manifest.base_export_id, TRANSFORMATION_VERSION),
+                            (
+                                workspace_id,
+                                manifest.base_export_id,
+                                TRANSFORMATION_VERSION,
+                            ),
                         )
                         row = cur.fetchone()
                         if not row or row[1] != "promoted":
                             raise ValueError("linear_import_base_invalid")
                         base_batch_id = row[0]
-                        stored_parity = row[2] if isinstance(row[2], dict) else json.loads(row[2])
-                        base_manifest, _, _ = load_export(self.config, manifest.base_export_id)
-                        if stored_parity.get("dimension_hashes") != base_manifest.dimension_hashes.model_dump() or stored_parity.get("dimension_counts") != base_manifest.dimension_counts.model_dump():
+                        stored_parity = (
+                            row[2] if isinstance(row[2], dict) else json.loads(row[2])
+                        )
+                        base_manifest, _, _ = load_export(
+                            self.config, manifest.base_export_id
+                        )
+                        if (
+                            stored_parity.get("dimension_hashes")
+                            != base_manifest.dimension_hashes.model_dump()
+                            or stored_parity.get("dimension_counts")
+                            != base_manifest.dimension_counts.model_dump()
+                        ):
                             raise ValueError("linear_import_base_invalid")
 
                     cur.execute(
@@ -288,7 +357,12 @@ class LinearImporter:
                     )
                     existing = cur.fetchone()
                     if existing:
-                        b_id, state, existing_map_hash, _ = existing[0], existing[1], existing[2], existing[3]
+                        b_id, state, existing_map_hash, _ = (
+                            existing[0],
+                            existing[1],
+                            existing[2],
+                            existing[3],
+                        )
                         if existing_map_hash != mapping_hash:
                             raise ValueError("linear_import_mapping_invalid")
                         if state in ("staged", "reconciled", "promoted", "blocked"):
@@ -308,9 +382,18 @@ class LinearImporter:
                             transformation_version, mapping_file_sha256, state, artifact_root
                         ) VALUES (%s, %s, %s, %s, %s, %s, 'staging', %s)
                         """,
-                        (b_id, workspace_id, export_id, base_batch_id, TRANSFORMATION_VERSION, mapping_hash, artifact_root),
+                        (
+                            b_id,
+                            workspace_id,
+                            export_id,
+                            base_batch_id,
+                            TRANSFORMATION_VERSION,
+                            mapping_hash,
+                            artifact_root,
+                        ),
                     )
                     return b_id, base_batch_id, False
+
     def _stage_single_page(
         self,
         workspace_id: UUID,
@@ -322,8 +405,14 @@ class LinearImporter:
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute("SET LOCAL search_path = pg_catalog")
-                    cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                    cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(operator_actor_id),))
+                    cur.execute(
+                        "SELECT set_config('omp.workspace_id', %s, true)",
+                        (str(workspace_id),),
+                    )
+                    cur.execute(
+                        "SELECT set_config('omp.actor_id', %s, true)",
+                        (str(operator_actor_id),),
+                    )
 
                     cur.execute(
                         "SELECT artifact_key, plaintext_sha256 FROM omp_integration.import_pages WHERE batch_id = %s AND stream = %s AND page_index = %s",
@@ -343,7 +432,15 @@ class LinearImporter:
                             batch_id, workspace_id, stream, page_index, artifact_key, plaintext_sha256, node_count
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
-                        (batch_id, workspace_id, page.stream, page.page_index, page_key, page_digest, len(page.nodes)),
+                        (
+                            batch_id,
+                            workspace_id,
+                            page.stream,
+                            page.page_index,
+                            page_key,
+                            page_digest,
+                            len(page.nodes),
+                        ),
                     )
                     for occ_idx, node in enumerate(page.nodes):
                         source_id = str(node["id"])
@@ -354,7 +451,15 @@ class LinearImporter:
                                 batch_id, workspace_id, stream, page_index, occurrence_index, source_id, raw_record_sha256
                             ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                             """,
-                            (batch_id, workspace_id, page.stream, page.page_index, occ_idx, source_id, raw_hash),
+                            (
+                                batch_id,
+                                workspace_id,
+                                page.stream,
+                                page.page_index,
+                                occ_idx,
+                                source_id,
+                                raw_hash,
+                            ),
                         )
 
     def _finalize_staging(
@@ -372,10 +477,19 @@ class LinearImporter:
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute("SET LOCAL search_path = pg_catalog")
-                    cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                    cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(operator_actor_id),))
+                    cur.execute(
+                        "SELECT set_config('omp.workspace_id', %s, true)",
+                        (str(workspace_id),),
+                    )
+                    cur.execute(
+                        "SELECT set_config('omp.actor_id', %s, true)",
+                        (str(operator_actor_id),),
+                    )
 
-                    cur.execute("SELECT COUNT(*) FROM omp_integration.import_pages WHERE batch_id = %s", (batch_id,))
+                    cur.execute(
+                        "SELECT COUNT(*) FROM omp_integration.import_pages WHERE batch_id = %s",
+                        (batch_id,),
+                    )
                     if cur.fetchone()[0] != len(pages):
                         raise RuntimeError("pagination_count_hash_gap")
 
@@ -389,7 +503,14 @@ class LinearImporter:
                             ) VALUES (%s, %s, %s, 'exporter', %s, %s, %s, '{}'::jsonb)
                             ON CONFLICT DO NOTHING
                             """,
-                            (anomaly_id, batch_id, workspace_id, anomaly.code, anomaly.disposition, anomaly.code),
+                            (
+                                anomaly_id,
+                                batch_id,
+                                workspace_id,
+                                anomaly.code,
+                                anomaly.disposition,
+                                anomaly.code,
+                            ),
                         )
                     # Stage exactly one logical entity per SourceHashEntry: keep only the
                     # page occurrence whose hash matches the exporter-selected winner, so
@@ -420,17 +541,29 @@ class LinearImporter:
                                 entry = getattr(source_hashes, dim_name).get(node_id)
                                 if entry is None:
                                     continue
-                                expected = entry.source_sha256 if use_source_hash else entry.record_sha256
+                                expected = (
+                                    entry.source_sha256
+                                    if use_source_hash
+                                    else entry.record_sha256
+                                )
                                 if sha256(node) != expected:
                                     continue
                             if node_id not in selected[stream_name]:
                                 selected[stream_name][node_id] = node
                     records_by_stream: dict[str, list[dict[str, Any]]] = {
-                        stream_name: list(nodes.values()) for stream_name, nodes in selected.items()
+                        stream_name: list(nodes.values())
+                        for stream_name, nodes in selected.items()
                     }
 
                     self._stage_lookup_and_domain_records(
-                        cur, workspace_id, batch_id, export_id, mapping, source_hashes, records_by_stream, manifest
+                        cur,
+                        workspace_id,
+                        batch_id,
+                        export_id,
+                        mapping,
+                        source_hashes,
+                        records_by_stream,
+                        manifest,
                     )
 
                     # Block on any blocking anomaly copied from the export OR raised by
@@ -441,14 +574,27 @@ class LinearImporter:
                     )
                     is_blocked = cur.fetchone() is not None
                     if is_blocked:
-                        cur.execute("UPDATE omp_integration.import_batches SET state = 'blocked' WHERE batch_id = %s AND state <> 'blocked'", (batch_id,))
+                        cur.execute(
+                            "UPDATE omp_integration.import_batches SET state = 'blocked' WHERE batch_id = %s AND state <> 'blocked'",
+                            (batch_id,),
+                        )
                     else:
-                        cur.execute("UPDATE omp_integration.import_batches SET state = 'staged', staged_at = clock_timestamp() WHERE batch_id = %s AND state = 'staging'", (batch_id,))
+                        cur.execute(
+                            "UPDATE omp_integration.import_batches SET state = 'staged', staged_at = clock_timestamp() WHERE batch_id = %s AND state = 'staging'",
+                            (batch_id,),
+                        )
 
                     return self._build_summary(cur, workspace_id, batch_id)
 
     def _get_or_create_local_id(
-        self, cur: Any, workspace_id: UUID, batch_id: UUID, system: str, external_id: str, local_type: str, identifier: str | None = None
+        self,
+        cur: Any,
+        workspace_id: UUID,
+        batch_id: UUID,
+        system: str,
+        external_id: str,
+        local_type: str,
+        identifier: str | None = None,
     ) -> UUID:
         cur.execute(
             "SELECT local_id, local_type FROM omp_integration.external_refs WHERE workspace_id = %s AND system = %s AND external_id = %s",
@@ -461,7 +607,10 @@ class LinearImporter:
             return row[0]
 
         if identifier:
-            cur.execute("SELECT work_id FROM omp_work.work_aliases WHERE workspace_id = %s AND key = %s", (workspace_id, identifier))
+            cur.execute(
+                "SELECT work_id FROM omp_work.work_aliases WHERE workspace_id = %s AND key = %s",
+                (workspace_id, identifier),
+            )
             alias_row = cur.fetchone()
             if alias_row:
                 cur.execute(
@@ -495,7 +644,9 @@ class LinearImporter:
         manifest: ExportManifest,
     ) -> None:
         for repo_key, repo_map in sorted(mapping.repositories.items()):
-            local_repo_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear_repo", repo_key, "repository")
+            local_repo_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear_repo", repo_key, "repository"
+            )
             transformed_repo = {
                 "key": repo_map.key,
                 "name": repo_map.name,
@@ -512,7 +663,15 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'repositories', %s, %s, 'repository', 'mapping', %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, repo_key, local_repo_id, repo_hash, repo_hash, json.dumps(transformed_repo)),
+                (
+                    batch_id,
+                    workspace_id,
+                    repo_key,
+                    local_repo_id,
+                    repo_hash,
+                    repo_hash,
+                    json.dumps(transformed_repo),
+                ),
             )
 
         users_dict: dict[str, dict[str, Any]] = {}
@@ -529,18 +688,29 @@ class LinearImporter:
                     if isinstance(person, dict) and person.get("id"):
                         u_id = str(person["id"])
                         if u_id not in users_dict:
-                            users_dict[u_id] = {k: person.get(k) for k in ("id", "name", "displayName", "active")}
+                            users_dict[u_id] = {
+                                k: person.get(k)
+                                for k in ("id", "name", "displayName", "active")
+                            }
 
         for user_id, u_node in sorted(users_dict.items()):
-            local_user_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", user_id, "principal")
+            local_user_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", user_id, "principal"
+            )
             transformed_user = {
                 "name": u_node.get("name") or u_node.get("displayName") or "User",
-                "display_name": u_node.get("displayName") or u_node.get("name") or "User",
+                "display_name": u_node.get("displayName")
+                or u_node.get("name")
+                or "User",
                 "active": bool(u_node.get("active", True)),
                 "provenance": {"import_batch_id": str(batch_id), "source_id": user_id},
             }
             u_hash = sha256(u_node)
-            art_ref = source_hashes.users[user_id].artifact_ref if user_id in source_hashes.users else "pages"
+            art_ref = (
+                source_hashes.users[user_id].artifact_ref
+                if user_id in source_hashes.users
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -549,12 +719,23 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'users', %s, %s, 'principal', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, user_id, local_user_id, art_ref, u_hash, u_hash, json.dumps(transformed_user)),
+                (
+                    batch_id,
+                    workspace_id,
+                    user_id,
+                    local_user_id,
+                    art_ref,
+                    u_hash,
+                    u_hash,
+                    json.dumps(transformed_user),
+                ),
             )
 
         for state in records.get("workflowStates", []):
             s_id = str(state["id"])
-            local_state_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", s_id, "workflow_state")
+            local_state_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", s_id, "workflow_state"
+            )
             transformed_state = {
                 "name": state.get("name", ""),
                 "state_type": state.get("type", "backlog"),
@@ -564,7 +745,11 @@ class LinearImporter:
             }
             s_hash = _logical_hash(transformed_state)
             raw_state_hash = sha256(state)
-            art_ref = source_hashes.states[s_id].artifact_ref if s_id in source_hashes.states else "pages"
+            art_ref = (
+                source_hashes.states[s_id].artifact_ref
+                if s_id in source_hashes.states
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -573,12 +758,23 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'states', %s, %s, 'workflow_state', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, s_id, local_state_id, art_ref, raw_state_hash, s_hash, json.dumps(transformed_state)),
+                (
+                    batch_id,
+                    workspace_id,
+                    s_id,
+                    local_state_id,
+                    art_ref,
+                    raw_state_hash,
+                    s_hash,
+                    json.dumps(transformed_state),
+                ),
             )
 
         for label in records.get("issueLabels", []):
             l_id = str(label["id"])
-            local_label_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", l_id, "label")
+            local_label_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", l_id, "label"
+            )
             transformed_label = {
                 "name": label.get("name", ""),
                 "color": label.get("color"),
@@ -587,7 +783,11 @@ class LinearImporter:
             }
             l_hash = _logical_hash(transformed_label)
             raw_label_hash = sha256(label)
-            art_ref = source_hashes.labels[l_id].artifact_ref if l_id in source_hashes.labels else "pages"
+            art_ref = (
+                source_hashes.labels[l_id].artifact_ref
+                if l_id in source_hashes.labels
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -596,12 +796,23 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'labels', %s, %s, 'label', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, l_id, local_label_id, art_ref, raw_label_hash, l_hash, json.dumps(transformed_label)),
+                (
+                    batch_id,
+                    workspace_id,
+                    l_id,
+                    local_label_id,
+                    art_ref,
+                    raw_label_hash,
+                    l_hash,
+                    json.dumps(transformed_label),
+                ),
             )
 
         for world in records.get("initiatives", []):
             w_id = str(world["id"])
-            local_world_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", w_id, "project")
+            local_world_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", w_id, "project"
+            )
             transformed_world = {
                 "key": None,
                 "name": world.get("name", ""),
@@ -612,7 +823,11 @@ class LinearImporter:
             }
             w_hash = _logical_hash(transformed_world)
             raw_world_hash = sha256(world)
-            art_ref = source_hashes.worlds[w_id].artifact_ref if w_id in source_hashes.worlds else "pages"
+            art_ref = (
+                source_hashes.worlds[w_id].artifact_ref
+                if w_id in source_hashes.worlds
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -621,19 +836,43 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'worlds', %s, %s, 'project', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, w_id, local_world_id, art_ref, raw_world_hash, w_hash, json.dumps(transformed_world)),
+                (
+                    batch_id,
+                    workspace_id,
+                    w_id,
+                    local_world_id,
+                    art_ref,
+                    raw_world_hash,
+                    w_hash,
+                    json.dumps(transformed_world),
+                ),
             )
 
         for surface in records.get("projects", []):
             surf_id = str(surface["id"])
-            local_surf_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", surf_id, "project")
+            local_surf_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", surf_id, "project"
+            )
             source_hash = sha256(surface)
-            updates = [upd for upd in records.get("projectUpdates", []) if str((upd.get("project") or {}).get("id")) == surf_id]
-            record_hash = source_hash if not updates else sha256(
-                {
-                    "project": source_hash,
-                    "updates": [{"id": str(u["id"]), "record_sha256": sha256(u)} for u in sorted(updates, key=lambda item: str(item.get("id", "")))],
-                }
+            updates = [
+                upd
+                for upd in records.get("projectUpdates", [])
+                if str((upd.get("project") or {}).get("id")) == surf_id
+            ]
+            record_hash = (
+                source_hash
+                if not updates
+                else sha256(
+                    {
+                        "project": source_hash,
+                        "updates": [
+                            {"id": str(u["id"]), "record_sha256": sha256(u)}
+                            for u in sorted(
+                                updates, key=lambda item: str(item.get("id", ""))
+                            )
+                        ],
+                    }
+                )
             )
             transformed_surf = {
                 "key": None,
@@ -645,7 +884,11 @@ class LinearImporter:
                 "source_updated_at": surface.get("updatedAt"),
                 "provenance": {"import_batch_id": str(batch_id), "source_id": surf_id},
             }
-            art_ref = source_hashes.surfaces[surf_id].artifact_ref if surf_id in source_hashes.surfaces else "pages"
+            art_ref = (
+                source_hashes.surfaces[surf_id].artifact_ref
+                if surf_id in source_hashes.surfaces
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -654,11 +897,22 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'surfaces', %s, %s, 'project', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, surf_id, local_surf_id, art_ref, source_hash, record_hash, json.dumps(transformed_surf)),
+                (
+                    batch_id,
+                    workspace_id,
+                    surf_id,
+                    local_surf_id,
+                    art_ref,
+                    source_hash,
+                    record_hash,
+                    json.dumps(transformed_surf),
+                ),
             )
         for promise in records.get("projectMilestones", []):
             prom_id = str(promise["id"])
-            local_prom_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", prom_id, "project")
+            local_prom_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", prom_id, "project"
+            )
             proj_id = str((promise.get("project") or {}).get("id", ""))
             transformed_prom = {
                 "key": None,
@@ -671,7 +925,11 @@ class LinearImporter:
             }
             prom_hash = _logical_hash(transformed_prom)
             raw_prom_hash = sha256(promise)
-            art_ref = source_hashes.promises[prom_id].artifact_ref if prom_id in source_hashes.promises else "pages"
+            art_ref = (
+                source_hashes.promises[prom_id].artifact_ref
+                if prom_id in source_hashes.promises
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -680,13 +938,24 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'promises', %s, %s, 'project', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, prom_id, local_prom_id, art_ref, raw_prom_hash, prom_hash, json.dumps(transformed_prom)),
+                (
+                    batch_id,
+                    workspace_id,
+                    prom_id,
+                    local_prom_id,
+                    art_ref,
+                    raw_prom_hash,
+                    prom_hash,
+                    json.dumps(transformed_prom),
+                ),
             )
 
         for issue in records.get("issues", []):
             i_id = str(issue["id"])
             identifier = issue.get("identifier") or ""
-            local_work_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", i_id, "work_item", identifier)
+            local_work_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", i_id, "work_item", identifier
+            )
 
             # Only HOME/OMP keys can ever live in work_aliases; moved-in issues carry
             # foreign-team identifiers (e.g. ENG-42) that must never reach the CHECKed
@@ -694,7 +963,9 @@ class LinearImporter:
             # every downstream alias path uses these filtered fields.
             alias_identifier = identifier if _ALIAS_KEY_RE.match(identifier) else ""
             alias_previous_identifiers = [
-                key for key in (str(p) for p in issue.get("previousIdentifiers", []) if p) if _ALIAS_KEY_RE.match(key)
+                key
+                for key in (str(p) for p in issue.get("previousIdentifiers", []) if p)
+                if _ALIAS_KEY_RE.match(key)
             ]
 
             state_node = issue.get("state") or {}
@@ -702,7 +973,9 @@ class LinearImporter:
             completed_at = issue.get("completedAt")
             canceled_at = issue.get("canceledAt")
             try:
-                canonical_state = map_work_item_state(state_type, completed_at, canceled_at)
+                canonical_state = map_work_item_state(
+                    state_type, completed_at, canceled_at
+                )
             except ValueError:
                 cur.execute("SELECT uuidv7()")
                 anomaly_id = cur.fetchone()[0]
@@ -734,20 +1007,56 @@ class LinearImporter:
             else:
                 repo_key = mapping.unprojected_repository
 
-            local_repo_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear_repo", repo_key, "repository")
-            local_proj_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", str(proj_id), "project") if proj_id else None
+            local_repo_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear_repo", repo_key, "repository"
+            )
+            local_proj_id = (
+                self._get_or_create_local_id(
+                    cur, workspace_id, batch_id, "linear", str(proj_id), "project"
+                )
+                if proj_id
+                else None
+            )
             state_id = state_node.get("id")
-            local_state_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", str(state_id), "workflow_state") if state_id else None
+            local_state_id = (
+                self._get_or_create_local_id(
+                    cur,
+                    workspace_id,
+                    batch_id,
+                    "linear",
+                    str(state_id),
+                    "workflow_state",
+                )
+                if state_id
+                else None
+            )
             assignee_id = (issue.get("assignee") or {}).get("id")
-            local_assignee_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", str(assignee_id), "principal") if assignee_id else None
+            local_assignee_id = (
+                self._get_or_create_local_id(
+                    cur, workspace_id, batch_id, "linear", str(assignee_id), "principal"
+                )
+                if assignee_id
+                else None
+            )
 
-            label_ids = [str(l["id"]) for l in (issue.get("labels") or {}).get("nodes", []) if l.get("id")]
-            local_label_ids = [self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", lid, "label") for lid in label_ids]
+            label_ids = [
+                str(l["id"])
+                for l in (issue.get("labels") or {}).get("nodes", [])
+                if l.get("id")
+            ]
+            local_label_ids = [
+                self._get_or_create_local_id(
+                    cur, workspace_id, batch_id, "linear", lid, "label"
+                )
+                for lid in label_ids
+            ]
 
             transformed_issue = {
                 "identifier": identifier,
                 "alias_identifier": alias_identifier,
-                "previous_identifiers": [str(p) for p in issue.get("previousIdentifiers", []) if p],
+                "previous_identifiers": [
+                    str(p) for p in issue.get("previousIdentifiers", []) if p
+                ],
                 "alias_previous_identifiers": alias_previous_identifiers,
                 "title": title,
                 "description": description,
@@ -764,12 +1073,23 @@ class LinearImporter:
                 "assignee_id": str(local_assignee_id) if local_assignee_id else None,
                 "label_ids": [str(lid) for lid in local_label_ids],
                 "source_label_ids": label_ids,
-                "parent_id": str((issue.get("parent") or {}).get("id")) if isinstance(issue.get("parent"), dict) and issue.get("parent", {}).get("id") else None,
+                "parent_id": str((issue.get("parent") or {}).get("id"))
+                if isinstance(issue.get("parent"), dict)
+                and issue.get("parent", {}).get("id")
+                else None,
                 "url": issue.get("url"),
-                "provenance": {"import_batch_id": str(batch_id), "source_id": i_id, "identifier": identifier},
+                "provenance": {
+                    "import_batch_id": str(batch_id),
+                    "source_id": i_id,
+                    "identifier": identifier,
+                },
             }
             raw_issue_hash = sha256(issue)
-            art_ref = source_hashes.work_items[i_id].artifact_ref if i_id in source_hashes.work_items else "pages"
+            art_ref = (
+                source_hashes.work_items[i_id].artifact_ref
+                if i_id in source_hashes.work_items
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -778,15 +1098,32 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'work_items', %s, %s, 'work_item', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, i_id, local_work_id, art_ref, raw_issue_hash, content_hash, json.dumps(transformed_issue)),
+                (
+                    batch_id,
+                    workspace_id,
+                    i_id,
+                    local_work_id,
+                    art_ref,
+                    raw_issue_hash,
+                    content_hash,
+                    json.dumps(transformed_issue),
+                ),
             )
 
         for update in records.get("projectUpdates", []):
             u_id = str(update["id"])
             proj_node = update.get("project") or {}
             p_id = str(proj_node.get("id", ""))
-            local_proj_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", p_id, "project") if p_id else None
-            local_upd_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", u_id, "project_update")
+            local_proj_id = (
+                self._get_or_create_local_id(
+                    cur, workspace_id, batch_id, "linear", p_id, "project"
+                )
+                if p_id
+                else None
+            )
+            local_upd_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", u_id, "project_update"
+            )
             transformed_upd = {
                 "project_id": str(local_proj_id) if local_proj_id else None,
                 "source_project_id": p_id,
@@ -799,7 +1136,11 @@ class LinearImporter:
             }
             upd_hash = _logical_hash(transformed_upd)
             raw_upd_hash = sha256(update)
-            art_ref = source_hashes.project_updates[u_id].artifact_ref if u_id in source_hashes.project_updates else "pages"
+            art_ref = (
+                source_hashes.project_updates[u_id].artifact_ref
+                if u_id in source_hashes.project_updates
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -808,7 +1149,16 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'project_updates', %s, %s, 'project_update', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, u_id, local_upd_id, art_ref, raw_upd_hash, upd_hash, json.dumps(transformed_upd)),
+                (
+                    batch_id,
+                    workspace_id,
+                    u_id,
+                    local_upd_id,
+                    art_ref,
+                    raw_upd_hash,
+                    upd_hash,
+                    json.dumps(transformed_upd),
+                ),
             )
 
         for comment in records.get("comments", []):
@@ -817,8 +1167,16 @@ class LinearImporter:
             i_id = str(issue_node.get("id", ""))
             body = str(comment.get("body", ""))
             prefix_kind = classify_comment_prefix(body)
-            local_comment_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", c_id, "comment")
-            local_issue_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", i_id, "work_item") if i_id else None
+            local_comment_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", c_id, "comment"
+            )
+            local_issue_id = (
+                self._get_or_create_local_id(
+                    cur, workspace_id, batch_id, "linear", i_id, "work_item"
+                )
+                if i_id
+                else None
+            )
             transformed_comment = {
                 "issue_id": str(local_issue_id) if local_issue_id else None,
                 "source_issue_id": i_id,
@@ -831,7 +1189,11 @@ class LinearImporter:
             }
             c_hash = _logical_hash(transformed_comment)
             raw_comment_hash = sha256(comment)
-            art_ref = source_hashes.comments[c_id].artifact_ref if c_id in source_hashes.comments else "pages"
+            art_ref = (
+                source_hashes.comments[c_id].artifact_ref
+                if c_id in source_hashes.comments
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -840,7 +1202,16 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'comments', %s, %s, 'comment', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, c_id, local_comment_id, art_ref, raw_comment_hash, c_hash, json.dumps(transformed_comment)),
+                (
+                    batch_id,
+                    workspace_id,
+                    c_id,
+                    local_comment_id,
+                    art_ref,
+                    raw_comment_hash,
+                    c_hash,
+                    json.dumps(transformed_comment),
+                ),
             )
 
         for attachment in records.get("attachments", []):
@@ -850,8 +1221,20 @@ class LinearImporter:
             url = attachment.get("url")
             meta = attachment.get("metadata")
             usable = bool(a_id and i_id and (url or meta))
-            local_att_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", a_id, "attachment") if a_id else uuid4()
-            local_issue_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", i_id, "work_item") if i_id else None
+            local_att_id = (
+                self._get_or_create_local_id(
+                    cur, workspace_id, batch_id, "linear", a_id, "attachment"
+                )
+                if a_id
+                else uuid4()
+            )
+            local_issue_id = (
+                self._get_or_create_local_id(
+                    cur, workspace_id, batch_id, "linear", i_id, "work_item"
+                )
+                if i_id
+                else None
+            )
             transformed_att = {
                 "issue_id": str(local_issue_id) if local_issue_id else None,
                 "source_issue_id": i_id,
@@ -865,7 +1248,11 @@ class LinearImporter:
             }
             a_hash = _logical_hash(transformed_att)
             raw_att_hash = sha256(attachment)
-            art_ref = source_hashes.attachments[a_id].artifact_ref if a_id in source_hashes.attachments else "pages"
+            art_ref = (
+                source_hashes.attachments[a_id].artifact_ref
+                if a_id in source_hashes.attachments
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -874,14 +1261,25 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'attachments', %s, %s, 'attachment', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, a_id or str(local_att_id), local_att_id, art_ref, raw_att_hash, a_hash, json.dumps(transformed_att)),
+                (
+                    batch_id,
+                    workspace_id,
+                    a_id or str(local_att_id),
+                    local_att_id,
+                    art_ref,
+                    raw_att_hash,
+                    a_hash,
+                    json.dumps(transformed_att),
+                ),
             )
 
         for init_proj in records.get("initiativeToProjects", []):
             r_id = str(init_proj["id"])
             init_id = str((init_proj.get("initiative") or {}).get("id", ""))
             proj_id = str((init_proj.get("project") or {}).get("id", ""))
-            local_rel_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", r_id, "project_relation")
+            local_rel_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", r_id, "project_relation"
+            )
             transformed_ip = {
                 "initiative_id": init_id,
                 "project_id": proj_id,
@@ -890,7 +1288,11 @@ class LinearImporter:
                 "provenance": {"import_batch_id": str(batch_id), "source_id": r_id},
             }
             ip_hash = sha256(init_proj)
-            art_ref = source_hashes.relations[r_id].artifact_ref if r_id in source_hashes.relations else "pages"
+            art_ref = (
+                source_hashes.relations[r_id].artifact_ref
+                if r_id in source_hashes.relations
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -899,14 +1301,25 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'relations', %s, %s, 'project_relation', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, r_id, local_rel_id, art_ref, ip_hash, ip_hash, json.dumps(transformed_ip)),
+                (
+                    batch_id,
+                    workspace_id,
+                    r_id,
+                    local_rel_id,
+                    art_ref,
+                    ip_hash,
+                    ip_hash,
+                    json.dumps(transformed_ip),
+                ),
             )
 
         for issue_rel in records.get("issueRelations", []):
             r_id = str(issue_rel["id"])
             src_i_id = str((issue_rel.get("issue") or {}).get("id", ""))
             tgt_i_id = str((issue_rel.get("relatedIssue") or {}).get("id", ""))
-            local_rel_id = self._get_or_create_local_id(cur, workspace_id, batch_id, "linear", r_id, "work_relation")
+            local_rel_id = self._get_or_create_local_id(
+                cur, workspace_id, batch_id, "linear", r_id, "work_relation"
+            )
             transformed_ir = {
                 "issue_id": src_i_id,
                 "related_issue_id": tgt_i_id,
@@ -915,7 +1328,11 @@ class LinearImporter:
                 "provenance": {"import_batch_id": str(batch_id), "source_id": r_id},
             }
             ir_hash = sha256(issue_rel)
-            art_ref = source_hashes.relations[r_id].artifact_ref if r_id in source_hashes.relations else "pages"
+            art_ref = (
+                source_hashes.relations[r_id].artifact_ref
+                if r_id in source_hashes.relations
+                else "pages"
+            )
             cur.execute(
                 """
                 INSERT INTO omp_integration.import_records (
@@ -924,14 +1341,27 @@ class LinearImporter:
                 ) VALUES (%s, %s, 'relations', %s, %s, 'work_relation', %s, %s, %s, %s)
                 ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                 """,
-                (batch_id, workspace_id, r_id, local_rel_id, art_ref, ir_hash, ir_hash, json.dumps(transformed_ir)),
+                (
+                    batch_id,
+                    workspace_id,
+                    r_id,
+                    local_rel_id,
+                    art_ref,
+                    ir_hash,
+                    ir_hash,
+                    json.dumps(transformed_ir),
+                ),
             )
+
     def _materialize_and_validate_relations(
         self, cur: Any, workspace_id: UUID, batch_id: UUID, operator_actor_id: UUID
     ) -> list[Anomaly]:
         anomalies: list[Anomaly] = []
 
-        cur.execute("SELECT base_batch_id FROM omp_integration.import_batches WHERE batch_id = %s", (batch_id,))
+        cur.execute(
+            "SELECT base_batch_id FROM omp_integration.import_batches WHERE batch_id = %s",
+            (batch_id,),
+        )
         base_b_row = cur.fetchone()
         base_batch_id = base_b_row[0] if base_b_row else None
         records_map: dict[tuple[str, str], tuple[UUID, dict[str, Any]]] = {}
@@ -945,7 +1375,10 @@ class LinearImporter:
                 (base_batch_id,),
             )
             for row in cur.fetchall():
-                records_map[(row[0], row[1])] = (row[2], row[3] if isinstance(row[3], dict) else json.loads(row[3]))
+                records_map[(row[0], row[1])] = (
+                    row[2],
+                    row[3] if isinstance(row[3], dict) else json.loads(row[3]),
+                )
 
         cur.execute(
             """
@@ -956,10 +1389,16 @@ class LinearImporter:
             (batch_id,),
         )
         for row in cur.fetchall():
-            records_map[(row[0], row[1])] = (row[2], row[3] if isinstance(row[3], dict) else json.loads(row[3]))
+            records_map[(row[0], row[1])] = (
+                row[2],
+                row[3] if isinstance(row[3], dict) else json.loads(row[3]),
+            )
 
-        cur.execute("SELECT relation_id, relation_kind, source_id, target_id, state FROM omp_integration.import_relations WHERE batch_id = %s", (batch_id,))
-        existing_rels = { (r[1], r[2], r[3]): (r[0], r[4]) for r in cur.fetchall() }
+        cur.execute(
+            "SELECT relation_id, relation_kind, source_id, target_id, state FROM omp_integration.import_relations WHERE batch_id = %s",
+            (batch_id,),
+        )
+        existing_rels = {(r[1], r[2], r[3]): (r[0], r[4]) for r in cur.fetchall()}
 
         def record_rel(
             relation_kind: str,
@@ -986,7 +1425,19 @@ class LinearImporter:
                     local_source_id, local_target_id, canonical_id, state
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
                 """,
-                (rel_id, batch_id, workspace_id, relation_kind, source_entity_type, source_id, target_entity_type, target_id, local_src, local_tgt, canonical_id),
+                (
+                    rel_id,
+                    batch_id,
+                    workspace_id,
+                    relation_kind,
+                    source_entity_type,
+                    source_id,
+                    target_entity_type,
+                    target_id,
+                    local_src,
+                    local_tgt,
+                    canonical_id,
+                ),
             )
             existing_rels[key] = (rel_id, "pending")
             return rel_id, "pending"
@@ -996,24 +1447,36 @@ class LinearImporter:
             source_id = issue_data["provenance"]["source_id"]
             parent_source_id = issue_data.get("parent_id")
             if parent_source_id:
-                record_rel("parent", "work_items", source_id, "work_items", parent_source_id)
+                record_rel(
+                    "parent", "work_items", source_id, "work_items", parent_source_id
+                )
 
             for label_source_id in issue_data.get("source_label_ids", []):
-                record_rel("issue_label", "work_items", source_id, "labels", label_source_id)
+                record_rel(
+                    "issue_label", "work_items", source_id, "labels", label_source_id
+                )
 
         comments = [v for k, v in records_map.items() if k[0] == "comments"]
         for _, comment_data in comments:
             c_source_id = comment_data["provenance"]["source_id"]
             i_source_id = comment_data.get("source_issue_id")
             if i_source_id:
-                record_rel("comment_parent", "comments", c_source_id, "work_items", i_source_id)
+                record_rel(
+                    "comment_parent", "comments", c_source_id, "work_items", i_source_id
+                )
 
         attachments = [v for k, v in records_map.items() if k[0] == "attachments"]
         for _, att_data in attachments:
             a_source_id = att_data["provenance"]["source_id"]
             i_source_id = att_data.get("source_issue_id")
             if i_source_id:
-                record_rel("attachment_owner", "attachments", a_source_id, "work_items", i_source_id)
+                record_rel(
+                    "attachment_owner",
+                    "attachments",
+                    a_source_id,
+                    "work_items",
+                    i_source_id,
+                )
 
         for (e_type, s_id), (record_local_id, data) in list(records_map.items()):
             if e_type == "relations":
@@ -1021,7 +1484,14 @@ class LinearImporter:
                     init_id = data.get("initiative_id")
                     proj_id = data.get("project_id")
                     if init_id and proj_id:
-                        record_rel("initiative_project", "worlds", init_id, "surfaces", proj_id, canonical_id=record_local_id)
+                        record_rel(
+                            "initiative_project",
+                            "worlds",
+                            init_id,
+                            "surfaces",
+                            proj_id,
+                            canonical_id=record_local_id,
+                        )
                 elif data.get("type"):
                     raw_kind = str(data.get("type", "")).lower()
                     kind_map = {
@@ -1035,17 +1505,38 @@ class LinearImporter:
                     src_id = data.get("issue_id")
                     tgt_id = data.get("related_issue_id")
                     if not mapping_entry or not src_id or not tgt_id:
-                        anomalies.append(Anomaly(code="unsupported_non_workflow_object", disposition="quarantined"))
+                        anomalies.append(
+                            Anomaly(
+                                code="unsupported_non_workflow_object",
+                                disposition="quarantined",
+                            )
+                        )
                         continue
                     rel_kind_val, is_reverse = mapping_entry
                     if is_reverse:
-                        record_rel(rel_kind_val, "work_items", tgt_id, "work_items", src_id, canonical_id=record_local_id)
+                        record_rel(
+                            rel_kind_val,
+                            "work_items",
+                            tgt_id,
+                            "work_items",
+                            src_id,
+                            canonical_id=record_local_id,
+                        )
                     else:
-                        record_rel(rel_kind_val, "work_items", src_id, "work_items", tgt_id, canonical_id=record_local_id)
+                        record_rel(
+                            rel_kind_val,
+                            "work_items",
+                            src_id,
+                            "work_items",
+                            tgt_id,
+                            canonical_id=record_local_id,
+                        )
             elif e_type == "promises":
                 proj_id = data.get("project_id")
                 if proj_id:
-                    record_rel("project_milestone", "surfaces", proj_id, "promises", s_id)
+                    record_rel(
+                        "project_milestone", "surfaces", proj_id, "promises", s_id
+                    )
         rels_dict: dict[tuple[str, str, str], tuple[Any, ...]] = {}
         if base_batch_id is not None:
             cur.execute(
@@ -1063,13 +1554,24 @@ class LinearImporter:
             rels_dict[(r[1], r[3], r[5])] = r
 
         all_rels = list(rels_dict.values())
-        cur.execute("SELECT source_work_id, target_work_id, kind FROM omp_work.work_relations WHERE workspace_id = %s AND active = true", (workspace_id,))
+        cur.execute(
+            "SELECT source_work_id, target_work_id, kind FROM omp_work.work_relations WHERE workspace_id = %s AND active = true",
+            (workspace_id,),
+        )
         raw_canonical = cur.fetchall()
         canonical_edges = [
-            RelationEdge(workspace_id=workspace_id, source_work_id=r[0], target_work_id=r[1], kind=RelationKind(r[2]), active=True)
+            RelationEdge(
+                workspace_id=workspace_id,
+                source_work_id=r[0],
+                target_work_id=r[1],
+                kind=RelationKind(r[2]),
+                active=True,
+            )
             for r in raw_canonical
         ]
-        canonical_parent_map: dict[UUID, UUID] = {r[0]: r[1] for r in raw_canonical if r[2] == "parent"}
+        canonical_parent_map: dict[UUID, UUID] = {
+            r[0]: r[1] for r in raw_canonical if r[2] == "parent"
+        }
         edge_list: list[RelationEdge] = list(canonical_edges)
 
         for rel in all_rels:
@@ -1082,26 +1584,49 @@ class LinearImporter:
 
             if rel_kind == "attachment_owner":
                 if not tgt_entry or not src_entry or not src_entry[1].get("usable"):
-                    cur.execute("UPDATE omp_integration.import_relations SET state = 'quarantined', anomaly_code = 'attachment_content_unavailable' WHERE relation_id = %s", (rel_id,))
-                    anomalies.append(Anomaly(code="attachment_content_unavailable", disposition="quarantined"))
+                    cur.execute(
+                        "UPDATE omp_integration.import_relations SET state = 'quarantined', anomaly_code = 'attachment_content_unavailable' WHERE relation_id = %s",
+                        (rel_id,),
+                    )
+                    anomalies.append(
+                        Anomaly(
+                            code="attachment_content_unavailable",
+                            disposition="quarantined",
+                        )
+                    )
                     continue
 
             if not src_entry or not tgt_entry:
-                cur.execute("UPDATE omp_integration.import_relations SET state = 'blocked', anomaly_code = 'missing_relation_endpoint' WHERE relation_id = %s", (rel_id,))
-                anomalies.append(Anomaly(code="missing_relation_endpoint", disposition="blocking"))
+                cur.execute(
+                    "UPDATE omp_integration.import_relations SET state = 'blocked', anomaly_code = 'missing_relation_endpoint' WHERE relation_id = %s",
+                    (rel_id,),
+                )
+                anomalies.append(
+                    Anomaly(code="missing_relation_endpoint", disposition="blocking")
+                )
                 continue
 
             if rel_kind in ("parent", "blocks", "duplicate_of", "related"):
                 if local_s == local_t:
-                    cur.execute("UPDATE omp_integration.import_relations SET state = 'blocked', anomaly_code = 'relation_cycle' WHERE relation_id = %s", (rel_id,))
-                    anomalies.append(Anomaly(code="relation_cycle", disposition="blocking"))
+                    cur.execute(
+                        "UPDATE omp_integration.import_relations SET state = 'blocked', anomaly_code = 'relation_cycle' WHERE relation_id = %s",
+                        (rel_id,),
+                    )
+                    anomalies.append(
+                        Anomaly(code="relation_cycle", disposition="blocking")
+                    )
                     continue
 
                 if rel_kind == "parent":
                     existing_parent = canonical_parent_map.get(local_s)
                     if existing_parent is not None and existing_parent != local_t:
-                        cur.execute("UPDATE omp_integration.import_relations SET state = 'blocked', anomaly_code = 'relation_cycle' WHERE relation_id = %s", (rel_id,))
-                        anomalies.append(Anomaly(code="relation_cycle", disposition="blocking"))
+                        cur.execute(
+                            "UPDATE omp_integration.import_relations SET state = 'blocked', anomaly_code = 'relation_cycle' WHERE relation_id = %s",
+                            (rel_id,),
+                        )
+                        anomalies.append(
+                            Anomaly(code="relation_cycle", disposition="blocking")
+                        )
                         continue
                     canonical_parent_map[local_s] = local_t
 
@@ -1114,15 +1639,26 @@ class LinearImporter:
                 )
                 if candidate_edge not in edge_list:
                     if would_create_cycle(tuple(edge_list), candidate_edge):
-                        cur.execute("UPDATE omp_integration.import_relations SET state = 'blocked', anomaly_code = 'relation_cycle' WHERE relation_id = %s", (rel_id,))
-                        anomalies.append(Anomaly(code="relation_cycle", disposition="blocking"))
+                        cur.execute(
+                            "UPDATE omp_integration.import_relations SET state = 'blocked', anomaly_code = 'relation_cycle' WHERE relation_id = %s",
+                            (rel_id,),
+                        )
+                        anomalies.append(
+                            Anomaly(code="relation_cycle", disposition="blocking")
+                        )
                         continue
                     edge_list.append(candidate_edge)
-            cur.execute("UPDATE omp_integration.import_relations SET state = 'validated' WHERE relation_id = %s", (rel_id,))
+            cur.execute(
+                "UPDATE omp_integration.import_relations SET state = 'validated' WHERE relation_id = %s",
+                (rel_id,),
+            )
         plans: dict[str, tuple[str, str]] = {}
         sorted_comments = sorted(
             [v[1] for k, v in records_map.items() if k[0] == "comments"],
-            key=lambda c: (str(c.get("created_at", "")), str(c["provenance"]["source_id"])),
+            key=lambda c: (
+                str(c.get("created_at", "")),
+                str(c["provenance"]["source_id"]),
+            ),
         )
         for comment_data in sorted_comments:
             body = comment_data.get("body", "")
@@ -1141,21 +1677,27 @@ class LinearImporter:
             if body.startswith("**Session review**"):
                 match = re.search(r"Plan SHA-256: `([a-f0-9]{64})`", body)
                 if match and match.group(1) != plan[0]:
-                    anomalies.append(Anomaly(code="legacy_authority_claim", disposition="blocking"))
+                    anomalies.append(
+                        Anomaly(code="legacy_authority_claim", disposition="blocking")
+                    )
 
         now_label_ids = {
-            k[1] for k, v in records_map.items()
+            k[1]
+            for k, v in records_map.items()
             if k[0] == "labels" and str(v[1].get("name", "")).casefold() == "now"
         }
         focused = [
-            v for k, v in records_map.items()
+            v
+            for k, v in records_map.items()
             if k[0] == "work_items"
             and not v[1].get("archived")
             and v[1].get("state") not in ("DONE", "CANCELED")
             and any(lid in now_label_ids for lid in v[1].get("source_label_ids", []))
         ]
         if len(focused) > 1:
-            anomalies.append(Anomaly(code="multiple_focus_slots", disposition="blocking"))
+            anomalies.append(
+                Anomaly(code="multiple_focus_slots", disposition="blocking")
+            )
         elif len(focused) == 1:
             cur.execute(
                 "SELECT work_id FROM omp_work.focus_slots WHERE workspace_id = %s AND owner_id = %s",
@@ -1163,13 +1705,17 @@ class LinearImporter:
             )
             focus_row = cur.fetchone()
             if focus_row and focus_row[0] is not None and focus_row[0] != focused[0][0]:
-                candidate_batches = [batch_id] + ([base_batch_id] if base_batch_id is not None else [])
+                candidate_batches = [batch_id] + (
+                    [base_batch_id] if base_batch_id is not None else []
+                )
                 cur.execute(
                     "SELECT entity_type FROM omp_integration.import_records WHERE batch_id = ANY(%s) AND local_id = %s",
                     (candidate_batches, focus_row[0]),
                 )
                 if not cur.fetchone():
-                    anomalies.append(Anomaly(code="source_local_conflict", disposition="blocking"))
+                    anomalies.append(
+                        Anomaly(code="source_local_conflict", disposition="blocking")
+                    )
 
         for item_entry in work_items:
             item_id = item_entry[0]
@@ -1198,21 +1744,36 @@ class LinearImporter:
                     last_hash, last_rev_id, last_row_version = last_res
                     if incoming_hash != last_hash:
                         if w_row[0] != last_rev_id or w_row[1] != last_row_version:
-                            anomalies.append(Anomaly(code="source_local_conflict", disposition="blocking"))
+                            anomalies.append(
+                                Anomaly(
+                                    code="source_local_conflict", disposition="blocking"
+                                )
+                            )
 
         # Projection conflicts: unchanged source must never overwrite locally edited
         # repositories, principals, states, projects, labels, or project health.
         for (e_type, proj_s_id), (proj_l_id, proj_data) in records_map.items():
             if e_type not in _PROJECTION_FIELDS:
                 continue
-            staged_payload = {field: proj_data.get(field) for field in _PROJECTION_FIELDS[e_type]}
-            decision, _ = self._projection_decision(cur, workspace_id, e_type, proj_s_id, proj_l_id, staged_payload)
+            staged_payload = {
+                field: proj_data.get(field) for field in _PROJECTION_FIELDS[e_type]
+            }
+            decision, _ = self._projection_decision(
+                cur, workspace_id, e_type, proj_s_id, proj_l_id, staged_payload
+            )
             if decision == "source_local_conflict":
-                anomalies.append(Anomaly(code="source_local_conflict", disposition="blocking"))
+                anomalies.append(
+                    Anomaly(code="source_local_conflict", disposition="blocking")
+                )
 
         health_candidates: dict[str, dict[str, Any]] = {}
         for (e_type, upd_s_id), (_, upd_data) in records_map.items():
-            if e_type == "project_updates" and not upd_data.get("archived") and upd_data.get("project_id") and upd_data.get("health"):
+            if (
+                e_type == "project_updates"
+                and not upd_data.get("archived")
+                and upd_data.get("project_id")
+                and upd_data.get("health")
+            ):
                 key = str(upd_data["project_id"])
                 candidate = {
                     "health": upd_data["health"],
@@ -1221,10 +1782,20 @@ class LinearImporter:
                     "update_source_id": upd_s_id,
                 }
                 existing_candidate = health_candidates.get(key)
-                if existing_candidate is None or (candidate["updated_at"] or "", upd_s_id) > (existing_candidate["updated_at"] or "", existing_candidate["update_source_id"]):
+                if existing_candidate is None or (
+                    candidate["updated_at"] or "",
+                    upd_s_id,
+                ) > (
+                    existing_candidate["updated_at"] or "",
+                    existing_candidate["update_source_id"],
+                ):
                     health_candidates[key] = candidate
         for (e_type, surf_s_id), (surf_l_id, surf_data) in records_map.items():
-            if e_type == "surfaces" and str(surf_l_id) not in health_candidates and surf_data.get("health"):
+            if (
+                e_type == "surfaces"
+                and str(surf_l_id) not in health_candidates
+                and surf_data.get("health")
+            ):
                 health_candidates[str(surf_l_id)] = {
                     "health": surf_data["health"],
                     "updated_at": _norm_ts(surf_data.get("source_updated_at")),
@@ -1232,10 +1803,22 @@ class LinearImporter:
                     "update_source_id": "",
                 }
         for key, candidate in health_candidates.items():
-            staged_payload = {"health": candidate["health"], "updated_at": candidate["updated_at"]}
-            decision, _ = self._projection_decision(cur, workspace_id, "project_health", candidate["project_source_id"], UUID(key), staged_payload)
+            staged_payload = {
+                "health": candidate["health"],
+                "updated_at": candidate["updated_at"],
+            }
+            decision, _ = self._projection_decision(
+                cur,
+                workspace_id,
+                "project_health",
+                candidate["project_source_id"],
+                UUID(key),
+                staged_payload,
+            )
             if decision == "source_local_conflict":
-                anomalies.append(Anomaly(code="source_local_conflict", disposition="blocking"))
+                anomalies.append(
+                    Anomaly(code="source_local_conflict", disposition="blocking")
+                )
 
         # Alias ownership: every current and previous identifier must map to this issue's
         # local ID — against canonical aliases and across the staged batch. Previous keys
@@ -1244,11 +1827,19 @@ class LinearImporter:
         alias_claims: dict[str, Any] = {}
         for item_local_id, item_data in work_items:
             current_key = item_data.get("alias_identifier") or ""
-            previous_keys = [key for key in item_data.get("alias_previous_identifiers", []) if key and key != current_key]
+            previous_keys = [
+                key
+                for key in item_data.get("alias_previous_identifiers", [])
+                if key and key != current_key
+            ]
             for key in ([current_key] if current_key else []) + previous_keys:
                 prior_claim = alias_claims.get(key)
                 if prior_claim is not None and prior_claim != item_local_id:
-                    anomalies.append(Anomaly(code="duplicate_uuid_key_mapping", disposition="blocking"))
+                    anomalies.append(
+                        Anomaly(
+                            code="duplicate_uuid_key_mapping", disposition="blocking"
+                        )
+                    )
                 else:
                     alias_claims[key] = item_local_id
                 cur.execute(
@@ -1257,7 +1848,11 @@ class LinearImporter:
                 )
                 alias_row = cur.fetchone()
                 if alias_row and alias_row[0] != item_local_id:
-                    anomalies.append(Anomaly(code="duplicate_uuid_key_mapping", disposition="blocking"))
+                    anomalies.append(
+                        Anomaly(
+                            code="duplicate_uuid_key_mapping", disposition="blocking"
+                        )
+                    )
 
         unique_anomalies: dict[tuple[str, str], Anomaly] = {}
         for a in anomalies:
@@ -1276,7 +1871,9 @@ class LinearImporter:
 
         return list(unique_anomalies.values())
 
-    def _canonical_projection_hash(self, cur: Any, workspace_id: UUID, entity_type: str, local_id: UUID) -> str | None:
+    def _canonical_projection_hash(
+        self, cur: Any, workspace_id: UUID, entity_type: str, local_id: UUID
+    ) -> str | None:
         table, id_column = _PROJECTION_TABLES[entity_type]
         fields = _PROJECTION_FIELDS[entity_type]
         cur.execute(
@@ -1287,12 +1884,22 @@ class LinearImporter:
         if canonical_row is None:
             return None
         return sha256(
-            {field: _norm_ts(value) if field == "updated_at" else (str(value) if isinstance(value, (date, datetime)) else value)
-             for field, value in zip(fields, canonical_row)}
+            {
+                field: _norm_ts(value)
+                if field == "updated_at"
+                else (str(value) if isinstance(value, (date, datetime)) else value)
+                for field, value in zip(fields, canonical_row)
+            }
         )
 
     def _projection_decision(
-        self, cur: Any, workspace_id: UUID, entity_type: str, source_id: str, local_id: UUID, staged_payload: dict[str, Any]
+        self,
+        cur: Any,
+        workspace_id: UUID,
+        entity_type: str,
+        source_id: str,
+        local_id: UUID,
+        staged_payload: dict[str, Any],
     ) -> tuple[str, str]:
         """Apply the work-item conflict rules to imported projections: unchanged source
         never overwrites local state, source-only change applies, both-changed conflicts."""
@@ -1310,7 +1917,9 @@ class LinearImporter:
         baseline_row = cur.fetchone()
         baseline = baseline_row[0] if baseline_row else None
 
-        canonical_hash = self._canonical_projection_hash(cur, workspace_id, entity_type, local_id)
+        canonical_hash = self._canonical_projection_hash(
+            cur, workspace_id, entity_type, local_id
+        )
 
         if baseline is None:
             return "created", incoming
@@ -1320,7 +1929,9 @@ class LinearImporter:
             return "source_local_conflict", incoming
         return "projection_updated", incoming
 
-    def _projection_matches(self, cur: Any, workspace_id: UUID, work_id: UUID, data: dict[str, Any]) -> bool:
+    def _projection_matches(
+        self, cur: Any, workspace_id: UUID, work_id: UUID, data: dict[str, Any]
+    ) -> bool:
         cur.execute(
             """
             SELECT state, repository_id, project_id, workflow_state_id, assignee_id, priority, archived
@@ -1368,7 +1979,9 @@ class LinearImporter:
         required_aliases: set[str] = set()
         if data.get("alias_identifier"):
             required_aliases.add(data["alias_identifier"])
-        required_aliases.update(key for key in data.get("alias_previous_identifiers", []) if key)
+        required_aliases.update(
+            key for key in data.get("alias_previous_identifiers", []) if key
+        )
         return required_aliases.issubset(current_aliases)
 
     def _compute_dispositions(
@@ -1408,9 +2021,10 @@ class LinearImporter:
                     )
                     last_res = cur.fetchone()
                     if last_res and last_res[0] == data["content_sha256"]:
-                        if existing_item[0] != last_res[1] or existing_item[1] != last_res[2]:
-                            disp = "unchanged"
-                        elif self._projection_matches(cur, workspace_id, l_id, data):
+                        if (
+                            existing_item[0] != last_res[1]
+                            or existing_item[1] != last_res[2]
+                        ) or self._projection_matches(cur, workspace_id, l_id, data):
                             disp = "unchanged"
                         else:
                             disp = "projection_updated"
@@ -1418,9 +2032,15 @@ class LinearImporter:
                         disp = "revised"
             else:
                 if e_type in _PROJECTION_FIELDS:
-                    staged_payload = {field: data.get(field) for field in _PROJECTION_FIELDS[e_type]}
-                    decision, _ = self._projection_decision(cur, workspace_id, e_type, s_id, l_id, staged_payload)
-                    disp = "blocked" if decision == "source_local_conflict" else decision
+                    staged_payload = {
+                        field: data.get(field) for field in _PROJECTION_FIELDS[e_type]
+                    }
+                    decision, _ = self._projection_decision(
+                        cur, workspace_id, e_type, s_id, l_id, staged_payload
+                    )
+                    disp = (
+                        "blocked" if decision == "source_local_conflict" else decision
+                    )
                 else:
                     cur.execute(
                         "SELECT 1 FROM omp_integration.external_refs WHERE workspace_id = %s AND local_id = %s",
@@ -1433,7 +2053,9 @@ class LinearImporter:
 
         return dispositions, dict(counts)
 
-    def _merged_import_records(self, cur: Any, batch_id: UUID, base_batch_id: UUID | None) -> list[Any]:
+    def _merged_import_records(
+        self, cur: Any, batch_id: UUID, base_batch_id: UUID | None
+    ) -> list[Any]:
         import_recs_dict: dict[tuple[str, str], Any] = {}
         if base_batch_id is not None:
             cur.execute(
@@ -1471,33 +2093,91 @@ class LinearImporter:
                 # excluded from the non-quarantined parity denominator; the attachment
                 # disposition group still accounts for them.
                 if e_type == "attachments":
-                    parity_groups["attachment_disposition"].append((disp, str(s_id), str(l_id), str(l_hash)))
+                    parity_groups["attachment_disposition"].append(
+                        (disp, str(s_id), str(l_id), str(l_hash))
+                    )
                 continue
-            parity_groups["entity_type"].append((e_type, str(s_id), str(l_id), str(l_hash)))
+            parity_groups["entity_type"].append(
+                (e_type, str(s_id), str(l_id), str(l_hash))
+            )
 
             if e_type in ("worlds", "surfaces", "promises"):
-                parity_groups["project"].append(("project", str(s_id), str(l_id), str(l_hash)))
+                parity_groups["project"].append(
+                    ("project", str(s_id), str(l_id), str(l_hash))
+                )
             elif e_type == "repositories":
-                parity_groups["repository"].append(("repository", str(s_id), str(l_id), str(l_hash)))
+                parity_groups["repository"].append(
+                    ("repository", str(s_id), str(l_id), str(l_hash))
+                )
             elif e_type == "states":
-                parity_groups["workflow_state"].append(("workflow_state", str(s_id), str(l_id), str(l_hash)))
+                parity_groups["workflow_state"].append(
+                    ("workflow_state", str(s_id), str(l_id), str(l_hash))
+                )
             elif e_type == "work_items":
-                parity_groups["lifecycle_bucket"].append((data.get("state", "BACKLOG"), str(s_id), str(l_id), str(l_hash)))
+                parity_groups["lifecycle_bucket"].append(
+                    (data.get("state", "BACKLOG"), str(s_id), str(l_id), str(l_hash))
+                )
                 for pos, crit in enumerate(data.get("acceptance_criteria", [])):
-                    parity_groups["acceptance_criterion"].append(("acceptance_criterion", f"{s_id}:{pos}", str(l_id), sha256(crit)))
-                if any(lid in [str(r[5]) for r in import_recs if r[0] == "labels" and (r[4].get("name") if isinstance(r[4], dict) else json.loads(r[4]).get("name", "")).casefold() == "now"] for lid in data.get("label_ids", [])):
-                    parity_groups["focus_slot"].append(("focus_slot", str(s_id), str(l_id), str(l_hash)))
+                    parity_groups["acceptance_criterion"].append(
+                        (
+                            "acceptance_criterion",
+                            f"{s_id}:{pos}",
+                            str(l_id),
+                            sha256(crit),
+                        )
+                    )
+                if any(
+                    lid
+                    in [
+                        str(r[5])
+                        for r in import_recs
+                        if r[0] == "labels"
+                        and (
+                            r[4].get("name")
+                            if isinstance(r[4], dict)
+                            else json.loads(r[4]).get("name", "")
+                        ).casefold()
+                        == "now"
+                    ]
+                    for lid in data.get("label_ids", [])
+                ):
+                    parity_groups["focus_slot"].append(
+                        ("focus_slot", str(s_id), str(l_id), str(l_hash))
+                    )
             elif e_type == "labels":
-                parity_groups["label"].append(("label", str(s_id), str(l_id), str(l_hash)))
+                parity_groups["label"].append(
+                    ("label", str(s_id), str(l_id), str(l_hash))
+                )
             elif e_type in ("comments", "project_updates"):
-                p_kind = data.get("prefix_kind") or ("project_update" if e_type == "project_updates" else "user_comment")
-                parity_groups["comment_activity_type"].append((p_kind, str(s_id), str(l_id), str(l_hash)))
+                p_kind = data.get("prefix_kind") or (
+                    "project_update" if e_type == "project_updates" else "user_comment"
+                )
+                parity_groups["comment_activity_type"].append(
+                    (p_kind, str(s_id), str(l_id), str(l_hash))
+                )
                 if data.get("prefix_kind"):
-                    parity_groups["legacy_artifact_type"].append((data["prefix_kind"], str(s_id), str(l_id), str(l_hash)))
+                    parity_groups["legacy_artifact_type"].append(
+                        (data["prefix_kind"], str(s_id), str(l_id), str(l_hash))
+                    )
             elif e_type == "attachments":
-                parity_groups["attachment_disposition"].append((disp or "metadata_only", str(s_id), str(l_id), str(l_hash)))
+                parity_groups["attachment_disposition"].append(
+                    (disp or "metadata_only", str(s_id), str(l_id), str(l_hash))
+                )
 
-            parity_groups["external_reference"].append((e_type, str(s_id), str(l_id), sha256({"system": "linear", "external_id": str(s_id), "local_id": str(l_id)})))
+            parity_groups["external_reference"].append(
+                (
+                    e_type,
+                    str(s_id),
+                    str(l_id),
+                    sha256(
+                        {
+                            "system": "linear",
+                            "external_id": str(s_id),
+                            "local_id": str(l_id),
+                        }
+                    ),
+                )
+            )
         rels_map: dict[tuple[str, str, str], tuple[str, str, str, str]] = {}
         if base_batch_id is not None:
             cur.execute(
@@ -1519,14 +2199,28 @@ class LinearImporter:
                 # Quarantined relations (unusable attachment owners, unsupported objects)
                 # keep their anomaly/quarantine evidence but stay out of relation parity.
                 continue
-            r_hash = sha256({"source": s_id, "target": t_id, "kind": r_kind, "state": r_state})
-            parity_groups["relation_type"].append((r_kind, str(s_id), str(t_id), r_hash))
+            r_hash = sha256(
+                {"source": s_id, "target": t_id, "kind": r_kind, "state": r_state}
+            )
+            parity_groups["relation_type"].append(
+                (r_kind, str(s_id), str(t_id), r_hash)
+            )
 
         parity_hashes: dict[str, str] = {}
         for group_name in (
-            "entity_type", "project", "repository", "workflow_state", "lifecycle_bucket",
-            "label", "relation_type", "comment_activity_type", "acceptance_criterion",
-            "legacy_artifact_type", "focus_slot", "attachment_disposition", "external_reference",
+            "entity_type",
+            "project",
+            "repository",
+            "workflow_state",
+            "lifecycle_bucket",
+            "label",
+            "relation_type",
+            "comment_activity_type",
+            "acceptance_criterion",
+            "legacy_artifact_type",
+            "focus_slot",
+            "attachment_disposition",
+            "external_reference",
         ):
             items = sorted(parity_groups.get(group_name, []))
             parity_hashes[group_name] = sha256(items)
@@ -1547,18 +2241,45 @@ class LinearImporter:
             if dim == "surfaces":
                 folded = sorted(updates_by_project.get(str(r[1]), []))
                 if folded:
-                    return sha256({"project": str(r[2]), "updates": [{"id": u_id, "record_sha256": u_hash} for u_id, u_hash in folded]})
+                    return sha256(
+                        {
+                            "project": str(r[2]),
+                            "updates": [
+                                {"id": u_id, "record_sha256": u_hash}
+                                for u_id, u_hash in folded
+                            ],
+                        }
+                    )
             return str(r[2])
 
         dimensions_match = True
-        for dim in ("worlds", "surfaces", "promises", "work_items", "states", "labels", "relations", "comments", "attachments", "users"):
+        for dim in (
+            "worlds",
+            "surfaces",
+            "promises",
+            "work_items",
+            "states",
+            "labels",
+            "relations",
+            "comments",
+            "attachments",
+            "users",
+        ):
             dim_items = [r for r in import_recs if r[0] == dim]
             expected_count = getattr(dimension_counts, dim)
             expected_hash = getattr(dimension_hashes, dim)
-            candidate_hash = sha256([{"id": str(r[1]), "record_sha256": _record_hash(dim, r)} for r in sorted(dim_items, key=lambda item: str(item[1]))])
+            candidate_hash = sha256(
+                [
+                    {"id": str(r[1]), "record_sha256": _record_hash(dim, r)}
+                    for r in sorted(dim_items, key=lambda item: str(item[1]))
+                ]
+            )
             if len(dim_items) != expected_count or candidate_hash != expected_hash:
                 dimensions_match = False
-        parity_counts = {group_name: len(parity_groups.get(group_name, [])) for group_name in parity_hashes}
+        parity_counts = {
+            group_name: len(parity_groups.get(group_name, []))
+            for group_name in parity_hashes
+        }
         return parity_hashes, parity_counts, dimensions_match
 
     def reconcile(self, batch_id: UUID) -> ImportBatchSummary:
@@ -1568,14 +2289,25 @@ class LinearImporter:
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute("SET LOCAL search_path = pg_catalog")
-                    cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(operator_actor_id),))
-                    cur.execute("SELECT omp_integration.lookup_batch_workspace(%s)", (batch_id,))
+                    cur.execute(
+                        "SELECT set_config('omp.actor_id', %s, true)",
+                        (str(operator_actor_id),),
+                    )
+                    cur.execute(
+                        "SELECT omp_integration.lookup_batch_workspace(%s)", (batch_id,)
+                    )
                     ws_row = cur.fetchone()
                     if not ws_row or ws_row[0] is None:
                         raise ValueError("linear_import_missing")
                     workspace_id = ws_row[0]
-                    cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                    cur.execute("SELECT workspace_id, export_id, state, mapping_file_sha256, artifact_root FROM omp_integration.import_batches WHERE batch_id = %s", (batch_id,))
+                    cur.execute(
+                        "SELECT set_config('omp.workspace_id', %s, true)",
+                        (str(workspace_id),),
+                    )
+                    cur.execute(
+                        "SELECT workspace_id, export_id, state, mapping_file_sha256, artifact_root FROM omp_integration.import_batches WHERE batch_id = %s",
+                        (batch_id,),
+                    )
                     batch_row = cur.fetchone()
                     if not batch_row:
                         raise ValueError("linear_import_missing")
@@ -1586,21 +2318,40 @@ class LinearImporter:
                         return self._build_summary(cur, workspace_id, batch_id)
                     manifest, _, _ = load_export(self.config, export_id)
 
-                    self._materialize_and_validate_relations(cur, workspace_id, batch_id, operator_actor_id)
+                    self._materialize_and_validate_relations(
+                        cur, workspace_id, batch_id, operator_actor_id
+                    )
 
                     cur.execute(
                         "SELECT code, disposition FROM omp_integration.migration_anomalies WHERE batch_id = %s",
                         (batch_id,),
                     )
-                    all_anomalies = [Anomaly(code=r[0], disposition=r[1]) for r in cur.fetchall()]
+                    all_anomalies = [
+                        Anomaly(code=r[0], disposition=r[1]) for r in cur.fetchall()
+                    ]
 
-                    cur.execute("SELECT base_batch_id FROM omp_integration.import_batches WHERE batch_id = %s", (batch_id,))
+                    cur.execute(
+                        "SELECT base_batch_id FROM omp_integration.import_batches WHERE batch_id = %s",
+                        (batch_id,),
+                    )
                     base_batch_id = cur.fetchone()[0]
 
-                    import_recs = self._merged_import_records(cur, batch_id, base_batch_id)
-                    dispositions, disp_counts = self._compute_dispositions(cur, workspace_id, batch_id, import_recs)
-                    parity_hashes, parity_counts, dimensions_match = self._evaluate_parity(
-                        cur, batch_id, base_batch_id, manifest.dimension_counts, manifest.dimension_hashes, import_recs, dispositions
+                    import_recs = self._merged_import_records(
+                        cur, batch_id, base_batch_id
+                    )
+                    dispositions, disp_counts = self._compute_dispositions(
+                        cur, workspace_id, batch_id, import_recs
+                    )
+                    parity_hashes, parity_counts, dimensions_match = (
+                        self._evaluate_parity(
+                            cur,
+                            batch_id,
+                            base_batch_id,
+                            manifest.dimension_counts,
+                            manifest.dimension_hashes,
+                            import_recs,
+                            dispositions,
+                        )
                     )
                     if not dimensions_match:
                         cur.execute("SELECT uuidv7()")
@@ -1614,10 +2365,18 @@ class LinearImporter:
                             """,
                             (anomaly_id, batch_id, workspace_id),
                         )
-                        all_anomalies.append(Anomaly(code="pagination_count_hash_gap", disposition="blocking"))
-                    has_blocking = any(a.disposition == "blocking" for a in all_anomalies)
+                        all_anomalies.append(
+                            Anomaly(
+                                code="pagination_count_hash_gap", disposition="blocking"
+                            )
+                        )
+                    has_blocking = any(
+                        a.disposition == "blocking" for a in all_anomalies
+                    )
 
-                    staging_dir = self.config.state_dir / "staging" / f"import-{batch_id}"
+                    staging_dir = (
+                        self.config.state_dir / "staging" / f"import-{batch_id}"
+                    )
                     shutil.rmtree(staging_dir, ignore_errors=True)
                     staging_dir.mkdir(parents=True, mode=0o700)
                     art_dir = self.config.data_dir / artifact_root
@@ -1634,21 +2393,38 @@ class LinearImporter:
                                 "mapping_file_sha256": map_hash,
                             },
                             "mapping-records": [
-                                {"entity_type": r[0], "source_id": r[1], "local_id": str(r[5]), "disposition": dispositions.get((r[0], r[1]))}
+                                {
+                                    "entity_type": r[0],
+                                    "source_id": r[1],
+                                    "local_id": str(r[5]),
+                                    "disposition": dispositions.get((r[0], r[1])),
+                                }
                                 for r in import_recs
                             ],
-                            "anomaly-manifest": [a.model_dump(mode="json") for a in all_anomalies],
+                            "anomaly-manifest": [
+                                a.model_dump(mode="json") for a in all_anomalies
+                            ],
                             "quarantine-manifest": [
-                                {"entity_type": r[0], "source_id": r[1], "local_id": str(r[5])}
-                                for r in import_recs if dispositions.get((r[0], r[1])) == "quarantined"
+                                {
+                                    "entity_type": r[0],
+                                    "source_id": r[1],
+                                    "local_id": str(r[5]),
+                                }
+                                for r in import_recs
+                                if dispositions.get((r[0], r[1])) == "quarantined"
                             ],
                             "parity-report": {
                                 "parity_hashes": parity_hashes,
                                 "counts": parity_counts,
                             },
                             "legacy-artifact-classification": [
-                                {"entity_type": r[0], "source_id": r[1], "disposition": dispositions.get((r[0], r[1]))}
-                                for r in import_recs if dispositions.get((r[0], r[1])) == "legacy_untrusted"
+                                {
+                                    "entity_type": r[0],
+                                    "source_id": r[1],
+                                    "disposition": dispositions.get((r[0], r[1])),
+                                }
+                                for r in import_recs
+                                if dispositions.get((r[0], r[1])) == "legacy_untrusted"
                             ],
                         }
 
@@ -1668,7 +2444,11 @@ class LinearImporter:
                                 self.config.data_dir,
                             )
                             if existing_art:
-                                if existing_art[0] != rel_path or existing_art[1] != p_hash or existing_art[2] != c_hash:
+                                if (
+                                    existing_art[0] != rel_path
+                                    or existing_art[1] != p_hash
+                                    or existing_art[2] != c_hash
+                                ):
                                     raise RuntimeError("pagination_count_hash_gap")
                             else:
                                 cur.execute("SELECT uuidv7()")
@@ -1679,7 +2459,15 @@ class LinearImporter:
                                         artifact_id, batch_id, workspace_id, name, artifact_path, plaintext_sha256, ciphertext_sha256
                                     ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                                     """,
-                                    (art_id, batch_id, workspace_id, name, rel_path, p_hash, c_hash),
+                                    (
+                                        art_id,
+                                        batch_id,
+                                        workspace_id,
+                                        name,
+                                        rel_path,
+                                        p_hash,
+                                        c_hash,
+                                    ),
                                 )
                             artifacts_summary[name] = rel_path
                     finally:
@@ -1703,17 +2491,27 @@ class LinearImporter:
                     if has_blocking:
                         cur.execute(
                             "UPDATE omp_integration.import_batches SET state = 'blocked', reconciliation_sha256 = %s, parity_hashes = %s WHERE batch_id = %s",
-                            (reconciliation_sha256, json.dumps(stored_parity_bundle), batch_id),
+                            (
+                                reconciliation_sha256,
+                                json.dumps(stored_parity_bundle),
+                                batch_id,
+                            ),
                         )
                     else:
                         cur.execute(
                             "UPDATE omp_integration.import_batches SET state = 'reconciled', reconciled_at = clock_timestamp(), reconciliation_sha256 = %s, parity_hashes = %s WHERE batch_id = %s AND state = 'staged'",
-                            (reconciliation_sha256, json.dumps(stored_parity_bundle), batch_id),
+                            (
+                                reconciliation_sha256,
+                                json.dumps(stored_parity_bundle),
+                                batch_id,
+                            ),
                         )
 
                     return self._build_summary(cur, workspace_id, batch_id)
 
-    def _revalidate_staged_edges(self, cur: Any, workspace_id: UUID, batch_id: UUID) -> None:
+    def _revalidate_staged_edges(
+        self, cur: Any, workspace_id: UUID, batch_id: UUID
+    ) -> None:
         """Read-only replay of graph validation for staged edges already marked validated:
         canonical mutations between reconcile and promote must still block promotion."""
         cur.execute(
@@ -1727,12 +2525,24 @@ class LinearImporter:
         )
         raw_canonical = cur.fetchall()
         edge_list = [
-            RelationEdge(workspace_id=workspace_id, source_work_id=r[0], target_work_id=r[1], kind=RelationKind(r[2]), active=True)
+            RelationEdge(
+                workspace_id=workspace_id,
+                source_work_id=r[0],
+                target_work_id=r[1],
+                kind=RelationKind(r[2]),
+                active=True,
+            )
             for r in raw_canonical
         ]
-        canonical_parent_map: dict[UUID, UUID] = {r[0]: r[1] for r in raw_canonical if r[2] == "parent"}
+        canonical_parent_map: dict[UUID, UUID] = {
+            r[0]: r[1] for r in raw_canonical if r[2] == "parent"
+        }
         for rel_kind, local_s, local_t in staged_edges:
-            if rel_kind not in ("parent", "blocks", "duplicate_of", "related") or not local_s or not local_t:
+            if (
+                rel_kind not in ("parent", "blocks", "duplicate_of", "related")
+                or not local_s
+                or not local_t
+            ):
                 continue
             if local_s == local_t:
                 raise ValueError("linear_import_blocked")
@@ -1761,14 +2571,25 @@ class LinearImporter:
                 with conn.cursor() as cur:
                     cur.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
                     cur.execute("SET LOCAL search_path = pg_catalog")
-                    cur.execute("SELECT set_config('omp.actor_id', %s, true)", (str(operator_actor_id),))
-                    cur.execute("SELECT omp_integration.lookup_batch_workspace(%s)", (batch_id,))
+                    cur.execute(
+                        "SELECT set_config('omp.actor_id', %s, true)",
+                        (str(operator_actor_id),),
+                    )
+                    cur.execute(
+                        "SELECT omp_integration.lookup_batch_workspace(%s)", (batch_id,)
+                    )
                     ws_row = cur.fetchone()
                     if not ws_row or ws_row[0] is None:
                         raise ValueError("linear_import_missing")
                     workspace_id = ws_row[0]
-                    cur.execute("SELECT set_config('omp.workspace_id', %s, true)", (str(workspace_id),))
-                    cur.execute("SELECT workspace_id, export_id, state, reconciliation_sha256, parity_hashes FROM omp_integration.import_batches WHERE batch_id = %s", (batch_id,))
+                    cur.execute(
+                        "SELECT set_config('omp.workspace_id', %s, true)",
+                        (str(workspace_id),),
+                    )
+                    cur.execute(
+                        "SELECT workspace_id, export_id, state, reconciliation_sha256, parity_hashes FROM omp_integration.import_batches WHERE batch_id = %s",
+                        (batch_id,),
+                    )
                     row = cur.fetchone()
                     if not row:
                         raise ValueError("linear_import_missing")
@@ -1779,9 +2600,14 @@ class LinearImporter:
                         if state == "blocked":
                             raise ValueError("linear_import_blocked")
                         raise ValueError("linear_import_not_reconciled")
-                    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"workspace:{workspace_id}",))
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"workspace:{workspace_id}",),
+                    )
 
-                    new_anomalies = self._materialize_and_validate_relations(cur, workspace_id, batch_id, operator_actor_id)
+                    new_anomalies = self._materialize_and_validate_relations(
+                        cur, workspace_id, batch_id, operator_actor_id
+                    )
                     if any(a.disposition == "blocking" for a in new_anomalies):
                         raise ValueError("linear_import_blocked")
                     self._revalidate_staged_edges(cur, workspace_id, batch_id)
@@ -1790,19 +2616,40 @@ class LinearImporter:
                     # and source dimension counts/hashes against the bundle reconciliation
                     # stored. No page decryption here — the workspace advisory lock stays
                     # short; the manifest was already verified at stage/reconcile time.
-                    cur.execute("SELECT base_batch_id FROM omp_integration.import_batches WHERE batch_id = %s", (batch_id,))
+                    cur.execute(
+                        "SELECT base_batch_id FROM omp_integration.import_batches WHERE batch_id = %s",
+                        (batch_id,),
+                    )
                     promote_base_batch_id = cur.fetchone()[0]
-                    promote_recs = self._merged_import_records(cur, batch_id, promote_base_batch_id)
-                    promote_dispositions, _ = self._compute_dispositions(cur, workspace_id, batch_id, promote_recs)
-                    stored_bundle = stored_parity if isinstance(stored_parity, dict) else json.loads(stored_parity or "{}")
+                    promote_recs = self._merged_import_records(
+                        cur, batch_id, promote_base_batch_id
+                    )
+                    promote_dispositions, _ = self._compute_dispositions(
+                        cur, workspace_id, batch_id, promote_recs
+                    )
+                    stored_bundle = (
+                        stored_parity
+                        if isinstance(stored_parity, dict)
+                        else json.loads(stored_parity or "{}")
+                    )
                     try:
-                        stored_counts = ReconciliationCounts(**stored_bundle["dimension_counts"])
-                        stored_hashes = ReconciliationHashes(**stored_bundle["dimension_hashes"])
+                        stored_counts = ReconciliationCounts(
+                            **stored_bundle["dimension_counts"]
+                        )
+                        stored_hashes = ReconciliationHashes(
+                            **stored_bundle["dimension_hashes"]
+                        )
                         stored_groups = stored_bundle["parity_groups"]
                     except (KeyError, TypeError, ValueError):
                         raise ValueError("linear_import_drift") from None
                     promote_parity, _, promote_dims_match = self._evaluate_parity(
-                        cur, batch_id, promote_base_batch_id, stored_counts, stored_hashes, promote_recs, promote_dispositions
+                        cur,
+                        batch_id,
+                        promote_base_batch_id,
+                        stored_counts,
+                        stored_hashes,
+                        promote_recs,
+                        promote_dispositions,
                     )
                     if not promote_dims_match or promote_parity != stored_groups:
                         raise ValueError("linear_import_drift")
@@ -1815,7 +2662,9 @@ class LinearImporter:
 
                     for row in records:
                         e_type, s_id, l_id, l_type, t_json = row
-                        data = t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        data = (
+                            t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        )
                         cur.execute(
                             """
                             INSERT INTO omp_integration.external_refs (
@@ -1840,9 +2689,16 @@ class LinearImporter:
                         e_type, s_id, l_id, l_type, t_json = row
                         if e_type not in _PROJECTION_FIELDS:
                             continue
-                        data = t_json if isinstance(t_json, dict) else json.loads(t_json)
-                        staged_payload = {field: data.get(field) for field in _PROJECTION_FIELDS[e_type]}
-                        decision, incoming = self._projection_decision(cur, workspace_id, e_type, s_id, l_id, staged_payload)
+                        data = (
+                            t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        )
+                        staged_payload = {
+                            field: data.get(field)
+                            for field in _PROJECTION_FIELDS[e_type]
+                        }
+                        decision, incoming = self._projection_decision(
+                            cur, workspace_id, e_type, s_id, l_id, staged_payload
+                        )
                         if decision == "source_local_conflict":
                             raise ValueError("linear_import_blocked")
                         projection_decisions[(e_type, s_id)] = decision
@@ -1857,11 +2713,15 @@ class LinearImporter:
 
                     for row in records:
                         e_type, s_id, l_id, l_type, t_json = row
-                        data = t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        data = (
+                            t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        )
                         if projection_decisions.get((e_type, s_id)) == "unchanged":
                             continue
                         if (e_type, s_id) in projection_decisions:
-                            written_projections.append((e_type, l_id, projection_hashes[(e_type, s_id)]))
+                            written_projections.append(
+                                (e_type, l_id, projection_hashes[(e_type, s_id)])
+                            )
 
                         if l_type == "repository":
                             cur.execute(
@@ -1874,7 +2734,15 @@ class LinearImporter:
                                     url = EXCLUDED.url,
                                     archived = EXCLUDED.archived
                                 """,
-                                (l_id, workspace_id, data["key"], data["name"], data["url"], data["archived"], json.dumps(data["provenance"])),
+                                (
+                                    l_id,
+                                    workspace_id,
+                                    data["key"],
+                                    data["name"],
+                                    data["url"],
+                                    data["archived"],
+                                    json.dumps(data["provenance"]),
+                                ),
                             )
                         elif l_type == "principal":
                             cur.execute(
@@ -1887,7 +2755,14 @@ class LinearImporter:
                                     display_name = EXCLUDED.display_name,
                                     active = EXCLUDED.active
                                 """,
-                                (l_id, workspace_id, data["name"], data["display_name"], data["active"], json.dumps(data["provenance"])),
+                                (
+                                    l_id,
+                                    workspace_id,
+                                    data["name"],
+                                    data["display_name"],
+                                    data["active"],
+                                    json.dumps(data["provenance"]),
+                                ),
                             )
                         elif l_type == "workflow_state":
                             cur.execute(
@@ -1901,7 +2776,15 @@ class LinearImporter:
                                     position = EXCLUDED.position,
                                     archived = EXCLUDED.archived
                                 """,
-                                (l_id, workspace_id, data["name"], data["state_type"], data["position"], data["archived"], json.dumps(data["provenance"])),
+                                (
+                                    l_id,
+                                    workspace_id,
+                                    data["name"],
+                                    data["state_type"],
+                                    data["position"],
+                                    data["archived"],
+                                    json.dumps(data["provenance"]),
+                                ),
                             )
                         elif l_type == "label":
                             cur.execute(
@@ -1913,7 +2796,14 @@ class LinearImporter:
                                     color = EXCLUDED.color,
                                     archived = EXCLUDED.archived
                                 """,
-                                (l_id, workspace_id, data["name"], data.get("color"), data["archived"], json.dumps(data["provenance"])),
+                                (
+                                    l_id,
+                                    workspace_id,
+                                    data["name"],
+                                    data.get("color"),
+                                    data["archived"],
+                                    json.dumps(data["provenance"]),
+                                ),
                             )
                         elif l_type == "project":
                             cur.execute(
@@ -1927,14 +2817,25 @@ class LinearImporter:
                                     target_date = EXCLUDED.target_date,
                                     archived = EXCLUDED.archived
                                 """,
-                                (l_id, workspace_id, data.get("key"), data["name"], data["kind"], data.get("target_date"), data["archived"], json.dumps(data["provenance"])),
+                                (
+                                    l_id,
+                                    workspace_id,
+                                    data.get("key"),
+                                    data["name"],
+                                    data["kind"],
+                                    data.get("target_date"),
+                                    data["archived"],
+                                    json.dumps(data["provenance"]),
+                                ),
                             )
 
                     for row in records:
                         e_type, s_id, l_id, l_type, t_json = row
                         if l_type != "work_item":
                             continue
-                        data = t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        data = (
+                            t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        )
 
                         cur.execute(
                             "SELECT current_revision_id, row_version, state FROM omp_work.work_items WHERE workspace_id = %s AND work_id = %s",
@@ -1959,9 +2860,17 @@ class LinearImporter:
                                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s)
                                 """,
                                 (
-                                    l_id, workspace_id, data["state"], revision_id, data["archived"],
-                                    data.get("repository_id"), data.get("project_id"), data.get("workflow_state_id"),
-                                    data.get("assignee_id"), data.get("priority"), data.get("source_updated_at"),
+                                    l_id,
+                                    workspace_id,
+                                    data["state"],
+                                    revision_id,
+                                    data["archived"],
+                                    data.get("repository_id"),
+                                    data.get("project_id"),
+                                    data.get("workflow_state_id"),
+                                    data.get("assignee_id"),
+                                    data.get("priority"),
+                                    data.get("source_updated_at"),
                                     json.dumps(data["provenance"]),
                                 ),
                             )
@@ -1973,12 +2882,22 @@ class LinearImporter:
                                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                                 """,
                                 (
-                                    revision_id, l_id, workspace_id, rev_number,
-                                    data["title"], data["description"], data["scope"],
-                                    data["content_sha256"], "importer", data.get("source_updated_at") or datetime.now(timezone.utc).isoformat(),
+                                    revision_id,
+                                    l_id,
+                                    workspace_id,
+                                    rev_number,
+                                    data["title"],
+                                    data["description"],
+                                    data["scope"],
+                                    data["content_sha256"],
+                                    "importer",
+                                    data.get("source_updated_at")
+                                    or datetime.now(UTC).isoformat(),
                                 ),
                             )
-                            for pos, crit in enumerate(data.get("acceptance_criteria", [])):
+                            for pos, crit in enumerate(
+                                data.get("acceptance_criteria", [])
+                            ):
                                 cur.execute(
                                     "INSERT INTO omp_work.acceptance_criteria (revision_id, workspace_id, position, criterion) VALUES (%s, %s, %s, %s)",
                                     (revision_id, workspace_id, pos, crit),
@@ -2002,21 +2921,32 @@ class LinearImporter:
                                 # conflict baselines skip non-writing 'unchanged' results instead.
                                 revision_id = current_rev_id
                                 resulting_row_version = current_row_version
-                                if current_rev_id != last_res[1] or current_row_version != last_res[2]:
+                                if (
+                                    current_rev_id != last_res[1]
+                                    or current_row_version != last_res[2]
+                                ):
                                     # Source unchanged but local canonical state moved since the
                                     # last promoted import: preserve local work, write nothing.
                                     disposition = "unchanged"
-                                elif self._projection_matches(cur, workspace_id, l_id, data):
+                                elif self._projection_matches(
+                                    cur, workspace_id, l_id, data
+                                ):
                                     disposition = "unchanged"
                                 else:
                                     disposition = "projection_updated"
                                     resulting_row_version = current_row_version + 1
                                     apply_update = True
                             else:
-                                if last_res and (current_rev_id != last_res[1] or current_row_version != last_res[2]):
+                                if last_res and (
+                                    current_rev_id != last_res[1]
+                                    or current_row_version != last_res[2]
+                                ):
                                     raise ValueError("linear_import_blocked")
                                 disposition = "revised"
-                                cur.execute("SELECT COALESCE(MAX(revision_number), 0) + 1 FROM omp_work.work_revisions WHERE work_id = %s", (l_id,))
+                                cur.execute(
+                                    "SELECT COALESCE(MAX(revision_number), 0) + 1 FROM omp_work.work_revisions WHERE work_id = %s",
+                                    (l_id,),
+                                )
                                 rev_number = cur.fetchone()[0]
                                 cur.execute("SELECT uuidv7()")
                                 revision_id = cur.fetchone()[0]
@@ -2028,12 +2958,22 @@ class LinearImporter:
                                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                                     """,
                                     (
-                                        revision_id, l_id, workspace_id, rev_number,
-                                        data["title"], data["description"], data["scope"],
-                                        data["content_sha256"], "importer", data.get("source_updated_at") or datetime.now(timezone.utc).isoformat(),
+                                        revision_id,
+                                        l_id,
+                                        workspace_id,
+                                        rev_number,
+                                        data["title"],
+                                        data["description"],
+                                        data["scope"],
+                                        data["content_sha256"],
+                                        "importer",
+                                        data.get("source_updated_at")
+                                        or datetime.now(UTC).isoformat(),
                                     ),
                                 )
-                                for pos, crit in enumerate(data.get("acceptance_criteria", [])):
+                                for pos, crit in enumerate(
+                                    data.get("acceptance_criteria", [])
+                                ):
                                     cur.execute(
                                         "INSERT INTO omp_work.acceptance_criteria (revision_id, workspace_id, position, criterion) VALUES (%s, %s, %s, %s)",
                                         (revision_id, workspace_id, pos, crit),
@@ -2058,10 +2998,18 @@ class LinearImporter:
                                     WHERE workspace_id = %s AND work_id = %s
                                     """,
                                     (
-                                        data["state"], revision_id, data.get("repository_id"), data.get("project_id"),
-                                        data.get("workflow_state_id"), data.get("assignee_id"), data.get("priority"),
-                                        data.get("source_updated_at"), data["archived"], resulting_row_version,
-                                        workspace_id, l_id,
+                                        data["state"],
+                                        revision_id,
+                                        data.get("repository_id"),
+                                        data.get("project_id"),
+                                        data.get("workflow_state_id"),
+                                        data.get("assignee_id"),
+                                        data.get("priority"),
+                                        data.get("source_updated_at"),
+                                        data["archived"],
+                                        resulting_row_version,
+                                        workspace_id,
+                                        l_id,
                                     ),
                                 )
 
@@ -2076,8 +3024,12 @@ class LinearImporter:
                                     """,
                                     (l_id, workspace_id, data["alias_identifier"]),
                                 )
-                            for previous_key in data.get("alias_previous_identifiers", []):
-                                if previous_key and previous_key != data.get("alias_identifier"):
+                            for previous_key in data.get(
+                                "alias_previous_identifiers", []
+                            ):
+                                if previous_key and previous_key != data.get(
+                                    "alias_identifier"
+                                ):
                                     cur.execute(
                                         """
                                         INSERT INTO omp_work.work_aliases (
@@ -2087,7 +3039,9 @@ class LinearImporter:
                                         """,
                                         (l_id, workspace_id, previous_key),
                                     )
-                            staged_labels = [str(label_id) for label_id in data.get("label_ids", [])]
+                            staged_labels = [
+                                str(label_id) for label_id in data.get("label_ids", [])
+                            ]
                             for lbl_id in staged_labels:
                                 cur.execute(
                                     """
@@ -2115,23 +3069,45 @@ class LinearImporter:
                             ) VALUES (%s, %s, 'work_items', %s, %s, 'work_item', %s, %s, %s, %s)
                             ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                             """,
-                            (batch_id, workspace_id, s_id, l_id, disposition, data["content_sha256"], revision_id, resulting_row_version),
+                            (
+                                batch_id,
+                                workspace_id,
+                                s_id,
+                                l_id,
+                                disposition,
+                                data["content_sha256"],
+                                revision_id,
+                                resulting_row_version,
+                            ),
                         )
                         if disposition != "unchanged":
-                            written_items.append((l_id, data, revision_id, resulting_row_version))
+                            written_items.append(
+                                (l_id, data, revision_id, resulting_row_version)
+                            )
 
                     cur.execute(
                         "SELECT relation_id, relation_kind, local_source_id, local_target_id, canonical_id FROM omp_integration.import_relations WHERE batch_id = %s AND state = 'validated'",
                         (batch_id,),
                     )
-                    for rel_id, rel_kind, l_src, l_tgt, rel_canonical_id in cur.fetchall():
+                    for (
+                        rel_id,
+                        rel_kind,
+                        l_src,
+                        l_tgt,
+                        rel_canonical_id,
+                    ) in cur.fetchall():
                         # Source-backed relations reuse the stable mapped local ID; source-less
                         # relations (parent, project_milestone) derive one deterministically so
                         # repeated imports converge on the same canonical row.
                         canonical_rel_id = rel_canonical_id or uuid5(
-                            NAMESPACE_URL, f"omp-work/relation/{workspace_id}/{rel_kind}/{l_src}/{l_tgt}"
+                            NAMESPACE_URL,
+                            f"omp-work/relation/{workspace_id}/{rel_kind}/{l_src}/{l_tgt}",
                         )
-                        if rel_kind in ("parent", "blocks", "duplicate_of", "related") and l_src and l_tgt:
+                        if (
+                            rel_kind in ("parent", "blocks", "duplicate_of", "related")
+                            and l_src
+                            and l_tgt
+                        ):
                             src_id = l_src
                             tgt_id = l_tgt
                             if rel_kind == "related" and str(src_id) > str(tgt_id):
@@ -2143,10 +3119,20 @@ class LinearImporter:
                                 ) VALUES (%s, %s, %s, %s, %s, true)
                                 ON CONFLICT DO NOTHING
                                 """,
-                                (canonical_rel_id, workspace_id, src_id, tgt_id, rel_kind),
+                                (
+                                    canonical_rel_id,
+                                    workspace_id,
+                                    src_id,
+                                    tgt_id,
+                                    rel_kind,
+                                ),
                             )
                             written_work_relations.append((src_id, tgt_id, rel_kind))
-                        elif rel_kind in ("initiative_project", "project_milestone") and l_src and l_tgt:
+                        elif (
+                            rel_kind in ("initiative_project", "project_milestone")
+                            and l_src
+                            and l_tgt
+                        ):
                             cur.execute(
                                 """
                                 INSERT INTO omp_work.project_relations (
@@ -2154,15 +3140,28 @@ class LinearImporter:
                                 ) VALUES (%s, %s, %s, %s, %s, true)
                                 ON CONFLICT DO NOTHING
                                 """,
-                                (canonical_rel_id, workspace_id, l_src, l_tgt, rel_kind),
+                                (
+                                    canonical_rel_id,
+                                    workspace_id,
+                                    l_src,
+                                    l_tgt,
+                                    rel_kind,
+                                ),
                             )
                             written_project_relations.append((l_src, l_tgt, rel_kind))
 
                     health_candidates: dict[str, dict[str, Any]] = {}
                     for row in records:
                         e_type, s_id, l_id, l_type, t_json = row
-                        data = t_json if isinstance(t_json, dict) else json.loads(t_json)
-                        if e_type == "project_updates" and not data.get("archived") and data.get("project_id") and data.get("health"):
+                        data = (
+                            t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        )
+                        if (
+                            e_type == "project_updates"
+                            and not data.get("archived")
+                            and data.get("project_id")
+                            and data.get("health")
+                        ):
                             key = str(data["project_id"])
                             candidate = {
                                 "health": data["health"],
@@ -2171,13 +3170,21 @@ class LinearImporter:
                                 "update_source_id": s_id,
                             }
                             existing_candidate = health_candidates.get(key)
-                            if existing_candidate is None or (candidate["updated_at"] or "", s_id) > (existing_candidate["updated_at"] or "", existing_candidate["update_source_id"]):
+                            if existing_candidate is None or (
+                                candidate["updated_at"] or "",
+                                s_id,
+                            ) > (
+                                existing_candidate["updated_at"] or "",
+                                existing_candidate["update_source_id"],
+                            ):
                                 health_candidates[key] = candidate
                     for row in records:
                         e_type, s_id, l_id, l_type, t_json = row
                         if e_type != "surfaces":
                             continue
-                        data = t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        data = (
+                            t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        )
                         if str(l_id) not in health_candidates and data.get("health"):
                             health_candidates[str(l_id)] = {
                                 "health": data["health"],
@@ -2187,14 +3194,24 @@ class LinearImporter:
                             }
 
                     for key, candidate in health_candidates.items():
-                        staged_payload = {"health": candidate["health"], "updated_at": candidate["updated_at"]}
+                        staged_payload = {
+                            "health": candidate["health"],
+                            "updated_at": candidate["updated_at"],
+                        }
                         decision, incoming = self._projection_decision(
-                            cur, workspace_id, "project_health", candidate["project_source_id"], UUID(key), staged_payload
+                            cur,
+                            workspace_id,
+                            "project_health",
+                            candidate["project_source_id"],
+                            UUID(key),
+                            staged_payload,
                         )
                         if decision == "source_local_conflict":
                             raise ValueError("linear_import_blocked")
                         if decision != "unchanged":
-                            written_ts = candidate["updated_at"] or datetime.now(timezone.utc).isoformat()
+                            written_ts = (
+                                candidate["updated_at"] or datetime.now(UTC).isoformat()
+                            )
                             cur.execute(
                                 """
                                 INSERT INTO omp_work.project_health (workspace_id, project_id, health, updated_at)
@@ -2203,9 +3220,16 @@ class LinearImporter:
                                     health = EXCLUDED.health,
                                     updated_at = EXCLUDED.updated_at
                                 """,
-                                (workspace_id, UUID(key), candidate["health"], written_ts),
+                                (
+                                    workspace_id,
+                                    UUID(key),
+                                    candidate["health"],
+                                    written_ts,
+                                ),
                             )
-                            written_health.append((UUID(key), candidate["health"], written_ts))
+                            written_health.append(
+                                (UUID(key), candidate["health"], written_ts)
+                            )
                         cur.execute(
                             """
                             INSERT INTO omp_integration.import_record_results (
@@ -2213,7 +3237,14 @@ class LinearImporter:
                             ) VALUES (%s, %s, 'project_health', %s, %s, 'project_health', %s, %s)
                             ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                             """,
-                            (batch_id, workspace_id, candidate["project_source_id"], UUID(key), decision, incoming),
+                            (
+                                batch_id,
+                                workspace_id,
+                                candidate["project_source_id"],
+                                UUID(key),
+                                decision,
+                                incoming,
+                            ),
                         )
 
                     cur.execute(
@@ -2254,13 +3285,22 @@ class LinearImporter:
                         e_type, s_id, l_id, l_type, t_json = row
                         if l_type == "work_item":
                             continue
-                        data = t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        data = (
+                            t_json if isinstance(t_json, dict) else json.loads(t_json)
+                        )
                         disposition = projection_decisions.get((e_type, s_id))
                         if disposition is None:
                             disposition = (
-                                "metadata_only" if e_type == "attachments" and data.get("usable") else
-                                "quarantined" if e_type == "attachments" or (e_type == "comments" and not data.get("prefix_kind")) else
-                                "legacy_untrusted" if e_type in ("comments", "project_updates") else "created"
+                                "metadata_only"
+                                if e_type == "attachments" and data.get("usable")
+                                else "quarantined"
+                                if e_type == "attachments"
+                                or (
+                                    e_type == "comments" and not data.get("prefix_kind")
+                                )
+                                else "legacy_untrusted"
+                                if e_type in ("comments", "project_updates")
+                                else "created"
                             )
                         cur.execute(
                             """
@@ -2269,24 +3309,49 @@ class LinearImporter:
                             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (batch_id, entity_type, source_id) DO NOTHING
                             """,
-                            (batch_id, workspace_id, e_type, s_id, l_id, l_type, disposition, projection_hashes.get((e_type, s_id))),
+                            (
+                                batch_id,
+                                workspace_id,
+                                e_type,
+                                s_id,
+                                l_id,
+                                l_type,
+                                disposition,
+                                projection_hashes.get((e_type, s_id)),
+                            ),
                         )
 
                     # Canonical read-back: every row this batch committed must equal the
                     # candidate projection. Any divergence means drift slipped past the
                     # conflict rules; raising rolls back all canonical and promotion writes.
                     for e_type, l_id, incoming in written_projections:
-                        if self._canonical_projection_hash(cur, workspace_id, e_type, l_id) != incoming:
+                        if (
+                            self._canonical_projection_hash(
+                                cur, workspace_id, e_type, l_id
+                            )
+                            != incoming
+                        ):
                             raise ValueError("linear_import_drift")
-                    for l_id, item_data, revision_id, resulting_row_version in written_items:
+                    for (
+                        l_id,
+                        item_data,
+                        revision_id,
+                        resulting_row_version,
+                    ) in written_items:
                         cur.execute(
                             "SELECT current_revision_id, row_version FROM omp_work.work_items WHERE workspace_id = %s AND work_id = %s",
                             (workspace_id, l_id),
                         )
                         written_row = cur.fetchone()
-                        if written_row is None or written_row[0] != revision_id or written_row[1] != resulting_row_version:
+                        if (
+                            written_row is None
+                            or written_row[0] != revision_id
+                            or written_row[1] != resulting_row_version
+                        ):
                             raise ValueError("linear_import_drift")
-                        if not self._projection_matches(cur, workspace_id, l_id, item_data):
+                        if not self._projection_matches(
+                            cur, workspace_id, l_id, item_data
+                        ):
                             raise ValueError("linear_import_drift")
                     for src_id, tgt_id, rel_kind in written_work_relations:
                         cur.execute(
@@ -2308,7 +3373,11 @@ class LinearImporter:
                             (workspace_id, p_id),
                         )
                         health_row = cur.fetchone()
-                        if health_row is None or health_row[0] != health or _norm_ts(health_row[1]) != written_ts:
+                        if (
+                            health_row is None
+                            or health_row[0] != health
+                            or _norm_ts(health_row[1]) != written_ts
+                        ):
                             raise ValueError("linear_import_drift")
                     if focus_written is not None:
                         cur.execute(
@@ -2326,7 +3395,9 @@ class LinearImporter:
 
                     return self._build_summary(cur, workspace_id, batch_id)
 
-    def _build_summary(self, cur: Any, workspace_id: UUID, batch_id: UUID) -> ImportBatchSummary:
+    def _build_summary(
+        self, cur: Any, workspace_id: UUID, batch_id: UUID
+    ) -> ImportBatchSummary:
         cur.execute(
             """
             SELECT batch_id, workspace_id, export_id, state, transformation_version,
@@ -2339,7 +3410,10 @@ class LinearImporter:
         if not row:
             raise ValueError("linear_import_missing")
 
-        cur.execute("SELECT name, artifact_path FROM omp_integration.import_artifacts WHERE batch_id = %s", (batch_id,))
+        cur.execute(
+            "SELECT name, artifact_path FROM omp_integration.import_artifacts WHERE batch_id = %s",
+            (batch_id,),
+        )
         artifacts = {r[0]: r[1] for r in cur.fetchall()}
 
         cur.execute(
@@ -2353,7 +3427,9 @@ class LinearImporter:
             (batch_id,),
         )
         anomaly_codes = [r[0] for r in cur.fetchall()]
-        raw_parity = row[8] if isinstance(row[8], dict) else json.loads(row[8]) if row[8] else {}
+        raw_parity = (
+            row[8] if isinstance(row[8], dict) else json.loads(row[8]) if row[8] else {}
+        )
         parity_hashes = raw_parity.get("parity_groups", raw_parity)
         return ImportBatchSummary(
             batch_id=row[0],

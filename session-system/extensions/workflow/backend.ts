@@ -4,6 +4,23 @@
  * obligations, confirmations, footer, NOW window, and digest rendering; a backend
  * supplies storage I/O only.
  */
+import type {
+	Candidate,
+	EvidenceReceipt,
+	ExecutionGrantItemClaim,
+	ExecutionGrantItemView,
+	ExecutionGrantView,
+	ExecutionJudgeManifest,
+	ExecutionMode,
+	ExecutionProvenanceEnvelope,
+	WorkClient,
+} from "@oh-my-pi/pi-work-client";
+
+export interface ExecutionSnapshot {
+	grant: ExecutionGrantView;
+	items: ExecutionGrantItemView[];
+	activeItem: ExecutionGrantItemView | null;
+}
 
 
 
@@ -53,6 +70,13 @@ export interface CloseAttemptSession {
 	dirtyPaths: string[];
 	/** Sealed rider batch from the owner-staged .work-riders.json, if any. */
 	riders?: RiderProof[];
+	authorization_kind?: "summary" | "execution";
+	execution_grant_id?: string;
+	candidate_tree_sha?: string;
+	original_request_sha256?: string;
+	criteria_sha256?: string;
+	plan_stamp_sha256?: string;
+	judge_sha256?: string;
 }
 
 /** One typed service event, exactly as the ledger rendered it. */
@@ -393,7 +417,7 @@ export interface BatchOutcome {
  *  typed receipts only. The session review is `closeout`; audit receipts are
  *  minted ONLY by the service's settle transaction (OMP-47) and never appended
  *  through this surface. */
-export type EvidenceKind = "handoff" | "verification" | "closeout" | "same_session_found_fixed";
+export type EvidenceKind = "handoff" | "verification" | "closeout" | "same_session_found_fixed" | "push" | "plan";
 /** Split a same-session receipt body into its finding and verification texts
  *  (OMP-52): the model writes `## Finding` and `## Verification` sections. */
 export function sameSessionSections(body: string): { finding: string; verification: string } | null {
@@ -408,6 +432,9 @@ export function sameSessionSections(body: string): { finding: string; verificati
 export interface EvidenceMeta {
 	planHash?: string;
 	candidateSha256?: string; // binds verification/closeout to the final candidate
+	candidateCommit?: string;
+	remoteRef?: string;
+	remoteCommit?: string;
 }
 
 /** Hooks the host hands a backend for interactive flows (freeze/push verdicts). */
@@ -457,6 +484,8 @@ export interface WorkflowBackend {
 	readonly serviceLabel: string; // "Work Ledger"
 	readonly markerFile: string; // committed project-scope marker
 	readonly scopeFix: string; // one-line instructions for an unscoped repo
+	readonly workspaceId: string;
+	workClient?: WorkClient;
 	readonly cacheFile: string; // work-now.json (basename under ~/.omp/agent)
 	readonly queueNoun: string; // "TRIAGE" — for preview text
 	/** Kind that settles the review obligation — the typed session review. */
@@ -492,7 +521,7 @@ export interface WorkflowBackend {
 	clearNowRemote(issueId: string | undefined): Promise<void>; // throws → host warns, clears locally
 	/** Returns the issue the plan state lives on; work backend also the planned candidate id. */
 	stampPlan(target: NowRef, stamp: PlanStamp): Promise<{ issue: NowRef; plannedCandidateId?: string }>;
-	appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta, authorizationRef?: string): Promise<CloseAttemptOutcome | void>;
+	appendEvidence(issue: NowRef, kind: EvidenceKind, body: string, meta: EvidenceMeta, authorizationRef?: string): Promise<CloseAttemptOutcome | EvidenceReceipt | void>;
 	createIssue(input: { title: string; description?: string; project?: string; queue?: boolean; question?: string }): Promise<NowRef>;
 	createBatch(input: CreateBatchInput): Promise<BatchOutcome>;
 	/** OMP-139: one atomic same-session found-and-fixed filing — the BACKLOG
@@ -561,8 +590,73 @@ export interface WorkflowBackend {
 	settleAuditorLaunch(key: string, launchId: string, transport: { payload?: unknown; failed?: boolean }): Promise<CloseAttemptOutcome>;
 	/** Unresolved requires_delivery events for this work item (any attempt). */
 	pendingDeliveries(key: string): Promise<CloseEventView[]>;
-	/** Record one delivery receipt (delivered | failed | owner-authorized waived). */
+	snapshotQueue(projectFilter?: string, currentKey?: string, cwd?: string): Promise<ExecutionGrantItemClaim[]>;
 	attestDelivery(eventId: string, ownerSessionId: string, renderedSha256: string, status: "delivered" | "failed" | "waived", authorizationRef?: string): Promise<CloseAttemptOutcome>;
+	getFocusVersion(): Promise<number>;
+
+	// ---- OMP-180 execution cycle authority ----
+	getExecution(key?: string): Promise<ExecutionSnapshot | null>;
+	finalizeExecutionCandidate(key: string, plannedCandidateId: string, freeze: { commitSha: string; candidateSha256: string; paths: string[] }): Promise<Candidate>;
+	snapshotQueue(projectFilter?: string, currentKey?: string): Promise<ExecutionGrantItemClaim[]>;
+	beginExecution(input: {
+		provenance: ExecutionProvenanceEnvelope;
+		mode: ExecutionMode;
+		items: ExecutionGrantItemClaim[];
+		expectedFocusVersion: number;
+		judgeSha256: string;
+		judgeManifest: ExecutionJudgeManifest;
+	}): Promise<ExecutionSnapshot>;
+	activateExecutionItem(input: {
+		grantId: string;
+		expectedGrantVersion: number;
+		position: number;
+		workId: string;
+		expectedRevisionId: string;
+		gitBaseline: string;
+		judgeSha256: string;
+		expectedFocusVersion: number;
+		expectedProjectId?: string;
+		expectedBlockerIds?: string[];
+	}): Promise<ExecutionSnapshot>;
+	sealExecutionCriteria(input: {
+		grantId: string;
+		expectedGrantVersion: number;
+		workId: string;
+		expectedRevisionId: string;
+		criteria: string[];
+		descriptionSha256: string;
+		judgeSha256: string;
+	}): Promise<ExecutionSnapshot>;
+	stampExecutionPlan(input: {
+		grantId: string;
+		expectedGrantVersion: number;
+		workId: string;
+		revisionId: string;
+		candidateId: string;
+		planFile: string;
+		planBody: string;
+		planSha256: string;
+		approach: string[];
+		verification: string[];
+		paths: string[];
+		candidateSha256: string;
+		judgeSha256: string;
+	}): Promise<ExecutionSnapshot>;
+	setExecutionState(input: {
+		grantId: string;
+		expectedGrantVersion: number;
+		targetState: "active" | "paused" | "stopped" | "canceled";
+		reason?: string | null;
+		judgeSha256: string;
+	}): Promise<ExecutionSnapshot>;
+	completeExecutionItem(input: {
+		grantId: string;
+		expectedGrantVersion: number;
+		workId: string;
+		attemptId: string;
+		pushReceiptId: string;
+		judgeSha256: string;
+	}): Promise<ExecutionSnapshot>;
 }
 
 /** Thrown by createBatch after a partial publish — the host formats the exact
