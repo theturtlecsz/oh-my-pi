@@ -297,6 +297,9 @@ decision), Q&A transcript, task breakdown, scores of any kind.
 
 No side effects before lint passes — the ontology lives at the ledger. Check:
 
+- [ ] The blueprint artifact is saved to `local://intake-{slug}.md`.
+- [ ] `create_work.description` is copied unchanged from `local://intake-{slug}.md` (byte-for-byte exact match; any post-lint edit requires saving to the artifact and re-running lint before publication).
+- [ ] Every candidate deliverable is split into a separate single-issue blueprint when it has no native blocking edge.
 - [ ] Every acceptance criterion asserting live state is probed (result recorded)
       or explicitly hedged ("unverified — probe at build"). Hedging is
       permitted ONLY when the probe is genuinely expensive (needs the owner,
@@ -307,7 +310,7 @@ No side effects before lint passes — the ontology lives at the ledger. Check:
 - [ ] Every noun used in acceptance criteria is defined in Entities & Rules (or
       the section is legitimately absent because no new noun was minted).
 - [ ] Target surface exists — probe the workflow tool's `tree`, don't assume.
-      When `tree` can't confirm the target, the phase-1 `create_issue`
+      When `tree` can't confirm the target, the phase-1 `create_work`
       preview (which writes nothing) is the canonical existence probe — its
       preview either resolves the target or errors (obs #110).
 - [ ] Any categorical mapping over live records (states → buckets/labels/
@@ -316,7 +319,7 @@ No side effects before lint passes — the ontology lives at the ledger. Check:
       rendered line shown in the blueprint — and a falsified mapping
       assumption at execution is a surfaced conflict + parked decision,
       never a silent in-flight contract change (obs #112).
-- [ ] Blocking edges among proposed issues are acyclic.
+- [ ] Blocking edges among proposed batch issues are acyclic and every child participates in ≥1 blocking edge.
 - [ ] The visible scan was shown before the session's first question (a
       no-question session still shows it).
 - [ ] Every asking-you item was asked, or the owner's skip is recorded
@@ -336,23 +339,11 @@ publish a failing blueprint.
 
 ## Publication (two-phase, via the workflow tool)
 
-- **Single issue** (default): `create_issue` with the blueprint as description.
-  Two-phase: first call returns the payload preview — show it to the owner
-  verbatim, including that the item becomes NOW; repeat with `confirm:true`
-  only after his yes.
-- **Conditional split**: only when ONE complaint's blueprint decomposes into ≥2
-  independently verifiable slices that share blocking relations — the split is
-  a decomposition of a single deliverable, never a bundling of independent
-  complaints (those each get their own single-issue publication; Blueprint
-  section). Parent item holds the blueprint; children hold the slices
-  with NATIVE blocking links (never text-described edges); ONE batch
-  preview = one owner yes for the whole set. GATED: before attempting any split
-  publish, confirm the installed workflow tool's `create_issue` exposes
-  parent/blocks/batch params.
-  If the params are absent, publish the single-issue path and record the split as
-  deferred on the item.
-- Never assume a write landed without `success:true`.
+The host mechanically refuses missing/stale artifacts, byte drift, explicit multi-deliverable single issues, and unlinked batch children before owner preview.
 
+- **Single issue** (default): `create_work` with `params.description` copied byte-exact from `local://intake-{slug}.md`. Each independent complaint uses its own artifact and standard single-issue publication. Two-phase: first call returns the payload preview — show it to the owner verbatim, including that the item becomes NOW; repeat with `confirm:true` only after his yes.
+- **Conditional split**: only when ONE complaint's blueprint decomposes into ≥2 independently verifiable slices that share blocking relations — never a bundling of independent complaints (those each get their own single-issue publication; Blueprint section). Parent item holds the blueprint (`params.description` matching `local://intake-{slug}.md` byte-for-byte); children hold the slices with NATIVE blocking links (`blocks` array; textual claims never substitute); every child MUST participate in at least one incoming or outgoing `blocks` edge. ONE batch preview = one owner yes for the whole set.
+- Never assume a write landed without `success:true`.
 Intake ends here. Native publication selects the first item or batch parent as
 NOW; do not ask Chris to select it again. Do not start building inside intake —
 the next owner action is `/plan`.

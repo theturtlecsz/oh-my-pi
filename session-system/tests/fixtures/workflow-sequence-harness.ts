@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ExtensionRunner, getAgentDir, loadExtensions, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { confirmRoundTrip } from "./two-phase";
 import { currentTranscriptRef } from "../../extensions/workflow/transcript";
 import { createWorkBackend } from "../../extensions/workflow/work";
@@ -827,15 +828,27 @@ const inheritedNow =
 		: [];
 const fableModel = { id: "claude-fable-5", provider: "anthropic", name: "Claude Fable 5", api: "anthropic-messages" };
 const gptModel = { id: "gpt-5.2", provider: "openai", name: "GPT 5.2", api: "openai-responses" };
+const artifactsDir = path.join(probe, ".artifacts");
+fs.mkdirSync(artifactsDir, { recursive: true });
+const localProtocolOptions = {
+	getArtifactsDir: () => artifactsDir,
+	getSessionId: () => currentSessionId,
+};
+function writeIntakeBlueprint(name: string, content: string): string {
+	const p = resolveLocalUrlToPath(`local://${name}`, localProtocolOptions);
+	fs.mkdirSync(path.dirname(p), { recursive: true });
+	fs.writeFileSync(p, content);
+	return content;
+}
 const runner = new ExtensionRunner(
 	loaded.extensions,
 	loaded.runtime,
 	probe,
-	{ getCwd: () => probe, getBranch: () => inheritedNow, getSessionId: () => "session-test" } as never,
+	{ getCwd: () => probe, getBranch: () => inheritedNow, getSessionId: () => currentSessionId, getArtifactsDir: () => artifactsDir } as never,
 	{ getAvailable: () => [fableModel, gptModel], hasProvider: () => true } as never,
 	undefined,
 	{ getModelRole: (role: string) => (role === "audit" ? "openai/gpt-5.2" : undefined), get: () => undefined, getStorage: () => undefined } as never,
-	undefined,
+	localProtocolOptions,
 	undefined,
 	depth,
 );
@@ -1033,10 +1046,117 @@ if (mode === "intake") {
 	} as never);
 	out.askValid = askValid;
 
-	const first = await confirmRoundTrip(execute, { action: "create_work", title: "First", description: "one", project: "The Bookends" });
-	out.preview = first.preview;
-	out.confirmed = first.confirmed;
-	const second = await confirmRoundTrip(execute, { action: "create_work", title: "Second", description: "two", project: "The Bookends" });
+	// 1. Missing blueprint refuses before preview
+	out.missingBlueprint = await execute({ action: "create_work", title: "First", description: "one", project: "The Bookends" });
+
+	// 2. Mismatch payload refuses
+	const blueprint1 = "# First Complaint\n\nProblem: one\n";
+	writeIntakeBlueprint("intake-first.md", blueprint1);
+	out.mismatchPayload = await execute({ action: "create_work", title: "First", description: "different", project: "The Bookends" });
+
+	// 3. Exact preview, artifact drift invalidates confirm, restore permits confirmation
+	const firstPreviewRaw = await execute({ action: "create_work", title: "First", description: blueprint1, project: "The Bookends" });
+	out.preview = firstPreviewRaw;
+	const confirmIdMatch = /confirmation_id: (\S+)/.exec(firstPreviewRaw);
+	const confirmId1 = confirmIdMatch ? confirmIdMatch[1] : "";
+	writeIntakeBlueprint("intake-first.md", `${blueprint1}\nmutated\n`);
+	out.confirmAfterDrift = await execute({ action: "create_work", title: "First", description: blueprint1, project: "The Bookends", confirm: true, confirmation_id: confirmId1 });
+	writeIntakeBlueprint("intake-first.md", blueprint1);
+	out.confirmed = await execute({ action: "create_work", title: "First", description: blueprint1, project: "The Bookends", confirm: true, confirmation_id: confirmId1 });
+
+	// 4. OMP-166 multi-deliverable bundle refusal
+	const omp166Blueprint = [
+		"# Session workflow slimming — cut standing token burn and loadout brittleness",
+		"",
+		"## Problem",
+		"",
+		"Every session starts by paying for things it never uses. Session-start context in this repo runs ~60,000 tokens typical (28,000 floor, measured across 147 recorded sessions); this repo has spent $3,277 over 22,918 turns. Inside that opening load: ~120 skill descriptions of which only 22 were ever opened in 149 sessions, and ~290 phone/TV/research tool descriptions carried twice per session that were executed zero times in this repo. The task-observer gate forces a full 26.6KB read every session (126 so far, ~830k tokens). Around it, debris accumulates unbounded: 1.18GB session store with ~150 of 244 folders being test-run leftovers (71 empty), 4,190 unrotated log files (84MB), and two skill symlink trees (12 vs 27 links) pointing at one source that have diverged.",
+		"",
+		"## Solution",
+		"",
+		"One slimming pass over the session loadout, in four slices: (1) move the device/research tool catalogs (deepadb, android, maestro, notebooklm, tavily, firecrawl) out of the global config and into only the projects that use them; (2) globally uninstall skill packs that no project uses, reinstalling on demand when a matching task appears; (3) keep the task-observer hard gate but satisfy it with a ~2KB core digest, loading the full skill and references only when logging or reviewing; (4) clean the debris — purge test-run session folders, bound the log directory, and consolidate or mechanically sync the skill symlink trees. Review-only session; all changes execute under /plan in the execution lane.",
+		"",
+		"## Decisions",
+		"",
+		"- Device/research tool catalogs move from global `~/.claude.json` to per-project mounts (media-discovery keeps firecrawl; device work keeps deepadb/android/maestro). — Q1: where should the catalogs live?",
+		"- Skill packs unused by any project are uninstalled globally, not just hidden per-repo; reinstall on demand. — Q2: how aggressively to prune? (Owner chose the stronger option over the per-repo recommendation.)",
+		"- The task-observer first-tool gate stays mechanical but is satisfied by a ~2KB digest; full skill loads on demand. — Q3: change the gate mechanism?",
+		"- Housekeeping debris (session store, logs, symlink trees) rides this work item as a fourth slice. — Q4: where does cleanup get filed?",
+		"- Single work item with four slices as acceptance criteria; no parent/child split. — Q5: how should the ledger carry it?",
+		"",
+		"## Acceptance criteria",
+		"",
+		"- [ ] A fresh session in this repo lists no deepadb/android/maestro/notebooklm/tavily tools, and a fresh media-discovery session still reaches firecrawl. Probe at build (needs new sessions after config change): inspect the session's tool inventory both places. Current state probed 2026-08-27: all mounted globally via `~/.claude.json`; 0 executions in this repo across 22,918 turns; real use elsewhere confirmed.",
+		"- [ ] The per-session skill catalog drops from ~120 entries to the used set plus deliberate keeps; packs unused by any project are uninstalled. Probe at build: count entries in a fresh session's skill list; verify removed packs absent from discovery roots. Current state probed 2026-08-27: ~120 loaded, 22 ever opened here.",
+		"- [ ] The task-observer gate passes on a digest read of ≤ ~2KB; the full 26.6KB skill is no longer read at every session start; enforcement (block until read) still fires when the digest is skipped. Probe at build: start a fresh session, observe the gate accept the digest; check digest file size.",
+		"- [ ] Session store test-debris folders are gone (244 project dirs → roughly the ~90 real ones; 0 empty), the log directory is bounded by rotation or cleanup (4,190 files today), and skill installation resolves to one canonical tree or a mechanically synced pair. Probe at build: recount dirs/files; resolve every symlink.",
+		"",
+		"## Out of scope",
+		"",
+		"- Splitting the 100KB workflow extension file (`host.ts`) into modules.",
+		"- The overdue observation-log review (~60 open items) — summary-lane job.",
+		"- Changing the standing persona modes (ponytail, caveman).",
+		"- Executing any of the above in this session — review-only; execution goes through /plan.",
+		"",
+		"## Deferred & assumptions",
+		"",
+		"- [deferred design] Mechanical enforcement for repeated shell `grep`/`sed` (648 uses despite the built-in tool) and `sleep 30` polling (98 uses) — decide whether a hook is worth new machinery after the loadout cuts land.",
+		"- [scheduled review] Observation-log review (60 OPEN, clusters on summary and task-observer) — runs in the summary lane, not here.",
+		"- [assumption] Cache pricing keeps first-turn context the dominant per-session cost lever; medians treated as decision-grade.",
+		"- Environmental figures (60k/28k first-turn tokens, 244 session dirs, 4,190 log files, 12/27 symlinks, ~120 skills) observed 2026-08-27 — re-probe at execution.",
+		"",
+		"## Coverage table",
+		"",
+		"| Category | Status |",
+		"|---|---|",
+		"| Functional scope & behavior | Resolved — four slices settled |",
+		"| Domain & data model | Clear (N/A — no new records or entities) |",
+		"| Interaction & UX flow | Resolved — gate behavior settled (Q3) |",
+		"| Non-functional qualities | Resolved — token/size targets in criteria |",
+		"| Integrations & external dependencies | Resolved — per-project MCP mounts (Q1) |",
+		"| Edge cases & failure handling | Partial — reinstall-on-demand path exercised only at build (deferred) |",
+		"| Constraints & tradeoffs | Resolved — global prune chosen over per-repo hide (Q2) |",
+		"| Terminology | Clear (N/A — no new nouns minted) |",
+		"| Completion signals | Resolved — probed acceptance criteria |",
+		"| Placeholders & ambiguities in existing text | Clear (N/A — no source draft) |",
+		"| Scope boundaries | Resolved — out-of-scope list |",
+		"",
+	].join("\n");
+	writeIntakeBlueprint("intake-omp166.md", omp166Blueprint);
+	out.omp166Refusal = await execute({ action: "create_work", title: "Bundled", description: omp166Blueprint, project: "The Bookends" });
+
+	// 5. Unlinked batch child refusal & 6. Linked batch acceptance
+	const batchBlueprint = "# Batch Parent\n\nParent description\n";
+	writeIntakeBlueprint("intake-batch.md", batchBlueprint);
+	out.unlinkedBatchRefusal = await execute({
+		action: "create_work",
+		title: "Batch Parent",
+		description: batchBlueprint,
+		project: "The Bookends",
+		batch: [
+			{ title: "Child 0", blocks: [1] },
+			{ title: "Child 1" },
+			{ title: "Child 2" },
+		],
+	});
+	const linkedBatch = await confirmRoundTrip(execute, {
+		action: "create_work",
+		title: "Batch Parent",
+		description: batchBlueprint,
+		project: "The Bookends",
+		batch: [
+			{ title: "Child 0", blocks: [1] },
+			{ title: "Child 1", blocks: [2] },
+			{ title: "Child 2" },
+		],
+	});
+	out.linkedBatchPreview = linkedBatch.preview;
+	out.linkedBatchConfirmed = linkedBatch.confirmed;
+
+	// 7. Second single-issue blueprint creates HOME-6 without replacing NOW
+	const blueprint2 = "# Second Complaint\n\nProblem: two\n";
+	writeIntakeBlueprint("intake-second.md", blueprint2);
+	const second = await confirmRoundTrip(execute, { action: "create_work", title: "Second", description: blueprint2, project: "The Bookends" });
 	out.second = second.confirmed;
 	const stop = await extension.handlers.get("session_stop")?.[0]?.({ type: "session_stop", stop_hook_active: false }, ctx);
 	out.stop = stop ?? null;
@@ -1049,13 +1169,15 @@ if (mode === "intake") {
 			role: "custom",
 			customType: "skill-prompt",
 			attribution: "user",
-			details: { name: "intake", args: "--publish local://blueprint.md" },
+			details: { name: "intake", args: "--publish local://intake-published.md" },
 			content: "intake --publish",
 			timestamp: Date.now(),
 		},
 	};
+	const blueprintPublish = "# Published Complaint\n\nProblem: published\n";
+	writeIntakeBlueprint("intake-published.md", blueprintPublish);
 	await runner.emit(publishMessage as never);
-	const publishTrip = await confirmRoundTrip(execute, { action: "create_work", title: "Published", description: "blueprint", project: "The Bookends" });
+	const publishTrip = await confirmRoundTrip(execute, { action: "create_work", title: "Published", description: blueprintPublish, project: "The Bookends" });
 	out.publishConfirmed = publishTrip.confirmed;
 } else if (mode === "plan") {
 	out.noNow = await runner.emitInput("/plan", undefined, "interactive");

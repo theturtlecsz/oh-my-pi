@@ -8,8 +8,8 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { type Dirent, readFileSync, realpathSync } from "node:fs";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
@@ -26,6 +26,7 @@ import {
 	type ExtensionModelQuery,
 	type Theme,
 } from "@oh-my-pi/pi-coding-agent";
+import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
 import digestPromptTemplate from "./digest-prompt.md" with { type: "text" };
@@ -374,6 +375,67 @@ export function createWorkflowHost(cfg: HostConfig) {
 		const rest2 = rest1.slice(m2.index + m2[0].length);
 		const m3 = headingRegex("Leaving for later").exec(rest2);
 		return m3 !== null;
+	}
+
+	function resetIntakeState(): void {
+		intakeActive = false;
+		intakeScanRequired = false;
+		intakeScanDelivered = false;
+		intakeSelected = false;
+	}
+
+	async function readLatestIntakeBlueprint(ctx: ExtensionContext): Promise<{ url: string; content: string } | null> {
+		if (!ctx.localProtocolOptions) return null;
+		let localRoot: string;
+		try {
+			localRoot = resolveLocalUrlToPath("local://", ctx.localProtocolOptions);
+		} catch {
+			return null;
+		}
+		let dirents: Dirent[];
+		try {
+			dirents = await readdir(localRoot, { withFileTypes: true });
+		} catch {
+			return null;
+		}
+		const pattern = /^intake-[a-z0-9][a-z0-9_-]*\.md$/i;
+		const candidates: Array<{ name: string; fullPath: string; mtimeMs: number }> = [];
+		for (const dirent of dirents) {
+			if (!dirent.isFile() && !dirent.isSymbolicLink()) continue;
+			if (!pattern.test(dirent.name)) continue;
+			const fullPath = join(localRoot, dirent.name);
+			try {
+				const st = await stat(fullPath);
+				if (st.isFile()) {
+					candidates.push({ name: dirent.name, fullPath, mtimeMs: st.mtimeMs });
+				}
+			} catch {
+				// ignore unreadable file
+			}
+		}
+		if (candidates.length === 0) return null;
+		candidates.sort((a, b) => {
+			if (b.mtimeMs !== a.mtimeMs) {
+				return b.mtimeMs - a.mtimeMs;
+			}
+			return a.name.localeCompare(b.name);
+		});
+		const top = candidates[0]!;
+		try {
+			const content = await readFile(top.fullPath, "utf-8");
+			if (content.length === 0) return null;
+			return { url: `local://${top.name}`, content };
+		} catch {
+			return null;
+		}
+	}
+
+	function hasExplicitMultiDeliverableDeclaration(text: string): boolean {
+		const countPattern =
+			/\b(?:[2-9]|two|three|four|five|six|seven|eight|nine)\s+(?:(?:independent|independently\s+verifiable)\s+)?(?:slices?|deliverables?|workstreams?)\b/i;
+		const qualifiedPluralPattern =
+			/\b(?:independent|independently\s+verifiable)\s+(?:changes|slices|deliverables|workstreams)\b/i;
+		return countPattern.test(text) || qualifiedPluralPattern.test(text);
 	}
 	let activeCenterRunId: number | null = null;
 	let nextCenterRunId = 1;
@@ -1186,10 +1248,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			summaryAuthorizationRef = undefined;
 			summaryAuthorized = false;
 			summaryBlockReason = undefined;
-			intakeActive = false;
-			intakeScanRequired = false;
-			intakeScanDelivered = false;
-			intakeSelected = false;
+			resetIntakeState();
 			planTarget = undefined;
 			// OMP-43: only an OWNER lifecycle clears the process-global audit bridge
 			// (binding, receipts, transcript ref) — a subagent's session_start (the
@@ -1297,10 +1356,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			sessionStartCommit = headCommit(process.cwd());
 			sessionStartedAt = new Date().toISOString();
 			summaryAuthorizationRef = undefined;
-			intakeActive = false;
-			intakeScanRequired = false;
-			intakeScanDelivered = false;
-			intakeSelected = false;
+			resetIntakeState();
 			planTarget = undefined;
 			resetConfirmations({ resetShared: ownerSession(ctx) }); // OMP-43: owner transcripts only — see session_start
 			if (event.reason === "resume" || event.reason === "new") {
@@ -1372,6 +1428,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				intakeScanDelivered = false;
 				return;
 			}
+			resetIntakeState();
 		});
 		pi.on("message_end", async (event, ctx) => {
 			if (!ownerSession(ctx)) return;
@@ -2157,6 +2214,18 @@ export function createWorkflowHost(cfg: HostConfig) {
 								}
 							}
 							if (!params.title) return deny("title required");
+							if (intakeActive) {
+								const blueprint = await readLatestIntakeBlueprint(ctx);
+								if (!blueprint) {
+									return deny("intake_blueprint_missing: save and lint local://intake-{slug}.md before publishing");
+								}
+								if (params.description === undefined || params.description !== blueprint.content) {
+									return deny(`intake_blueprint_mismatch: description must exactly match ${blueprint.url}; save the changed bytes and re-run intake lint`);
+								}
+								if ((params.batch === undefined || params.batch.length === 0) && hasExplicitMultiDeliverableDeclaration(blueprint.content)) {
+									return deny("intake_decomposition_required: blueprint declares multiple deliverables without native blocking relations; save one local://intake-{slug}.md per independent complaint, or publish one linked batch when the slices truly block each other");
+								}
+							}
 							const selectsNow = intakeActive && !intakeSelected;
 							if (params.batch !== undefined && params.batch.length > 0) {
 								const entries = params.batch;
@@ -2185,6 +2254,20 @@ export function createWorkflowHost(cfg: HostConfig) {
 									for (let k = 0; k < n; k++) if (indeg[k]! > 0) leftover.push(`[${k}] "${entries[k]!.title}"`);
 									return deny(`blocks edges form a cycle: ${leftover.join(" ↔ ")} — publish refused`);
 								}
+								if (intakeActive) {
+									for (let k = 0; k < n; k++) {
+										const outgoing = (entries[k]!.blocks ?? []).length;
+										let incoming = 0;
+										for (let j = 0; j < n; j++) {
+											if (j !== k && (entries[j]!.blocks ?? []).includes(k)) {
+												incoming++;
+											}
+										}
+										if (outgoing + incoming === 0) {
+											return deny(`intake_decomposition_required: batch entry [${k}] "${entries[k]!.title}" has no blocking relations; publish as a separate single-issue blueprint`);
+										}
+									}
+								}
 								const target = fileTarget(params.project);
 								const batchRefusal = unscopedRefusal(target);
 								if (batchRefusal) return deny(batchRefusal);
@@ -2206,11 +2289,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 									if (selectsNow) {
 										await setNow(outcome.parent, ctx);
 										intakeSelected = true;
-									}
-									if (intakeActive) {
-										intakeActive = false;
-										intakeScanRequired = false;
-										intakeScanDelivered = false;
 									}
 									return okText(`${outcome.text}${selectsNow ? " + parent is NOW" : ""}`, {
 										identifier: outcome.parent.key,
@@ -2260,11 +2338,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (selectsNow) {
 								await setNow(created, ctx);
 								intakeSelected = true;
-							}
-							if (intakeActive) {
-								intakeActive = false;
-								intakeScanRequired = false;
-								intakeScanDelivered = false;
 							}
 							return okText(`created ${created.key}${params.queue ? ` + ${backend.queueNoun}` : ""}${selectsNow ? " + NOW" : ""}`, { identifier: created.key, now: selectsNow });
 						}
