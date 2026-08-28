@@ -120,6 +120,7 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(capturedOptions?.settings).toBe(sentinelSettings);
 		expect(capturedOptions?.modelOverride).toBe("@audit");
 		expect(capturedOptions?.modelRole).toBe("audit");
+		expect(capturedOptions?.modelRegistry).toBe(sentinelRegistry);
 		expect(result.started).toBe(true);
 		expect(result.payload).toBe("VERDICT: PASS\nAll acceptance criteria verified.");
 	});
