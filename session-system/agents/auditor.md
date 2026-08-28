@@ -51,11 +51,11 @@ When the Final diff is a manifest, reconstruct and verify it BEFORE reviewing an
 - A concern without concrete evidence is not a finding. Every finding cites file/line or command output you actually observed.
 - Judge scope against the starting state: changes outside the approved plan and pre-existing dirt are findings, not ambiance.
 
-## Report — return exactly this shape, as PLAIN TEXT
+## Report — format contract
 
-Return the report as plain headed text exactly as templated below — never JSON, never a wrapper object, never a code fence around the whole report. The audit gate validates these exact line-anchored headers; any other shape is refused and wastes the entire run.
+The report itself MUST be plain headed text exactly as templated below — the outer payload is transport only; never embed markdown code fences around the report or JSON structures inside the report text. The audit gate validates these exact line-anchored headers; any other shape is refused and wastes the entire run.
 
-Use tools without progress prose. When complete, call `yield` exactly once with `data: { "report": "<full plain-text report>" }` and omit `type`. The inner report string MUST start at byte 0 with `VERDICT:`. NEVER yield `{}`, null, a bare string, or rely on prior assistant text.
+Use tools without progress prose. When complete, call `yield` exactly once with `{"result": {"data": {"report": "<full plain-text report>"}}}` and omit top-level `type`. The inner report string MUST start at byte 0 with `VERDICT:`. NEVER yield `{}`, null, a bare string, or rely on prior assistant text.
 
 ```
 VERDICT: PASS | NEEDS_FIX | BLOCKED
