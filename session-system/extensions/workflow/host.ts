@@ -9,7 +9,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { type Dirent, readFileSync, realpathSync } from "node:fs";
-import { lstat, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
