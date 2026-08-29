@@ -4159,3 +4159,93 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
     assert status == 200, body
     assert body["result"]["state"] == "DONE"
     assert body["result"]["grant"]["state"] == "completed"
+
+def test_execution_grant_project_drift_rejection(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "Item without project", description="desc")
+    work_id, rev_id = item["work_id"], item["revision_id"]
+    project_id = uuid4()
+    _seed_project(service, workspace_id, project_id, "Test Project")
+    judge_sha, judge_manifest = _tcb_manifest()
+    head_commit = "0" * 40
+
+    # 1. Reject begin_execution when claim has project_id but work item has none (null-to-project mismatch)
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": str(uuid4()),
+                "provenance": {
+                    "owner_input_id": str(uuid4()),
+                    "owner_session_id": "session-1",
+                    "normalized_command": "/execute OMP-1",
+                    "workspace_id": str(workspace_id),
+                    "repository": "oh-my-pi",
+                    "nonce": str(uuid4()),
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(work_id),
+                        "revision_id": str(rev_id),
+                        "position": 0,
+                        "original_request": "desc",
+                        "original_request_sha256": text_sha256("desc"),
+                        "initial_git_baseline": head_commit,
+                        "project_id": str(project_id),
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 409
+    assert any("project mismatch" in d for d in body["error"]["diagnostics"])
+
+    # 2. Reject begin_execution when claim has None but work item has a project
+    proj_item = _create(service, workspace_id, "Item with project", description="desc", project_id=str(project_id))
+    proj_work_id, proj_rev_id = proj_item["work_id"], proj_item["revision_id"]
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": str(uuid4()),
+                "provenance": {
+                    "owner_input_id": str(uuid4()),
+                    "owner_session_id": "session-1",
+                    "normalized_command": "/execute OMP-2",
+                    "workspace_id": str(workspace_id),
+                    "repository": "oh-my-pi",
+                    "nonce": str(uuid4()),
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(proj_work_id),
+                        "revision_id": str(proj_rev_id),
+                        "position": 0,
+                        "original_request": "desc",
+                        "original_request_sha256": text_sha256("desc"),
+                        "initial_git_baseline": head_commit,
+                        "project_id": None,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 409
+    assert any("project mismatch" in d for d in body["error"]["diagnostics"])

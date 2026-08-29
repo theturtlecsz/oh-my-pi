@@ -288,6 +288,7 @@ try {
 	assert.equal(queueOut.item0WorkId, item2.work_id, "named queue item is claim position 0");
 	assert.ok(String(queueOut.reviewQ1).includes("Advanced to next queue item") || String(queueOut.reviewQ1).includes("completed"), "queue item 1 completed");
 
+
 	// Test Scenario 4: Four Restart Tamper Scenarios
 	const healthReady = await (await fetch(`${baseUrl}/v1/health/ready`)).json();
 	const fp = healthReady.service_fingerprint;
@@ -1115,7 +1116,55 @@ try {
 		assert.equal(startOut.exec?.grant?.continuations_scheduled, 0, `continuations start at 0 for ${label}`);
 		return { item, startOut };
 	};
-
+	// Test Scenario 7a: Post-PASS Queue Dirt Stops Grant with execution_worktree_not_clean
+	fs.rmSync(path.join(probe, "python"), { recursive: true, force: true });
+	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
+	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
+	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
+	const queueDirtBatch = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "create_work_batch",
+				payload: {
+					items: [
+						{
+							client_ref: "smoke-qdirt-1",
+							title: "Queue dirt item 1",
+							description: "Queue dirt item 1 description",
+							scope: "surface",
+						},
+						{
+							client_ref: "smoke-qdirt-2",
+							title: "Queue dirt item 2",
+							description: "Queue dirt item 2 description",
+							scope: "surface",
+						},
+					],
+				},
+			},
+		}),
+	})).json();
+	const qDirt1 = queueDirtBatch.result.items[0];
+	const queueDirtOut = runHarness("queue-dirt", qDirt1.key);
+	assert.ok(fs.existsSync(path.join(probe, "residual-dirt.txt")), "residual file still exists on disk");
+	assert.ok(String(queueDirtOut.reviewQ1).includes("execution_worktree_not_clean"), "queue advance with dirt refused");
+	assert.equal(queueDirtOut.finalExecution?.grant?.state, "stopped", "grant stopped on queue dirt");
+	assert.equal(queueDirtOut.finalExecution?.grant?.terminal_reason, "execution_worktree_not_clean", "terminal reason recorded for queue dirt");
+	assert.ok(queueDirtOut.finalExecution?.grant?.stopped_at, "stopped_at is set");
+	assert.equal(queueDirtOut.finalExecution?.items[0]?.phase, "completed", "delivered item remains completed");
+	assert.equal(queueDirtOut.finalExecution?.items[1]?.phase, "skipped", "remaining claims are skipped");
+	const qDirtFocus = await (await fetch(`${baseUrl}/v1/workspaces/${WORKSPACE}/focus/${OWNER}`, { headers })).json();
+	assert.equal(qDirtFocus.work_id, null, "focus slot is cleared on queue dirt terminalization");
+	assert.ok(!((queueDirtOut.sentMessages as Array<{ content?: string }>) || []).some(m => typeof m?.content === "string" && m.content.includes(queueDirtBatch.result.items[1].key)), "no next-item continuation emitted");
+	assert.equal(queueDirtOut.finalExecution?.items[1]?.activated_at, null, "next item never activated");
+	fs.rmSync(path.join(probe, "residual-dirt.txt"), { force: true });
 	// 1. Happy Path Recovery
 	const happy = await createAndStartDisposableGrant("happy");
 	const happyOut1 = runHarness("recovery", happy.item.key);
@@ -1273,6 +1322,42 @@ try {
 	assert.equal((recoveryProj.sentMessages as unknown[])?.length, 0, "project drift sends zero turns");
 	await cancelGrant(projCase.startOut.exec?.grant?.grant_id, projCase.startOut.exec?.grant?.grant_version, projCase.startOut.exec?.grant?.judge_sha256);
 
+	// 4c. Drift Probe: Projectless-to-project drift sends zero turns
+	const nullProjBatch = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "create_work_batch",
+				payload: {
+					items: [{
+						client_ref: "smoke-nullproj-item",
+						title: "Null Project Item",
+						description: "Item without project",
+						scope: "smoke",
+						acceptance_criteria: [],
+						state: "BACKLOG",
+					}],
+				},
+			},
+		}),
+	})).json();
+	const nullProjItem = nullProjBatch.result.items[0];
+	const nullProjStartOut = runHarness("start-only", nullProjItem.key);
+	assert.equal(nullProjStartOut.exec?.grant?.state, "active", "grant for null project item started");
+	assert.equal(nullProjStartOut.exec?.activeItem?.project_id, null, "activeItem project_id is null");
+	psql(`UPDATE omp_work.work_items SET project_id='${proj2Id}' WHERE work_id='${nullProjItem.work_id}';`);
+	const recoveryNullProj = runHarness("recovery", nullProjItem.key);
+	assert.equal((recoveryNullProj.sentMessages as unknown[])?.length, 0, "null-to-project drift sends zero turns");
+	assert.equal(recoveryNullProj.exec?.grant?.grant_version, nullProjStartOut.exec?.grant?.grant_version, "grant version unchanged on null-to-project drift");
+	assert.equal(recoveryNullProj.exec?.grant?.continuations_scheduled, nullProjStartOut.exec?.grant?.continuations_scheduled, "continuations_scheduled unchanged on null-to-project drift");
+	await cancelGrant(nullProjStartOut.exec?.grant?.grant_id, nullProjStartOut.exec?.grant?.grant_version, nullProjStartOut.exec?.grant?.judge_sha256);
+
 	// 5. Drift Probe: Blocker drift sends zero turns
 	const blockerCase = await createAndStartDisposableGrant("blocker");
 	const blockerItemRes = await (await fetch(`${baseUrl}/v1/commands`, {
@@ -1332,7 +1417,7 @@ try {
 	const recoveryMissingYield = runHarness("recovery", yieldCase.item.key, { OMP_WORK_SMOKE_MISSING_YIELD: "1" });
 	assert.equal((recoveryMissingYield.sentMessages as unknown[])?.length, 0, "missing yield-assembly sends zero turns");
 	await cancelGrant(yieldCase.startOut.exec?.grant?.grant_id, yieldCase.startOut.exec?.grant?.grant_version, yieldCase.startOut.exec?.grant?.judge_sha256);
-	// 7. Continuation Cap Exhaustion: Schedule up to max_continuations (8) then 9th stops grant with complete cleanup
+	// 7. Continuation Cap Exhaustion: Schedule up to max_continuations (8) then fresh-process recovery while active at cap triggers terminalization
 	const capCase = await createAndStartDisposableGrant("cap");
 	let grantVerCap = capCase.startOut.exec?.grant?.grant_version ?? 1;
 	let scheduledCap = capCase.startOut.exec?.grant?.continuations_scheduled ?? 0;
@@ -1364,33 +1449,18 @@ try {
 	}
 	assert.equal(scheduledCap, 8, "continuations scheduled reached cap of 8");
 
-	// 9th continuation exceeds cap -> atomically stopped and cleaned up
-	const capExceededRes = await (await fetch(`${baseUrl}/v1/commands`, {
-		method: "POST",
-		headers,
-		body: JSON.stringify({
-			api_version: "work.omp.dev/v1",
-			workspace_id: WORKSPACE,
-			request_id: crypto.randomUUID(),
-			correlation_id: crypto.randomUUID(),
-			operation_id: crypto.randomUUID(),
-			command: {
-				type: "set_execution_state",
-				payload: {
-					grant_id: capCase.startOut.exec?.grant?.grant_id,
-					target_state: "active",
-					expected_grant_version: grantVerCap,
-					judge_sha256: capJudgeSha,
-				},
-			},
-		}),
-	})).json();
-	assert.equal(capExceededRes.result?.grant?.state, "stopped", "grant stopped on cap exhaustion");
-	assert.equal(capExceededRes.result?.grant?.terminal_reason, "max_continuations_exceeded", "terminal reason recorded");
-
+	// Recovery while active at the cap calls set_execution_state which atomically stops and cleans up
 	const recoveryCap = runHarness("recovery", capCase.item.key);
-	assert.equal((recoveryCap.sentMessages as unknown[])?.length, 0, "stopped grant on cap exhaustion sends zero turns");
+	assert.equal((recoveryCap.sentMessages as unknown[])?.length, 0, "recovery while active at cap sends zero turns");
 
+	assert.equal(recoveryCap.exec?.grant?.state, "stopped", "grant stopped on cap exhaustion during recovery");
+	assert.equal(recoveryCap.exec?.grant?.terminal_reason, "max_continuations_exceeded", "terminal reason recorded");
+	assert.ok(recoveryCap.exec?.grant?.stopped_at, "stopped_at is set on cap exhaustion");
+	const capActiveItem = recoveryCap.exec?.items?.find(i => i.work_id === capCase.item.work_id);
+	assert.equal(capActiveItem?.phase, "abandoned", "active item abandoned on cap exhaustion");
+	assert.ok(recoveryCap.exec?.items?.every(i => i.phase === "abandoned" || i.phase === "skipped" || i.phase === "completed"), "pending items skipped");
+	const capFocusRes = await (await fetch(`${baseUrl}/v1/workspaces/${WORKSPACE}/focus/${OWNER}`, { headers })).json();
+	assert.equal(capFocusRes.work_id, null, "focus slot is cleared on cap exhaustion");
 	// Test Scenario 8: Non-main branch push binding success & negative refusal
 	const nonMainCase = await createAndStartDisposableGrant("non-main", "release/omp-180-smoke");
 	const grantNonMainId = nonMainCase.startOut.exec?.grant?.grant_id;

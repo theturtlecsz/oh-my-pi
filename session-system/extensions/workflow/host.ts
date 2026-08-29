@@ -1336,9 +1336,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					return { ok: false, reason: `dirty worktree: ${dirt.join(", ")}` };
 				}
 			}
-			if (exec.grant.continuations_scheduled >= exec.grant.max_continuations) {
-				return { ok: false, reason: "max continuations reached" };
-			}
+
 			let tcb: { judgeSha256: string; judgeManifest: ExecutionJudgeManifest };
 			try {
 				tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
@@ -1360,7 +1358,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if (["DONE", "CANCELED", "CANCELLED", "TRIAGE", "BLOCKED"].includes(item.state)) {
 				return { ok: false, reason: `item in terminal or blocked state: ${item.state}` };
 			}
-			if (exec.activeItem.project_id && item.project_id !== exec.activeItem.project_id) {
+			const expectedProjectId = exec.activeItem.project_id ?? null;
+			const currentProjectId = item.project_id ?? null;
+			if (currentProjectId !== expectedProjectId) {
 				return { ok: false, reason: "project mismatch" };
 			}
 			const workflow = await backend.workClient!.workflow(targetIssue.key);
@@ -2171,6 +2171,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 							preflight.targetIssue.key,
 							ctx,
 						);
+					} else if (updated && updated.grant.state === "stopped") {
+						ctx.ui.notify(`Execution grant stopped: ${updated.grant.terminal_reason ?? "cap reached"}`, "warning");
 					}
 					return;
 				}
@@ -3135,9 +3137,27 @@ export function createWorkflowHost(cfg: HostConfig) {
 								const nextPending = completed.items.find(i => i.phase === "pending");
 								if (nextPending) {
 									const dirt = dirtyPaths(ctx.cwd);
-									if (dirt.length > 0) return deny("execution_worktree_not_clean on queue advance: clean worktree required.");
+									if (dirt.length > 0) {
+										await backend.setExecutionState({
+											grantId: completed.grant.grant_id,
+											expectedGrantVersion: completed.grant.grant_version,
+											targetState: "stopped",
+											reason: "execution_worktree_not_clean",
+											judgeSha256: tcb.judgeSha256,
+										});
+										return deny("execution_worktree_not_clean on queue advance: clean worktree required.");
+									}
 									const head = headCommit(ctx.cwd);
-									if (!head) return deny("no head commit on queue advance");
+									if (!head) {
+										await backend.setExecutionState({
+											grantId: completed.grant.grant_id,
+											expectedGrantVersion: completed.grant.grant_version,
+											targetState: "stopped",
+											reason: "no_head_commit",
+											judgeSha256: tcb.judgeSha256,
+										});
+										return deny("no head commit on queue advance");
+									}
 									const focusVersion = await backend.getFocusVersion();
 									await backend.activateExecutionItem({
 										grantId: completed.grant.grant_id,

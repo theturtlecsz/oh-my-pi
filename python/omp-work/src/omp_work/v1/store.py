@@ -3690,10 +3690,7 @@ class PostgresWorkStore:
                     "revision_conflict",
                     (f"work item {claim.work_id} revision mismatch",),
                 )
-            if (
-                claim.project_id is not None
-                and work_row["project_id"] != claim.project_id
-            ):
+            if work_row["project_id"] != claim.project_id:
                 raise WorkStoreError(
                     "revision_conflict",
                     (f"work item {claim.work_id} project mismatch",),
@@ -3753,7 +3750,7 @@ class PostgresWorkStore:
                     claim.position,
                     initial_phase,
                     claim.revision_id,
-                    claim.project_id or work_row["project_id"],
+                    claim.project_id,
                     [str(b) for b in claim.active_blocker_ids],
                     claim.initial_git_baseline,
                     claim.initial_git_baseline if is_first else None,
@@ -3841,10 +3838,7 @@ class PostgresWorkStore:
             )
         if work_row["current_revision_id"] != payload.expected_revision_id:
             raise WorkStoreError("revision_conflict", ("work item revision mismatch",))
-        if (
-            payload.expected_project_id is not None
-            and work_row["project_id"] != payload.expected_project_id
-        ):
+        if work_row["project_id"] != payload.expected_project_id:
             raise WorkStoreError("revision_conflict", ("work item project mismatch",))
         if work_row["state"] in ("DONE", "CANCELED", "CANCELLED", "TRIAGE", "BLOCKED"):
             raise WorkStoreError(

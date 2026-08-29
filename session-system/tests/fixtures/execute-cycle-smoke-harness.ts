@@ -292,6 +292,34 @@ if (scenario === "dirty") {
 
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
+} else if (scenario === "queue-dirt") {
+	const executeCmd = extension.commands.get("execute");
+	if (!executeCmd) throw new Error("execute command missing");
+
+	await executeCmd.handler(`${workKeyArg || "OMP-2"} --queue`, cmdCtx);
+	const execState1 = JSON.parse(await execute({ action: "get_execution" }));
+	out.queueLength = execState1.items.length;
+	// Process item 1
+	await execute({ action: "seal_execution_criteria", criteria: ["AC-1: queue item 1"] });
+	const planFile = "local://execute-plan.md";
+	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Write item 1\n\n## Verification\n1. Prove item 1\n");
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/qdirt1.ts"] });
+	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+	fs.writeFileSync(path.join(probe, "src/qdirt1.ts"), "export const qdirt1 = true;\n");
+	subprocessCount = 1;
+	// Turn 1: freeze & push
+	const reviewT1 = await execute({ action: "begin_execution_review", body: "test qdirt1 passed" });
+	out.reviewT1 = reviewT1;
+	// Write residual untracked dirt after freeze before settlement completion
+	fs.writeFileSync(path.join(probe, "residual-dirt.txt"), "residual dirt\n");
+	// Turn 2 & 3: audit and completion with dirt
+	const reviewQ1 = await reviewUntilSettled("test qdirt1 passed");
+	out.reviewQ1 = reviewQ1;
+	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
+	out.uiCalls = uiCalls;
+	out.sentMessages = sentMessages;
 } else if (scenario === "contract-pause") {
 	const executeCmd = extension.commands.get("execute");
 	if (!executeCmd) throw new Error("execute command missing");
