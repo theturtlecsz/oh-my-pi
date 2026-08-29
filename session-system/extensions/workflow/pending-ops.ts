@@ -146,3 +146,21 @@ export async function ackOps(dir: string, delivered: ReadonlySet<string>, now = 
 		if (Number.isFinite(age) && age > RESOLVED_TTL_MS) await rm(path, { force: true });
 	}
 }
+
+export async function readPendingClaims(dir: string): Promise<{ records: PendingRecord[]; unreadable: string[] }> {
+	await ensureDir(dir);
+	const names = await readdir(dir);
+	const records: PendingRecord[] = [];
+	const unreadable: string[] = [];
+	for (const name of names) {
+		if (!name.endsWith(".json") || name.endsWith(".tmp")) continue;
+		const fullPath = join(dir, name);
+		const record = await readRecord(fullPath);
+		if (record) {
+			records.push(record);
+		} else {
+			unreadable.push(fullPath);
+		}
+	}
+	return { records, unreadable };
+}

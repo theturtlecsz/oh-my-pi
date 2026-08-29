@@ -433,3 +433,22 @@ describe("confirmation lifecycle (OMP-168)", () => {
 		expect(confirmCall.approved).toBe(true);
 	});
 });
+
+describe("audit judge TCB sealing (OMP-180)", () => {
+	test("getExecutorSha fails closed when required yield-assembly source is unresolvable", async () => {
+		const { getExecutorSha } = await import("../extensions/workflow/audit-tcb");
+		expect(() => {
+			getExecutorSha((specifier: string) => {
+				if (specifier === "@oh-my-pi/pi-coding-agent/task/yield-assembly") return undefined;
+				return import.meta.resolve(specifier);
+			});
+		}).toThrow("Failed to resolve required audit transport source: @oh-my-pi/pi-coding-agent/task/yield-assembly");
+	});
+
+	test("getExecutorSha returns stable 64-hex digest under standard resolver", async () => {
+		const { getExecutorSha } = await import("../extensions/workflow/audit-tcb");
+		const sha = getExecutorSha();
+		expect(typeof sha).toBe("string");
+		expect(sha).toMatch(/^[0-9a-f]{64}$/);
+	});
+});

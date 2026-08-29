@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -731,11 +731,42 @@ class ExecutionJudgeManifest(StrictModel):
 class BeginExecutionPayload(StrictModel):
     grant_id: UUID
     provenance: ExecutionProvenanceEnvelope
+    remote_ref: str = Field(min_length=1)
     mode: Literal["single", "queue"]
     items: tuple[ExecutionGrantItemClaim, ...] = Field(min_length=1)
     expected_focus_version: int = Field(ge=0)
     judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     judge_manifest: ExecutionJudgeManifest
+
+    @field_validator("remote_ref")
+    @classmethod
+    def validate_remote_ref(cls, v: str) -> str:
+        if not isinstance(v, str) or not v.startswith("refs/heads/"):
+            raise ValueError("remote_ref must start with refs/heads/")
+        branch = v[len("refs/heads/") :]
+        if not branch:
+            raise ValueError("remote_ref branch name cannot be empty")
+        if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in v):
+            raise ValueError(
+                "remote_ref cannot contain whitespace or control characters"
+            )
+        if ".." in v or "@{" in v or "//" in v:
+            raise ValueError("remote_ref cannot contain .., @{, or consecutive slashes")
+        if any(c in v for c in ("~", "^", ":", "?", "*", "[", "\\")):
+            raise ValueError("remote_ref contains invalid git ref characters")
+        parts = branch.split("/")
+        for part in parts:
+            if not part:
+                raise ValueError("remote_ref components cannot be empty")
+            if part.startswith(".") or part.endswith("."):
+                raise ValueError("remote_ref components cannot start or end with a dot")
+            if part.endswith(".lock"):
+                raise ValueError("remote_ref components cannot end with .lock")
+            if part == "@":
+                raise ValueError("remote_ref cannot be '@'")
+        if v.endswith(("/", ".")):
+            raise ValueError("remote_ref cannot end with a slash or dot")
+        return v
 
 
 class ActivateExecutionItemPayload(StrictModel):

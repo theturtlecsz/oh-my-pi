@@ -8,6 +8,7 @@
  * audit never collides on UNIQUE(work_id, revision_id, candidate_sha256).
  */
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 import {
 	type Candidate,
 	candidateSha256,
@@ -75,7 +76,7 @@ import {
 } from "./backend";
 import { pendingOpsDir, type WorkClientConfig } from "./config";
 import { candidateDrift, type CandidateDriftShape, freezeCandidateCommit, headCommit, pushCandidate } from "./git";
-import { ackOps as ackClaimOps, claimPendingOp, dropPendingOp, intentFingerprint, resolvePendingOp } from "./pending-ops";
+import { ackOps as ackClaimOps, claimPendingOp, dropPendingOp, intentFingerprint, readPendingClaims, resolvePendingOp } from "./pending-ops";
 import { bounded, healthWord, oneRecovery, redactSecrets } from "./status";
 
 const DRAIN_MAX_QUEUE = 8;
@@ -372,7 +373,7 @@ export function createWorkBackend(
 		return hit.project_id;
 	}
 
-	async function receipt(kind: ServiceEvidenceKind, issue: NowRef, body: string, _meta?: EvidenceMeta): Promise<EvidenceReceipt> {
+	async function receipt(kind: ServiceEvidenceKind, issue: NowRef, body: string, _meta?: EvidenceMeta & { priorTip?: string | null }): Promise<EvidenceReceipt> {
 		const item = await client.workItem(issue.key);
 		if (kind === "same_session_found_fixed") {
 			// OMP-52: the child's receipt binds the PARENT attempt's audited candidate.
@@ -438,8 +439,20 @@ export function createWorkBackend(
 			return { ...base, candidate_sha256: _meta?.candidateSha256 ?? candidate.candidate_sha256, ...((_meta?.candidateCommit ?? candidate.commit_sha) ? { candidate_commit: _meta?.candidateCommit ?? candidate.commit_sha } : {}) };
 		}
 		if (kind === "push") {
+			const pushPayload = {
+				repository: basename(process.cwd()),
+				remote_url: "git@github.com:owner/oh-my-pi.git",
+				remote_ref: _meta?.remoteRef ?? "refs/heads/main",
+				prior_tip: _meta?.priorTip !== undefined ? _meta.priorTip : (item.candidate?.commit_sha ?? null),
+				candidate_commit: _meta?.candidateCommit ?? candidate.commit_sha,
+				result_tip: _meta?.remoteCommit ?? candidate.commit_sha,
+				detail: body,
+			};
+			const pSha = payloadHash(pushPayload);
 			return {
 				...base,
+				payload: pushPayload,
+				payload_sha256: pSha,
 				candidate_sha256: _meta?.candidateSha256 ?? candidate.candidate_sha256,
 				...((_meta?.candidateCommit ?? candidate.commit_sha) ? { candidate_commit: _meta?.candidateCommit ?? candidate.commit_sha } : {}),
 				...(_meta?.remoteRef ? { remote_ref: _meta.remoteRef } : {}),
@@ -466,9 +479,25 @@ export function createWorkBackend(
 					receipt.remote_commit === push.remoteCommit,
 			);
 		if (!alreadyRecorded) {
+			const r = await receipt("push", now, push.detail ?? `pushed ${push.remoteRef}`, {
+				candidateCommit: commitSha,
+				remoteRef: push.remoteRef,
+				remoteCommit: push.remoteCommit,
+			});
+			const pushPayload = {
+				repository: basename(hooks.cwd),
+				remote_url: push.remoteUrl,
+				remote_ref: push.remoteRef,
+				prior_tip: push.priorTip ?? null,
+				candidate_commit: commitSha,
+				result_tip: push.remoteCommit ?? commitSha,
+				detail: push.detail,
+			};
 			await run("append_evidence", {
 				receipt: {
-					...(await receipt("push", now, push.detail ?? `pushed ${push.remoteRef}`)),
+					...r,
+					payload: pushPayload,
+					payload_sha256: payloadHash(pushPayload),
 					...(push.remoteRef ? { remote_ref: push.remoteRef } : {}),
 					...(push.remoteCommit ? { remote_commit: push.remoteCommit } : {}),
 					...(push.status === "contained" ? { candidate_commit: commitSha } : {}),
@@ -1601,6 +1630,7 @@ export function createWorkBackend(
 			const result = await run("begin_execution", {
 				grant_id: grantId,
 				provenance: input.provenance,
+				remote_ref: input.remoteRef,
 				mode: input.mode,
 				items: input.items,
 				expected_focus_version: input.expectedFocusVersion,
@@ -1630,7 +1660,7 @@ export function createWorkBackend(
 			return { grant: result.grant, items: view.items, activeItem: result.item };
 		},
 
-		async sealExecutionCriteria(input): Promise<ExecutionSnapshot> {
+		async sealExecutionCriteria(input): Promise<ExecutionSnapshot & { sealedCriteria: string[] }> {
 			const result = await run("seal_execution_criteria", {
 				grant_id: input.grantId,
 				expected_grant_version: input.expectedGrantVersion,
@@ -1642,7 +1672,12 @@ export function createWorkBackend(
 			});
 			if (result.type !== "seal_execution_criteria") throw new Error(`unexpected result ${result.type}`);
 			const view = await client.execution(input.grantId);
-			return { grant: result.grant, items: view.items, activeItem: result.item };
+			return {
+				grant: result.grant,
+				items: view.items,
+				activeItem: result.item,
+				sealedCriteria: result.revision.acceptance_criteria,
+			};
 		},
 
 		async stampExecutionPlan(input): Promise<ExecutionSnapshot> {
@@ -1703,6 +1738,22 @@ export function createWorkBackend(
 			for (let i = deliveredOps.length - 1; i >= 0; i--) {
 				if (acked.has(deliveredOps[i]!)) deliveredOps.splice(i, 1);
 			}
+		},
+		async getPendingExecutionClaims() {
+			const { records, unreadable } = await readPendingClaims(pendingDir);
+			if (unreadable.length > 0) {
+				throw new Error(`unreadable pending claim(s): ${unreadable.join(", ")} — refusing recovery to prevent duplicate execution`);
+			}
+			const results: Array<{ command: Command; result?: CommandResult }> = [];
+			for (const r of records) {
+				const env = r.envelope as CommandEnvelope | undefined;
+				const cmd = env?.command;
+				const res = r.result as CommandResult | undefined;
+				if (cmd && (cmd.type === "set_execution_state" || cmd.type === "begin_execution")) {
+					results.push({ command: cmd, result: res });
+				}
+			}
+			return results;
 		},
 	};
 	return backend;

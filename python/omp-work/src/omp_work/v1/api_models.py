@@ -180,6 +180,7 @@ class ExecutionGrantView(StrictModel):
     workspace_id: UUID
     owner_id: UUID
     repository: str
+    remote_ref: str
     state: str
     mode: str
     grant_version: int

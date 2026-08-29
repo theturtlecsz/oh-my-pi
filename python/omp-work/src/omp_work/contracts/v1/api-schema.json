@@ -428,6 +428,10 @@
               "default": null,
               "title": "Paused At"
             },
+            "remote_ref": {
+              "title": "Remote Ref",
+              "type": "string"
+            },
             "repository": {
               "title": "Repository",
               "type": "string"
@@ -472,6 +476,7 @@
             "workspace_id",
             "owner_id",
             "repository",
+            "remote_ref",
             "state",
             "mode",
             "grant_version",
@@ -1177,6 +1182,10 @@
               "default": null,
               "title": "Paused At"
             },
+            "remote_ref": {
+              "title": "Remote Ref",
+              "type": "string"
+            },
             "repository": {
               "title": "Repository",
               "type": "string"
@@ -1221,6 +1230,7 @@
             "workspace_id",
             "owner_id",
             "repository",
+            "remote_ref",
             "state",
             "mode",
             "grant_version",
@@ -4683,6 +4693,10 @@
               "default": null,
               "title": "Paused At"
             },
+            "remote_ref": {
+              "title": "Remote Ref",
+              "type": "string"
+            },
             "repository": {
               "title": "Repository",
               "type": "string"
@@ -4727,6 +4741,7 @@
             "workspace_id",
             "owner_id",
             "repository",
+            "remote_ref",
             "state",
             "mode",
             "grant_version",
@@ -5904,6 +5919,10 @@
               "default": null,
               "title": "Paused At"
             },
+            "remote_ref": {
+              "title": "Remote Ref",
+              "type": "string"
+            },
             "repository": {
               "title": "Repository",
               "type": "string"
@@ -5948,6 +5967,7 @@
             "workspace_id",
             "owner_id",
             "repository",
+            "remote_ref",
             "state",
             "mode",
             "grant_version",
@@ -7382,6 +7402,10 @@
           "default": null,
           "title": "Paused At"
         },
+        "remote_ref": {
+          "title": "Remote Ref",
+          "type": "string"
+        },
         "repository": {
           "title": "Repository",
           "type": "string"
@@ -7426,6 +7450,7 @@
         "workspace_id",
         "owner_id",
         "repository",
+        "remote_ref",
         "state",
         "mode",
         "grant_version",
@@ -7809,6 +7834,10 @@
               "default": null,
               "title": "Paused At"
             },
+            "remote_ref": {
+              "title": "Remote Ref",
+              "type": "string"
+            },
             "repository": {
               "title": "Repository",
               "type": "string"
@@ -7853,6 +7882,7 @@
             "workspace_id",
             "owner_id",
             "repository",
+            "remote_ref",
             "state",
             "mode",
             "grant_version",
@@ -9520,6 +9550,10 @@
               "default": null,
               "title": "Paused At"
             },
+            "remote_ref": {
+              "title": "Remote Ref",
+              "type": "string"
+            },
             "repository": {
               "title": "Repository",
               "type": "string"
@@ -9564,6 +9598,7 @@
             "workspace_id",
             "owner_id",
             "repository",
+            "remote_ref",
             "state",
             "mode",
             "grant_version",
@@ -9769,6 +9804,10 @@
               "default": null,
               "title": "Paused At"
             },
+            "remote_ref": {
+              "title": "Remote Ref",
+              "type": "string"
+            },
             "repository": {
               "title": "Repository",
               "type": "string"
@@ -9813,6 +9852,7 @@
             "workspace_id",
             "owner_id",
             "repository",
+            "remote_ref",
             "state",
             "mode",
             "grant_version",
@@ -10434,6 +10474,10 @@
               "default": null,
               "title": "Paused At"
             },
+            "remote_ref": {
+              "title": "Remote Ref",
+              "type": "string"
+            },
             "repository": {
               "title": "Repository",
               "type": "string"
@@ -10478,6 +10522,7 @@
             "workspace_id",
             "owner_id",
             "repository",
+            "remote_ref",
             "state",
             "mode",
             "grant_version",
@@ -12273,6 +12318,10 @@
               "default": null,
               "title": "Paused At"
             },
+            "remote_ref": {
+              "title": "Remote Ref",
+              "type": "string"
+            },
             "repository": {
               "title": "Repository",
               "type": "string"
@@ -12317,6 +12366,7 @@
             "workspace_id",
             "owner_id",
             "repository",
+            "remote_ref",
             "state",
             "mode",
             "grant_version",

@@ -130,6 +130,7 @@ export async function deliverCheckpoint(pi: ExtensionAPI, backend: WorkflowBacke
 	return status;
 }
 
+
 /** Deliver every unresolved requires_delivery event for one work item (bounded). (For idle lifecycle contexts). */
 export async function deliverPendingCheckpoints(pi: ExtensionAPI, backend: WorkflowBackend, key: string): Promise<DeliveryPassResult> {
 	const result: DeliveryPassResult = { delivered: 0, failed: 0, notices: [] };

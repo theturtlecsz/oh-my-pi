@@ -2408,11 +2408,17 @@
             },
             "provenance": {
               "$ref": "#/$defs/ExecutionProvenanceEnvelope"
+            },
+            "remote_ref": {
+              "minLength": 1,
+              "title": "Remote Ref",
+              "type": "string"
             }
           },
           "required": [
             "grant_id",
             "provenance",
+            "remote_ref",
             "mode",
             "items",
             "expected_focus_version",
@@ -2856,11 +2862,17 @@
         },
         "provenance": {
           "$ref": "#/$defs/ExecutionProvenanceEnvelope"
+        },
+        "remote_ref": {
+          "minLength": 1,
+          "title": "Remote Ref",
+          "type": "string"
         }
       },
       "required": [
         "grant_id",
         "provenance",
+        "remote_ref",
         "mode",
         "items",
         "expected_focus_version",
@@ -4341,11 +4353,17 @@
             },
             "provenance": {
               "$ref": "#/$defs/ExecutionProvenanceEnvelope"
+            },
+            "remote_ref": {
+              "minLength": 1,
+              "title": "Remote Ref",
+              "type": "string"
             }
           },
           "required": [
             "grant_id",
             "provenance",
+            "remote_ref",
             "mode",
             "items",
             "expected_focus_version",

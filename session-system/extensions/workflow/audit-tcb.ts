@@ -30,14 +30,17 @@ const freezeSha256 = new Bun.CryptoHasher("sha256").update(freezeBytes).digest("
 const runnerBytes = readFileSync(join(workflowDir, "auditor-runner.ts"));
 const runnerSha256 = new Bun.CryptoHasher("sha256").update(runnerBytes).digest("hex");
 
-function getExecutorSha(): string {
+export type SourceResolver = (specifier: string) => string | undefined;
+
+export function getExecutorSha(sourceResolver?: SourceResolver): string {
 	const hasher = new Bun.CryptoHasher("sha256");
 	const requiredSpecifiers = [
 		"@oh-my-pi/pi-coding-agent/task/executor",
 		"@oh-my-pi/pi-coding-agent/task/yield-assembly",
 	];
 	for (const specifier of requiredSpecifiers) {
-		const resolved = import.meta.resolve(specifier);
+		const resolver = sourceResolver ?? ((s: string) => import.meta.resolve(s));
+		const resolved = resolver(specifier);
 		if (!resolved) {
 			throw new Error(`Failed to resolve required audit transport source: ${specifier}`);
 		}
@@ -47,11 +50,11 @@ function getExecutorSha(): string {
 	}
 	return hasher.digest("hex");
 }
-const executorSha256 = getExecutorSha();
 
 export async function computeAuditTcb(
 	ctx: ExtensionContext,
 	workClient: WorkClient,
+	sourceResolver?: SourceResolver,
 ): Promise<{ judgeSha256: string; judgeManifest: ExecutionJudgeManifest }> {
 	const discovery = await discoverAgents(ctx.cwd);
 	const agent = getAgent(discovery.agents, "auditor");
@@ -75,7 +78,7 @@ export async function computeAuditTcb(
 		adapter_sha256: adapterSha256,
 		freeze_sha256: freezeSha256,
 		runner_sha256: runnerSha256,
-		executor_sha256: executorSha256,
+		executor_sha256: getExecutorSha(sourceResolver),
 		contract_sha256: WORK_CONTRACT_SHA256,
 		service_fingerprint: serviceFingerprint,
 		service_code_fingerprint: serviceFingerprint,

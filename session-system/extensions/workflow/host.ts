@@ -62,11 +62,12 @@ import {
 	type WorkflowBackend,
 	type WorkflowCheckpoint,
 	type WorkStateCarrier,
+	type ExecutionSnapshot,
 	renderCenterReadout,
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
-import { dirtyPaths, freezeCandidateCommit, headCommit, parentCommit, pushCandidate, rangeDiffSha256, validateExecutionPaths } from "./git";
+import { currentSymbolicRef, dirtyPaths, freezeCandidateCommit, headCommit, inProgressGitOp, parentCommit, pushCandidate, rangeDiffSha256, validateExecutionPaths } from "./git";
 import {
 	cancelBatchPath,
 	consumeStagedCancelBatch,
@@ -79,8 +80,8 @@ import {
 } from "./rider-batch";
 import { registerSessionLedger } from "./session-ledger";
 import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
-import { computeAuditTcb } from "./audit-tcb";
-import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope } from "@oh-my-pi/pi-work-client";
+import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
+import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type WorkItemView } from "@oh-my-pi/pi-work-client";
 
 /** Tool actions — the canonical action set for the `work` tool. */
 export type CanonicalAction =
@@ -139,6 +140,8 @@ export interface HostConfig {
 	entryType: string;
 	/** Accept a persisted session entry as this backend's NOW state. */
 	acceptEntry(data: Record<string, unknown>): boolean;
+	/** Optional source resolver override for test isolation. */
+	sourceResolver?: SourceResolver;
 }
 interface HostNowState {
 	issueId?: string;
@@ -160,6 +163,7 @@ interface HostNowState {
 	summaryRefusal?: { issueId: string; key: string; reason: string; at: number };
 	/** Opaque backend carrier (work: candidate ids/shas); persisted verbatim. */
 	carrier?: unknown;
+	lastSentContinuation?: { grantId: string; preReservationVersion: number; newVersion: number; at: number };
 }
 
 const TREE_GLYPH: Record<TreeItem["bucket"], string> = { done: "✔", working: "▶", stuck: "✖", onyou: "✋", next: "○" };
@@ -1253,6 +1257,129 @@ export function createWorkflowHost(cfg: HostConfig) {
 			container.addChild(new Spacer(1));
 			return container;
 		});
+		interface ExecutionOutboxEntry {
+			grantId: string;
+			preReservationVersion: number;
+			postVersion: number;
+			messageId: string;
+			status: "pending" | "delivered";
+			at: string;
+		}
+
+		async function deliverExecutionMessage(
+			grantId: string,
+			preReservationVersion: number,
+			postVersion: number,
+			issueKey: string,
+			ctx?: ExtensionContext,
+		): Promise<void> {
+			const messageId = randomUUID();
+			// Fail-closed: the pending entry MUST be persisted before sending.
+			pi.appendEntry(`${cfg.entryType}-execute-outbox`, {
+				grantId,
+				preReservationVersion,
+				postVersion,
+				messageId,
+				status: "pending",
+				at: new Date().toISOString(),
+			});
+
+			pi.sendMessage({
+				customType: `${TOOL_NAME}-execute`,
+				content: prompt.render(executePromptTemplate, { key: issueKey }),
+			}, { deliverAs: "nextTurn", triggerTurn: true });
+
+			try {
+				pi.appendEntry(`${cfg.entryType}-execute-outbox`, {
+					grantId,
+					preReservationVersion,
+					postVersion,
+					messageId,
+					status: "delivered",
+					at: new Date().toISOString(),
+				});
+			} catch (error) {
+				try {
+					ctx?.ui?.notify?.(`Warning: failed to persist outbox delivery ack (${String(error)})`, "warning");
+				} catch {}
+			}
+		}
+
+		async function validateExecutionRecoveryPreflight(
+			ctx: ExtensionContext,
+			backend: WorkflowBackend,
+			exec: ExecutionSnapshot,
+			expectedState: "active" | "paused",
+		): Promise<{ ok: true; tcb: { judgeSha256: string; judgeManifest: ExecutionJudgeManifest }; targetIssue: NowRef; item: WorkItemView } | { ok: false; reason: string }> {
+			if (exec.grant.state !== expectedState) {
+				return { ok: false, reason: `grant state is ${exec.grant.state}, expected ${expectedState}` };
+			}
+			if (!exec.activeItem) {
+				return { ok: false, reason: "no active item on execution grant" };
+			}
+			if (inProgressGitOp(ctx.cwd)) {
+				return { ok: false, reason: "git operation in progress" };
+			}
+			const dirt = dirtyPaths(ctx.cwd);
+			if (exec.activeItem.phase === "awaiting_contract_approval" || exec.grant.terminal_reason?.startsWith("contract_approval_required")) {
+				const contractCheck = checkProspectiveContract(ctx.cwd);
+				if (!contractCheck.approved) {
+					return { ok: false, reason: `contract approval required for prospective digest ${contractCheck.prospectiveDigest}` };
+				}
+				const contractDir = "python/omp-work/src/omp_work/contracts/v1";
+				const nonContractDirt = dirt.filter(p => !p.startsWith(contractDir));
+				if (nonContractDirt.length > 0) {
+					return { ok: false, reason: `dirty worktree outside contract files: ${nonContractDirt.join(", ")}` };
+				}
+			} else {
+				if (dirt.length > 0) {
+					return { ok: false, reason: `dirty worktree: ${dirt.join(", ")}` };
+				}
+			}
+			if (exec.grant.continuations_scheduled >= exec.grant.max_continuations) {
+				return { ok: false, reason: "max continuations reached" };
+			}
+			let tcb: { judgeSha256: string; judgeManifest: ExecutionJudgeManifest };
+			try {
+				tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
+			} catch (error) {
+				return { ok: false, reason: `judge TCB computation failed: ${String(error)}` };
+			}
+			if (tcb.judgeSha256 !== exec.grant.judge_sha256) {
+				return { ok: false, reason: "judge TCB drift" };
+			}
+			const targetIssue = await backend.findIssue(exec.activeItem.work_id);
+			const item = await backend.workClient!.workItem(targetIssue.key);
+			if (!item) {
+				return { ok: false, reason: "work item not found" };
+			}
+			const expectedRev = exec.activeItem.criteria_revision_id ?? exec.activeItem.claimed_revision_id;
+			if (item.revision.revision_id !== expectedRev) {
+				return { ok: false, reason: `revision drift: item is ${item.revision.revision_id}, expected ${expectedRev}` };
+			}
+			if (["DONE", "CANCELED", "CANCELLED", "TRIAGE", "BLOCKED"].includes(item.state)) {
+				return { ok: false, reason: `item in terminal or blocked state: ${item.state}` };
+			}
+			if (exec.activeItem.project_id && item.project_id !== exec.activeItem.project_id) {
+				return { ok: false, reason: "project mismatch" };
+			}
+			const workflow = await backend.workClient!.workflow(targetIssue.key);
+			const activeBlockers = (workflow?.relations ?? []).filter(r => r.active && r.kind === "blocks" && r.target_work_id === item.work_id);
+			if (activeBlockers.length > 0) {
+				return { ok: false, reason: "active unfinished blockers present" };
+			}
+			let expectedHead: string | undefined;
+			if (["reviewing", "remediating"].includes(exec.activeItem.phase) && item.candidate?.commit_sha) {
+				expectedHead = item.candidate.commit_sha;
+			} else {
+				expectedHead = exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline;
+			}
+			const head = headCommit(ctx.cwd);
+			if (head !== expectedHead) {
+				return { ok: false, reason: `HEAD commit mismatch: current ${head}, expected ${expectedHead}` };
+			}
+			return { ok: true, tcb, targetIssue, item };
+		}
 
 		pi.on("session_start", async (_e, ctx) => {
 			preExistingDirtyPaths = dirtyPaths(process.cwd());
@@ -1271,6 +1398,35 @@ export function createWorkflowHost(cfg: HostConfig) {
 			resetConfirmations({ resetShared: ownerSession(ctx) });
 			await loadCache();
 			models = ctx.models;
+			const outboxStatus = new Map<string, "pending" | "delivered">();
+			const pendingOutboxEntries: ExecutionOutboxEntry[] = [];
+			const deliveredPreReservations = new Set<string>();
+			const deliveredPostVersions = new Set<string>();
+
+			try {
+				for (const entry of ctx.sessionManager.getBranch()) {
+					if (entry.type === "custom" && "customType" in entry) {
+						if (entry.customType === `${cfg.entryType}-execute-outbox`) {
+							const data = ("data" in entry ? entry.data : undefined) as ExecutionOutboxEntry | undefined;
+							if (data?.grantId && data.messageId) {
+								outboxStatus.set(data.messageId, data.status);
+								if (data.status === "delivered") {
+									deliveredPreReservations.add(`${data.grantId}:${data.preReservationVersion}`);
+									deliveredPostVersions.add(`${data.grantId}:${data.postVersion}`);
+								} else if (data.status === "pending") {
+									pendingOutboxEntries.push(data);
+								}
+							}
+						} else if (entry.customType === `${cfg.entryType}-execute` || entry.customType === `${TOOL_NAME}-execute`) {
+							const data = ("data" in entry ? entry.data : undefined) as { grantId?: string; preReservationVersion?: number; newVersion?: number } | undefined;
+							if (data?.grantId) {
+								if (data.preReservationVersion !== undefined) deliveredPreReservations.add(`${data.grantId}:${data.preReservationVersion}`);
+								if (data.newVersion !== undefined) deliveredPostVersions.add(`${data.grantId}:${data.newVersion}`);
+							}
+						}
+					}
+				}
+			} catch {}
 			// session entry wins over cache for NOW restore (survives cache loss)
 			try {
 				for (const entry of ctx.sessionManager.getBranch()) {
@@ -1359,52 +1515,83 @@ export function createWorkflowHost(cfg: HostConfig) {
 					}
 				}
 			}
-			if (ownerSession(ctx) && backend.workClient) {
+			if ((ctx?.taskDepth === 0 || ctx?.taskDepth === undefined) && backend.workClient) {
 				try {
 					const exec = await backend.getExecution();
 					if (exec && exec.grant.state === "active" && exec.activeItem) {
-						const head = headCommit(ctx.cwd);
-						const dirt = dirtyPaths(ctx.cwd);
-						const tcb = await computeAuditTcb(ctx, backend.workClient);
-						const targetIssue = await backend.findIssue(exec.activeItem.work_id);
-						const item = await backend.workClient.workItem(targetIssue.key);
-						const expectedRev = exec.activeItem.criteria_revision_id ?? exec.activeItem.claimed_revision_id;
-						const workflow = await backend.workClient.workflow(targetIssue.key);
-						const activeBlockers = (workflow?.relations ?? []).filter(r => r.active && r.kind === "blocks" && r.target_work_id === item.work_id);
-
-						let expectedHead: string | undefined;
-						if (["reviewing", "remediating"].includes(exec.activeItem.phase) && item?.candidate?.commit_sha) {
-							expectedHead = item.candidate.commit_sha;
-						} else {
-							expectedHead = exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline;
-						}
-
-						if (
-							dirt.length === 0 &&
-							head === expectedHead &&
-							tcb.judgeSha256 === exec.grant.judge_sha256 &&
-							exec.grant.continuations_scheduled < exec.grant.max_continuations &&
-							item &&
-							item.revision.revision_id === expectedRev &&
-							!["DONE", "CANCELED", "CANCELLED", "TRIAGE", "BLOCKED"].includes(item.state) &&
-							(!exec.activeItem.project_id || item.project_id === exec.activeItem.project_id) &&
-							activeBlockers.length === 0
-						) {
-							const resumeKey = `${exec.grant.grant_id}:${exec.grant.grant_version}`;
-							if (!resumedExecutionVersions.has(resumeKey)) {
-								resumedExecutionVersions.add(resumeKey);
-								const updated = await backend.setExecutionState({
-									grantId: exec.grant.grant_id,
-									expectedGrantVersion: exec.grant.grant_version,
-									targetState: "active",
-									reason: "session_start_recovery",
-									judgeSha256: tcb.judgeSha256,
+						const preflight = await validateExecutionRecoveryPreflight(ctx, backend, exec, "active");
+						if (preflight.ok) {
+							const curVersion = exec.grant.grant_version;
+							const pendingOutbox = pendingOutboxEntries.find(
+								e => e.grantId === exec.grant.grant_id && outboxStatus.get(e.messageId) === "pending",
+							);
+							if (pendingOutbox) {
+								pi.sendMessage({
+									customType: `${TOOL_NAME}-execute`,
+									content: prompt.render(executePromptTemplate, { key: preflight.targetIssue.key }),
+								}, { deliverAs: "nextTurn", triggerTurn: true });
+								try {
+									pi.appendEntry(`${cfg.entryType}-execute-outbox`, {
+										...pendingOutbox,
+										status: "delivered",
+										at: new Date().toISOString(),
+									});
+								} catch (error) {
+									try {
+										ctx.ui.notify(`Warning: failed to persist replay delivery ack (${String(error)})`, "warning");
+									} catch {}
+								}
+							} else {
+								let pendingClaims: Array<{ command: Command; result?: CommandResult }>;
+								try {
+									pendingClaims = (await backend.getPendingExecutionClaims?.()) ?? [];
+								} catch (error) {
+									try {
+										ctx.ui.notify(`Recovery blocked by unreadable claim: ${String(error)}`, "error");
+									} catch {}
+									return;
+								}
+								const committedClaim = pendingClaims.find(c => {
+									if (c.command.type !== "set_execution_state") return false;
+									const p = c.command.payload as { grant_id: string; expected_grant_version: number };
+									if (p.grant_id !== exec.grant.grant_id) return false;
+									const res = c.result;
+									return res && res.type === "set_execution_state" && res.grant.grant_version === curVersion;
 								});
-								if (updated && updated.grant.state === "active") {
-									pi.sendMessage({
-										customType: `${TOOL_NAME}-execute`,
-										content: prompt.render(executePromptTemplate, { key: exec.activeItem.work_id }),
-									}, { deliverAs: "nextTurn" });
+
+								if (committedClaim && !deliveredPostVersions.has(`${exec.grant.grant_id}:${curVersion}`)) {
+									const preVer = (committedClaim.command.payload as { expected_grant_version: number }).expected_grant_version;
+									deliveredPreReservations.add(`${exec.grant.grant_id}:${preVer}`);
+									deliveredPostVersions.add(`${exec.grant.grant_id}:${curVersion}`);
+									await deliverExecutionMessage(
+										exec.grant.grant_id,
+										preVer,
+										curVersion,
+										preflight.targetIssue.key,
+										ctx,
+									);
+								} else if (
+									!deliveredPreReservations.has(`${exec.grant.grant_id}:${curVersion}`) &&
+									!(curVersion > 1 && deliveredPostVersions.has(`${exec.grant.grant_id}:${curVersion}`))
+								) {
+									const updated = await backend.setExecutionState({
+										grantId: exec.grant.grant_id,
+										expectedGrantVersion: curVersion,
+										targetState: "active",
+										reason: "session_start_recovery",
+										judgeSha256: preflight.tcb.judgeSha256,
+									});
+									if (updated && updated.grant.state === "active") {
+										deliveredPreReservations.add(`${exec.grant.grant_id}:${curVersion}`);
+										deliveredPostVersions.add(`${exec.grant.grant_id}:${updated.grant.grant_version}`);
+										await deliverExecutionMessage(
+											exec.grant.grant_id,
+											curVersion,
+											updated.grant.grant_version,
+											preflight.targetIssue.key,
+											ctx,
+										);
+									}
 								}
 							}
 						}
@@ -1963,29 +2150,28 @@ export function createWorkflowHost(cfg: HostConfig) {
 						ctx.ui.notify("No execution grant found to resume", "error");
 						return;
 					}
-					if (exec.grant.state !== "paused") {
-						ctx.ui.notify(`Execution grant is ${exec.grant.state}, not paused`, "warning");
+					const preflight = await validateExecutionRecoveryPreflight(ctx, backend, exec, "paused");
+					if (!preflight.ok) {
+						ctx.ui.notify(`Cannot resume: ${preflight.reason}`, "error");
 						return;
 					}
-					if (exec.activeItem?.phase === "awaiting_contract_approval" || exec.grant.terminal_reason?.startsWith("contract_approval_required")) {
-						const contractCheck = checkProspectiveContract(ctx.cwd);
-						if (!contractCheck.approved) {
-							ctx.ui.notify(`Cannot resume: prospective contract digest ${contractCheck.prospectiveDigest} is still not approved in approval.json (approved: ${contractCheck.approvedDigest || "none"}). Run 'omp-work approve --issue ${exec.activeItem?.work_id ?? "item"}' first.`, "error");
-							return;
-						}
-					}
-					const tcb = await computeAuditTcb(ctx, backend.workClient!);
-					await backend.setExecutionState({
+					const preVersion = exec.grant.grant_version;
+					const updated = await backend.setExecutionState({
 						grantId: exec.grant.grant_id,
-						expectedGrantVersion: exec.grant.grant_version,
+						expectedGrantVersion: preVersion,
 						targetState: "active",
-						judgeSha256: tcb.judgeSha256,
+						judgeSha256: preflight.tcb.judgeSha256,
 					});
-					ctx.ui.notify(`Execution grant resumed`, "info");
-					pi.sendMessage({
-						customType: `${TOOL_NAME}-execute`,
-						content: prompt.render(executePromptTemplate, { key: exec.activeItem?.work_id ?? key }),
-					}, { deliverAs: "nextTurn" });
+					if (updated && updated.grant.state === "active") {
+						ctx.ui.notify("Execution grant resumed", "info");
+						await deliverExecutionMessage(
+							exec.grant.grant_id,
+							preVersion,
+							updated.grant.grant_version,
+							preflight.targetIssue.key,
+							ctx,
+						);
+					}
 					return;
 				}
 
@@ -1996,7 +2182,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 						ctx.ui.notify("No execution grant found to cancel", "error");
 						return;
 					}
-					const tcb = await computeAuditTcb(ctx, backend.workClient!);
+					const tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
 					await backend.setExecutionState({
 						grantId: exec.grant.grant_id,
 						expectedGrantVersion: exec.grant.grant_version,
@@ -2063,7 +2249,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 					return;
 				}
 
-				const tcb = await computeAuditTcb(ctx, backend.workClient!);
+				const remoteRef = currentSymbolicRef(ctx.cwd);
+				if (!remoteRef) {
+					ctx.ui.notify("Cannot begin execution: detached HEAD or invalid branch ref", "error");
+					return;
+				}
+				const tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
 				const statusRes = await backend.workflowState(issue.key);
 				const provenance: ExecutionProvenanceEnvelope = {
 					owner_input_id: randomUUID(),
@@ -2076,15 +2267,15 @@ export function createWorkflowHost(cfg: HostConfig) {
 				};
 				const expectedFocusVersion = await backend.getFocusVersion();
 
-				await backend.beginExecution({
+				const begun = await backend.beginExecution({
 					provenance,
+					remoteRef,
 					mode: isQueue ? "queue" : "single",
 					items: claims,
 					expectedFocusVersion,
 					judgeSha256: tcb.judgeSha256,
 					judgeManifest: tcb.judgeManifest,
 				});
-
 				state.identifier = issue.key;
 				state.issueId = issue.id;
 				state.title = issue.title;
@@ -2093,10 +2284,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 				await saveCache();
 				footer(ctx);
 				ctx.ui.notify(`Execution grant started for ${issue.key} (${isQueue ? `queue: ${claims.length} items` : "single"})`, "info");
-				pi.sendMessage({
-					customType: `${TOOL_NAME}-execute`,
-					content: prompt.render(executePromptTemplate, { key: issue.key }),
-				}, { deliverAs: "nextTurn" });
+				await deliverExecutionMessage(
+					begun.grant.grant_id,
+					0,
+					begun.grant.grant_version,
+					issue.key,
+					ctx,
+				);
 			},
 		});
 
@@ -2725,6 +2919,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (!exec.activeItem || exec.activeItem.phase !== "criteria_pending") {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected criteria_pending`);
 							}
+							// Items carrying acceptance criteria seal them verbatim server-side
+							// (the derived proposal is discarded); derived criteria bind only
+							// when the item has none.
 							if (!params.criteria || !params.criteria.length) return deny("criteria array required");
 							const tcb = await computeAuditTcb(ctx, backend.workClient!);
 							const updated = await backend.sealExecutionCriteria({
@@ -2736,7 +2933,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 								descriptionSha256: exec.activeItem.original_request_sha256,
 								judgeSha256: tcb.judgeSha256,
 							});
-							return okText("criteria sealed successfully", { execution: updated });
+							const { sealedCriteria, ...execution } = updated;
+							return okText(
+								`criteria sealed successfully. Sealed acceptance criteria (authoritative, verbatim):\n${sealedCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}`,
+								{ execution, sealed_criteria: sealedCriteria },
+							);
 						}
 						case "stamp_execution_plan": {
 							const exec = await backend.getExecution(params.work);
@@ -2819,121 +3020,115 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 							const exec = await backend.getExecution(params.work);
 							if (!exec || exec.grant.state !== "active") return deny("no active execution grant");
-							if (!exec.activeItem || !["executing", "remediating"].includes(exec.activeItem.phase)) {
-								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected executing or remediating`);
+							if (!exec.activeItem || !["executing", "remediating", "reviewing"].includes(exec.activeItem.phase)) {
+								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected executing, remediating, or reviewing`);
 							}
+							const activeWorkId = exec.activeItem.work_id;
 							const tcb = await computeAuditTcb(ctx, backend.workClient!);
 							const targetIssue = await backend.findIssue(exec.activeItem.work_id);
 							if (!targetIssue) return deny(`Target execution item ${exec.activeItem.work_id} not found`);
 
-							const planStampData = exec.activeItem.plan_stamp as { candidate_id?: string; paths?: string[] } | undefined;
-							const plannedCandidateId = planStampData?.candidate_id ?? (await backend.issueDetail(targetIssue.key))?.planPacket?.candidateId;
-							if (!plannedCandidateId) return deny("planned candidate ID missing from execution item");
-
-							const sealedPaths = planStampData?.paths ?? [];
-
-							// Step 10: Work contract change handling.
-							// If the execution mutates files in python/omp-work, compute prospective contract digest.
-							// If unapproved in approval.json, atomically pause the grant and refuse freeze/push/audit.
-							if (sealedPaths.some(p => p.startsWith("python/omp-work/"))) {
-								const contractCheck = checkProspectiveContract(ctx.cwd);
-								if (!contractCheck.approved) {
-									await backend.setExecutionState({
-										grantId: exec.grant.grant_id,
-										expectedGrantVersion: exec.grant.grant_version,
-										targetState: "paused",
-										reason: `contract_approval_required:${contractCheck.prospectiveDigest}`,
-										judgeSha256: tcb.judgeSha256,
+							// OMP-97: checkpoint deliveries settle only after the turn yields,
+							// and this handler IS the turn. Every service gate that demands an
+							// attested delivery is therefore satisfied across turns: queue the
+							// delivery, schedule the execute continuation prompt, hand the
+							// turn back, and resume from service state on the next call.
+							const yieldForDeliveries = (events: Awaited<ReturnType<typeof backend.pendingDeliveries>>, phase: string) => {
+								for (const ev of events) {
+									queueCheckpointDelivery(pi, backend, ev, notice => {
+										pendingNotices.push(`[${TOOL_NAME}] checkpoint delivery failed (${notice})`);
 									});
-									ctx.ui.notify(`Contract change detected. Execution grant paused awaiting owner approval for ${contractCheck.prospectiveDigest}. Run 'omp-work approve --issue ${targetIssue.key}' then '/execute resume' to continue.`, "warning");
-									return deny(`Contract approval required: prospective contract digest ${contractCheck.prospectiveDigest} is not approved in approval.json. Execution grant paused before candidate freeze. Run 'omp-work approve --issue ${targetIssue.key}' then '/execute resume'.`);
 								}
+								pi.sendMessage({
+									customType: `${TOOL_NAME}-execute`,
+									content: prompt.render(executePromptTemplate, { key: targetIssue.key }),
+								}, { deliverAs: "nextTurn", triggerTurn: true });
+								return okText(
+									`${phase} — ${events.length} close-attempt checkpoint(s) queued for delivery. END YOUR TURN NOW with no further tool calls: the checkpoints inject when the turn yields, and the execution prompt returns automatically. Then call begin_execution_review again with the same verification body to continue.`,
+								);
+							};
+
+							const pendingEvents = await backend.pendingDeliveries(targetIssue.key);
+							if (pendingEvents.length) {
+								return yieldForDeliveries(pendingEvents, "Checkpoint delivery pending");
 							}
 
-							const freeze = await freezeCandidateCommit(
-								ctx.ui,
-								ctx.cwd,
-								targetIssue.key,
-								plannedCandidateId,
-								[],
-								{ mode: "execution", sealedPaths },
-							);
-							if ("refused" in freeze) return deny(`Candidate freeze refused: ${freeze.reason}`);
+							// Cross-turn resume detection: a live attempt for this item means an
+							// earlier review turn already froze, pushed, and begun the attempt.
+							const detail = await backend.issueDetail(targetIssue.key);
+							const liveAttempt = detail.attemptSnapshot && LIVE_ATTEMPT_STATES[detail.attemptSnapshot.state]
+								? detail.attemptSnapshot
+								: undefined;
 
-							let finalCandidate: any;
-try {
- finalCandidate = await backend.finalizeExecutionCandidate(targetIssue.key, plannedCandidateId, freeze);
-} catch (err) {
- console.error("FINALIZE CANDIDATE ERROR:", err);
- throw err;
-}
+							type ReceiptRow = { receipt_id: string; kind: string; verdict?: string | null; candidate_commit?: string | null };
+							type LaunchRow = { launch_id: string; attempt_id: string; launch_number: number };
+							const wfView = liveAttempt
+								? ((await backend.workClient!.workflow(targetIssue.key)) as { receipts?: ReceiptRow[]; auditor_launches?: LaunchRow[] })
+								: undefined;
+							const receiptRows: ReceiptRow[] = wfView?.receipts ?? [];
+							const recoverReceipt = (kind: "push" | "audit", candidateCommit: string | undefined): ReceiptRow | undefined => {
+								for (let i = receiptRows.length - 1; i >= 0; i--) {
+									const r = receiptRows[i];
+									if (r.kind !== kind) continue;
+									if (candidateCommit && r.candidate_commit !== candidateCommit) continue;
+									return r;
+								}
+								return undefined;
+							};
 
-							await backend.appendEvidence(targetIssue, "verification", params.body.trim(), {
-								candidateSha256: finalCandidate.candidate_sha256,
-								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
-							});
+							const runAuditAndSettle = async (attemptId: string, pushReceiptId: string, hasManifest: boolean) => {
+								if (!hasManifest) {
+									const sealOutcome = await backend.sealAuditManifest(targetIssue);
+									if (sealOutcome.status === "refused") {
+										return deny(`Seal audit manifest refused: ${sealOutcome.event.renderedText}`);
+									}
+								}
+								const runner = await prepareNativeAuditRunner(ctx);
+								const sealedTask = await backend.sealedAuditTask(targetIssue.key);
+								if (!sealedTask) return deny("sealed audit task missing");
+								const resv = await backend.reserveAuditorLaunch(targetIssue.key, sealedTask.taskSha256, _id);
+								if (resv.status === "refused" || !resv.launchId) {
+									return deny(`Reserve launch refused: ${resv.event.renderedText}`);
+								}
+								const auditRun = await runner(sealedTask.taskBody, attemptId, _signal);
+								const settle = await backend.settleAuditorLaunch(targetIssue.key, resv.launchId, {
+									payload: auditRun.payload,
+									failed: !auditRun.started || Boolean(auditRun.error && !auditRun.payload),
+								});
+								if (settle.verdict === "NEEDS_FIX") {
+									// Remediation is not delivery-gated: queue the settlement
+									// checkpoint and hand findings back in the same response.
+									if (settle.event?.requiresDelivery) {
+										queueCheckpointDelivery(pi, backend, settle.event, notice => {
+											pendingNotices.push(`[${TOOL_NAME}] checkpoint delivery failed (${notice})`);
+										});
+									}
+									return okText(`Audit verdict: NEEDS_FIX.\n\nFindings:\n${settle.event?.renderedText ?? ""}\n\nUpdate plan, stamp plan, fix findings, and rerun review.`);
+								}
+								if (settle.verdict !== "PASS") {
+									if (settle.event?.requiresDelivery) {
+										queueCheckpointDelivery(pi, backend, settle.event, notice => {
+											pendingNotices.push(`[${TOOL_NAME}] checkpoint delivery failed (${notice})`);
+										});
+									}
+									return deny(`Audit verdict: ${settle.verdict ?? "unknown"}.\n${settle.event?.renderedText ?? ""}`);
+								}
+								if (settle.event?.requiresDelivery) {
+									// PASS: completion is gated on this attested delivery.
+									return yieldForDeliveries([settle.event], "Audit PASS recorded");
+								}
+								return completeItem(attemptId, pushReceiptId);
+							};
 
-							const push = await pushCandidate(ctx.cwd, freeze.commitSha);
-							if (push.status !== "pushed" && push.status !== "remote_commit" && push.status !== "contained") {
-								return deny(`Remote push failed: ${push.detail ?? "push refused"}`);
-							}
-							const pushEvidence = await backend.appendEvidence(targetIssue, "push", "remote push verified", {
-								candidateSha256: finalCandidate.candidate_sha256,
-								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
-								remoteRef: push.remoteRef,
-								remoteCommit: push.remoteCommit,
-							});
-							const pushReceiptId = pushEvidence && typeof pushEvidence === "object" && "receipt_id" in pushEvidence ? String(pushEvidence.receipt_id) : "";
-							if (!pushReceiptId) return deny("Push receipt recording failed");
-
-							const attemptOutcome = await backend.beginCloseAttempt(targetIssue, {
-								authorizationRef: `execution:${exec.grant.grant_id}:${exec.activeItem.position}:${exec.activeItem.close_attempts_started + 1}`,
-								sessionId: exec.grant.authorization_hash,
-								startedAt: exec.grant.created_at,
-								startCommit: exec.activeItem.initial_git_baseline,
-								repository: exec.grant.repository,
-								diffSha256: rangeDiffSha256(ctx.cwd, exec.activeItem.initial_git_baseline, freeze.commitSha) ?? "",
-								dirtyPaths: [],
-								authorization_kind: "execution",
-								execution_grant_id: exec.grant.grant_id,
-								candidate_tree_sha: finalCandidate.candidate_sha256,
-								original_request_sha256: exec.activeItem.original_request_sha256,
-								criteria_sha256: exec.activeItem.criteria_sha256 ?? undefined,
-								plan_stamp_sha256: exec.activeItem.plan_stamp_sha256 ?? undefined,
-								judge_sha256: tcb.judgeSha256,
-								riders: [],
-							});
-							if (attemptOutcome.status === "refused") {
-								return deny(`Begin close attempt refused: ${attemptOutcome.event.renderedText}`);
-							}
-
-
-							const sealOutcome = await backend.sealAuditManifest(targetIssue);
-							if (sealOutcome.status === "refused") {
-								return deny(`Seal audit manifest refused: ${sealOutcome.event.renderedText}`);
-							}
-
-							const runner = await prepareNativeAuditRunner(ctx);
-							const sealedTask = await backend.sealedAuditTask(targetIssue.key);
-							if (!sealedTask) return deny("sealed audit task missing");
-							const resv = await backend.reserveAuditorLaunch(targetIssue.key, sealedTask.taskSha256, _id);
-							if (resv.status === "refused" || !resv.launchId) {
-								return deny(`Reserve launch refused: ${resv.event.renderedText}`);
-							}
-
-							const auditRun = await runner(sealedTask.taskBody, attemptOutcome.attemptId!, _signal);
-							const settle = await backend.settleAuditorLaunch(targetIssue.key, resv.launchId, {
-								payload: auditRun.payload,
-								failed: !auditRun.started || Boolean(auditRun.error && !auditRun.payload),
-							});
-							if (settle.verdict === "PASS") {
+							const completeItem = async (attemptId: string, pushReceiptId: string) => {
+								if (!pushReceiptId) return deny("push receipt missing for the frozen candidate — cannot complete");
 								const currentExec = await backend.getExecution(params.work);
 								if (!currentExec || !currentExec.activeItem) return deny("execution grant missing after settlement");
 								const completed = await backend.completeExecutionItem({
 									grantId: currentExec.grant.grant_id,
 									expectedGrantVersion: currentExec.grant.grant_version,
 									workId: currentExec.activeItem.work_id,
-									attemptId: attemptOutcome.attemptId!,
+									attemptId,
 									pushReceiptId,
 									judgeSha256: tcb.judgeSha256,
 								});
@@ -2968,14 +3163,120 @@ try {
 										await saveCache();
 										footer(ctx);
 									}
-									return okText(`Item ${exec.activeItem.work_id} completed and passed audit! Advanced to next queue item ${nextIssue?.key ?? nextPending.work_id} (phase: criteria_pending).`);
+									return okText(`Item ${activeWorkId} completed and passed audit! Advanced to next queue item ${nextIssue?.key ?? nextPending.work_id} (phase: criteria_pending).`);
 								}
-								return okText(`Execution grant completed! Work item ${exec.activeItem.work_id} delivered and closed.`);
-							} else if (settle.verdict === "NEEDS_FIX") {
-								return okText(`Audit verdict: NEEDS_FIX.\n\nFindings:\n${settle.event?.renderedText ?? ""}\n\nUpdate plan, stamp plan, fix findings, and rerun review.`);
-							} else {
-								return deny(`Audit verdict: ${settle.verdict ?? "unknown"}.\n${settle.event?.renderedText ?? ""}`);
+								return okText(`Execution grant completed! Work item ${activeWorkId} delivered and closed.`);
+							};
+
+							if (liveAttempt) {
+								// Resumed turn. Deliveries are clear; continue from service state.
+								const pushReceipt = recoverReceipt("push", liveAttempt.candidateCommit);
+								const passReceipt = recoverReceipt("audit", liveAttempt.candidateCommit);
+								if (passReceipt?.verdict === "PASS") {
+									return completeItem(liveAttempt.attemptId, pushReceipt ? String(pushReceipt.receipt_id) : "");
+								}
+								if (liveAttempt.state === "auditor_in_flight") {
+									// A prior turn crashed between reserve and settle: the service
+									// still holds the launch, so a fresh reservation would refuse
+									// forever. Cancel the stranded launch, then rerun bounded.
+									const stranded = (wfView?.auditor_launches ?? [])
+										.filter(l => l.attempt_id === liveAttempt.attemptId)
+										.sort((a, b) => a.launch_number - b.launch_number)
+										.at(-1);
+									if (!stranded) return deny("attempt reports an in-flight auditor launch but the workflow view has none — manual recovery required");
+									const cancelOutcome = await backend.cancelAuditorLaunch(targetIssue.key, stranded.launch_id);
+									if (cancelOutcome.status === "refused") {
+										return deny(`Stranded auditor launch cancel refused: ${cancelOutcome.event.renderedText}`);
+									}
+									if (cancelOutcome.event?.requiresDelivery) {
+										queueCheckpointDelivery(pi, backend, cancelOutcome.event, notice => {
+											pendingNotices.push(`[${TOOL_NAME}] checkpoint delivery failed (${notice})`);
+										});
+									}
+								}
+								return runAuditAndSettle(liveAttempt.attemptId, pushReceipt ? String(pushReceipt.receipt_id) : "", liveAttempt.hasManifest);
 							}
+
+							// First turn: freeze, finalize, record evidence, push, begin attempt.
+							const planStampData = exec.activeItem.plan_stamp as { candidate_id?: string; paths?: string[] } | undefined;
+							const plannedCandidateId = planStampData?.candidate_id ?? detail.planPacket?.candidateId;
+							if (!plannedCandidateId) return deny("planned candidate ID missing from execution item");
+
+							const sealedPaths = planStampData?.paths ?? [];
+
+							// Step 10: Work contract change handling.
+							// If the execution mutates files in python/omp-work, compute prospective contract digest.
+							// If unapproved in approval.json, atomically pause the grant and refuse freeze/push/audit.
+							if (sealedPaths.some(p => p.startsWith("python/omp-work/"))) {
+								const contractCheck = checkProspectiveContract(ctx.cwd);
+								if (!contractCheck.approved) {
+									await backend.setExecutionState({
+										grantId: exec.grant.grant_id,
+										expectedGrantVersion: exec.grant.grant_version,
+										targetState: "paused",
+										reason: `contract_approval_required:${contractCheck.prospectiveDigest}`,
+										judgeSha256: tcb.judgeSha256,
+									});
+									ctx.ui.notify(`Contract change detected. Execution grant paused awaiting owner approval for ${contractCheck.prospectiveDigest}. Run 'omp-work approve --issue ${targetIssue.key}' then '/execute resume' to continue.`, "warning");
+									return deny(`Contract approval required: prospective contract digest ${contractCheck.prospectiveDigest} is not approved in approval.json. Execution grant paused before candidate freeze. Run 'omp-work approve --issue ${targetIssue.key}' then '/execute resume'.`);
+								}
+							}
+
+							const freeze = await freezeCandidateCommit(
+								ctx.ui,
+								ctx.cwd,
+								targetIssue.key,
+								plannedCandidateId,
+								[],
+								{ mode: "execution", sealedPaths },
+							);
+							if ("refused" in freeze) return deny(`Candidate freeze refused: ${freeze.reason}`);
+
+							const finalCandidate = await backend.finalizeExecutionCandidate(targetIssue.key, plannedCandidateId, freeze);
+
+							await backend.appendEvidence(targetIssue, "verification", params.body.trim(), {
+								candidateSha256: finalCandidate.candidate_sha256,
+								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
+							});
+
+							const push = await pushCandidate(ctx.cwd, freeze.commitSha, exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline);
+							if (push.status !== "pushed" && push.status !== "remote_commit" && push.status !== "contained") {
+								return deny(`Remote push failed: ${push.detail ?? "push refused"}`);
+							}
+							const pushEvidence = await backend.appendEvidence(targetIssue, "push", "remote push verified", {
+								candidateSha256: finalCandidate.candidate_sha256,
+								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
+								remoteRef: push.remoteRef,
+								remoteCommit: push.remoteCommit,
+								priorTip: push.priorTip,
+							} as EvidenceMeta);
+							const pushReceiptId = pushEvidence && typeof pushEvidence === "object" && "receipt_id" in pushEvidence ? String(pushEvidence.receipt_id) : "";
+							if (!pushReceiptId) return deny("Push receipt recording failed");
+
+							const attemptOutcome = await backend.beginCloseAttempt(targetIssue, {
+								authorizationRef: `execution:${exec.grant.grant_id}:${exec.activeItem.position}:${exec.activeItem.close_attempts_started + 1}`,
+								sessionId: exec.grant.authorization_hash,
+								startedAt: exec.grant.created_at,
+								startCommit: exec.activeItem.initial_git_baseline,
+								repository: exec.grant.repository,
+								diffSha256: rangeDiffSha256(ctx.cwd, exec.activeItem.initial_git_baseline, freeze.commitSha) ?? "",
+								dirtyPaths: [],
+								authorization_kind: "execution",
+								execution_grant_id: exec.grant.grant_id,
+								candidate_tree_sha: finalCandidate.candidate_sha256,
+								original_request_sha256: exec.activeItem.original_request_sha256,
+								criteria_sha256: exec.activeItem.criteria_sha256 ?? undefined,
+								plan_stamp_sha256: exec.activeItem.plan_stamp_sha256 ?? undefined,
+								judge_sha256: tcb.judgeSha256,
+								riders: [],
+							});
+							if (attemptOutcome.status === "refused") {
+								return deny(`Begin close attempt refused: ${attemptOutcome.event.renderedText}`);
+							}
+							if (attemptOutcome.event?.requiresDelivery) {
+								return yieldForDeliveries([attemptOutcome.event], "Close attempt begun (candidate frozen and pushed)");
+							}
+							return runAuditAndSettle(attemptOutcome.attemptId!, pushReceiptId, false);
 						}
 						case "stop_execution": {
 							const exec = await backend.getExecution(params.work);

@@ -437,6 +437,7 @@ export type ExecutionJudgeManifest = {
 export type BeginExecutionPayload = {
 	grant_id: UUID;
 	provenance: ExecutionProvenanceEnvelope;
+	remote_ref: string;
 	mode: ExecutionMode;
 	items: ExecutionGrantItemClaim[];
 	expected_focus_version: number;
@@ -625,6 +626,7 @@ export type ExecutionGrantView = {
 	workspace_id: UUID;
 	owner_id: UUID;
 	repository: string;
+	remote_ref: string;
 	state: ExecutionState;
 	mode: ExecutionMode;
 	grant_version: number;

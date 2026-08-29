@@ -2969,6 +2969,7 @@ def test_execution_grant_lifecycle_pass(service) -> None:
             "payload": {
                 "grant_id": grant_id,
                 "provenance": provenance,
+                "remote_ref": "refs/heads/main",
                 "mode": "single",
                 "items": [
                     {
@@ -3069,11 +3070,22 @@ def test_execution_grant_lifecycle_pass(service) -> None:
                     "candidate_id": str(final_cand_id),
                     "kind": "push",
                     "payload": {
+                        "repository": "oh-my-pi",
+                        "remote_url": "git@github.com:owner/oh-my-pi.git",
                         "remote_ref": "refs/heads/main",
-                        "remote_commit": final_commit,
+                        "prior_tip": head_commit,
+                        "candidate_commit": final_commit,
+                        "result_tip": final_commit,
                     },
                     "payload_sha256": sha256(
-                        {"remote_ref": "refs/heads/main", "remote_commit": final_commit}
+                        {
+                            "repository": "oh-my-pi",
+                            "remote_url": "git@github.com:owner/oh-my-pi.git",
+                            "remote_ref": "refs/heads/main",
+                            "prior_tip": head_commit,
+                            "candidate_commit": final_commit,
+                            "result_tip": final_commit,
+                        }
                     ),
                     "issuer": "test",
                     "issued_at": datetime.now(timezone.utc).isoformat(),
@@ -3089,7 +3101,7 @@ def test_execution_grant_lifecycle_pass(service) -> None:
 
     # Close attempt
     attempt_id = str(uuid4())
-    status, body = _command(
+    status, begin_body = _command(
         service,
         workspace_id,
         {
@@ -3115,7 +3127,8 @@ def test_execution_grant_lifecycle_pass(service) -> None:
             },
         },
     )
-    assert status == 200, body
+    assert status == 200, begin_body
+    begin_event = begin_body["result"]["event"]
 
     verif_receipt_id = str(uuid4())
     status, body = _command(
@@ -3174,7 +3187,7 @@ def test_execution_grant_lifecycle_pass(service) -> None:
     assert status == 200, body
     launch_id = body["result"]["launch"]["launch_id"]
 
-    status, body = _command(
+    status, settle_body = _command(
         service,
         workspace_id,
         {
@@ -3186,9 +3199,37 @@ def test_execution_grant_lifecycle_pass(service) -> None:
             },
         },
     )
-    assert status == 200, body
-    assert body["result"]["verdict"] == "PASS"
+    assert status == 200, settle_body
+    assert settle_body["result"]["verdict"] == "PASS"
+    settle_event = settle_body["result"]["event"]
 
+    # Attest deliveries before completion
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": begin_event["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": begin_event["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": settle_event["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": settle_event["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
     # Complete execution item
     status, body = _command(
         service,
@@ -3208,6 +3249,89 @@ def test_execution_grant_lifecycle_pass(service) -> None:
     assert status == 200, body
     assert body["result"]["state"] == "DONE"
     assert body["result"]["grant"]["state"] == "completed"
+
+
+def test_seal_preserves_existing_criteria_verbatim(service) -> None:
+    """Items carrying acceptance criteria seal them verbatim: the caller's
+    derived proposal is discarded (sessions cannot reproduce stored bytes),
+    no replacement revision is created, and the result reports the
+    authoritative revision."""
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+
+    existing = ["AC-1: stored criterion", "AC-2: exact bytes \u2014 kept"]
+    item = _create(
+        service,
+        workspace_id,
+        "Sealed criteria item",
+        description="Do the thing",
+        acceptance_criteria=existing,
+    )
+    work_id, rev_id = item["work_id"], item["revision_id"]
+
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    provenance = {
+        "owner_input_id": str(uuid4()),
+        "owner_session_id": "session-1",
+        "normalized_command": "/execute OMP-1",
+        "workspace_id": str(workspace_id),
+        "repository": "oh-my-pi",
+        "nonce": str(uuid4()),
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": provenance,
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(work_id),
+                        "revision_id": str(rev_id),
+                        "position": 0,
+                        "original_request": "Do the thing",
+                        "original_request_sha256": text_sha256("Do the thing"),
+                        "initial_git_baseline": "0" * 40,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 200, body
+
+    # A mismatched derived proposal must seal the stored criteria verbatim.
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_execution_criteria",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 1,
+                "work_id": str(work_id),
+                "expected_revision_id": str(rev_id),
+                "criteria": ["AC-1: a guessed paraphrase"],
+                "description_sha256": text_sha256("Do the thing"),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    result = body["result"]
+    assert result["item"]["phase"] == "planning"
+    assert result["revision"]["acceptance_criteria"] == existing
+    assert result["revision"]["revision_id"] == str(rev_id), "no replacement revision"
+    assert result["item"]["criteria_revision_id"] == str(rev_id)
+    assert result["item"]["criteria_sha256"] == sha256(existing)
 
 
 def test_execution_grant_no_progress_cap(service) -> None:
@@ -3236,6 +3360,7 @@ def test_execution_grant_no_progress_cap(service) -> None:
                     "nonce": str(uuid4()),
                     "issued_at": datetime.now(timezone.utc).isoformat(),
                 },
+                "remote_ref": "refs/heads/main",
                 "mode": "single",
                 "items": [
                     {
@@ -3428,6 +3553,7 @@ def test_execution_grant_continuation_cap(service) -> None:
                     "nonce": str(uuid4()),
                     "issued_at": datetime.now(timezone.utc).isoformat(),
                 },
+                "remote_ref": "refs/heads/main",
                 "mode": "single",
                 "items": [
                     {
@@ -3511,6 +3637,7 @@ def test_execution_grant_pause_resume_contract_approval(service) -> None:
                     "nonce": str(uuid4()),
                     "issued_at": datetime.now(timezone.utc).isoformat(),
                 },
+                "remote_ref": "refs/heads/main",
                 "mode": "single",
                 "items": [
                     {
@@ -3638,6 +3765,7 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
                     "nonce": str(uuid4()),
                     "issued_at": datetime.now(timezone.utc).isoformat(),
                 },
+                "remote_ref": "refs/heads/main",
                 "mode": "single",
                 "items": [
                     {
@@ -3710,7 +3838,7 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
         candidate_hash=final_cand_sha,
     )
     att_id = str(uuid4())
-    status, body = _command(
+    status, begin_body = _command(
         service,
         workspace_id,
         {
@@ -3736,8 +3864,10 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
             },
         },
     )
+    assert status == 200, begin_body
+    begin_event = begin_body["result"]["event"]
+
     v_id = str(uuid4())
-    assert status == 200, body
     status, body = _command(
         service,
         workspace_id,
@@ -3761,6 +3891,7 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
         },
     )
     assert status == 200, body
+
     status, m_body = _command(
         service,
         workspace_id,
@@ -3770,6 +3901,7 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
         },
     )
     assert status == 200, m_body
+
     status, l_body = _command(
         service,
         workspace_id,
@@ -3783,7 +3915,8 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
         },
     )
     assert status == 200, l_body
-    status, body = _command(
+
+    status, settle_body = _command(
         service,
         workspace_id,
         {
@@ -3795,7 +3928,24 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
             },
         },
     )
-    assert status == 200, body
+    assert status == 200, settle_body
+    assert settle_body["result"]["verdict"] == "PASS"
+    settle_event = settle_body["result"]["event"]
+
+    # Attest begin delivery first, leaving settle delivery pending
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": begin_event["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": begin_event["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
 
     # Push receipt with mismatched remote commit fails
     bad_push_id = str(uuid4())
@@ -3843,11 +3993,93 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
     )
     assert status == 409, body
     assert body["error"]["code"] == "completion_blocked"
-    # Push receipt with matching remote commit succeeds
+
+    # Negative probes for push bindings
+    for field_name, bad_value, expected_msg in [
+        ("repository", "other-repo", "push receipt repository mismatch"),
+        ("remote_ref", "invalid-tag-ref", "push receipt remote_ref mismatch"),
+        ("remote_ref", "refs/tags/v1.0", "push receipt remote_ref mismatch"),
+        ("prior_tip", "f" * 40, "push receipt prior_tip mismatch"),
+        ("candidate_commit", "f" * 40, "push receipt candidate_commit mismatch"),
+        ("result_tip", "f" * 40, "push receipt result_tip mismatch"),
+    ]:
+        bad_payload = {
+            "repository": "oh-my-pi",
+            "remote_url": "git@github.com:owner/oh-my-pi.git",
+            "remote_ref": "refs/heads/main",
+            "prior_tip": head_commit,
+            "candidate_commit": final_commit,
+            "result_tip": final_commit,
+        }
+        bad_payload[field_name] = bad_value
+        bad_id = str(uuid4())
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "append_evidence",
+                "payload": {
+                    "receipt": {
+                        "receipt_id": bad_id,
+                        "work_id": str(work_id),
+                        "revision_id": str(new_rev_id),
+                        "candidate_id": str(final_id),
+                        "kind": "push",
+                        "payload": bad_payload,
+                        "payload_sha256": sha256(bad_payload),
+                        "issuer": "test",
+                        "issued_at": datetime.now(timezone.utc).isoformat(),
+                        "candidate_sha256": final_cand_sha,
+                        "candidate_commit": final_commit,
+                        "remote_ref": bad_payload["remote_ref"],
+                        "remote_commit": final_commit,
+                    },
+                },
+            },
+        )
+        assert status == 200, body
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "complete_execution_item",
+                "payload": {
+                    "grant_id": grant_id,
+                    "expected_grant_version": 3,
+                    "work_id": str(work_id),
+                    "attempt_id": att_id,
+                    "push_receipt_id": bad_id,
+                    "judge_sha256": judge_sha,
+                },
+            },
+        )
+        assert status == 409, body
+        assert body["error"]["code"] == "completion_blocked"
+        assert expected_msg in body["error"]["diagnostics"][0]
+
+    # Negative probe: attempt candidate_tree_sha is immutable
+    with psycopg.connect(
+        **service.config.connection_kwargs("omp_work_app"), autocommit=True
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                (str(workspace_id), str(uuid4())),
+            )
+            with pytest.raises(psycopg.Error, match="close attempt identity is immutable"):
+                cur.execute(
+                    "UPDATE omp_work.close_attempts SET candidate_tree_sha=%s WHERE workspace_id=%s AND attempt_id=%s",
+                    ("0" * 64, workspace_id, att_id),
+                )
+    # Push receipt with matching full bindings
     good_push_id = str(uuid4())
     good_push_payload = {
+        "repository": "oh-my-pi",
+        "remote_url": "git@github.com:owner/oh-my-pi.git",
         "remote_ref": "refs/heads/main",
-        "remote_commit": final_commit,
+        "prior_tip": head_commit,
+        "candidate_commit": final_commit,
+        "result_tip": final_commit,
     }
     status, body = _command(
         service,
@@ -3874,6 +4106,41 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
         },
     )
     assert status == 200, body
+
+    # Prove pending delivery blocks completion
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": str(work_id),
+                "attempt_id": att_id,
+                "push_receipt_id": good_push_id,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "completion_blocked"
+    assert "delivery_pending" in body["error"]["diagnostics"][0]
+
+    # Attest remaining delivery -> completion succeeds
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": settle_event["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": settle_event["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
     status, body = _command(
         service,
         workspace_id,

@@ -46,7 +46,7 @@ def config(tmp_path: Path) -> OperationsConfig:
 
 def test_pinned_migration_set_is_forward_only() -> None:
     files = migrations()
-    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
     assert all(path.name.startswith(f"{ordinal:04d}_") for ordinal, path in files)
     assert len(migration_set_sha256()) == 64
 
@@ -515,8 +515,8 @@ def test_execution_grant_triggers_enforce_immutability_and_monotonicity(config: 
                 )
                 cursor.execute("UPDATE omp_work.work_items SET current_revision_id = %s WHERE work_id = %s", (rev_id, work_id))
                 cursor.execute(
-                    "INSERT INTO omp_work.execution_grants(grant_id, workspace_id, owner_id, repository, mode, max_continuations, max_close_attempts, max_no_progress, authorization_hash, provenance, judge_sha256, judge_manifest, focus_version_at_grant, created_at, expires_at, state)"
-                    " VALUES (%s, %s, %s, 'oh-my-pi', 'single', 8, 3, 3, %s, '{}'::jsonb, %s, '{}'::jsonb, 0, %s, %s + interval '7 days', 'active')",
+                    "INSERT INTO omp_work.execution_grants(grant_id, workspace_id, owner_id, repository, remote_ref, mode, max_continuations, max_close_attempts, max_no_progress, authorization_hash, provenance, judge_sha256, judge_manifest, focus_version_at_grant, created_at, expires_at, state)"
+                    " VALUES (%s, %s, %s, 'oh-my-pi', 'refs/heads/main', 'single', 8, 3, 3, %s, '{}'::jsonb, %s, '{}'::jsonb, 0, %s, %s + interval '7 days', 'active')",
                     (grant_id, workspace_id, actor_id, "a" * 64, "b" * 64, now, now),
                 )
                 cursor.execute(
@@ -540,6 +540,7 @@ def test_execution_grant_triggers_enforce_immutability_and_monotonicity(config: 
             ("workspace_id", f"'{uuid4()}'"),
             ("owner_id", f"'{uuid4()}'"),
             ("repository", "'other-repo'"),
+            ("remote_ref", "'refs/heads/other'"),
             ("mode", "'queue'"),
             ("max_continuations", "10"),
             ("max_close_attempts", "5"),
@@ -609,3 +610,39 @@ def test_execution_grant_triggers_enforce_immutability_and_monotonicity(config: 
                 with connection.transaction(), connection.cursor() as cursor:
                     cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
                     cursor.execute("UPDATE omp_work.execution_grants SET state='active', grant_version=grant_version+1 WHERE grant_id = %s", (grant_id,))
+
+        # 7. remote_ref CHECK constraint rejects forbidden patterns
+        forbidden_refs = [
+            "refs/heads/",
+            "refs/heads/a..b",
+            "refs/heads/x@{y",
+            "refs/heads/a.lock",
+            "refs/heads/a.lock/b",
+            "refs/heads/a/",
+            "refs/heads/a.",
+            "refs/heads/a./b",
+            "refs/heads/.a",
+            "refs/heads/a//b",
+            "refs/heads/a b",
+            "refs/heads/a^b",
+            "refs/heads/a~b",
+            "refs/heads/a:b",
+            "refs/heads/a?b",
+            "refs/heads/a*b",
+            "refs/heads/a[b",
+            "refs/heads/a\\b",
+            "refs/heads/@",
+            "refs/tags/v1.0",
+            "HEAD",
+        ]
+        for bad_ref in forbidden_refs:
+            with psycopg.connect(**app_kwargs) as connection:
+                with pytest.raises(psycopg.Error, match="execution_grants_remote_ref_check"):
+                    with connection.transaction(), connection.cursor() as cursor:
+                        cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                        bad_grant_id = uuid4()
+                        cursor.execute(
+                            "INSERT INTO omp_work.execution_grants(grant_id, workspace_id, owner_id, repository, remote_ref, mode, max_continuations, max_close_attempts, max_no_progress, authorization_hash, provenance, judge_sha256, judge_manifest, focus_version_at_grant, created_at, expires_at, state)"
+                            " VALUES (%s, %s, %s, 'oh-my-pi', %s, 'single', 8, 3, 3, %s, '{}'::jsonb, %s, '{}'::jsonb, 0, %s, %s + interval '7 days', 'active')",
+                            (bad_grant_id, workspace_id, actor_id, bad_ref, "a" * 64, "b" * 64, now, now),
+                        )

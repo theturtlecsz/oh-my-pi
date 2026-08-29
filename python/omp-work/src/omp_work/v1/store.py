@@ -54,7 +54,7 @@ from .semantics import (
 
 _RECEIPT_FIELDS = "receipt_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit"
 _ATTEMPT_FIELDS = "attempt_id,work_id,revision_id,candidate_id,plan_receipt_id,candidate_sha256,candidate_commit,owner_session_id,owner_session_started_at,owner_session_start_commit,repository,diff_sha256,starting_dirty_paths,authorization_kind,authorization_ref,launch_count,cancelled_launch_count,accepted_report_count,in_flight_launch_id,state,terminal_reason,requested_at,closeout_requested_at,completed_at,completion_authorization_ref,riders,execution_grant_id,candidate_tree_sha,original_request_sha256,criteria_sha256,plan_stamp_sha256,judge_sha256"
-_GRANT_FIELDS = "grant_id,workspace_id,owner_id,repository,state,mode,grant_version,max_continuations,max_close_attempts,max_no_progress,continuations_scheduled,terminal_reason,authorization_hash,judge_sha256,created_at,expires_at,completed_at,paused_at,stopped_at,canceled_at"
+_GRANT_FIELDS = "grant_id,workspace_id,owner_id,repository,remote_ref,state,mode,grant_version,max_continuations,max_close_attempts,max_no_progress,continuations_scheduled,terminal_reason,authorization_hash,judge_sha256,created_at,expires_at,completed_at,paused_at,stopped_at,canceled_at"
 _GRANT_ITEM_FIELDS = "item_id,workspace_id,grant_id,work_id,position,phase,claimed_revision_id,project_id,active_blocker_ids,initial_git_baseline,current_git_baseline,criteria_revision_id,original_request,original_request_sha256,criteria_sha256,plan_stamp_sha256,plan_stamp,close_attempts_started,consecutive_no_progress,last_reviewed_tree_sha,last_findings_hash,push_receipt_id,closeout_receipt_id,activated_at,completed_at,abandoned_at,skipped_at,terminal_reason"
 _MANIFEST_FIELDS = "manifest_id,work_id,attempt_id,manifest_version,plan_receipt_id,verification_receipt_id,candidate_id,candidate_sha256,candidate_commit,task_body,task_sha256,section_hashes,created_at"
 _LAUNCH_FIELDS = "launch_id,attempt_id,manifest_id,launch_number,task_sha256,tool_call_id,reserved_at"
@@ -2433,6 +2433,7 @@ class PostgresWorkStore:
         }
         new_state, terminal_reason = transitions[verdict]
 
+        consecutive = 0
         if attempt["execution_grant_id"] is not None:
             cur.execute(
                 f"SELECT {_GRANT_FIELDS}, judge_manifest FROM omp_work.execution_grants WHERE workspace_id=%s AND grant_id=%s FOR UPDATE",
@@ -2495,58 +2496,17 @@ class PostgresWorkStore:
 
                 if grant_item is not None:
                     cur.execute(
-                        "UPDATE omp_work.execution_grant_items SET last_reviewed_tree_sha=%s, last_findings_hash=%s, consecutive_no_progress=%s, phase='remediating' WHERE workspace_id=%s AND grant_id=%s AND work_id=%s",
+                        "UPDATE omp_work.execution_grant_items SET last_reviewed_tree_sha=%s, last_findings_hash=%s, consecutive_no_progress=%s, current_git_baseline=%s, phase='remediating' WHERE workspace_id=%s AND grant_id=%s AND work_id=%s",
                         (
                             cur_tree,
                             findings_hash,
                             consecutive,
+                            attempt["candidate_commit"],
                             envelope.workspace_id,
                             attempt["execution_grant_id"],
                             attempt["work_id"],
                         ),
                     )
-
-                if consecutive >= int(grant.get("max_no_progress", 3)):
-                    cur.execute(
-                        "UPDATE omp_work.execution_grants SET state='stopped', terminal_reason='max_no_progress_exceeded', stopped_at=clock_timestamp() WHERE workspace_id=%s AND grant_id=%s",
-                        (envelope.workspace_id, attempt["execution_grant_id"]),
-                    )
-                    cur.execute(
-                        "UPDATE omp_work.execution_grant_items SET phase='abandoned', terminal_reason='max_no_progress_exceeded', abandoned_at=clock_timestamp() WHERE workspace_id=%s AND grant_id=%s AND work_id=%s",
-                        (envelope.workspace_id, attempt["execution_grant_id"], attempt["work_id"]),
-                    )
-                    cur.execute(
-                        "UPDATE omp_work.execution_grant_items SET phase='skipped', terminal_reason='grant_stopped', skipped_at=clock_timestamp() WHERE workspace_id=%s AND grant_id=%s AND phase='pending'",
-                        (envelope.workspace_id, attempt["execution_grant_id"]),
-                    )
-                elif int(attempt.get("launch_count", 0)) >= 5 or int(
-                    grant_item.get("close_attempts_started", 0)
-                ) >= int(grant.get("max_close_attempts", 5)):
-                    cur.execute(
-                        "UPDATE omp_work.execution_grants SET state='stopped', terminal_reason='max_close_attempts_exceeded', stopped_at=clock_timestamp() WHERE workspace_id=%s AND grant_id=%s",
-                        (envelope.workspace_id, attempt["execution_grant_id"]),
-                    )
-                    cur.execute(
-                        "UPDATE omp_work.execution_grant_items SET phase='abandoned', terminal_reason='max_close_attempts_exceeded', abandoned_at=clock_timestamp() WHERE workspace_id=%s AND grant_id=%s AND work_id=%s",
-                        (envelope.workspace_id, attempt["execution_grant_id"], attempt["work_id"]),
-                    )
-                    cur.execute(
-                        "UPDATE omp_work.execution_grant_items SET phase='skipped', terminal_reason='grant_stopped', skipped_at=clock_timestamp() WHERE workspace_id=%s AND grant_id=%s AND phase='pending'",
-                        (envelope.workspace_id, attempt["execution_grant_id"]),
-                    )
-            elif verdict == "BLOCKED":
-                cur.execute(
-                    "UPDATE omp_work.execution_grants SET state='stopped', terminal_reason='auditor_blocked', stopped_at=clock_timestamp() WHERE workspace_id=%s AND grant_id=%s",
-                    (envelope.workspace_id, attempt["execution_grant_id"]),
-                )
-                cur.execute(
-                    "UPDATE omp_work.execution_grant_items SET phase='abandoned', terminal_reason='auditor_blocked', abandoned_at=clock_timestamp() WHERE workspace_id=%s AND grant_id=%s AND work_id=%s",
-                    (envelope.workspace_id, attempt["execution_grant_id"], attempt["work_id"]),
-                )
-                cur.execute(
-                    "UPDATE omp_work.execution_grant_items SET phase='skipped', terminal_reason='grant_stopped', skipped_at=clock_timestamp() WHERE workspace_id=%s AND grant_id=%s AND phase='pending'",
-                    (envelope.workspace_id, attempt["execution_grant_id"]),
-                )
 
         receipt_id = uuid4()
         now = datetime.now(UTC)
@@ -2590,6 +2550,23 @@ class PostgresWorkStore:
                 (new_state,),
             )
         launches, reports = self._budget(attempt)
+
+        if attempt.get("execution_grant_id") is not None and grant is not None:
+            if verdict == "NEEDS_FIX":
+                if consecutive >= int(grant.get("max_no_progress", 3)):
+                    self._terminalize_execution_grant(
+                        cur, envelope, grant, "stopped", "max_no_progress_exceeded", now
+                    )
+                elif int(attempt.get("launch_count", 0)) >= 5 or int(
+                    grant_item.get("close_attempts_started", 0) if grant_item else 0
+                ) >= int(grant.get("max_close_attempts", 5)):
+                    self._terminalize_execution_grant(
+                        cur, envelope, grant, "stopped", "max_close_attempts_exceeded", now
+                    )
+            elif verdict == "BLOCKED":
+                self._terminalize_execution_grant(
+                    cur, envelope, grant, "stopped", "auditor_blocked", now
+                )
         next_actions = {
             "PASS": ("record the closeout review", "owner /done closes"),
             "NEEDS_FIX": (
@@ -3677,13 +3654,14 @@ class PostgresWorkStore:
         )
         now = datetime.now(UTC)
         cur.execute(
-            f"INSERT INTO omp_work.execution_grants(grant_id, workspace_id, owner_id, repository, state, mode, grant_version, max_continuations, max_close_attempts, max_no_progress, continuations_scheduled, terminal_reason, authorization_hash, provenance, judge_sha256, judge_manifest, focus_version_at_grant, created_at, expires_at) "
-            f"VALUES (%s, %s, %s, %s, 'active', %s, 1, 8, 5, 3, 0, NULL, %s, %s, %s, %s, %s, %s, %s + interval '7 days') RETURNING {_GRANT_FIELDS}",
+            f"INSERT INTO omp_work.execution_grants(grant_id, workspace_id, owner_id, repository, remote_ref, state, mode, grant_version, max_continuations, max_close_attempts, max_no_progress, continuations_scheduled, terminal_reason, authorization_hash, provenance, judge_sha256, judge_manifest, focus_version_at_grant, created_at, expires_at) "
+            f"VALUES (%s, %s, %s, %s, %s, 'active', %s, 1, 8, 5, 3, 0, NULL, %s, %s, %s, %s, %s, %s, %s + interval '7 days') RETURNING {_GRANT_FIELDS}",
             (
                 payload.grant_id,
                 envelope.workspace_id,
                 actor_id,
                 payload.provenance.repository,
+                payload.remote_ref,
                 payload.mode,
                 auth_hash,
                 json.dumps(payload.provenance.model_dump(mode="json")),
@@ -3980,7 +3958,7 @@ class PostgresWorkStore:
 
         # Check current revision
         cur.execute(
-            "SELECT r.revision_id, r.revision_number, r.title, r.description, r.scope FROM omp_work.work_items i JOIN omp_work.work_revisions r ON r.revision_id=i.current_revision_id WHERE i.workspace_id=%s AND i.work_id=%s FOR UPDATE OF i",
+            "SELECT r.revision_id, r.revision_number, r.title, r.description, r.scope, r.content_sha256, r.created_by, r.supplied_at FROM omp_work.work_items i JOIN omp_work.work_revisions r ON r.revision_id=i.current_revision_id WHERE i.workspace_id=%s AND i.work_id=%s FOR UPDATE OF i",
             (envelope.workspace_id, payload.work_id),
         )
         cur_rev = cur.fetchone()
@@ -3997,15 +3975,24 @@ class PostgresWorkStore:
         existing_criteria = [row["criterion"] for row in cur.fetchall()]
 
         if existing_criteria:
-            # Plan line 25: preserve existing criteria verbatim, do not create replacement revision
+            # Plan line 25: preserve existing criteria verbatim, do not create a
+            # replacement revision. The caller's derived proposal is discarded -
+            # sessions cannot reliably reproduce the exact stored bytes, and the
+            # sealed result reports the authoritative criteria.
             sealed_revision_id = cur_rev["revision_id"]
             sealed_criteria = existing_criteria
-            if payload.criteria and list(payload.criteria) != existing_criteria:
-                raise WorkStoreError(
-                    "invalid_request",
-                    ("cannot overwrite existing acceptance criteria; must preserve verbatim",),
-                )
-            new_revision_dict = None
+            new_revision_dict = {
+                "revision_id": str(cur_rev["revision_id"]),
+                "work_id": str(payload.work_id),
+                "revision_number": cur_rev["revision_number"],
+                "title": cur_rev["title"],
+                "description": cur_rev["description"],
+                "scope": cur_rev["scope"],
+                "acceptance_criteria": existing_criteria,
+                "content_sha256": cur_rev["content_sha256"],
+                "created_by": cur_rev["created_by"],
+                "created_at": cur_rev["supplied_at"].isoformat(),
+            }
         else:
             # Writes derived criteria only when missing
             if not payload.criteria:
@@ -4483,6 +4470,57 @@ class PostgresWorkStore:
                 "completion_blocked",
                 ("attempt does not match execution grant item sealed bindings",),
             )
+        # Check current work item under lock
+        cur.execute(
+            "SELECT work_id, current_revision_id, current_candidate_id, state, archived FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.work_id),
+        )
+        work_item = cur.fetchone()
+        if (
+            work_item is None
+            or work_item["archived"]
+            or work_item["state"] in ("DONE", "CANCELED", "CANCELLED")
+            or work_item["current_revision_id"] != attempt["revision_id"]
+            or work_item["current_candidate_id"] != attempt["candidate_id"]
+        ):
+            raise WorkStoreError("completion_blocked", ("work item revision, candidate, or state mismatch",))
+
+        # Check active blockers
+        cur.execute(
+            "SELECT count(*) AS cnt FROM omp_work.work_relations WHERE workspace_id=%s AND target_work_id=%s AND kind='blocks' AND active",
+            (envelope.workspace_id, payload.work_id),
+        )
+        if cur.fetchone()["cnt"] > 0:
+            raise WorkStoreError("completion_blocked", ("active blockers present",))
+
+        # Check candidate row
+        cur.execute(
+            "SELECT candidate_id,work_id,revision_id,candidate_sha256,commit_sha,kind,allocated_at FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s",
+            (envelope.workspace_id, attempt["candidate_id"]),
+        )
+        cand_row = cur.fetchone()
+        if cand_row is None or attempt.get("candidate_tree_sha") != cand_row["candidate_sha256"]:
+            raise WorkStoreError("completion_blocked", ("attempt candidate tree sha mismatch",))
+
+        # Check sealed riders
+        sealed_riders = list(attempt.get("riders") or [])
+        for rider in sealed_riders:
+            rider_work_id = UUID(str(rider["work_id"]))
+            if text_sha256(str(rider["evidence"])) != rider["evidence_sha256"]:
+                raise WorkStoreError("completion_blocked", (f"rider {rider_work_id}: sealed evidence digest mismatch",))
+            cur.execute(
+                "SELECT state,archived,current_revision_id FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s FOR UPDATE",
+                (envelope.workspace_id, rider_work_id),
+            )
+            rider_row = cur.fetchone()
+            if (
+                rider_row is None
+                or rider_row["state"] in ("DONE", "CANCELED", "CANCELLED")
+                or rider_row["archived"]
+                or str(rider_row["current_revision_id"]) != str(rider["revision_id"])
+            ):
+                raise WorkStoreError("completion_blocked", (f"rider {rider_work_id}: no longer open on the sealed revision",))
+
         # Check push receipt
         cur.execute(
             f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND receipt_id=%s",
@@ -4495,7 +4533,8 @@ class PostgresWorkStore:
             or push["work_id"] != payload.work_id
             or push["candidate_id"] != attempt["candidate_id"]
             or not push.get("remote_ref")
-            or push.get("remote_commit") != attempt["candidate_commit"]
+            or not push.get("remote_commit")
+            or push.get("candidate_commit") != attempt["candidate_commit"]
         ):
             raise WorkStoreError(
                 "completion_blocked",
@@ -4504,6 +4543,39 @@ class PostgresWorkStore:
                 ),
             )
 
+        push_payload = push.get("payload")
+        if isinstance(push_payload, str):
+            try:
+                push_payload = json.loads(push_payload)
+            except Exception as error:
+                raise WorkStoreError("completion_blocked", ("push receipt payload is malformed",)) from error
+        if not isinstance(push_payload, dict):
+            raise WorkStoreError("completion_blocked", ("push receipt payload must be an object",))
+        expected_repo = grant["repository"]
+        if not push_payload.get("repository") or push_payload["repository"] != expected_repo:
+            raise WorkStoreError("completion_blocked", ("push receipt repository mismatch",))
+
+        expected_remote_ref = grant["remote_ref"]
+        if (
+            not push.get("remote_ref")
+            or push["remote_ref"] != expected_remote_ref
+            or not push_payload.get("remote_ref")
+            or push_payload["remote_ref"] != expected_remote_ref
+        ):
+            raise WorkStoreError("completion_blocked", ("push receipt remote_ref mismatch",))
+        if attempt.get("remote_ref") and push["remote_ref"] != attempt["remote_ref"]:
+            raise WorkStoreError("completion_blocked", ("push receipt remote_ref mismatch",))
+        expected_baseline = (
+            grant_item.get("current_git_baseline")
+            or grant_item.get("initial_git_baseline")
+        )
+        if not push_payload.get("prior_tip") or push_payload["prior_tip"] != expected_baseline:
+            raise WorkStoreError("completion_blocked", ("push receipt prior_tip mismatch",))
+        if not push_payload.get("candidate_commit") or push_payload["candidate_commit"] != attempt["candidate_commit"]:
+            raise WorkStoreError("completion_blocked", ("push receipt candidate_commit mismatch",))
+
+        if not push_payload.get("result_tip") or push_payload["result_tip"] != push.get("remote_commit"):
+            raise WorkStoreError("completion_blocked", ("push receipt result_tip mismatch",))
         # Check PASS audit receipt
         cur.execute(
             f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND work_id=%s AND candidate_id=%s AND kind='audit' AND verdict='PASS' ORDER BY issued_at DESC LIMIT 1",
@@ -4548,6 +4620,38 @@ class PostgresWorkStore:
                 "state='closeout_requested', closeout_requested_at=%s",
                 (now,),
             )
+
+        # Check candidate and completion blockers under closeout_requested state
+        cur.execute(
+            "SELECT candidate_id,work_id,revision_id,candidate_sha256,commit_sha,kind,allocated_at FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s",
+            (envelope.workspace_id, attempt["candidate_id"]),
+        )
+        cand_row = cur.fetchone()
+        if cand_row is None:
+            raise WorkStoreError("completion_blocked", ("candidate row missing",))
+        from .models import Candidate, CloseAttempt, CompletionInput
+        candidate = Candidate.model_validate(cand_row)
+
+        cur.execute(
+            f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND work_id=%s AND revision_id=%s AND candidate_id=%s ORDER BY issued_at,receipt_id",
+            (envelope.workspace_id, payload.work_id, attempt["revision_id"], attempt["candidate_id"]),
+        )
+        receipts = tuple(EvidenceReceipt.model_validate(r) for r in cur.fetchall())
+
+        from .semantics import completion_blockers
+        persisted = CompletionInput(
+            work_id=payload.work_id,
+            current_revision_id=attempt["revision_id"],
+            candidate=candidate,
+            receipts=receipts,
+            closeout_requested=True,
+        )
+        attempt_model = CloseAttempt.model_validate(_row_json(dict(attempt)))
+        pending = self._pending_delivery_count(cur, envelope.workspace_id, payload.work_id)
+        blockers = completion_blockers(persisted, attempt=attempt_model, pending_delivery_count=pending)
+        if blockers:
+            raise WorkStoreError("completion_blocked", ("; ".join(f"{b.code}: {b.detail}" for b in blockers),))
+
         attempt = self._transition_attempt(
             cur,
             envelope.workspace_id,
@@ -4557,10 +4661,13 @@ class PostgresWorkStore:
         )
 
         # Complete work item
+        # Complete work item via CAS
         cur.execute(
-            "UPDATE omp_work.work_items SET state='DONE' WHERE workspace_id=%s AND work_id=%s",
-            (envelope.workspace_id, payload.work_id),
+            "UPDATE omp_work.work_items SET state='DONE', row_version=row_version+1 WHERE workspace_id=%s AND work_id=%s AND current_revision_id=%s AND current_candidate_id=%s AND state NOT IN ('DONE', 'CANCELED', 'CANCELLED')",
+            (envelope.workspace_id, payload.work_id, attempt["revision_id"], attempt["candidate_id"]),
         )
+        if cur.rowcount == 0:
+            raise WorkStoreError("completion_blocked", ("concurrent work item revision or state change",))
 
         # Complete grant item
         cur.execute(

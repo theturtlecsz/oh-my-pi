@@ -11,8 +11,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
-import { join as joinPath } from "node:path";
-
+import { isAbsolute, join as joinPath } from "node:path";
 /** Run git in cwd; timeoutMs guards network ops (push). `raw` is untrimmed stdout —
  *  porcelain -z parsing needs the leading space of the first `XY path` entry. */
 export function runGit(cwd: string, args: string[], timeoutMs = 10_000): { ok: boolean; out: string; raw: string; err: string } {
@@ -20,6 +19,26 @@ export function runGit(cwd: string, args: string[], timeoutMs = 10_000): { ok: b
 	const raw = r.stdout ?? "";
 	const err = (r.stderr ?? (r.error ? r.error.message : "")).trim();
 	return { ok: r.status === 0 && !r.error, out: raw.trim(), raw, err };
+}
+
+export function inProgressGitOp(cwd: string): boolean {
+	try {
+		const top = runGit(cwd, ["rev-parse", "--git-dir"]);
+		if (!top.ok) return false;
+		const gitDir = isAbsolute(top.out) ? top.out : joinPath(cwd, top.out);
+		const markers = [
+			"MERGE_HEAD",
+			"REBASE_HEAD",
+			"rebase-merge",
+			"rebase-apply",
+			"CHERRY_PICK_HEAD",
+			"REVERT_HEAD",
+			"BISECT_LOG",
+		];
+		return markers.some(m => existsSync(joinPath(gitDir, m)));
+	} catch {
+		return false;
+	}
 }
 
 /** Run git with raw stdout — required where byte fidelity matters (path lists
@@ -168,13 +187,16 @@ export function validateExecutionPath(path: string, root?: string): { valid: boo
 					if (i < segments.length - 1) {
 						return { valid: false, error: `parent directory does not exist for new file: ${path}` };
 					}
-					const parentDir = joinPath(root, ...segments.slice(0, -1));
+					const parentSegments = segments.slice(0, -1);
+					const parentDir = joinPath(root, ...parentSegments);
 					try {
 						const parentLst = lstatSync(parentDir);
 						if (!parentLst.isDirectory() || parentLst.isSymbolicLink()) {
 							return { valid: false, error: `parent directory is invalid or symlink for new file: ${path}` };
 						}
-						if (existsSync(joinPath(parentDir, ".git"))) {
+						// The repository root's own .git is never a submodule marker;
+						// only nested parent directories carrying .git are embedded repos.
+						if (parentSegments.length > 0 && existsSync(joinPath(parentDir, ".git"))) {
 							return { valid: false, error: `parent directory is a git submodule: ${path}` };
 						}
 					} catch {
@@ -503,6 +525,7 @@ export interface PushOutcome {
 	remoteUrl?: string;
 	remoteRef?: string;
 	remoteCommit?: string;
+	priorTip?: string | null;
 	detail?: string;
 }
 
@@ -512,15 +535,22 @@ export interface PushOutcome {
  *  branch is never rewound); otherwise push the exact commit and verify the
  *  remote ref resolves to it. Divergence and unverifiable containment fail
  *  closed as "not_pushed" naming both commits. NEVER throws. */
-export function pushCandidate(root: string, commitSha: string): PushOutcome {
+export function currentSymbolicRef(root: string): string | undefined {
+	const branch = runGit(root, ["symbolic-ref", "--quiet", "HEAD"]);
+	if (!branch.ok || !branch.out) return undefined;
+	const ref = branch.out.trim();
+	return ref.startsWith("refs/heads/") ? ref : undefined;
+}
+
+export function pushCandidate(root: string, commitSha: string, expectedBaseline?: string): PushOutcome {
 	try {
-		const branch = runGit(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-		if (!branch.ok || !branch.out || branch.out === "HEAD") {
+		const remoteRef = currentSymbolicRef(root);
+		if (!remoteRef) {
 			return { status: "not_pushed", detail: "detached HEAD — no branch to push" };
 		}
+		const branchName = remoteRef.slice("refs/heads/".length);
 		const remote = runGit(root, ["remote", "get-url", "origin"]);
 		if (!remote.ok || !remote.out) return { status: "not_pushed", detail: "no origin remote" };
-		const remoteRef = `refs/heads/${branch.out}`;
 		const verify = (): string | undefined => {
 			const ls = runGit(root, ["ls-remote", "origin", remoteRef], 30_000);
 			if (!ls.ok || !ls.out) return undefined;
@@ -528,7 +558,8 @@ export function pushCandidate(root: string, commitSha: string): PushOutcome {
 		};
 		const preTip = verify();
 		if (preTip === commitSha) {
-			return { status: "remote_commit", remoteUrl: remote.out, remoteRef, remoteCommit: preTip, detail: "already at remote tip" };
+			const resolvedPrior = expectedBaseline ?? parentCommit(root, commitSha) ?? preTip;
+			return { status: "remote_commit", remoteUrl: remote.out, remoteRef, remoteCommit: preTip, priorTip: resolvedPrior, detail: "already at remote tip" };
 		}
 		if (preTip) {
 			// OMP-99: a newer same-branch tip that contains the candidate is push
@@ -553,7 +584,8 @@ export function pushCandidate(root: string, commitSha: string): PushOutcome {
 					remoteUrl: remote.out,
 					remoteRef,
 					remoteCommit: preTip,
-					detail: `containment: ${preTip} contains ${commitSha} on ${branch.out} (merge-base --is-ancestor exit 0, verified ${new Date().toISOString()})`,
+					priorTip: preTip,
+					detail: `containment: ${preTip} contains ${commitSha} on ${branchName} (merge-base --is-ancestor exit 0, verified ${new Date().toISOString()})`,
 				};
 			}
 		}
@@ -565,6 +597,7 @@ export function pushCandidate(root: string, commitSha: string): PushOutcome {
 				remoteUrl: remote.out,
 				remoteRef,
 				remoteCommit,
+				priorTip: preTip ?? null,
 				detail: push.ok ? undefined : `push command failed but remote ref carries the commit: ${push.err.split("\n")[0]}`,
 			};
 		}

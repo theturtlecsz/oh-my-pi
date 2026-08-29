@@ -6,6 +6,8 @@
  */
 import type {
 	Candidate,
+	Command,
+	CommandResult,
 	EvidenceReceipt,
 	ExecutionGrantItemClaim,
 	ExecutionGrantItemView,
@@ -600,6 +602,7 @@ export interface WorkflowBackend {
 	snapshotQueue(projectFilter?: string, currentKey?: string): Promise<ExecutionGrantItemClaim[]>;
 	beginExecution(input: {
 		provenance: ExecutionProvenanceEnvelope;
+		remoteRef: string;
 		mode: ExecutionMode;
 		items: ExecutionGrantItemClaim[];
 		expectedFocusVersion: number;
@@ -626,7 +629,7 @@ export interface WorkflowBackend {
 		criteria: string[];
 		descriptionSha256: string;
 		judgeSha256: string;
-	}): Promise<ExecutionSnapshot>;
+	}): Promise<ExecutionSnapshot & { sealedCriteria: string[] }>;
 	stampExecutionPlan(input: {
 		grantId: string;
 		expectedGrantVersion: number;
@@ -657,6 +660,7 @@ export interface WorkflowBackend {
 		pushReceiptId: string;
 		judgeSha256: string;
 	}): Promise<ExecutionSnapshot>;
+	getPendingExecutionClaims?(): Promise<Array<{ command: Command; result?: CommandResult }>>;
 }
 
 /** Thrown by createBatch after a partial publish — the host formats the exact

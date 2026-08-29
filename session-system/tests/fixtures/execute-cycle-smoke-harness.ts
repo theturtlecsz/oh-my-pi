@@ -10,7 +10,8 @@ import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import { createWorkBackend } from "../../extensions/workflow/work";
 import { loadBearer, loadWorkConfig } from "../../extensions/workflow/config";
-const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d";
+
+const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d";
 const probe = process.argv[2];
 const workKeyArg = process.argv[4];
 
@@ -46,21 +47,60 @@ vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: any
 
 const loaded = await loadExtensions(["work-now.ts", "model-bookends.ts"].map(file => path.join(extDir, file)), probe);
 if (loaded.errors.length > 0) throw new Error(loaded.errors.map(error => error.error).join("; "));
-const extension = loaded.extensions[0];
-if (!extension) throw new Error("work-now extension did not load");
-const tool = extension.tools.get("work");
-if (!tool) throw new Error("work tool missing");
-const fableModel = { id: "claude-fable-5", provider: "anthropic", name: "Claude Fable 5", api: "anthropic-messages" };
 
+let extensions = loaded.extensions;
+if (process.env.OMP_WORK_SMOKE_MISSING_YIELD === "1") {
+	const { createWorkflowHost } = await import("../../extensions/workflow/host");
+	const { createWorkBackend } = await import("../../extensions/workflow/work");
+	const { loadBearer, loadWorkConfig } = await import("../../extensions/workflow/config");
+	extensions = loaded.extensions.map((ext, idx) => {
+		if (idx === 0) {
+			return {
+				...ext,
+				factory: (pi: unknown) => {
+					const config = loadWorkConfig();
+					if (!config) return;
+					createWorkflowHost({
+						backend: createWorkBackend(config, () => loadBearer(config)),
+						teamNoun: "the ledger",
+						entryType: "work-now",
+						acceptEntry: data => data.backend === "work",
+						sourceResolver: (specifier: string) => specifier === "@oh-my-pi/pi-coding-agent/task/yield-assembly" ? undefined : import.meta.resolve(specifier),
+					})(pi as never);
+				},
+				tools: new Map(ext.tools),
+				commands: new Map(ext.commands),
+				handlers: new Map(),
+			};
+		}
+		return ext;
+	});
+}
+const extension = extensions[0];
+if (!extension) throw new Error("work-now extension did not load");
+const fableModel = { id: "claude-fable-5", provider: "anthropic", name: "Claude Fable 5", api: "anthropic-messages" };
 const uiCalls: string[] = [];
 const sentMessages: unknown[] = [];
 let modelTurnCount = 0;
 const sessionId = `smoke-exec-${scenario}`;
+const sessionBranchFile = path.join(path.dirname(probe), ".smoke-session-branch.json");
+const getBranch = () => {
+	try {
+		return JSON.parse(fs.readFileSync(sessionBranchFile, "utf8"));
+	} catch {
+		return [];
+	}
+};
+const appendEntry = (customType: string, data: unknown) => {
+	const list = getBranch();
+	list.push({ type: "custom", customType, data });
+	fs.writeFileSync(sessionBranchFile, JSON.stringify(list));
+};
 const runner = new ExtensionRunner(
-	loaded.extensions,
+	extensions,
 	loaded.runtime,
 	probe,
-	{ getCwd: () => probe, getBranch: () => [], getSessionId: () => sessionId } as never,
+	{ getCwd: () => probe, getBranch, getSessionId: () => sessionId, taskDepth: 0 } as never,
 	{ getAvailable: () => [fableModel], hasProvider: () => true } as never,
 	undefined,
 	{ getModelRole: (role: string) => (role === "audit" ? "anthropic/claude-fable-5" : undefined), get: () => undefined, getStorage: () => undefined } as never,
@@ -70,9 +110,13 @@ const runner = new ExtensionRunner(
 );
 runner.initialize(
 	{
-		appendEntry: () => {},
+		appendEntry,
 		getSessionId: () => sessionId,
-		deliverMessage: async () => {},
+		// Faithful to AgentSession.queueExtensionDelivery (OMP-97): the promise
+		// settles only after the current turn yields - i.e. after the tool
+		// handler returns. Awaiting it INSIDE a tool handler deadlocks; execute()
+		// flushes the queue once the handler resolves.
+		deliverMessage: () => new Promise<void>(resolve => pendingTurnDeliveries.push(resolve)),
 		setModel: async () => true,
 		getThinkingLevel: () => "high",
 		setThinkingLevel: () => {},
@@ -100,15 +144,44 @@ runner.initialize(
 		},
 	} as never,
 );
+const tool = extension.tools.get("work");
+if (!tool) throw new Error("work tool missing");
 
 await runner.emit({ type: "session_start" } as never);
 const ctx = runner.createContext();
 const cmdCtx = runner.createCommandContext();
 
+const pendingTurnDeliveries: Array<() => void> = [];
+
 async function execute(params: Record<string, unknown>): Promise<string> {
 	modelTurnCount++;
-	const result = await tool.definition.execute("t", params, undefined, undefined, ctx);
-	return result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+	const toolDone = tool.definition.execute("t", params, undefined, undefined, ctx);
+	const timeout = setTimeout(() => {
+		throw new Error(`tool call deadlocked awaiting turn-yield delivery: ${JSON.stringify(params)}`);
+	}, 120_000);
+	try {
+		const result = await toolDone;
+		return result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+	} finally {
+		clearTimeout(timeout);
+		// Turn yields now: settle queued extension deliveries.
+		while (pendingTurnDeliveries.length) pendingTurnDeliveries.shift()!();
+	}
+}
+
+/** Drive the cross-turn review protocol: each "END YOUR TURN NOW" response
+ * queued a checkpoint delivery that settles when execute() flushes the turn;
+ * re-invoke until the review reaches a verdict, completion, or refusal. */
+async function reviewUntilSettled(body?: string): Promise<string> {
+	let last = "";
+	for (let turn = 0; turn < 8; turn++) {
+		last = await execute({ action: "begin_execution_review", ...(body ? { body } : {}) });
+		if (!last.includes("END YOUR TURN NOW")) return last;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		setTimeout(resolve, 50);
+		await promise;
+	}
+	throw new Error(`review never settled after 8 turns: ${last}`);
 }
 
 const out: Record<string, unknown> = {};
@@ -136,7 +209,7 @@ if (scenario === "dirty") {
 	// 2. seal_execution_criteria
 	const sealResult = await execute({
 		action: "seal_execution_criteria",
-		criteria: ["AC-1 deliver smoke feature"],
+		criteria: ["AC-1 guessed paraphrase"],
 	});
 	out.sealResult = sealResult;
 
@@ -162,10 +235,7 @@ if (scenario === "dirty") {
 	out.noBodyRefused = noBodyReview.includes("Verification evidence body is required");
 
 	// 5. Review with verification evidence (yields NEEDS_FIX)
-	const review1 = await execute({
-		action: "begin_execution_review",
-		body: "Ran test: expected true but got false (NEEDS_FIX)",
-	});
+	const review1 = await reviewUntilSettled("Ran test: expected true but got false (NEEDS_FIX)");
 	out.review1 = review1;
 
 	// 6. Remediate: fix code, restamp plan, re-review (yields PASS)
@@ -177,10 +247,7 @@ if (scenario === "dirty") {
 		paths: ["src/smoke_feat.ts"],
 	});
 
-	const review2 = await execute({
-		action: "begin_execution_review",
-		body: "Ran test: feat is true, all checks passed",
-	});
+	const review2 = await reviewUntilSettled("Ran test: feat is true, all checks passed");
 	out.review2 = review2;
 
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
@@ -206,7 +273,7 @@ if (scenario === "dirty") {
 	fs.writeFileSync(path.join(probe, "src/q1.ts"), "export const q1 = true;\n");
 	// Set subprocess count to 1 so review immediately PASSes
 	subprocessCount = 1;
-	const reviewQ1 = await execute({ action: "begin_execution_review", body: "test q1 passed" });
+	const reviewQ1 = await reviewUntilSettled("test q1 passed");
 	out.reviewQ1 = reviewQ1;
 
 	// Check that focus advanced to item 2
@@ -220,7 +287,7 @@ if (scenario === "dirty") {
 	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/q2.ts"] });
 	fs.writeFileSync(path.join(probe, "src/q2.ts"), "export const q2 = true;\n");
 	subprocessCount = 1;
-	const reviewQ2 = await execute({ action: "begin_execution_review", body: "test q2 passed" });
+	const reviewQ2 = await reviewUntilSettled("test q2 passed");
 	out.reviewQ2 = reviewQ2;
 
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
@@ -267,7 +334,7 @@ if (scenario === "dirty") {
 
 	// 4. Try to resume without approval -> must fail
 	await executeCmd.handler("resume", cmdCtx);
-	out.resumeDeniedNotices = uiCalls.filter(c => c.includes("Cannot resume: prospective contract digest"));
+	out.resumeDeniedNotices = uiCalls.filter(c => c.includes("Cannot resume:") && (c.includes("prospective digest") || c.includes("contract approval required")));
 
 	// 5. Simulate owner approval (write approval.json with prospective digest)
 	const contractCheck = checkProspectiveContract(probe);
@@ -284,6 +351,18 @@ if (scenario === "dirty") {
 	await executeCmd.handler("resume", cmdCtx);
 	out.resumedExecution = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
+} else if (scenario === "start-only") {
+	const executeCmd = extension.commands.get("execute");
+	if (!executeCmd) throw new Error("execute command missing");
+	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	out.exec = JSON.parse(await execute({ action: "get_execution" }));
+	out.uiCalls = uiCalls;
+} else if (scenario === "recovery") {
+	out.sentMessages = sentMessages;
+	out.modelTurnCount = modelTurnCount;
+	out.uiCalls = uiCalls;
+	try {
+		out.exec = JSON.parse(await execute({ action: "get_execution" }));
+	} catch {}
 }
-
 console.log(JSON.stringify(out, null, 2));
