@@ -1594,6 +1594,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 									}
 								}
 							}
+						} else {
+							try {
+								ctx.ui.notify(`Execution recovery skipped: ${preflight.reason}`, "warning");
+							} catch {}
 						}
 					}
 				} catch {}

@@ -1356,6 +1356,10 @@ try {
 	assert.equal((recoveryNullProj.sentMessages as unknown[])?.length, 0, "null-to-project drift sends zero turns");
 	assert.equal(recoveryNullProj.exec?.grant?.grant_version, nullProjStartOut.exec?.grant?.grant_version, "grant version unchanged on null-to-project drift");
 	assert.equal(recoveryNullProj.exec?.grant?.continuations_scheduled, nullProjStartOut.exec?.grant?.continuations_scheduled, "continuations_scheduled unchanged on null-to-project drift");
+	assert.ok(
+		(recoveryNullProj.uiCalls as string[])?.some(c => c.includes("project mismatch")),
+		"refusal reports project mismatch",
+	);
 	await cancelGrant(nullProjStartOut.exec?.grant?.grant_id, nullProjStartOut.exec?.grant?.grant_version, nullProjStartOut.exec?.grant?.judge_sha256);
 
 	// 5. Drift Probe: Blocker drift sends zero turns
@@ -1418,10 +1422,51 @@ try {
 	assert.equal((recoveryMissingYield.sentMessages as unknown[])?.length, 0, "missing yield-assembly sends zero turns");
 	await cancelGrant(yieldCase.startOut.exec?.grant?.grant_id, yieldCase.startOut.exec?.grant?.grant_version, yieldCase.startOut.exec?.grant?.judge_sha256);
 	// 7. Continuation Cap Exhaustion: Schedule up to max_continuations (8) then fresh-process recovery while active at cap triggers terminalization
-	const capCase = await createAndStartDisposableGrant("cap");
-	let grantVerCap = capCase.startOut.exec?.grant?.grant_version ?? 1;
-	let scheduledCap = capCase.startOut.exec?.grant?.continuations_scheduled ?? 0;
-	const capJudgeSha = capCase.startOut.exec?.grant?.judge_sha256;
+	const capBatch = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "create_work_batch",
+				payload: {
+					items: [
+						{
+							client_ref: "smoke-cap-item-1",
+							title: "Cap Item 1",
+							description: "Cap item 1 description",
+							scope: "surface",
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
+						{
+							client_ref: "smoke-cap-item-2",
+							title: "Cap Item 2",
+							description: "Cap item 2 description",
+							scope: "surface",
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
+					],
+				},
+			},
+		}),
+	})).json();
+	const capItem1 = capBatch.result.items[0];
+	const capItem2 = capBatch.result.items[1];
+	const capStartOut = runHarness("start-only", `${capItem1.key} --queue`);
+	assert.equal(capStartOut.exec?.grant?.state, "active", "queue grant started");
+	assert.ok(capStartOut.exec?.items?.length >= 2, "queue grant contains at least 2 items");
+	assert.equal(capStartOut.exec?.items?.find(i => i.work_id === capItem1.work_id)?.phase, "criteria_pending", "item 1 is criteria_pending");
+	assert.equal(capStartOut.exec?.items?.find(i => i.work_id === capItem2.work_id)?.phase, "pending", "item 2 is pending");
+
+	let grantVerCap = capStartOut.exec?.grant?.grant_version ?? 1;
+	let scheduledCap = capStartOut.exec?.grant?.continuations_scheduled ?? 0;
+	const capJudgeSha = capStartOut.exec?.grant?.judge_sha256;
 	while (scheduledCap < 8) {
 		const incRes = await (await fetch(`${baseUrl}/v1/commands`, {
 			method: "POST",
@@ -1435,7 +1480,7 @@ try {
 				command: {
 					type: "set_execution_state",
 					payload: {
-						grant_id: capCase.startOut.exec?.grant?.grant_id,
+						grant_id: capStartOut.exec?.grant?.grant_id,
 						target_state: "active",
 						expected_grant_version: grantVerCap,
 						judge_sha256: capJudgeSha,
@@ -1450,15 +1495,17 @@ try {
 	assert.equal(scheduledCap, 8, "continuations scheduled reached cap of 8");
 
 	// Recovery while active at the cap calls set_execution_state which atomically stops and cleans up
-	const recoveryCap = runHarness("recovery", capCase.item.key);
+	const recoveryCap = runHarness("recovery", capItem1.key);
 	assert.equal((recoveryCap.sentMessages as unknown[])?.length, 0, "recovery while active at cap sends zero turns");
 
 	assert.equal(recoveryCap.exec?.grant?.state, "stopped", "grant stopped on cap exhaustion during recovery");
 	assert.equal(recoveryCap.exec?.grant?.terminal_reason, "max_continuations_exceeded", "terminal reason recorded");
 	assert.ok(recoveryCap.exec?.grant?.stopped_at, "stopped_at is set on cap exhaustion");
-	const capActiveItem = recoveryCap.exec?.items?.find(i => i.work_id === capCase.item.work_id);
+	const capActiveItem = recoveryCap.exec?.items?.find(i => i.work_id === capItem1.work_id);
 	assert.equal(capActiveItem?.phase, "abandoned", "active item abandoned on cap exhaustion");
-	assert.ok(recoveryCap.exec?.items?.every(i => i.phase === "abandoned" || i.phase === "skipped" || i.phase === "completed"), "pending items skipped");
+	const capPendingItems = recoveryCap.exec?.items?.filter(i => i.work_id !== capItem1.work_id) ?? [];
+	assert.ok(capPendingItems.length > 0, "pending items present in queue grant");
+	assert.ok(capPendingItems.every(i => i.phase === "skipped" && i.terminal_reason === "grant_stopped"), "all pending items skipped on cap exhaustion with grant_stopped");
 	const capFocusRes = await (await fetch(`${baseUrl}/v1/workspaces/${WORKSPACE}/focus/${OWNER}`, { headers })).json();
 	assert.equal(capFocusRes.work_id, null, "focus slot is cleared on cap exhaustion");
 	// Test Scenario 8: Non-main branch push binding success & negative refusal
