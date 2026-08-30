@@ -3101,7 +3101,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 									payload: auditRun.payload,
 									failed: !auditRun.started || Boolean(auditRun.error && !auditRun.payload),
 								});
-								if (settle.verdict === "NEEDS_FIX") {
+								if (settle.verdict === "NEEDS_FIX" || settle.verdict === "BLOCKED") {
 									// Remediation is not delivery-gated: queue the settlement
 									// checkpoint and hand findings back in the same response.
 									if (settle.event?.requiresDelivery) {
@@ -3109,7 +3109,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 											pendingNotices.push(`[${TOOL_NAME}] checkpoint delivery failed (${notice})`);
 										});
 									}
-									return okText(`Audit verdict: NEEDS_FIX.\n\nFindings:\n${settle.event?.renderedText ?? ""}\n\nUpdate plan, stamp plan, fix findings, and rerun review.`);
+									const reportSuffix = auditRun.payload ? `\n\n## Auditor Report\n${auditRun.payload}` : "";
+									return okText(`Audit verdict: ${settle.verdict}.\n\nFindings:\n${settle.event?.renderedText ?? ""}${reportSuffix}\n\nUpdate plan, stamp plan, fix findings, and rerun review.`);
 								}
 								if (settle.verdict !== "PASS") {
 									if (settle.event?.requiresDelivery) {

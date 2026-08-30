@@ -30,7 +30,7 @@ const BLOCKED_REPORT = "VERDICT: BLOCKED\n\nFINDINGS\n- [blocker] AC-1 blocked o
 
 vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: any) => {
 	subprocessCount++;
-	const report = scenario === "blocked" ? BLOCKED_REPORT : (scenario === "judge-freeze" || scenario === "judge-resume") ? PASS_REPORT : subprocessCount === 1 ? NEEDS_FIX_REPORT : PASS_REPORT;
+	const report = (scenario === "judge-freeze" || scenario === "judge-resume") ? PASS_REPORT : subprocessCount === 1 ? (scenario === "blocked" ? BLOCKED_REPORT : NEEDS_FIX_REPORT) : PASS_REPORT;
 	const wrapped = JSON.stringify({ report });
 	return {
 		index: options.index,
@@ -450,6 +450,19 @@ if (scenario === "dirty") {
 	fs.writeFileSync(path.join(probe, "src/blocked_feat.ts"), "export const blocked = true;\n");
 	const reviewBlocked = await reviewUntilSettled("Ran test: blocked check");
 	out.reviewBlocked = reviewBlocked;
+
+	// Remediate after BLOCKED: fix code, restamp plan, re-review (yields PASS)
+	fs.writeFileSync(path.join(probe, "src/blocked_feat.ts"), "export const blocked = false;\n");
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Write feature\n2. Unblock feature\n\n## Verification\n1. Check feature\n");
+	out.stampResult2 = await execute({
+		action: "stamp_execution_plan",
+		plan_file: planFile,
+		paths: ["src/blocked_feat.ts"],
+	});
+
+	const reviewRemediated = await reviewUntilSettled("Ran test: blocker resolved, all checks passed");
+	out.reviewRemediated = reviewRemediated;
+
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
 	out.sentMessages = sentMessages;

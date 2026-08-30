@@ -3334,7 +3334,8 @@ def test_seal_preserves_existing_criteria_verbatim(service) -> None:
     assert result["item"]["criteria_sha256"] == sha256(existing)
 
 
-def test_execution_grant_no_progress_cap(service) -> None:
+@pytest.mark.parametrize("report_payload", [NEEDS_FIX_REPORT, BLOCKED_REPORT])
+def test_execution_grant_no_progress_cap(service, report_payload) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)
 
@@ -3412,7 +3413,7 @@ def test_execution_grant_no_progress_cap(service) -> None:
                 "candidate_id": cand_id,
                 "plan_file": "local://p.md",
                 "plan_body": "## Approach\n1. a\n\n## Verification\n1. v",
-                "plan_sha256": sha256("p"),
+                "plan_sha256": sha256("## Approach\n1. a\n\n## Verification\n1. v"),
                 "approach": ["1. a"],
                 "verification": ["1. v"],
                 "paths": ["a.ts"],
@@ -3514,7 +3515,7 @@ def test_execution_grant_no_progress_cap(service) -> None:
                 "payload": {
                     "attempt_id": att_id,
                     "launch_id": l_body["result"]["launch"]["launch_id"],
-                    "transport_payload": NEEDS_FIX_REPORT,
+                    "transport_payload": report_payload,
                 },
             },
         )
@@ -3525,6 +3526,513 @@ def test_execution_grant_no_progress_cap(service) -> None:
     assert resp.status_code == 200, resp.json()
     assert resp.json()["grant"]["state"] == "stopped"
     assert resp.json()["grant"]["terminal_reason"] == "max_no_progress_exceeded"
+
+
+def test_execution_grant_lifecycle_blocked_remediation(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+
+    item = _create(
+        service,
+        workspace_id,
+        "Build execution feature",
+        description="The request description",
+    )
+    work_id = item["work_id"]
+    rev_id = item["revision_id"]
+
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    head_commit = "0" * 40
+
+    provenance = {
+        "owner_input_id": str(uuid4()),
+        "owner_session_id": "session-1",
+        "normalized_command": "/execute OMP-1",
+        "workspace_id": str(workspace_id),
+        "repository": "oh-my-pi",
+        "nonce": str(uuid4()),
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": provenance,
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(work_id),
+                        "revision_id": str(rev_id),
+                        "position": 0,
+                        "original_request": "The request description",
+                        "original_request_sha256": text_sha256(
+                            "The request description"
+                        ),
+                        "initial_git_baseline": head_commit,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 200, body
+
+    # Seal criteria
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_execution_criteria",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 1,
+                "work_id": str(work_id),
+                "expected_revision_id": str(rev_id),
+                "criteria": ["AC-1: criteria one"],
+                "description_sha256": text_sha256("The request description"),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    new_rev_id = body["result"]["revision"]["revision_id"]
+
+    # Stamp plan 1
+    cand_1_id = str(uuid4())
+    plan_content_1 = "## Approach\n1. Step one\n\n## Verification\n1. Check one"
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 2,
+                "work_id": str(work_id),
+                "revision_id": str(new_rev_id),
+                "candidate_id": cand_1_id,
+                "plan_file": "local://execute-omp-1-plan.md",
+                "plan_body": plan_content_1,
+                "plan_sha256": sha256(plan_content_1),
+                "approach": ["1. Step one"],
+                "verification": ["1. Check one"],
+                "paths": ["src/feature.ts"],
+                "candidate_sha256": "1" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    plan_stamp_sha_1 = body["result"]["item"]["plan_stamp_sha256"]
+
+    # Finalize candidate 1
+    final_commit_1 = "1" * 40
+    final_cand_1_id = str(uuid4())
+    final_cand_1_sha = "2" * 64
+    _finalize(
+        service,
+        workspace_id,
+        {"work_id": work_id, "revision_id": new_rev_id},
+        cand_1_id,
+        commit=final_commit_1,
+        final_id=final_cand_1_id,
+        candidate_hash=final_cand_1_sha,
+    )
+
+    # Begin close attempt 1
+    att_1_id = str(uuid4())
+    status, begin_body_1 = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_close_attempt",
+            "payload": {
+                "work_id": str(work_id),
+                "attempt_id": att_1_id,
+                "authorization_ref": f"execution:{grant_id}:0:1",
+                "owner_session_id": "session-1",
+                "owner_session_started_at": datetime.now(timezone.utc).isoformat(),
+                "owner_session_start_commit": head_commit,
+                "repository": "oh-my-pi",
+                "diff_sha256": "3" * 64,
+                "starting_dirty_paths": [],
+                "authorization_kind": "execution",
+                "execution_grant_id": grant_id,
+                "candidate_tree_sha": final_cand_1_sha,
+                "original_request_sha256": text_sha256("The request description"),
+                "criteria_sha256": sha256(["AC-1: criteria one"]),
+                "plan_stamp_sha256": plan_stamp_sha_1,
+                "judge_sha256": judge_sha,
+                "riders": [],
+            },
+        },
+    )
+    assert status == 200, begin_body_1
+    begin_event_1 = begin_body_1["result"]["event"]
+
+    verif_receipt_1_id = str(uuid4())
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "append_evidence",
+            "payload": {
+                "receipt": {
+                    "receipt_id": verif_receipt_1_id,
+                    "work_id": str(work_id),
+                    "revision_id": str(new_rev_id),
+                    "candidate_id": str(final_cand_1_id),
+                    "kind": "verification",
+                    "payload": {"body": "tests 1"},
+                    "payload_sha256": sha256({"body": "tests 1"}),
+                    "issuer": "test",
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                    "candidate_sha256": final_cand_1_sha,
+                    "candidate_commit": final_commit_1,
+                },
+            },
+        },
+    )
+    assert status == 200, body
+
+    # Seal manifest 1
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_audit_manifest",
+            "payload": {
+                "attempt_id": att_1_id,
+                "verification_receipt_id": verif_receipt_1_id,
+            },
+        },
+    )
+    assert status == 200, body
+    task_sha_1 = body["result"]["manifest"]["task_sha256"]
+
+    # Reserve launch 1
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "reserve_auditor_launch",
+            "payload": {
+                "attempt_id": att_1_id,
+                "task_sha256": task_sha_1,
+                "tool_call_id": "call-1",
+            },
+        },
+    )
+    assert status == 200, body
+    launch_1_id = body["result"]["launch"]["launch_id"]
+
+    # Settle launch 1 with BLOCKED_REPORT
+    status, settle_body_1 = _command(
+        service,
+        workspace_id,
+        {
+            "type": "settle_auditor_launch",
+            "payload": {
+                "attempt_id": att_1_id,
+                "launch_id": launch_1_id,
+                "transport_payload": BLOCKED_REPORT,
+            },
+        },
+    )
+    assert status == 200, settle_body_1
+    assert settle_body_1["result"]["verdict"] == "BLOCKED"
+    settle_event_1 = settle_body_1["result"]["event"]
+
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": begin_event_1["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": begin_event_1["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": settle_event_1["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": settle_event_1["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
+
+    # Verify active execution grant and remediating phase
+    resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{grant_id}",
+        headers=_owner_headers(workspace_id),
+    )
+    assert resp.status_code == 200, resp.json()
+    exec_data = resp.json()
+    assert exec_data["grant"]["state"] == "active"
+    assert exec_data["items"][0]["phase"] == "remediating"
+    assert exec_data["items"][0]["consecutive_no_progress"] == 1
+
+    # Remediation: Stamp updated plan 2
+    cand_2_id = str(uuid4())
+    plan_content_2 = "## Approach\n1. Step one fixed\n\n## Verification\n1. Check one fixed"
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": str(work_id),
+                "revision_id": str(new_rev_id),
+                "candidate_id": cand_2_id,
+                "plan_file": "local://execute-omp-1-plan.md",
+                "plan_body": plan_content_2,
+                "plan_sha256": sha256(plan_content_2),
+                "approach": ["1. Step one fixed"],
+                "verification": ["1. Check one fixed"],
+                "paths": ["src/feature.ts"],
+                "candidate_sha256": "4" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["item"]["phase"] == "executing"
+    plan_stamp_sha_2 = body["result"]["item"]["plan_stamp_sha256"]
+
+    # Finalize candidate 2 & Push receipt
+    final_commit_2 = "5" * 40
+    final_cand_2_id = str(uuid4())
+    final_cand_2_sha = "6" * 64
+    _finalize(
+        service,
+        workspace_id,
+        {"work_id": work_id, "revision_id": new_rev_id},
+        cand_2_id,
+        commit=final_commit_2,
+        final_id=final_cand_2_id,
+        candidate_hash=final_cand_2_sha,
+    )
+
+    push_receipt_2_id = str(uuid4())
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "append_evidence",
+            "payload": {
+                "receipt": {
+                    "receipt_id": push_receipt_2_id,
+                    "work_id": str(work_id),
+                    "revision_id": str(new_rev_id),
+                    "candidate_id": str(final_cand_2_id),
+                    "kind": "push",
+                    "payload": {
+                        "repository": "oh-my-pi",
+                        "remote_url": "git@github.com:owner/oh-my-pi.git",
+                        "remote_ref": "refs/heads/main",
+                        "prior_tip": final_commit_1,
+                        "candidate_commit": final_commit_2,
+                        "result_tip": final_commit_2,
+                    },
+                    "payload_sha256": sha256(
+                        {
+                            "repository": "oh-my-pi",
+                            "remote_url": "git@github.com:owner/oh-my-pi.git",
+                            "remote_ref": "refs/heads/main",
+                            "prior_tip": final_commit_1,
+                            "candidate_commit": final_commit_2,
+                            "result_tip": final_commit_2,
+                        }
+                    ),
+                    "issuer": "test",
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                    "candidate_sha256": final_cand_2_sha,
+                    "candidate_commit": final_commit_2,
+                    "remote_ref": "refs/heads/main",
+                    "remote_commit": final_commit_2,
+                },
+            },
+        },
+    )
+    assert status == 200, body
+
+    # Close attempt 2
+    att_2_id = str(uuid4())
+    status, begin_body_2 = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_close_attempt",
+            "payload": {
+                "work_id": str(work_id),
+                "attempt_id": att_2_id,
+                "authorization_ref": f"execution:{grant_id}:0:2",
+                "owner_session_id": "session-1",
+                "owner_session_started_at": datetime.now(timezone.utc).isoformat(),
+                "owner_session_start_commit": final_commit_1,
+                "repository": "oh-my-pi",
+                "diff_sha256": "7" * 64,
+                "starting_dirty_paths": [],
+                "authorization_kind": "execution",
+                "execution_grant_id": grant_id,
+                "candidate_tree_sha": final_cand_2_sha,
+                "original_request_sha256": text_sha256("The request description"),
+                "criteria_sha256": sha256(["AC-1: criteria one"]),
+                "plan_stamp_sha256": plan_stamp_sha_2,
+                "judge_sha256": judge_sha,
+                "riders": [],
+            },
+        },
+    )
+    assert status == 200, begin_body_2
+    begin_event_2 = begin_body_2["result"]["event"]
+
+    verif_receipt_2_id = str(uuid4())
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "append_evidence",
+            "payload": {
+                "receipt": {
+                    "receipt_id": verif_receipt_2_id,
+                    "work_id": str(work_id),
+                    "revision_id": str(new_rev_id),
+                    "candidate_id": str(final_cand_2_id),
+                    "kind": "verification",
+                    "payload": {"body": "tests 2 passed"},
+                    "payload_sha256": sha256({"body": "tests 2 passed"}),
+                    "issuer": "test",
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                    "candidate_sha256": final_cand_2_sha,
+                    "candidate_commit": final_commit_2,
+                },
+            },
+        },
+    )
+    assert status == 200, body
+
+    # Seal manifest 2
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_audit_manifest",
+            "payload": {
+                "attempt_id": att_2_id,
+                "verification_receipt_id": verif_receipt_2_id,
+            },
+        },
+    )
+    assert status == 200, body
+    task_sha_2 = body["result"]["manifest"]["task_sha256"]
+
+    # Launch 2 and PASS
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "reserve_auditor_launch",
+            "payload": {
+                "attempt_id": att_2_id,
+                "task_sha256": task_sha_2,
+                "tool_call_id": "call-2",
+            },
+        },
+    )
+    assert status == 200, body
+    launch_2_id = body["result"]["launch"]["launch_id"]
+
+    status, settle_body_2 = _command(
+        service,
+        workspace_id,
+        {
+            "type": "settle_auditor_launch",
+            "payload": {
+                "attempt_id": att_2_id,
+                "launch_id": launch_2_id,
+                "transport_payload": PASS_REPORT,
+            },
+        },
+    )
+    assert status == 200, settle_body_2
+    assert settle_body_2["result"]["verdict"] == "PASS"
+    settle_event_2 = settle_body_2["result"]["event"]
+
+    # Verify phase is reviewing
+    resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{grant_id}",
+        headers=_owner_headers(workspace_id),
+    )
+    assert resp.status_code == 200, resp.json()
+    assert resp.json()["items"][0]["phase"] == "reviewing"
+    assert resp.json()["items"][0]["consecutive_no_progress"] == 0
+
+    # Attest deliveries before completion
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": begin_event_2["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": begin_event_2["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": settle_event_2["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": settle_event_2["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
+
+    # Complete execution item
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 4,
+                "work_id": str(work_id),
+                "attempt_id": att_2_id,
+                "push_receipt_id": push_receipt_2_id,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["state"] == "DONE"
+    assert body["result"]["grant"]["state"] == "completed"
 
 
 def test_execution_grant_continuation_cap(service) -> None:

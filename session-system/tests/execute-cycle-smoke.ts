@@ -1953,7 +1953,7 @@ try {
 	assert.ok(String((freezeOut.res3 as any)?.reason).includes("execution freeze secret detected"), "secret detected reason cited");
 	assert.equal(freezeOut.headUnchanged, true, "no candidate commit created on freeze refusals");
 
-	// Test Scenario 10: BLOCKED Audit Verdict Stops Execution Grant (AC-5)
+	// Test Scenario 10: BLOCKED Audit Verdict Autonomous Remediation (OMP-184)
 	fs.rmSync(path.join(probe, "python"), { recursive: true, force: true });
 	fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
 	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
@@ -1989,17 +1989,19 @@ try {
 	const blockedItem = blockedItemRes.result.items[0];
 
 	const blockedOut = runHarness("blocked", blockedItem.key);
-	assert.equal(blockedOut.finalExecution?.grant?.state, "stopped", "execution grant stopped on BLOCKED audit verdict");
-	assert.equal(blockedOut.finalExecution?.grant?.terminal_reason, "auditor_blocked", "terminal reason is auditor_blocked");
-	const blockedActiveItem = blockedOut.finalExecution?.items?.find((i: any) => i.work_id === blockedItem.work_id);
-	assert.equal(blockedActiveItem?.phase, "abandoned", "item abandoned on BLOCKED audit verdict");
-	assert.equal(blockedActiveItem?.terminal_reason, "auditor_blocked", "item terminal reason is auditor_blocked");
+	assert.ok(blockedOut.reviewBlocked.includes("Audit verdict: BLOCKED"), "first review returned BLOCKED verdict");
+	assert.ok(blockedOut.reviewBlocked.includes("blocked on external dependency"), "rendered blocker finding returned in review response");
+	assert.ok(blockedOut.reviewBlocked.includes("verdict_blocked"), "settlement event rendered in review response");
+	assert.equal(blockedOut.finalExecution?.grant?.state, "completed", "execution grant completed after remediation");
+	const blockedActiveItem = blockedOut.finalExecution?.items?.find((i: { work_id?: string; phase?: string }) => i.work_id === blockedItem.work_id);
+	assert.equal(blockedActiveItem?.phase, "completed", "item completed after remediation");
 
 	const blockedView = (await (await fetch(`${baseUrl}/v1/work-items/${blockedItem.key}/workflow`, { headers })).json()) as {
 		item: { state: string };
 		receipts: { kind: string }[];
 	};
-	assert.equal(blockedView.receipts.some(r => r.kind === "closeout"), false, "no closeout receipt recorded on BLOCKED verdict");
+	assert.equal(blockedView.item.state, "DONE", "work item state is DONE");
+	assert.equal(blockedView.receipts.some(r => r.kind === "closeout"), true, "closeout receipt recorded after remediation");
 
 	// Test Scenario 11: Concurrent /execute Refusal on Active Grant (AC-7)
 	const activeCase = await createAndStartDisposableGrant("concurrent-active");

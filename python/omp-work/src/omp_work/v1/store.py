@@ -2471,7 +2471,7 @@ class PostgresWorkStore:
                         "UPDATE omp_work.execution_grant_items SET phase='reviewing', consecutive_no_progress=0 WHERE workspace_id=%s AND grant_id=%s AND work_id=%s",
                         (envelope.workspace_id, attempt["execution_grant_id"], attempt["work_id"]),
                     )
-            elif verdict == "NEEDS_FIX":
+            elif verdict in ("NEEDS_FIX", "BLOCKED"):
                 findings_hash = _extract_findings_hash(report)
                 consecutive = (
                     int(grant_item["consecutive_no_progress"]) if grant_item else 0
@@ -2554,7 +2554,7 @@ class PostgresWorkStore:
         launches, reports = self._budget(attempt)
 
         if attempt.get("execution_grant_id") is not None and grant is not None:
-            if verdict == "NEEDS_FIX":
+            if verdict in ("NEEDS_FIX", "BLOCKED"):
                 if consecutive >= int(grant.get("max_no_progress", 3)):
                     self._terminalize_execution_grant(
                         cur, envelope, grant, "stopped", "max_no_progress_exceeded", now
@@ -2565,10 +2565,6 @@ class PostgresWorkStore:
                     self._terminalize_execution_grant(
                         cur, envelope, grant, "stopped", "max_close_attempts_exceeded", now
                     )
-            elif verdict == "BLOCKED":
-                self._terminalize_execution_grant(
-                    cur, envelope, grant, "stopped", "auditor_blocked", now
-                )
         next_actions = {
             "PASS": ("record the closeout review", "owner /done closes"),
             "NEEDS_FIX": (

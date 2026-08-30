@@ -16,7 +16,7 @@ Follow this deterministic sequence without skipping steps or asking for manual c
    - Edit only within the sealed path set.
    - Run focused checks and reproduction commands to verify each step.
    - Call `work action:"begin_execution_review", body:"<exact test commands and reproduction results>"` to freeze candidate, record verification evidence, push remote commit, seal audit manifest, run native audit, and auto-complete on PASS.
-5. **Remediation:** If audit reported `NEEDS_FIX`:
+5. **Remediation:** If audit reported `NEEDS_FIX` or `BLOCKED`:
    - The phase will be `remediating`.
    - Update plan at `local://execute-<lowercase-key>-plan.md` addressing only the named findings.
    - Call `work action:"stamp_execution_plan"` with the plan file and paths before making fixes.
