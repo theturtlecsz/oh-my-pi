@@ -282,9 +282,13 @@ try {
 	assert.ok(item1View.receipts.some(r => r.kind === "closeout"), "closeout receipt exists");
 	const auditReceipt = item1View.receipts.find(r => r.kind === "audit");
 	assert.ok(auditReceipt, "audit receipt exists");
+	const expectedCriteriaSha = (singleOut.finalExecution as any)?.items?.[0]?.criteria_sha256;
+	const actualCriteriaSha = (auditReceipt.payload as any)?.criteria_sha256;
+	assert.ok(typeof expectedCriteriaSha === "string" && /^[0-9a-f]{64}$/.test(expectedCriteriaSha), "execution item has valid criteria_sha256");
+	assert.ok(typeof actualCriteriaSha === "string" && /^[0-9a-f]{64}$/.test(actualCriteriaSha), "audit receipt payload has valid criteria_sha256");
 	assert.equal(
-		(auditReceipt.payload as any)?.criteria_sha256,
-		(singleOut.finalExecution as any)?.items?.[0]?.criteria_sha256,
+		actualCriteriaSha,
+		expectedCriteriaSha,
 		"audit receipt payload binds criteria_sha256",
 	);
 	assert.ok(item1View.receipts.some(r => r.kind === "push"), "push receipt exists");
@@ -2038,7 +2042,10 @@ try {
 	})).json();
 
 	assert.equal(concurrentRes.error?.code, "idempotency_conflict", "concurrent begin_execution returns idempotency_conflict");
-	assert.ok(concurrentRes.error?.diagnostics?.[0]?.includes("active execution grant already exists"), "diagnostics cite active grant exists");
+	assert.ok(
+		concurrentRes.error?.diagnostics?.[0]?.includes(`active execution grant already exists: ${activeGrantId}`),
+		"diagnostics cite active grant exists with exact grant ID",
+	);
 
 	const curActiveView = await (await fetch(`${baseUrl}/v1/workspaces/${WORKSPACE}/execution/${activeGrantId}`, { headers })).json();
 	assert.equal(curActiveView.grant?.grant_id, activeGrantId, "original grant ID preserved");
@@ -2227,6 +2234,7 @@ try {
 	const judgeCandidateTree = git(probe, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]);
 	assert.ok(judgeCandidateTree.includes("session-system/agents/auditor.md"), "candidate commit includes modified auditor.md");
 	assert.ok(judgeCandidateTree.includes("session-system/extensions/workflow/audit-tcb.ts"), "candidate commit includes modified audit-tcb.ts");
+	assert.ok(judgeCandidateTree.includes("packages/coding-agent/src/task/executor.ts"), "candidate commit includes modified executor.ts");
 	fs.rmSync(path.join(probe, "session-system"), { recursive: true, force: true });
 	fs.rmSync(path.join(probe, "packages"), { recursive: true, force: true });
 	fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });

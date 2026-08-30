@@ -3629,7 +3629,8 @@ class PostgresWorkStore:
         existing = cur.fetchone()
         if existing is not None:
             raise WorkStoreError(
-                "idempotency_conflict", ("active execution grant already exists",)
+                "idempotency_conflict",
+                (f"active execution grant already exists: {existing['grant_id']}",),
             )
         if payload.provenance.workspace_id != envelope.workspace_id:
             raise WorkStoreError("invalid_request", ("provenance workspace mismatch",))
