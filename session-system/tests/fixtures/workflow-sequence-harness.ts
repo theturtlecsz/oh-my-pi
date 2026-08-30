@@ -1452,6 +1452,9 @@ if (mode === "intake") {
 	out.noAttemptGetWork = await execute({ action: "get_work", work: "HOME-1" });
 	await approve(planA);
 	await enterSummary();
+	// OMP-168 remediation: a foreign/nonexistent explicit target must not
+	// suppress HOME-1's live NOW recovery banner on the typed refusal.
+	out.foreignWorkRefusal = await execute({ action: "run_audit", work: "HOME-404" });
 	out.activeGetWork = await execute({ action: "get_work", work: "HOME-1" });
 	await execute({ action: "append_evidence", work: "HOME-1", kind: "verification", body: "bun test → pass" });
 	out.auditReadyGetWork = await execute({ action: "get_work", work: "HOME-1" });

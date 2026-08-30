@@ -2374,16 +2374,23 @@ export function createWorkflowHost(cfg: HostConfig) {
 				const deny = async (msg: string) => {
 					let text = msg;
 					if (!msg.startsWith("CONFIRM REQUIRED")) {
-						const workTarget = params.work || currentNowRef()?.key;
-						if (workTarget) {
+						// OMP-168 remediation: live NOW guidance first, explicit target
+						// second — a foreign/nonexistent params.work must not suppress
+						// the current NOW item's recovery banner.
+						const nowKey = currentNowRef()?.key;
+						const targets: string[] = [];
+						if (nowKey) targets.push(nowKey);
+						if (params.work && params.work !== nowKey) targets.push(params.work);
+						for (const workTarget of targets) {
 							try {
 								const detail = await backend.issueDetail(workTarget);
 								const banner = renderNextActionBanner(workTarget, detail.attemptSnapshot, summaryAuthorized);
 								if (banner.length > 0) {
 									text = `${banner.join("\n")}\n\n${msg}`;
+									break;
 								}
 							} catch {
-								// degrade to original refusal
+								// unreadable target — try the next, else keep original refusal
 							}
 						}
 					}

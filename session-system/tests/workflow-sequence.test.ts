@@ -535,6 +535,13 @@ describe("HOME-122 workflow sequence", () => {
 		expect((String(out.activeGetWork).match(/NEXT REQUIRED ACTION:/g) || []).length).toBe(1);
 		expect(String(out.activeGetWork)).toContain('NEXT REQUIRED ACTION: work action:"append_evidence", work:"HOME-1", kind:"verification"');
 		expect(String(out.activeGetWork)).toContain('BLOCKED ACTIONS: run_audit, append_evidence kind:"closeout", /done');
+		// OMP-168 remediation: a foreign/nonexistent explicit target must not
+		// suppress or redirect HOME-1's live NOW recovery banner on the refusal.
+		expect(String(out.foreignWorkRefusal).indexOf("STATUS: CLOSE ATTEMPT active")).toBe(0);
+		expect((String(out.foreignWorkRefusal).match(/NEXT REQUIRED ACTION:/g) || []).length).toBe(1);
+		expect(String(out.foreignWorkRefusal)).toContain('NEXT REQUIRED ACTION: work action:"append_evidence", work:"HOME-1", kind:"verification"');
+		expect(String(out.foreignWorkRefusal)).toContain('BLOCKED ACTIONS: run_audit, append_evidence kind:"closeout", /done');
+		expect(String(out.foreignWorkRefusal)).toContain('REFUSED — named work item "HOME-404" must be current NOW ("HOME-1").');
 		expect(String(out.auditReadyGetWork).indexOf("STATUS: CLOSE ATTEMPT audit_ready")).toBe(0);
 		expect((String(out.auditReadyGetWork).match(/NEXT REQUIRED ACTION:/g) || []).length).toBe(1);
 		expect(String(out.auditReadyGetWork)).toContain('NEXT REQUIRED ACTION: work action:"run_audit", work:"HOME-1"');
