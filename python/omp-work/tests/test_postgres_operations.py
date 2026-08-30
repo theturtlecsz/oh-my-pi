@@ -700,6 +700,24 @@ def test_ledger_immutability_and_role_privilege_enforcement(config: OperationsCo
                     " VALUES (%s, %s, 'OMP-100', 'local')",
                     (work_id, workspace_id),
                 )
+                attempt_id = uuid4()
+                cursor.execute(
+                    "INSERT INTO omp_work.close_attempts(attempt_id, workspace_id, work_id, revision_id, candidate_id, plan_receipt_id, candidate_sha256, candidate_commit, owner_session_id, owner_session_started_at, owner_session_start_commit, repository, diff_sha256, starting_dirty_paths, authorization_kind, authorization_ref, state)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 's1', %s, %s, 'oh-my-pi', %s, ARRAY[]::text[], 'summary', 'token-1', 'active')",
+                    (attempt_id, workspace_id, work_id, revision_id, candidate_id, receipt_id, "a" * 64, "b" * 40, now, "b" * 40, "e" * 64),
+                )
+                verif_receipt_id = uuid4()
+                cursor.execute(
+                    "INSERT INTO omp_evidence.receipts(receipt_id, workspace_id, work_id, revision_id, candidate_id, kind, payload, payload_sha256, artifact_sha256, issuer, issued_at)"
+                    " VALUES (%s, %s, %s, %s, %s, 'verification', '{}', %s, %s, 'test', %s)",
+                    (verif_receipt_id, workspace_id, work_id, revision_id, candidate_id, "1" * 64, "2" * 64, now),
+                )
+                manifest_id = uuid4()
+                cursor.execute(
+                    "INSERT INTO omp_work.audit_manifests(manifest_id, workspace_id, work_id, attempt_id, manifest_version, plan_receipt_id, verification_receipt_id, candidate_id, candidate_sha256, candidate_commit, task_body, task_sha256, section_hashes, created_at)"
+                    " VALUES (%s, %s, %s, %s, 1, %s, %s, %s, %s, %s, 'task body', %s, '{}'::jsonb, %s)",
+                    (manifest_id, workspace_id, work_id, attempt_id, receipt_id, verif_receipt_id, candidate_id, "a" * 64, "b" * 40, "a" * 64, now),
+                )
                 event_id = uuid4()
                 cursor.execute(
                     "INSERT INTO omp_audit.domain_events(event_id, workspace_id, aggregate_type, aggregate_id, aggregate_version, actor_id, actor_kind, capability_id, request_id, correlation_id, causation_id, operation_id, event_type, outcome, payload, payload_sha256, previous_event_sha256, event_sha256, occurred_at)"
@@ -714,6 +732,8 @@ def test_ledger_immutability_and_role_privilege_enforcement(config: OperationsCo
             ("omp_work.acceptance_criteria", f"revision_id = '{revision_id}' AND position = 0"),
             ("omp_work.work_revisions", f"revision_id = '{revision_id}'"),
             ("omp_work.work_aliases", f"work_id = '{work_id}'"),
+            ("omp_work.close_attempts", f"attempt_id = '{attempt_id}'"),
+            ("omp_work.audit_manifests", f"manifest_id = '{manifest_id}'"),
             ("omp_audit.domain_events", f"event_id = '{event_id}'"),
         ]:
             with psycopg.connect(**postgres_kwargs) as connection:
