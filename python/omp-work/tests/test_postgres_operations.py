@@ -646,3 +646,124 @@ def test_execution_grant_triggers_enforce_immutability_and_monotonicity(config: 
                             " VALUES (%s, %s, %s, 'oh-my-pi', %s, 'single', 8, 3, 3, %s, '{}'::jsonb, %s, '{}'::jsonb, 0, %s, %s + interval '7 days', 'active')",
                             (bad_grant_id, workspace_id, actor_id, bad_ref, "a" * 64, "b" * 64, now, now),
                         )
+
+
+def test_ledger_immutability_and_role_privilege_enforcement(config: OperationsConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("omp_work.operations.database.validate_bundle", lambda **kw: None)
+    with native_postgres(config.state_dir, config.port):
+        bootstrap(config)
+        workspace_id = uuid4()
+        actor_id = config.actor_id()
+        seed_authority(config.connection_kwargs("postgres"), workspace_id, actor_id)
+        with psycopg.connect(**config.connection_kwargs("postgres")) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                cursor.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)", (workspace_id,))
+
+        work_id = uuid4()
+        revision_id = uuid4()
+        candidate_id = uuid4()
+        receipt_id = uuid4()
+        criterion_id = uuid4()
+        now = datetime.now(timezone.utc)
+        app_kwargs = config.connection_kwargs("omp_work_app")
+        readonly_kwargs = config.connection_kwargs("omp_work_readonly")
+        importer_kwargs = config.connection_kwargs("omp_work_importer")
+        postgres_kwargs = config.connection_kwargs("postgres")
+
+        # 1. Populate valid ledger items via app role
+        with psycopg.connect(**app_kwargs) as connection:
+            with connection.transaction(), connection.cursor() as cursor:
+                cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                cursor.execute("INSERT INTO omp_work.work_items(work_id, workspace_id, state) VALUES (%s, %s, 'OPEN')", (work_id, workspace_id))
+                cursor.execute(
+                    "INSERT INTO omp_work.work_revisions(revision_id, work_id, workspace_id, revision_number, title, description, scope, content_sha256, created_by, supplied_at)"
+                    " VALUES (%s, %s, %s, 1, 'T', 'D', 'S', %s, 'test', %s)",
+                    (revision_id, work_id, workspace_id, "0" * 64, now),
+                )
+                cursor.execute(
+                    "INSERT INTO omp_work.acceptance_criteria(revision_id, workspace_id, position, criterion)"
+                    " VALUES (%s, %s, 0, 'Criterion 1')",
+                    (revision_id, workspace_id),
+                )
+                cursor.execute(
+                    "INSERT INTO omp_work.candidates(candidate_id, workspace_id, work_id, revision_id, candidate_sha256, commit_sha, allocated_at)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (candidate_id, workspace_id, work_id, revision_id, "a" * 64, "b" * 40, now),
+                )
+                cursor.execute(
+                    "INSERT INTO omp_evidence.receipts(receipt_id, workspace_id, work_id, revision_id, candidate_id, kind, payload, payload_sha256, artifact_sha256, issuer, issued_at)"
+                    " VALUES (%s, %s, %s, %s, %s, 'plan', '{}', %s, %s, 'test', %s)",
+                    (receipt_id, workspace_id, work_id, revision_id, candidate_id, "c" * 64, "d" * 64, now),
+                )
+                cursor.execute(
+                    "INSERT INTO omp_work.work_aliases(work_id, workspace_id, key, origin)"
+                    " VALUES (%s, %s, 'OMP-100', 'local')",
+                    (work_id, workspace_id),
+                )
+                event_id = uuid4()
+                cursor.execute(
+                    "INSERT INTO omp_audit.domain_events(event_id, workspace_id, aggregate_type, aggregate_id, aggregate_version, actor_id, actor_kind, capability_id, request_id, correlation_id, causation_id, operation_id, event_type, outcome, payload, payload_sha256, previous_event_sha256, event_sha256, occurred_at)"
+                    " VALUES (%s, %s, 'work_item', %s, 1, %s, 'owner', %s, %s, %s, %s, %s, 'work_created', 'success', '{}'::jsonb, %s, NULL, %s, %s)",
+                    (event_id, workspace_id, work_id, actor_id, uuid4(), uuid4(), uuid4(), uuid4(), uuid4(), "e" * 64, "f" * 64, now),
+                )
+
+        # 2. Trigger enforcement: direct UPDATE and DELETE rejected as immutable
+        for table, where in [
+            ("omp_work.candidates", f"candidate_id = '{candidate_id}'"),
+            ("omp_evidence.receipts", f"receipt_id = '{receipt_id}'"),
+            ("omp_work.acceptance_criteria", f"revision_id = '{revision_id}' AND position = 0"),
+            ("omp_work.work_revisions", f"revision_id = '{revision_id}'"),
+            ("omp_work.work_aliases", f"work_id = '{work_id}'"),
+            ("omp_audit.domain_events", f"event_id = '{event_id}'"),
+        ]:
+            with psycopg.connect(**postgres_kwargs) as connection:
+                with pytest.raises(psycopg.Error, match="immutable"):
+                    with connection.transaction(), connection.cursor() as cursor:
+                        cursor.execute(f"UPDATE {table} SET workspace_id = '{uuid4()}' WHERE {where}")
+                with pytest.raises(psycopg.Error, match="immutable"):
+                    with connection.transaction(), connection.cursor() as cursor:
+                        cursor.execute(f"DELETE FROM {table} WHERE {where}")
+
+        # 3. Role privilege enforcement: omp_work_app cannot DELETE or TRUNCATE
+        with psycopg.connect(**app_kwargs) as connection:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("DELETE FROM omp_work.candidates")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("DELETE FROM omp_evidence.receipts")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("TRUNCATE TABLE omp_work.work_items")
+
+        # 4. Role privilege enforcement: omp_work_readonly cannot INSERT or UPDATE
+        with psycopg.connect(**readonly_kwargs) as connection:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("INSERT INTO omp_work.work_items(work_id, workspace_id, state) VALUES (%s, %s, 'OPEN')", (uuid4(), workspace_id))
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("UPDATE omp_work.work_items SET state = 'CLOSED'")
+
+        # 5. Role privilege enforcement: omp_work_importer cannot INSERT into candidates or receipts
+        with psycopg.connect(**importer_kwargs) as connection:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("INSERT INTO omp_work.candidates(candidate_id, workspace_id, work_id, revision_id, candidate_sha256, commit_sha, allocated_at) VALUES (%s, %s, %s, %s, %s, %s, %s)", (uuid4(), workspace_id, work_id, revision_id, "0" * 64, "0" * 40, now))
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("INSERT INTO omp_evidence.receipts(receipt_id, workspace_id, work_id, revision_id, candidate_id, kind, payload, payload_sha256, issuer, issued_at) VALUES (%s, %s, %s, %s, %s, 'plan', '{}', %s, 'test', %s)", (uuid4(), workspace_id, work_id, revision_id, candidate_id, "0" * 64, now))
+
+        # 6. Provenance immutability trigger enforcement
+        with psycopg.connect(**app_kwargs) as connection:
+            with pytest.raises(psycopg.Error, match="provenance is immutable"):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("UPDATE omp_work.work_items SET provenance = '{\"tampered\": true}'::jsonb WHERE work_id = %s", (work_id,))
