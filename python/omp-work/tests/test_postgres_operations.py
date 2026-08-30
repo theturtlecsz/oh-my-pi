@@ -700,6 +700,36 @@ def test_ledger_immutability_and_role_privilege_enforcement(config: OperationsCo
                     " VALUES (%s, %s, 'OMP-100', 'local')",
                     (work_id, workspace_id),
                 )
+                repo_id = uuid4()
+                cursor.execute(
+                    "INSERT INTO omp_work.repositories(repository_id, workspace_id, key, name, url)"
+                    " VALUES (%s, %s, 'test-repo', 'Test Repo', 'https://example.com')",
+                    (repo_id, workspace_id),
+                )
+                principal_id = uuid4()
+                cursor.execute(
+                    "INSERT INTO omp_work.principals(principal_id, workspace_id, name, display_name)"
+                    " VALUES (%s, %s, 'test-principal', 'Test Principal')",
+                    (principal_id, workspace_id),
+                )
+                state_id = uuid4()
+                cursor.execute(
+                    "INSERT INTO omp_work.workflow_states(workflow_state_id, workspace_id, name, state_type, position)"
+                    " VALUES (%s, %s, 'Backlog', 'unstarted', 1)",
+                    (state_id, workspace_id),
+                )
+                project_id = uuid4()
+                cursor.execute(
+                    "INSERT INTO omp_work.projects(project_id, workspace_id, name, kind)"
+                    " VALUES (%s, %s, 'Test Project', 'surface')",
+                    (project_id, workspace_id),
+                )
+                label_id = uuid4()
+                cursor.execute(
+                    "INSERT INTO omp_work.labels(label_id, workspace_id, name)"
+                    " VALUES (%s, %s, 'test-label')",
+                    (label_id, workspace_id),
+                )
                 attempt_id = uuid4()
                 cursor.execute(
                     "INSERT INTO omp_work.close_attempts(attempt_id, workspace_id, work_id, revision_id, candidate_id, plan_receipt_id, candidate_sha256, candidate_commit, owner_session_id, owner_session_started_at, owner_session_start_commit, repository, diff_sha256, starting_dirty_paths, authorization_kind, authorization_ref, state)"
@@ -744,7 +774,28 @@ def test_ledger_immutability_and_role_privilege_enforcement(config: OperationsCo
                     with connection.transaction(), connection.cursor() as cursor:
                         cursor.execute(f"DELETE FROM {table} WHERE {where}")
 
-        # 3. Role privilege enforcement: omp_work_app cannot DELETE or TRUNCATE
+        # 3. Catalog-backed privilege assertions: omp_work_app, omp_work_readonly, omp_work_importer lack DELETE and TRUNCATE across all tables in omp_work and omp_evidence
+        with psycopg.connect(**postgres_kwargs) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT schemaname, tablename
+                    FROM pg_tables
+                    WHERE schemaname IN ('omp_work', 'omp_evidence')
+                """)
+                tables = cursor.fetchall()
+                assert len(tables) > 0, "Expected tables in omp_work and omp_evidence"
+                for schema, table in tables:
+                    full_table = f"{schema}.{table}"
+                    for role in ("omp_work_app", "omp_work_readonly", "omp_work_importer"):
+                        for priv in ("DELETE", "TRUNCATE"):
+                            cursor.execute(
+                                "SELECT has_table_privilege(%s, %s, %s)",
+                                (role, full_table, priv),
+                            )
+                            has_priv = cursor.fetchone()[0]
+                            assert not has_priv, f"Role {role} unexpectedly has {priv} privilege on {full_table}"
+
+        # 4. Role privilege statement-level checks: omp_work_app cannot DELETE or TRUNCATE
         with psycopg.connect(**app_kwargs) as connection:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 with connection.transaction(), connection.cursor() as cursor:
@@ -759,7 +810,7 @@ def test_ledger_immutability_and_role_privilege_enforcement(config: OperationsCo
                     cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
                     cursor.execute("TRUNCATE TABLE omp_work.work_items")
 
-        # 4. Role privilege enforcement: omp_work_readonly cannot INSERT or UPDATE
+        # 5. Role privilege statement-level checks: omp_work_readonly cannot INSERT, UPDATE, DELETE, or TRUNCATE
         with psycopg.connect(**readonly_kwargs) as connection:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 with connection.transaction(), connection.cursor() as cursor:
@@ -769,8 +820,16 @@ def test_ledger_immutability_and_role_privilege_enforcement(config: OperationsCo
                 with connection.transaction(), connection.cursor() as cursor:
                     cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
                     cursor.execute("UPDATE omp_work.work_items SET state = 'CLOSED'")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("DELETE FROM omp_work.work_items")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("TRUNCATE TABLE omp_work.work_items")
 
-        # 5. Role privilege enforcement: omp_work_importer cannot INSERT into candidates or receipts
+        # 6. Role privilege statement-level checks: omp_work_importer cannot INSERT into candidates or receipts, nor DELETE or TRUNCATE
         with psycopg.connect(**importer_kwargs) as connection:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 with connection.transaction(), connection.cursor() as cursor:
@@ -780,10 +839,27 @@ def test_ledger_immutability_and_role_privilege_enforcement(config: OperationsCo
                 with connection.transaction(), connection.cursor() as cursor:
                     cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
                     cursor.execute("INSERT INTO omp_evidence.receipts(receipt_id, workspace_id, work_id, revision_id, candidate_id, kind, payload, payload_sha256, issuer, issued_at) VALUES (%s, %s, %s, %s, %s, 'plan', '{}', %s, 'test', %s)", (uuid4(), workspace_id, work_id, revision_id, candidate_id, "0" * 64, now))
-
-        # 6. Provenance immutability trigger enforcement
-        with psycopg.connect(**app_kwargs) as connection:
-            with pytest.raises(psycopg.Error, match="provenance is immutable"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 with connection.transaction(), connection.cursor() as cursor:
                     cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
-                    cursor.execute("UPDATE omp_work.work_items SET provenance = '{\"tampered\": true}'::jsonb WHERE work_id = %s", (work_id,))
+                    cursor.execute("DELETE FROM omp_work.candidates")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with connection.transaction(), connection.cursor() as cursor:
+                    cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                    cursor.execute("TRUNCATE TABLE omp_work.candidates")
+
+        # 7. Provenance immutability trigger enforcement across all provenance-bearing tables
+        provenance_targets = [
+            ("omp_work.work_items", f"work_id = '{work_id}'"),
+            ("omp_work.repositories", f"repository_id = '{repo_id}'"),
+            ("omp_work.principals", f"principal_id = '{principal_id}'"),
+            ("omp_work.workflow_states", f"workflow_state_id = '{state_id}'"),
+            ("omp_work.projects", f"project_id = '{project_id}'"),
+            ("omp_work.labels", f"label_id = '{label_id}'"),
+        ]
+        with psycopg.connect(**app_kwargs) as connection:
+            for table, where in provenance_targets:
+                with pytest.raises(psycopg.Error, match="provenance is immutable"):
+                    with connection.transaction(), connection.cursor() as cursor:
+                        cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                        cursor.execute(f"UPDATE {table} SET provenance = '{{\"tampered\": true}}'::jsonb WHERE {where}")
