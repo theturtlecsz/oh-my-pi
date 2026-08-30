@@ -2539,7 +2539,71 @@ try {
 	const postTamperAuditReceipts = postTamperView.receipts.filter(r => r.kind === "audit").length;
 	assert.equal(postTamperAuditReceipts, initialAuditReceipts, "audit receipt count unchanged after tamper attempts");
 
-	console.log("execute-cycle-smoke: PASS (clean preflight, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes)");
+	// Test Scenario: OMP-188 already-delivered baseline completion & audit-gate safety
+	const alreadyRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			operation_id: crypto.randomUUID(),
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			command: {
+				type: "create_work_batch",
+				payload: {
+					items: [
+						{
+							client_ref: "smoke-item-already-delivered",
+							title: "Smoke Already Delivered Feature",
+							description: "Feature already committed at the grant baseline",
+							scope: "smoke",
+							acceptance_criteria: [],
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
+						{
+							client_ref: "smoke-item-already-unmet",
+							title: "Smoke Already Unmet Feature",
+							description: "Feature claimed but never built",
+							scope: "smoke",
+							acceptance_criteria: [],
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
+					],
+				},
+			},
+		}),
+	})).json();
+	assert.equal(alreadyRes.receipt.state, "applied");
+	const itemAlready = alreadyRes.result.items[0];
+	const itemUnmet = alreadyRes.result.items[1];
+
+	const alreadyOut = runHarness("already-delivered", itemAlready.key);
+	assert.ok(
+		String(alreadyOut.review).includes("Execution grant completed") || String(alreadyOut.review).includes("delivered and closed"),
+		`already-delivered completes autonomously; got: ${alreadyOut.review}`,
+	);
+	assert.ok(
+		(alreadyOut.uiCalls as string[]).some(c => c.includes("binding baseline HEAD")),
+		"baseline-bind notice surfaced on the already-delivered freeze",
+	);
+	// harness JSON output — narrow one-off read of the grant projection
+	const alreadyExec = alreadyOut.finalExecution as { items?: { phase?: string }[] } | undefined;
+	assert.equal(alreadyExec?.items?.[0]?.phase, "completed", "already-delivered item phase is completed");
+	const alreadyView = (await (await fetch(`${baseUrl}/v1/work-items/${itemAlready.key}/workflow`, { headers })).json()) as { item: { state: string } };
+	assert.equal(alreadyView.item.state, "DONE", "already-delivered item closed DONE service-side");
+
+	const unmetOut = runHarness("already-unmet", itemUnmet.key);
+	assert.ok(String(unmetOut.review).includes("NEEDS_FIX"), `already-unmet audit yields NEEDS_FIX; got: ${unmetOut.review}`);
+	// harness JSON output — narrow one-off read of the grant projection
+	const unmetExec = unmetOut.execAfterReview as { activeItem?: { phase?: string } } | undefined;
+	assert.equal(unmetExec?.activeItem?.phase, "remediating", "empty-diff NEEDS_FIX lands in remediating, not completed");
+	const unmetView = (await (await fetch(`${baseUrl}/v1/work-items/${itemUnmet.key}/workflow`, { headers })).json()) as { item: { state: string } };
+	assert.notEqual(unmetView.item.state, "DONE", "unmet item is not closed by an empty diff");
+
+	console.log("execute-cycle-smoke: PASS (clean preflight, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety)");
 } finally {
 	cleanup();
 }

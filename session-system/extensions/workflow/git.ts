@@ -345,16 +345,24 @@ export async function freezeCandidateCommit(
 			}
 			const committable = all.filter(p => sealed.has(p));
 			if (committable.length === 0) {
-				// Check if current HEAD is already the candidate
 				const head = runGit(root, ["log", "-1", "--format=%H%x00%B"]);
 				const sep = head.ok ? head.out.indexOf("\x00") : -1;
 				const headSha = sep > 0 ? head.out.slice(0, sep) : "";
 				const headLines = sep > 0 ? head.out.slice(sep + 1).split("\n") : [];
-				if (headSha && headLines[0] === `session candidate: ${key}` && headLines.includes(`Work-Candidate: ${candidateId}`)) {
+				if (!headSha) return refuse("failed", "execution freeze refused: no HEAD commit to bind as candidate", "error");
+				// Re-freeze idempotency: current HEAD already is this candidate.
+				if (headLines[0] === `session candidate: ${key}` && headLines.includes(`Work-Candidate: ${candidateId}`)) {
 					const paths = committedPaths(root, headSha);
 					return { root, paths, commitSha: headSha, candidateSha256: candidateSha256(headSha, paths) };
 				}
-				return refuse("nothing", "nothing to freeze for execution candidate", "warning");
+				// OMP-188: already-delivered baseline. No sealed path carries
+				// changes, so bind current HEAD as the execution candidate instead
+				// of stranding the grant behind refuse:"nothing" — the audit stays
+				// the completion arbiter for whether the baseline satisfies the
+				// sealed criteria.
+				ui.notify(`execution freeze: sealed paths are unchanged — binding baseline HEAD ${headSha.slice(0, 12)} as the candidate (already-delivered path; the audit decides completion)`, "info");
+				const paths = committedPaths(root, headSha);
+				return { root, paths, commitSha: headSha, candidateSha256: candidateSha256(headSha, paths) };
 			}
 			for (const p of committable) {
 				const full = joinPath(root, p);

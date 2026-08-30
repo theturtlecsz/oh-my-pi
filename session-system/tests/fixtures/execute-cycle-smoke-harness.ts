@@ -13,7 +13,7 @@ import { loadBearer, loadWorkConfig } from "../../extensions/workflow/config";
 import { freezeCandidateCommit } from "../../extensions/workflow/git";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
-const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume";
+const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet";
 const probe = process.argv[2];
 const workKeyArg = process.argv[4];
 
@@ -509,6 +509,56 @@ if (scenario === "dirty") {
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
 	out.sentMessages = sentMessages;
+} else if (scenario === "already-delivered") {
+	// OMP-188: the sealed path is already committed at the grant baseline; the
+	// cycle must complete autonomously instead of stranding on an empty freeze.
+	// Prior scenarios may leave local main diverged from the bare remote or
+	// leave stray files; align to the remote tip first so this scenario's
+	// push is a fast-forward from a clean tree.
+	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
+	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+	fs.writeFileSync(path.join(probe, "src/already_delivered.ts"), "export const delivered = true;\n");
+	for (const args of [["add", "--", "src/already_delivered.ts"], ["commit", "-q", "-m", "deliver ahead of grant"], ["push", "-q", "origin", "main"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
+	const executeCmd = extension.commands.get("execute");
+	if (!executeCmd) throw new Error("execute command missing");
+	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	await execute({ action: "seal_execution_criteria", criteria: ["AC-1: feature already delivered at baseline"] });
+	const planFile = "local://execute-plan.md";
+	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Verify the delivered feature\n\n## Verification\n1. Prove the delivered feature\n");
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/already_delivered.ts"] });
+	subprocessCount = 1; // next auditor report: PASS
+	out.review = await reviewUntilSettled("verified at baseline: src/already_delivered.ts committed and correct; no changes required");
+	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
+	out.uiCalls = uiCalls;
+} else if (scenario === "already-unmet") {
+	// OMP-188 AC-3: an empty sealed diff with UNMET criteria must not complete;
+	// the audit stays the arbiter (NEEDS_FIX -> remediating, no bypass).
+	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
+	const executeCmd = extension.commands.get("execute");
+	if (!executeCmd) throw new Error("execute command missing");
+	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	await execute({ action: "seal_execution_criteria", criteria: ["AC-1: feature that was never built"] });
+	const planFile = "local://execute-plan.md";
+	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Claim the feature exists\n\n## Verification\n1. The audit catches the gap\n");
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/never_written.ts"] });
+	// subprocessCount stays 0: the first auditor report is NEEDS_FIX.
+	out.review = await reviewUntilSettled("claims unverified at baseline");
+	out.execAfterReview = JSON.parse(await execute({ action: "get_execution" }));
+	out.stopResult = await execute({ action: "stop_execution", body: "already-unmet scenario complete" });
+	out.uiCalls = uiCalls;
 } else if (scenario === "freeze-probes") {
 	const mockUi = {
 		confirm: async () => true,

@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
+import { candidateSha256 } from "@oh-my-pi/pi-work-client";
 import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256 } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
@@ -362,6 +363,68 @@ describe("candidate freeze and push", () => {
 		const head = git(repo, "rev-parse", "HEAD");
 		const outcome = pushCandidate(repo, head);
 		expect(outcome.status).toBe("not_pushed");
+	});
+});
+
+describe("execution freeze (OMP-188)", () => {
+	test("binds baseline HEAD when sealed paths carry no changes (already-delivered)", async () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const ui = makeUi(true);
+		const outcome = await freezeCandidateCommit(ui, repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["seed.txt"],
+		});
+		if ("refused" in outcome) throw new Error(`expected baseline bind, got refusal: ${outcome.reason}`);
+		expect(outcome.commitSha).toBe(head);
+		expect(outcome.paths).toEqual(["seed.txt"]);
+		expect(outcome.candidateSha256).toBe(candidateSha256(head, ["seed.txt"]));
+		expect(git(repo, "rev-parse", "HEAD")).toBe(head); // no new commit
+		expect(ui.notices.some(n => n.includes("binding baseline HEAD"))).toBe(true);
+	});
+
+	test("refuses failed when the repo has no HEAD commit", async () => {
+		const repo = path.join(tempRoot, `repo-${repoSeq++}`);
+		fs.mkdirSync(repo, { recursive: true });
+		for (const args of [["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "T"]])
+			Bun.spawnSync(["git", ...args], { cwd: repo });
+		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["seed.txt"],
+		});
+		expect("refused" in outcome && outcome.refused).toBe("failed");
+		expect("refused" in outcome ? outcome.reason : "").toContain("no HEAD commit");
+	});
+
+	test("dirty sealed path still freezes a fresh marker candidate commit", async () => {
+		const repo = makeRepo();
+		const baseline = git(repo, "rev-parse", "HEAD");
+		fs.writeFileSync(path.join(repo, "feat.ts"), "export const feat = true;\n");
+		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["feat.ts"],
+		});
+		if ("refused" in outcome) throw new Error(`expected freeze, got refusal: ${outcome.reason}`);
+		expect(outcome.commitSha).not.toBe(baseline);
+		expect(outcome.paths).toEqual(["feat.ts"]);
+		expect(git(repo, "log", "-1", "--format=%s")).toBe("session candidate: OMP-1");
+	});
+
+	test("re-freeze on the marker HEAD returns the same commit (idempotent)", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, "feat.ts"), "export const feat = true;\n");
+		const first = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["feat.ts"],
+		});
+		if ("refused" in first) throw new Error(`first freeze refused: ${first.reason}`);
+		const second = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["feat.ts"],
+		});
+		if ("refused" in second) throw new Error(`re-freeze refused: ${second.reason}`);
+		expect(second.commitSha).toBe(first.commitSha);
+		expect(second.candidateSha256).toBe(first.candidateSha256);
 	});
 });
 
