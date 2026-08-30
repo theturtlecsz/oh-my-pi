@@ -1156,12 +1156,21 @@ if (mode === "intake") {
 		"| Scope boundaries | Resolved — out-of-scope list |",
 		"",
 	].join("\n");
+	const baseTime = 1788100000000;
 	writeIntakeBlueprint("intake-omp166.md", omp166Blueprint);
+	const path1 = resolveLocalUrlToPath("local://intake-first.md", localProtocolOptions);
+	const pathOmp166 = resolveLocalUrlToPath("local://intake-omp166.md", localProtocolOptions);
+	const time1 = new Date(baseTime);
+	fs.utimesSync(path1, time1, time1);
+	fs.utimesSync(pathOmp166, time1, time1);
 	out.omp166Refusal = await execute({ action: "create_work", title: "Bundled", description: omp166Blueprint, project: "The Bookends" });
 	out.writesAfterOmp166 = { ...writes };
 	// 5. Unlinked batch child refusal & 6. Linked batch acceptance
 	const batchBlueprint = "# Batch Parent\n\nParent description\n";
 	writeIntakeBlueprint("intake-batch.md", batchBlueprint);
+	const pathBatch = resolveLocalUrlToPath("local://intake-batch.md", localProtocolOptions);
+	const timeBatch = new Date(baseTime + 10000);
+	fs.utimesSync(pathBatch, timeBatch, timeBatch);
 	out.unlinkedBatchRefusal = await execute({
 		action: "create_work",
 		title: "Batch Parent",
@@ -1193,10 +1202,14 @@ if (mode === "intake") {
 	// 7. Second single-issue blueprint creates HOME-6 without replacing NOW
 	const blueprint2 = "# Second Complaint\n\nProblem: two\n";
 	writeIntakeBlueprint("intake-second.md", blueprint2);
+	const pathSecond = resolveLocalUrlToPath("local://intake-second.md", localProtocolOptions);
+	const timeSecond = new Date(baseTime + 20000);
+	fs.utimesSync(pathSecond, timeSecond, timeSecond);
 	const second = await confirmRoundTrip(execute, { action: "create_work", title: "Second", description: blueprint2, project: "The Bookends" });
 	out.second = second.confirmed;
 	out.writesAfterSecond = { ...writes };
-
+	// 7b. Stale blueprint replay refusal: attempting to publish older blueprint1 when intake-second.md is newest must refuse
+	out.staleBlueprintRefusal = await execute({ action: "create_work", title: "Stale", description: blueprint1, project: "The Bookends" });
 	const stop = await extension.handlers.get("session_stop")?.[0]?.({ type: "session_stop", stop_hook_active: false }, ctx);
 	out.stop = stop ?? null;
 	out.writes = writes;
@@ -1215,6 +1228,9 @@ if (mode === "intake") {
 	};
 	const blueprintPublish = "# Published Complaint\n\nProblem: published\n";
 	writeIntakeBlueprint("intake-published.md", blueprintPublish);
+	const pathPublished = resolveLocalUrlToPath("local://intake-published.md", localProtocolOptions);
+	const timePublished = new Date(baseTime + 30000);
+	fs.utimesSync(pathPublished, timePublished, timePublished);
 	await runner.emit(publishMessage as never);
 	const publishTrip = await confirmRoundTrip(execute, { action: "create_work", title: "Published", description: blueprintPublish, project: "The Bookends" });
 	out.publishConfirmed = publishTrip.confirmed;

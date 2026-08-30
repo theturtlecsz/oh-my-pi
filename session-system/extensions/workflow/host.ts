@@ -402,7 +402,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		intakeSelected = false;
 	}
 
-	async function readLatestIntakeBlueprint(ctx: ExtensionContext): Promise<{ url: string; content: string } | null> {
+	async function readLatestIntakeBlueprint(ctx: ExtensionContext, description?: string): Promise<{ url: string; content: string } | null> {
 		if (!ctx.localProtocolOptions) return null;
 		let localRoot: string;
 		try {
@@ -432,13 +432,23 @@ export function createWorkflowHost(cfg: HostConfig) {
 			}
 		}
 		if (candidates.length === 0) return null;
-		candidates.sort((a, b) => {
-			if (b.mtimeMs !== a.mtimeMs) {
-				return b.mtimeMs - a.mtimeMs;
+		candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+		const maxMtime = candidates[0]!.mtimeMs;
+		const newest = candidates.filter(c => c.mtimeMs === maxMtime);
+		if (typeof description === "string" && description.length > 0 && newest.length > 1) {
+			for (const candidate of newest) {
+				try {
+					const content = await readFile(candidate.fullPath, "utf-8");
+					if (content === description) {
+						return { url: `local://${candidate.name}`, content };
+					}
+				} catch {
+					// ignore unreadable file
+				}
 			}
-			return a.name.localeCompare(b.name);
-		});
-		const top = candidates[0]!;
+		}
+		newest.sort((a, b) => a.name.localeCompare(b.name));
+		const top = newest[0]!;
 		try {
 			const content = await readFile(top.fullPath, "utf-8");
 			if (content.length === 0) return null;
@@ -2675,7 +2685,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 							if (!params.title) return deny("title required");
 							if (intakeActive) {
-								const blueprint = await readLatestIntakeBlueprint(ctx);
+								const blueprint = await readLatestIntakeBlueprint(ctx, params.description);
 								if (!blueprint) {
 									return deny("intake_blueprint_missing: save and lint local://intake-{slug}.md before publishing");
 								}

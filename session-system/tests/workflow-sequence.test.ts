@@ -80,7 +80,7 @@ describe("HOME-122 workflow sequence", () => {
 		expect(out.linkedBatchConfirmed).toContain("HOME-2 + 3 child(ren)");
 		expect(record(out.writesAfterLinkedBatch)).toMatchObject({ created: 5, addNow: 1, removeNow: 0, closed: 0 });
 		expect(out.second).toContain("created HOME-6");
-		expect(record(out.writesAfterSecond)).toMatchObject({ created: 6, addNow: 1, removeNow: 0, closed: 0 });
+		expect(out.staleBlueprintRefusal).toContain("intake_blueprint_mismatch: description must exactly match local://intake-second.md");
 		expect(out.publishConfirmed).toContain("created HOME-7");
 		expect(record(out.writes)).toMatchObject({ created: 7, addNow: 2, removeNow: 0, closed: 0 });
 		expect(out.nowSelected).toBe(true);
