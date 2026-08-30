@@ -10,8 +10,10 @@ import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import { createWorkBackend } from "../../extensions/workflow/work";
 import { loadBearer, loadWorkConfig } from "../../extensions/workflow/config";
+import { freezeCandidateCommit } from "../../extensions/workflow/git";
+import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
-const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d";
+const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume";
 const probe = process.argv[2];
 const workKeyArg = process.argv[4];
 
@@ -24,10 +26,11 @@ const extDir = process.env.OMP_WORK_SMOKE_EXT_DIR ?? path.join(repoRoot, "sessio
 let subprocessCount = 0;
 const NEEDS_FIX_REPORT = "VERDICT: NEEDS_FIX\n\nFINDINGS\n- [major] AC-1 src/smoke_feat.ts:1 evidence: feat is false; impact: broken; minimal fix: set to true\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
 const PASS_REPORT = "VERDICT: PASS\n\nFINDINGS\n(none)\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
+const BLOCKED_REPORT = "VERDICT: BLOCKED\n\nFINDINGS\n- [blocker] AC-1 blocked on external dependency\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
 
 vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: any) => {
 	subprocessCount++;
-	const report = subprocessCount === 1 ? NEEDS_FIX_REPORT : PASS_REPORT;
+	const report = scenario === "blocked" ? BLOCKED_REPORT : (scenario === "judge-freeze" || scenario === "judge-resume") ? PASS_REPORT : subprocessCount === 1 ? NEEDS_FIX_REPORT : PASS_REPORT;
 	const wrapped = JSON.stringify({ report });
 	return {
 		index: options.index,
@@ -262,6 +265,39 @@ if (scenario === "dirty") {
 	const execState1 = JSON.parse(await execute({ action: "get_execution" }));
 	out.queueLength = execState1.items.length;
 	out.item0WorkId = execState1.items[0]?.work_id;
+
+	// Create an eligible item AFTER snapshot creation
+	const config = loadWorkConfig();
+	if (config) {
+		const bearer = loadBearer(config);
+		const postRes = await (await fetch(`${config.baseUrl}/v1/commands`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${bearer}`, "X-OMP-Workspace-ID": config.workspaceId, "X-OMP-Contract-SHA256": WORK_CONTRACT_SHA256, "Content-Type": "application/json" },
+			body: JSON.stringify({
+				api_version: "work.omp.dev/v1",
+				workspace_id: config.workspaceId,
+				request_id: crypto.randomUUID(),
+				correlation_id: crypto.randomUUID(),
+				operation_id: crypto.randomUUID(),
+				command: {
+					type: "create_work_batch",
+					payload: {
+						items: [{
+							client_ref: "smoke-item-post-snapshot",
+							title: "Smoke Delivery Feature Post Snapshot",
+							description: "Eligible item created after snapshot",
+							scope: "smoke",
+							acceptance_criteria: [],
+							state: "BACKLOG",
+							project_id: execState1.items[0]?.project_id,
+						}],
+					},
+				},
+			}),
+		})).json();
+		out.postSnapshotWorkId = postRes.result?.items?.[0]?.work_id;
+		out.postSnapshotKey = postRes.result?.items?.[0]?.key;
+	}
 	// Process item 1
 	await execute({ action: "seal_execution_criteria", criteria: ["AC-1: queue item 1"] });
 	const planFile = "local://execute-plan.md";
@@ -392,5 +428,116 @@ if (scenario === "dirty") {
 	try {
 		out.exec = JSON.parse(await execute({ action: "get_execution" }));
 	} catch {}
+} else if (scenario === "blocked") {
+	const executeCmd = extension.commands.get("execute");
+	if (!executeCmd) throw new Error("execute command missing");
+
+	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	await execute({
+		action: "seal_execution_criteria",
+		criteria: ["AC-1: deliver smoke feature"],
+	});
+	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+	const planFile = "local://execute-plan.md";
+	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Write feature\n\n## Verification\n1. Check feature\n");
+	await execute({
+		action: "stamp_execution_plan",
+		plan_file: planFile,
+		paths: ["src/blocked_feat.ts"],
+	});
+	fs.writeFileSync(path.join(probe, "src/blocked_feat.ts"), "export const blocked = true;\n");
+	const reviewBlocked = await reviewUntilSettled("Ran test: blocked check");
+	out.reviewBlocked = reviewBlocked;
+	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
+	out.uiCalls = uiCalls;
+	out.sentMessages = sentMessages;
+} else if (scenario === "judge-freeze") {
+	const executeCmd = extension.commands.get("execute");
+	if (!executeCmd) throw new Error("execute command missing");
+
+	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	await execute({
+		action: "seal_execution_criteria",
+		criteria: ["AC-1: judge isolation check"],
+	});
+	fs.mkdirSync(path.join(probe, "session-system/agents"), { recursive: true });
+	fs.mkdirSync(path.join(probe, "session-system/extensions/workflow"), { recursive: true });
+	fs.mkdirSync(path.join(probe, "packages/coding-agent/src/task"), { recursive: true });
+	fs.writeFileSync(path.join(probe, "session-system/agents/auditor.md"), "TAMPERED CANDIDATE AUDITOR\n");
+	fs.writeFileSync(path.join(probe, "session-system/extensions/workflow/audit-tcb.ts"), "TAMPERED CANDIDATE TCB\n");
+	fs.writeFileSync(path.join(probe, "packages/coding-agent/src/task/executor.ts"), "TAMPERED CANDIDATE EXECUTOR\n");
+
+	const planFile = "local://execute-plan.md";
+	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Write judge isolation files\n\n## Verification\n1. Verify judge isolation\n");
+	await execute({
+		action: "stamp_execution_plan",
+		plan_file: planFile,
+		paths: [
+			"session-system/agents/auditor.md",
+			"session-system/extensions/workflow/audit-tcb.ts",
+			"packages/coding-agent/src/task/executor.ts",
+		],
+	});
+	const reviewTurn1 = await execute({
+		action: "begin_execution_review",
+		body: "Ran test: judge isolation verified",
+	});
+	out.reviewTurn1 = reviewTurn1;
+	out.execAfterFreeze = JSON.parse(await execute({ action: "get_execution" }));
+	out.uiCalls = uiCalls;
+	out.sentMessages = sentMessages;
+} else if (scenario === "judge-resume") {
+	const reviewResumed = await reviewUntilSettled("Ran test: judge isolation verified");
+	out.reviewResumed = reviewResumed;
+	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
+	out.uiCalls = uiCalls;
+	out.sentMessages = sentMessages;
+} else if (scenario === "freeze-probes") {
+	const mockUi = {
+		confirm: async () => true,
+		notify: (msg: string) => uiCalls.push(`freeze-notify:${msg}`),
+	};
+	const preHead = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+
+	// 1. Unsealed pre-session / dirty files present in working tree
+	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+	fs.writeFileSync(path.join(probe, "src/unsealed.txt"), "unsealed\n");
+	const res1 = await freezeCandidateCommit(mockUi, probe, "OMP-1", "cand-1", [], {
+		mode: "execution",
+		sealedPaths: ["src/sealed.txt"],
+	});
+	const headAfter1 = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	fs.rmSync(path.join(probe, "src/unsealed.txt"), { force: true });
+
+	// 2. Oversized sealed file (>= 50MB)
+	fs.writeFileSync(path.join(probe, "src/big.bin"), "");
+	const fd = fs.openSync(path.join(probe, "src/big.bin"), "w");
+	fs.ftruncateSync(fd, 50_000_000);
+	fs.closeSync(fd);
+	const res2 = await freezeCandidateCommit(mockUi, probe, "OMP-1", "cand-1", [], {
+		mode: "execution",
+		sealedPaths: ["src/big.bin"],
+	});
+	const headAfter2 = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	fs.rmSync(path.join(probe, "src/big.bin"), { force: true });
+
+	// 3. Possible secret in staged diff
+	fs.writeFileSync(path.join(probe, "src/secret.txt"), ["const token = '", "sk-", "1234567890abcdef123456';\n"].join(""));
+	const res3 = await freezeCandidateCommit(mockUi, probe, "OMP-1", "cand-1", [], {
+		mode: "execution",
+		sealedPaths: ["src/secret.txt"],
+	});
+	const headAfter3 = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	fs.rmSync(path.join(probe, "src/secret.txt"), { force: true });
+
+	out.res1 = res1;
+	out.res2 = res2;
+	out.res3 = res3;
+	out.headUnchanged = preHead === headAfter1 && preHead === headAfter2 && preHead === headAfter3;
+	out.uiCalls = uiCalls;
 }
 console.log(JSON.stringify(out, null, 2));

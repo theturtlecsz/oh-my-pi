@@ -2515,6 +2515,8 @@ class PostgresWorkStore:
             "manifest_id": str(manifest["manifest_id"]),
             "launch_id": str(payload.launch_id),
         }
+        if attempt.get("criteria_sha256"):
+            receipt_payload["criteria_sha256"] = attempt["criteria_sha256"]
         cur.execute(
             "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit) VALUES(%s,%s,%s,%s,%s,'audit',%s,%s,%s,%s,%s,%s,%s,%s,true,NULL,NULL)",
             (

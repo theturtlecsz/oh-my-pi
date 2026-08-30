@@ -203,6 +203,15 @@ try {
 							state: "BACKLOG",
 							project_id: PROJECT,
 						},
+						{
+							client_ref: "smoke-item-question",
+							title: "Smoke Delivery Feature Question",
+							description: "Build smoke delivery feature with question\n\n## Owner question\nWhich approach to use?",
+							scope: "smoke",
+							acceptance_criteria: [],
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
 					],
 				},
 			},
@@ -212,7 +221,7 @@ try {
 	const item1 = createRes.result.items[0];
 	const item2 = createRes.result.items[1];
 	const queueItem2 = createRes.result.items[2];
-
+	const questionItem = createRes.result.items[3];
 	const runHarness = (scenario: string, phaseKey?: string, extraEnv?: Record<string, string>) => {
 		const args = [path.join(import.meta.dir, "fixtures/execute-cycle-smoke-harness.ts"), probe, scenario];
 		if (phaseKey) args.push(phaseKey);
@@ -271,10 +280,15 @@ try {
 	};
 	assert.equal(item1View.item.state, "DONE", "item 1 is DONE");
 	assert.ok(item1View.receipts.some(r => r.kind === "closeout"), "closeout receipt exists");
-	assert.ok(item1View.receipts.some(r => r.kind === "audit"), "audit receipt exists");
+	const auditReceipt = item1View.receipts.find(r => r.kind === "audit");
+	assert.ok(auditReceipt, "audit receipt exists");
+	assert.equal(
+		(auditReceipt.payload as any)?.criteria_sha256,
+		(singleOut.finalExecution as any)?.items?.[0]?.criteria_sha256,
+		"audit receipt payload binds criteria_sha256",
+	);
 	assert.ok(item1View.receipts.some(r => r.kind === "push"), "push receipt exists");
 	assert.ok(item1View.receipts.some(r => r.kind === "verification"), "verification receipt exists");
-
 	// Verify remote ref has candidate commit
 	const remoteHead = git(probe, ["ls-remote", "origin", "refs/heads/main"]).split(/\s+/)[0];
 	assert.ok(/^[0-9a-f]{40}$/.test(remoteHead), "remote git ref resolves to valid commit SHA");
@@ -282,12 +296,20 @@ try {
 	// Initial audit receipt count baseline
 	const initialAuditReceipts = item1View.receipts.filter(r => r.kind === "audit").length;
 
-	// Test Scenario 3: Queue Mode Execution
+	// Test Scenario 3: Queue Mode Execution & Snapshot Boundary Filtering (AC-11)
 	const queueOut = runHarness("queue", item2.key);
 	assert.ok(queueOut.queueLength >= 2, "queue mode snapshots queue items");
 	assert.equal(queueOut.item0WorkId, item2.work_id, "named queue item is claim position 0");
+	const queueItemIds = (queueOut.finalExecution as any)?.items?.map((i: any) => i.work_id) ?? [];
+	assert.ok(!queueItemIds.includes(questionItem.work_id), "owner question item excluded from queue snapshot");
+	assert.ok(queueOut.postSnapshotWorkId, "post-snapshot item was created");
+	assert.ok(!queueItemIds.includes(queueOut.postSnapshotWorkId), "post-snapshot item excluded from queue snapshot");
+	assert.equal((queueOut.finalExecution as any)?.grant?.state, "completed", "queue execution completes at snapshot boundary");
 	assert.ok(String(queueOut.reviewQ1).includes("Advanced to next queue item") || String(queueOut.reviewQ1).includes("completed"), "queue item 1 completed");
 
+	// Verify post-snapshot item was left in BACKLOG state
+	const postSnapView = (await (await fetch(`${baseUrl}/v1/work-items/${queueOut.postSnapshotKey}/workflow`, { headers })).json()) as { item: { state: string } };
+	assert.equal(postSnapView.item.state, "BACKLOG", "post-snapshot item remains in BACKLOG");
 
 	// Test Scenario 4: Four Restart Tamper Scenarios
 	const healthReady = await (await fetch(`${baseUrl}/v1/health/ready`)).json();
@@ -1908,7 +1930,591 @@ try {
 
 	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
 	Bun.spawnSync(["git", "branch", "-D", "release/omp-180-smoke"], { cwd: probe });
-	// Verify audit receipt count remained unchanged after tamper attempts
+
+	// Test Scenario 9: Fail-Closed Execution Freeze Failure Probes (AC-6)
+	const freezeOut = runHarness("freeze-probes", item1.key);
+	assert.equal((freezeOut.res1 as any)?.refused, "failed", "unsealed paths probe refused");
+	assert.ok(String((freezeOut.res1 as any)?.reason).includes("unsealed modified paths"), "unsealed paths reason cited");
+	assert.equal((freezeOut.res2 as any)?.refused, "failed", "oversized file probe refused");
+	assert.ok(String((freezeOut.res2 as any)?.reason).includes("file >= 50MB"), "oversized file reason cited");
+	assert.equal((freezeOut.res3 as any)?.refused, "failed", "secret detected probe refused");
+	assert.ok(String((freezeOut.res3 as any)?.reason).includes("execution freeze secret detected"), "secret detected reason cited");
+	assert.equal(freezeOut.headUnchanged, true, "no candidate commit created on freeze refusals");
+
+	// Test Scenario 10: BLOCKED Audit Verdict Stops Execution Grant (AC-5)
+	fs.rmSync(path.join(probe, "python"), { recursive: true, force: true });
+	fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
+	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
+	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
+	Bun.spawnSync(["git", "fetch", "origin"], { cwd: probe });
+	Bun.spawnSync(["git", "reset", "--hard", "origin/main"], { cwd: probe });
+	const blockedItemRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "create_work_batch",
+				payload: {
+					items: [{
+						client_ref: "smoke-item-blocked",
+						title: "Smoke Delivery Feature Blocked",
+						description: "Build smoke delivery feature blocked test",
+						scope: "smoke",
+						acceptance_criteria: ["AC-1 deliver smoke feature"],
+						state: "BACKLOG",
+						project_id: PROJECT,
+					}],
+				},
+			},
+		}),
+	})).json();
+	assert.equal(blockedItemRes.receipt.state, "applied");
+	const blockedItem = blockedItemRes.result.items[0];
+
+	const blockedOut = runHarness("blocked", blockedItem.key);
+	assert.equal(blockedOut.finalExecution?.grant?.state, "stopped", "execution grant stopped on BLOCKED audit verdict");
+	assert.equal(blockedOut.finalExecution?.grant?.terminal_reason, "auditor_blocked", "terminal reason is auditor_blocked");
+	const blockedActiveItem = blockedOut.finalExecution?.items?.find((i: any) => i.work_id === blockedItem.work_id);
+	assert.equal(blockedActiveItem?.phase, "abandoned", "item abandoned on BLOCKED audit verdict");
+	assert.equal(blockedActiveItem?.terminal_reason, "auditor_blocked", "item terminal reason is auditor_blocked");
+
+	const blockedView = (await (await fetch(`${baseUrl}/v1/work-items/${blockedItem.key}/workflow`, { headers })).json()) as {
+		item: { state: string };
+		receipts: { kind: string }[];
+	};
+	assert.equal(blockedView.receipts.some(r => r.kind === "closeout"), false, "no closeout receipt recorded on BLOCKED verdict");
+
+	// Test Scenario 11: Concurrent /execute Refusal on Active Grant (AC-7)
+	const activeCase = await createAndStartDisposableGrant("concurrent-active");
+	const activeGrantId = activeCase.startOut.exec?.grant?.grant_id;
+	const activeGrantVer = activeCase.startOut.exec?.grant?.grant_version;
+	const activeJudgeSha = activeCase.startOut.exec?.grant?.judge_sha256;
+
+	const concurrentRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "begin_execution",
+				payload: {
+					grant_id: crypto.randomUUID(),
+					provenance: {
+						owner_input_id: crypto.randomUUID(),
+						owner_session_id: "concurrent-second",
+						normalized_command: `/execute ${activeCase.item.key}`,
+						workspace_id: WORKSPACE,
+						repository: "repo",
+						nonce: crypto.randomUUID(),
+						issued_at: new Date().toISOString(),
+					},
+					remote_ref: "refs/heads/main",
+					mode: "single",
+					items: [{
+						work_id: activeCase.item.work_id,
+						revision_id: activeCase.item.revision_id,
+						position: 0,
+						original_request: activeCase.startOut.exec?.items?.[0]?.original_request ?? "Verify recovery isolation for concurrent-active",
+						original_request_sha256: activeCase.startOut.exec?.items?.[0]?.original_request_sha256 ?? sha256Hex("Verify recovery isolation for concurrent-active"),
+						initial_git_baseline: headCommit,
+						project_id: PROJECT,
+						active_blocker_ids: [],
+					}],
+					expected_focus_version: 1,
+					judge_sha256: activeJudgeSha,
+					judge_manifest: activeCase.startOut.exec?.grant?.judge_manifest ?? judgeManifest,
+				},
+			},
+		}),
+	})).json();
+
+	assert.equal(concurrentRes.error?.code, "idempotency_conflict", "concurrent begin_execution returns idempotency_conflict");
+	assert.ok(concurrentRes.error?.diagnostics?.[0]?.includes("active execution grant already exists"), "diagnostics cite active grant exists");
+
+	const curActiveView = await (await fetch(`${baseUrl}/v1/workspaces/${WORKSPACE}/execution/${activeGrantId}`, { headers })).json();
+	assert.equal(curActiveView.grant?.grant_id, activeGrantId, "original grant ID preserved");
+	assert.equal(curActiveView.grant?.grant_version, activeGrantVer, "original grant version preserved");
+	await cancelGrant(activeGrantId, activeGrantVer, activeJudgeSha);
+
+	// Test Scenario 12: Grant Cancellation and Owner Revision Conflict Stops (AC-9)
+	// (a) Grant Cancellation
+	const cancelCase = await createAndStartDisposableGrant("cancel-stop");
+	const cancelGrantId = cancelCase.startOut.exec?.grant?.grant_id;
+	let cancelGrantVer = cancelCase.startOut.exec?.grant?.grant_version;
+	const cancelJudgeSha = cancelCase.startOut.exec?.grant?.judge_sha256;
+
+	const setCancelRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "set_execution_state",
+				payload: {
+					grant_id: cancelGrantId,
+					expected_grant_version: cancelGrantVer,
+					target_state: "canceled",
+					reason: "owner_cancel",
+					judge_sha256: cancelJudgeSha,
+				},
+			},
+		}),
+	})).json();
+	assert.equal(setCancelRes.result?.grant?.state, "canceled", "grant set to canceled");
+	cancelGrantVer = setCancelRes.result?.grant?.grant_version;
+
+	const attemptOnCanceled = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "complete_execution_item",
+				payload: {
+					grant_id: cancelGrantId,
+					expected_grant_version: cancelGrantVer,
+					work_id: cancelCase.item.work_id,
+					attempt_id: crypto.randomUUID(),
+					push_receipt_id: crypto.randomUUID(),
+					judge_sha256: cancelJudgeSha,
+				},
+			},
+		}),
+	})).json();
+	assert.ok(attemptOnCanceled.error, "privileged action on canceled grant is refused");
+
+	// (b) Owner Revision Conflict
+	const conflictCase = await createAndStartDisposableGrant("rev-conflict");
+	const conflictGrantId = conflictCase.startOut.exec?.grant?.grant_id;
+	const conflictGrantVer = conflictCase.startOut.exec?.grant?.grant_version;
+	const conflictJudgeSha = conflictCase.startOut.exec?.grant?.judge_sha256;
+
+	const conflictNewRevId = crypto.randomUUID();
+	const conflictRevTitle = "Recovery Test rev-conflict";
+	const conflictRevDescription = "Updated description during execution that causes conflict";
+	const conflictRevContentSha = sha256Hex(canonicalJson({
+		title: conflictRevTitle,
+		description: conflictRevDescription,
+		scope: "smoke",
+		acceptance_criteria: [],
+	}));
+	const conflictReviseRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "revise_work",
+				payload: {
+					work_id: conflictCase.item.work_id,
+					expected_revision_id: conflictCase.item.revision_id,
+					revision: {
+						revision_id: conflictNewRevId,
+						work_id: conflictCase.item.work_id,
+						revision_number: 2,
+						title: conflictRevTitle,
+						description: conflictRevDescription,
+						scope: "smoke",
+						acceptance_criteria: [],
+						content_sha256: conflictRevContentSha,
+						created_by: "test",
+						created_at: new Date().toISOString(),
+					},
+				},
+			},
+		}),
+	})).json();
+	assert.equal(conflictReviseRes.result?.type, "revise_work", "revise_work applied");
+
+	const staleSealRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "seal_execution_criteria",
+				payload: {
+					grant_id: conflictGrantId,
+					expected_grant_version: conflictGrantVer,
+					work_id: conflictCase.item.work_id,
+					expected_revision_id: conflictCase.item.revision_id,
+					criteria: ["AC-1: conflicted criteria"],
+					description_sha256: sha256Hex(conflictCase.startOut.exec?.items?.[0]?.original_request ?? "Verify recovery isolation for rev-conflict"),
+					judge_sha256: conflictJudgeSha,
+				},
+			},
+		}),
+	})).json();
+	assert.equal(staleSealRes.error?.code, "revision_conflict", "stale revision causes revision_conflict refusal");
+	await cancelGrant(conflictGrantId, conflictGrantVer, conflictJudgeSha);
+
+	// Test Scenario 13: Judge Isolation Across Candidate Modifications & Restart Recovery (AC-10)
+	fs.rmSync(path.join(probe, "session-system"), { recursive: true, force: true });
+	fs.rmSync(path.join(probe, "packages"), { recursive: true, force: true });
+	fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
+	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
+	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
+	Bun.spawnSync(["git", "fetch", "origin"], { cwd: probe });
+	Bun.spawnSync(["git", "reset", "--hard", "origin/main"], { cwd: probe });
+
+	const judgeItemRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "create_work_batch",
+				payload: {
+					items: [{
+						client_ref: "smoke-item-judge",
+						title: "Smoke Delivery Feature Judge Isolation",
+						description: "Verify judge isolation across candidate modifications and restart",
+						scope: "smoke",
+						acceptance_criteria: ["AC-1: judge isolation check"],
+						state: "BACKLOG",
+						project_id: PROJECT,
+					}],
+				},
+			},
+		}),
+	})).json();
+	assert.equal(judgeItemRes.receipt.state, "applied");
+	const judgeItem = judgeItemRes.result.items[0];
+
+	// 1. Phase 1: Start grant, write tampered candidate files, stamp plan, freeze candidate, and yield turn
+	const judgeFreezeOut = runHarness("judge-freeze", judgeItem.key);
+	assert.ok(String(judgeFreezeOut.reviewTurn1).includes("END YOUR TURN NOW"), "phase 1 yields turn after freeze and attempt begin");
+
+	// 2. Phase 2 (Fresh process restart-resume): Resumes from in-flight attempt while tampered files remain in worktree
+	const resumeOut = runHarness("judge-resume", judgeItem.key);
+	assert.equal(resumeOut.finalExecution?.grant?.state, "completed", "judge isolation grant completed across restart-resume");
+	assert.equal(resumeOut.finalExecution?.items?.[0]?.phase, "completed", "judge isolation item completed");
+
+	// 3. Verify restart-resume across fresh process recovery on completed item sends 0 turns
+	const judgeRecovery = runHarness("recovery", judgeItem.key);
+	assert.equal((judgeRecovery.sentMessages as unknown[])?.length, 0, "recovery on completed judge-isolated grant sends zero turns");
+
+	// 4. Verify the candidate commit contains the tampered files in git history
+	const judgeCandidateTree = git(probe, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]);
+	assert.ok(judgeCandidateTree.includes("session-system/agents/auditor.md"), "candidate commit includes modified auditor.md");
+	assert.ok(judgeCandidateTree.includes("session-system/extensions/workflow/audit-tcb.ts"), "candidate commit includes modified audit-tcb.ts");
+	fs.rmSync(path.join(probe, "session-system"), { recursive: true, force: true });
+	fs.rmSync(path.join(probe, "packages"), { recursive: true, force: true });
+	fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
+	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
+	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
+	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
+	const budgetCase = await createAndStartDisposableGrant("budget-rollover");
+	const budgetGrantId = budgetCase.startOut.exec?.grant?.grant_id;
+	let budgetGrantVer = budgetCase.startOut.exec?.grant?.grant_version;
+	const budgetJudgeSha = budgetCase.startOut.exec?.grant?.judge_sha256;
+	const budgetBaseline = budgetCase.startOut.exec?.items?.[0]?.initial_git_baseline ?? headCommit;
+	const sealBudget = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "seal_execution_criteria",
+				payload: {
+					grant_id: budgetGrantId,
+					expected_grant_version: budgetGrantVer,
+					work_id: budgetCase.item.work_id,
+					expected_revision_id: budgetCase.item.revision_id,
+					criteria: ["AC-1: budget rollover test"],
+					description_sha256: sha256Hex(budgetCase.startOut.exec?.items?.[0]?.original_request ?? "Verify recovery isolation for budget-rollover"),
+					judge_sha256: budgetJudgeSha,
+				},
+			},
+		}),
+	})).json();
+	const budgetRevId = sealBudget.result.item.criteria_revision_id;
+	budgetGrantVer = sealBudget.result.grant.grant_version;
+
+	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+	let lastAttemptStamp: any = null;
+	for (let attemptNum = 1; attemptNum <= 5; attemptNum++) {
+		const planBodyAttempt = `## Approach\n1. Test budget rollover ${attemptNum}\n\n## Verification\n1. Verify budget termination ${attemptNum}\n`;
+		const planShaAttempt = sha256Hex(planBodyAttempt);
+		const plannedCandId = crypto.randomUUID();
+		const candPlannedSha = sha256Hex(JSON.stringify({ candidateId: plannedCandId, planSha: planShaAttempt }));
+		const stampRes = await (await fetch(`${baseUrl}/v1/commands`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				api_version: "work.omp.dev/v1",
+				workspace_id: WORKSPACE,
+				request_id: crypto.randomUUID(),
+				correlation_id: crypto.randomUUID(),
+				operation_id: crypto.randomUUID(),
+				command: {
+					type: "stamp_execution_plan",
+					payload: {
+						grant_id: budgetGrantId,
+						expected_grant_version: budgetGrantVer,
+						work_id: budgetCase.item.work_id,
+						revision_id: budgetRevId,
+						candidate_id: plannedCandId,
+						plan_file: "local://execute-plan.md",
+						plan_body: planBodyAttempt,
+						plan_sha256: planShaAttempt,
+						approach: [`Test budget rollover ${attemptNum}`],
+						verification: [`Verify budget termination ${attemptNum}`],
+						paths: ["src/budget.ts"],
+						candidate_sha256: candPlannedSha,
+						judge_sha256: budgetJudgeSha,
+					},
+				},
+			}),
+		})).json();
+		assert.equal(stampRes.result?.type, "stamp_execution_plan");
+		budgetGrantVer = stampRes.result.grant.grant_version;
+		lastAttemptStamp = stampRes;
+
+		fs.writeFileSync(path.join(probe, "src/budget.ts"), `export const budget = ${attemptNum};\n`);
+		Bun.spawnSync(["git", "add", "."], { cwd: probe });
+		Bun.spawnSync(["git", "commit", "-m", `budget attempt ${attemptNum}`], { cwd: probe });
+		const attemptCommit = git(probe, ["rev-parse", "HEAD"]);
+
+		const attemptCandId = crypto.randomUUID();
+		const attemptCandSha = sha256Hex(`final-content-budget-rollover-${attemptNum}`);
+		const finalizeRes = await (await fetch(`${baseUrl}/v1/commands`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				api_version: "work.omp.dev/v1",
+				workspace_id: WORKSPACE,
+				request_id: crypto.randomUUID(),
+				correlation_id: crypto.randomUUID(),
+				operation_id: crypto.randomUUID(),
+				command: {
+					type: "finalize_candidate",
+					payload: {
+						work_id: budgetCase.item.work_id,
+						revision_id: budgetRevId,
+						planned_candidate_id: plannedCandId,
+						candidate_id: attemptCandId,
+						candidate_sha256: attemptCandSha,
+						commit_sha: attemptCommit,
+					},
+				},
+			}),
+		})).json();
+		assert.equal(finalizeRes.result?.type, "finalize_candidate");
+
+		const attemptVerifReceiptId = crypto.randomUUID();
+		await (await fetch(`${baseUrl}/v1/commands`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				api_version: "work.omp.dev/v1",
+				workspace_id: WORKSPACE,
+				request_id: crypto.randomUUID(),
+				correlation_id: crypto.randomUUID(),
+				operation_id: crypto.randomUUID(),
+				command: {
+					type: "append_evidence",
+					payload: {
+						receipt: {
+							receipt_id: attemptVerifReceiptId,
+							work_id: budgetCase.item.work_id,
+							revision_id: budgetRevId,
+							candidate_id: attemptCandId,
+							kind: "verification",
+							payload: { body: `verification for budget attempt ${attemptNum}` },
+							payload_sha256: sha256Hex(JSON.stringify({ body: `verification for budget attempt ${attemptNum}` })),
+							issuer: "test",
+							issued_at: new Date().toISOString(),
+							candidate_sha256: attemptCandSha,
+							candidate_commit: attemptCommit,
+							independent: false,
+						},
+					},
+				},
+			}),
+		})).json();
+
+		const attId = crypto.randomUUID();
+		const beginAtt = await (await fetch(`${baseUrl}/v1/commands`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				api_version: "work.omp.dev/v1",
+				workspace_id: WORKSPACE,
+				request_id: crypto.randomUUID(),
+				correlation_id: crypto.randomUUID(),
+				operation_id: crypto.randomUUID(),
+				command: {
+					type: "begin_close_attempt",
+					payload: {
+						attempt_id: attId,
+						work_id: budgetCase.item.work_id,
+						authorization_ref: `execution:${budgetGrantId}:0:${attemptNum}`,
+						owner_session_id: "smoke-budget",
+						owner_session_started_at: new Date().toISOString(),
+						owner_session_start_commit: budgetBaseline,
+						repository: "repo",
+						diff_sha256: "0".repeat(64),
+						starting_dirty_paths: [],
+						authorization_kind: "execution",
+						execution_grant_id: budgetGrantId,
+						candidate_tree_sha: attemptCandSha,
+						original_request_sha256: stampRes.result.item.original_request_sha256,
+						criteria_sha256: stampRes.result.item.criteria_sha256,
+						plan_stamp_sha256: stampRes.result.item.plan_stamp_sha256,
+						judge_sha256: budgetJudgeSha,
+						riders: [],
+					},
+				},
+			}),
+		})).json();
+		assert.equal(beginAtt.result?.status, "applied", `close attempt ${attemptNum} started`);
+
+		const sealMan = await (await fetch(`${baseUrl}/v1/commands`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				api_version: "work.omp.dev/v1",
+				workspace_id: WORKSPACE,
+				request_id: crypto.randomUUID(),
+				correlation_id: crypto.randomUUID(),
+				operation_id: crypto.randomUUID(),
+				command: {
+					type: "seal_audit_manifest",
+					payload: {
+						attempt_id: attId,
+						verification_receipt_id: attemptVerifReceiptId,
+					},
+				},
+			}),
+		})).json();
+		assert.equal(sealMan.result?.type, "seal_audit_manifest");
+
+		const resvLaunch = await (await fetch(`${baseUrl}/v1/commands`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				api_version: "work.omp.dev/v1",
+				workspace_id: WORKSPACE,
+				request_id: crypto.randomUUID(),
+				correlation_id: crypto.randomUUID(),
+				operation_id: crypto.randomUUID(),
+				command: {
+					type: "reserve_auditor_launch",
+					payload: {
+						attempt_id: attId,
+						task_sha256: sealMan.result.manifest.task_sha256,
+						tool_call_id: `launch-budget-${attemptNum}`,
+					},
+				},
+			}),
+		})).json();
+		assert.equal(resvLaunch.result?.type, "reserve_auditor_launch");
+
+		const settleAtt = await (await fetch(`${baseUrl}/v1/commands`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				api_version: "work.omp.dev/v1",
+				workspace_id: WORKSPACE,
+				request_id: crypto.randomUUID(),
+				correlation_id: crypto.randomUUID(),
+				operation_id: crypto.randomUUID(),
+				command: {
+					type: "settle_auditor_launch",
+					payload: {
+						attempt_id: attId,
+						launch_id: resvLaunch.result.launch.launch_id,
+						transport_payload: {
+							report: `VERDICT: NEEDS_FIX\n\nFINDINGS\n- [major] AC-1 src/budget.ts:1 evidence: attempt ${attemptNum} distinct finding ${attemptCandSha}; impact: broken; minimal fix: fix ${attemptNum}\n\nACCEPTANCE COVERAGE\nAC-1 budget rollover test\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone`,
+						},
+						transport_failed: false,
+					},
+				},
+			}),
+		})).json();
+		assert.equal(settleAtt.result?.status, "applied");
+	}
+
+	// Attempt 6: begin_close_attempt is refused with max_close_attempts_exceeded
+	const attempt6Res = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			operation_id: crypto.randomUUID(),
+			command: {
+				type: "begin_close_attempt",
+				payload: {
+					attempt_id: crypto.randomUUID(),
+					work_id: budgetCase.item.work_id,
+					authorization_ref: `execution:${budgetGrantId}:0:6`,
+					owner_session_id: "smoke-budget",
+					owner_session_started_at: new Date().toISOString(),
+					owner_session_start_commit: budgetBaseline,
+					repository: "repo",
+					diff_sha256: "0".repeat(64),
+					starting_dirty_paths: [],
+					authorization_kind: "execution",
+					execution_grant_id: budgetGrantId,
+					candidate_tree_sha: sha256Hex("final-content-budget-rollover-5"),
+					original_request_sha256: lastAttemptStamp.result.item.original_request_sha256,
+					criteria_sha256: lastAttemptStamp.result.item.criteria_sha256,
+					plan_stamp_sha256: lastAttemptStamp.result.item.plan_stamp_sha256,
+					judge_sha256: budgetJudgeSha,
+					riders: [],
+				},
+			},
+		}),
+	})).json();
+	assert.ok(
+		(attempt6Res.result?.status === "refused" && (attempt6Res.result?.event?.reason_code === "max_close_attempts_exceeded" || attempt6Res.result?.event?.reason_code === "execution_grant_inactive"))
+		|| attempt6Res.error?.code === "execution_grant_inactive",
+		"attempt 6 refused due to max_close_attempts_exceeded / grant inactive",
+	);
+
+	const finalBudgetGrant = await (await fetch(`${baseUrl}/v1/workspaces/${WORKSPACE}/execution/${budgetGrantId}`, { headers })).json();
+	assert.equal(finalBudgetGrant.grant?.state, "stopped", "budget grant stopped");
+	assert.equal(finalBudgetGrant.grant?.terminal_reason, "max_close_attempts_exceeded", "terminal reason is max_close_attempts_exceeded");
+	const budgetItemState = finalBudgetGrant.items?.find((i: any) => i.work_id === budgetCase.item.work_id);
+	assert.equal(budgetItemState?.phase, "abandoned", "active item abandoned on bounded termination");
+	assert.equal(budgetItemState?.close_attempts_started, 5, "exactly 5 close attempts started before termination");
 	const postTamperView = (await (await fetch(`${baseUrl}/v1/work-items/${item1.key}/workflow`, { headers })).json()) as {
 		receipts: { kind: string }[];
 	};
