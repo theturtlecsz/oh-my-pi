@@ -3282,7 +3282,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								sessionId: exec.grant.authorization_hash,
 								startedAt: exec.grant.created_at,
 								startCommit: exec.activeItem.initial_git_baseline,
-								repository: exec.grant.repository,
+								repository: isAbsolute(exec.grant.repository) ? exec.grant.repository : ctx.cwd,
 								diffSha256: rangeDiffSha256(ctx.cwd, exec.activeItem.initial_git_baseline, freeze.commitSha) ?? "",
 								dirtyPaths: [],
 								authorization_kind: "execution",

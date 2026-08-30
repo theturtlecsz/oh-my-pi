@@ -262,6 +262,14 @@ try {
 	assert.equal(singleOut.noBodyRefused, true, "begin_execution_review without body is refused");
 	assert.ok(String(singleOut.review1).includes("NEEDS_FIX"), `first review yields NEEDS_FIX; got: ${singleOut.review1}`);
 	assert.ok(String(singleOut.review2).includes("Execution grant completed") || String(singleOut.review2).includes("delivered and closed"), `execution completed on second review; got: ${singleOut.review2}`);
+	// OMP-185: the execution close attempt (the auditor manifest's repository
+	// input) must carry the absolute worktree, not the basename identity.
+	const execAttemptRepoRes = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "postgres", "-d", "omp_work", "-t", "-A", "-c", "SELECT repository FROM omp_work.close_attempts WHERE authorization_kind='execution'"], {
+		env: { ...process.env, PGPASSWORD: pgSecret },
+	});
+	const execAttemptRepos = execAttemptRepoRes.stdout.toString().trim().split("\n").filter(Boolean);
+	assert.ok(execAttemptRepos.length >= 1, "execution close attempts recorded");
+	for (const attemptRepo of execAttemptRepos) assert.equal(attemptRepo, probe, "execution close attempt repository is the absolute worktree");
 	// Prompt-shaped seal (no work param, mismatched derived proposal) must seal
 	// the stored criteria verbatim and surface them to the session.
 	assert.ok(
