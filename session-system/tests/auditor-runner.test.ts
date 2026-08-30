@@ -141,6 +141,7 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(capturedOptions).toBeDefined();
 		expect(capturedOptions?.settings).toBe(sentinelSettings);
 		expect(capturedOptions?.modelOverride).toEqual(["@audit"]);
+		expect(capturedOptions?.modelRole).toBe("audit");
 		expect(capturedOptions?.modelRegistry).toBe(sentinelRegistry);
 		expect(capturedOptions?.outputSchema).toBe(sentinelOutputSchema);
 		expect(capturedOptions?.outputSchemaSource).toBe("agent");
