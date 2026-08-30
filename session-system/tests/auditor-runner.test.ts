@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
+import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { prepareNativeAuditRunner } from "../extensions/workflow/auditor-runner";
 import type { CloseAttemptSnapshot } from "../extensions/workflow/backend";
 import {
@@ -16,10 +17,28 @@ import {
 } from "../extensions/workflow/host";
 
 describe("native auditor runner (OMP-168)", () => {
+	const defaultAuditor: AgentDefinition = {
+		name: "auditor",
+		description: "Auditor agent",
+		systemPrompt: "Audit prompt",
+		model: ["@audit"],
+		output: { properties: { report: { type: "string" } } },
+		source: "bundled",
+	};
+
+	function mockDiscovery(agent: AgentDefinition = defaultAuditor) {
+		return vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
+			agents: [agent],
+			projectAgentsDir: null,
+		});
+	}
+
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
+
 	test("prepareNativeAuditRunner fails if @audit role cannot be resolved", async () => {
+		mockDiscovery();
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
@@ -30,6 +49,7 @@ describe("native auditor runner (OMP-168)", () => {
 	});
 
 	test("prepareNativeAuditRunner returns a runner when preconditions exist", async () => {
+		mockDiscovery();
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
@@ -42,6 +62,7 @@ describe("native auditor runner (OMP-168)", () => {
 	});
 
 	test("runner returns started:false when cancelled before start", async () => {
+		mockDiscovery();
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
@@ -58,24 +79,20 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(result.started).toBe(false);
 		expect(result.payload).toBeUndefined();
 	});
-
 	test("forwards effective settings to the native auditor subprocess", async () => {
 		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "test/auditor" } });
 		const settingsSpy = vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(sentinelSettings);
 
 		const sentinelOutputSchema = { properties: { report: { type: "string" } } };
-		const fakeAgent = {
+		const fakeAgent: AgentDefinition = {
 			name: "auditor",
 			description: "Auditor agent",
 			systemPrompt: "Audit prompt",
-			model: "@audit",
+			model: ["@audit"],
 			output: sentinelOutputSchema,
-			source: "bundle" as const,
+			source: "bundled",
 		};
-		const discoverSpy = vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
-			agents: [fakeAgent],
-		});
-
+		const discoverSpy = mockDiscovery(fakeAgent);
 		let capturedOptions: executorModule.ExecutorOptions | undefined;
 		const wrappedPayload = JSON.stringify({
 			report: "VERDICT: PASS\nAll acceptance criteria verified.",
@@ -123,8 +140,7 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(runSubprocessSpy).toHaveBeenCalledTimes(1);
 		expect(capturedOptions).toBeDefined();
 		expect(capturedOptions?.settings).toBe(sentinelSettings);
-		expect(capturedOptions?.modelOverride).toBe("@audit");
-		expect(capturedOptions?.modelRole).toBe("audit");
+		expect(capturedOptions?.modelOverride).toEqual(["@audit"]);
 		expect(capturedOptions?.modelRegistry).toBe(sentinelRegistry);
 		expect(capturedOptions?.outputSchema).toBe(sentinelOutputSchema);
 		expect(capturedOptions?.outputSchemaSource).toBe("agent");
@@ -134,17 +150,14 @@ describe("native auditor runner (OMP-168)", () => {
 	});
 
 	test("fails if the auditor output schema is missing", async () => {
-		const fakeAgent = {
+		const fakeAgent: AgentDefinition = {
 			name: "auditor",
 			description: "Auditor agent",
 			systemPrompt: "Audit prompt",
-			model: "@audit",
-			source: "bundle" as const,
+			model: ["@audit"],
+			source: "bundled",
 		};
-		vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
-			agents: [fakeAgent],
-		});
-
+		mockDiscovery(fakeAgent);
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
