@@ -4339,10 +4339,12 @@ class PostgresWorkStore:
             raise WorkStoreError("invalid_request", ("unknown execution grant",))
         if grant["grant_version"] != payload.expected_grant_version:
             raise WorkStoreError("revision_conflict", ("grant_version mismatch",))
-        if grant["judge_sha256"] != payload.judge_sha256:
-            raise WorkStoreError("execution_judge_drift", ("judge_sha256 mismatch",))
-
         target = payload.target_state
+        if grant["judge_sha256"] != payload.judge_sha256 and target not in (
+            "stopped",
+            "canceled",
+        ):
+            raise WorkStoreError("execution_judge_drift", ("judge_sha256 mismatch",))
         now = datetime.now(UTC)
         if target == "paused":
             if grant["state"] != "active":

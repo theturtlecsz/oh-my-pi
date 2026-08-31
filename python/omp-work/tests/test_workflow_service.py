@@ -4119,7 +4119,13 @@ def test_execution_grant_continuation_cap(service) -> None:
     assert body["result"]["grant"]["terminal_reason"] == "max_continuations_exceeded"
 
 
-def test_execution_grant_pause_resume_contract_approval(service) -> None:
+@pytest.mark.parametrize(
+    ("terminal_state", "terminal_reason"),
+    [("stopped", "owner_stopped"), ("canceled", "owner_canceled")],
+)
+def test_execution_grant_pause_resume_and_terminal_judge_drift(
+    service, terminal_state: str, terminal_reason: str
+) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)
 
@@ -4127,6 +4133,7 @@ def test_execution_grant_pause_resume_contract_approval(service) -> None:
     work_id, rev_id = item["work_id"], item["revision_id"]
     grant_id = str(uuid4())
     judge_sha, judge_manifest = _tcb_manifest()
+    drifted_judge_sha = ("0" if judge_sha[0] != "0" else "1") + judge_sha[1:]
     head_commit = "0" * 40
 
     _command(
@@ -4164,6 +4171,24 @@ def test_execution_grant_pause_resume_contract_approval(service) -> None:
         },
     )
 
+    # Drifted pause is rejected
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "target_state": "paused",
+                "expected_grant_version": 1,
+                "reason": "contract_approval_required: contract hash mismatch",
+                "judge_sha256": drifted_judge_sha,
+            },
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "execution_judge_drift"
+
     # Pause for contract approval
     status, body = _command(
         service,
@@ -4189,6 +4214,23 @@ def test_execution_grant_pause_resume_contract_approval(service) -> None:
     )
     assert resp.json()["items"][0]["phase"] == "awaiting_contract_approval"
 
+    # Drifted resume is rejected
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "target_state": "active",
+                "expected_grant_version": 2,
+                "judge_sha256": drifted_judge_sha,
+            },
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "execution_judge_drift"
+
     # Resume returns to active and item returns to planning
     status, body = _command(
         service,
@@ -4213,7 +4255,7 @@ def test_execution_grant_pause_resume_contract_approval(service) -> None:
     )
     assert resp.json()["items"][0]["phase"] == "planning"
 
-    # Pause and then cancel
+    # Pause and then terminate with drifted judge hash
     _command(
         service,
         workspace_id,
@@ -4234,18 +4276,19 @@ def test_execution_grant_pause_resume_contract_approval(service) -> None:
             "type": "set_execution_state",
             "payload": {
                 "grant_id": grant_id,
-                "target_state": "canceled",
+                "target_state": terminal_state,
                 "expected_grant_version": 4,
-                "reason": "owner_canceled",
-                "judge_sha256": judge_sha,
+                "reason": terminal_reason,
+                "judge_sha256": drifted_judge_sha,
             },
         },
     )
     assert status == 200, body
-    assert body["result"]["grant"]["state"] == "canceled"
-    assert body["result"]["grant"]["paused_at"] is None
-    assert body["result"]["grant"]["canceled_at"] is not None
-
+    grant = body["result"]["grant"]
+    assert grant["state"] == terminal_state
+    assert grant["terminal_reason"] == terminal_reason
+    assert grant["paused_at"] is None
+    assert grant[f"{terminal_state}_at"] is not None
 
 def test_execution_grant_completion_push_binding_enforcement(service) -> None:
     workspace_id = uuid4()
