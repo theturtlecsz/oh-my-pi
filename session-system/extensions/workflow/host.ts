@@ -3085,8 +3085,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 							type ReceiptRow = { receipt_id: string; kind: string; verdict?: string | null; candidate_commit?: string | null };
 							type LaunchRow = { launch_id: string; attempt_id: string; launch_number: number };
+							type WfAttemptIdentityRow = { attempt_id: string; revision_id?: string; candidate_id?: string | null; candidate_sha256?: string | null; candidate_commit?: string | null };
+							type WfItemIdentity = { current_revision_id?: string; revision?: { revision_id?: string }; candidate?: { candidate_id?: string; candidate_sha256?: string; commit_sha?: string | null } | null };
 							const wfView = liveAttempt
-								? ((await backend.workClient!.workflow(targetIssue.key)) as { receipts?: ReceiptRow[]; auditor_launches?: LaunchRow[] })
+								? ((await backend.workClient!.workflow(targetIssue.key)) as { receipts?: ReceiptRow[]; auditor_launches?: LaunchRow[]; item?: WfItemIdentity; close_attempts?: WfAttemptIdentityRow[] })
 								: undefined;
 							const receiptRows: ReceiptRow[] = wfView?.receipts ?? [];
 							const recoverReceipt = (kind: "push" | "audit", candidateCommit: string | undefined): ReceiptRow | undefined => {
@@ -3098,6 +3100,21 @@ export function createWorkflowHost(cfg: HostConfig) {
 								}
 								return undefined;
 							};
+
+							// OMP-195: a live attempt is resumable only when its bound identity
+							// matches the item's CURRENT identity (revision + finalized candidate)
+							// — the same test the service applies at reserve (_attempt_drifted).
+							// A stale pre-grant attempt (left by an earlier /summary or an
+							// abandoned grant) fails this check; resuming it can only end in a
+							// candidate_drift refusal whose recovery is manual-lane ceremony.
+							const staleCheckAttempt = liveAttempt ? (wfView?.close_attempts ?? []).find(row => row.attempt_id === liveAttempt.attemptId) : undefined;
+							const staleCheckCandidate = wfView?.item?.candidate;
+							const staleCheckRevisionId = wfView?.item?.revision?.revision_id ?? wfView?.item?.current_revision_id;
+							const attemptMatchesItem = !!(staleCheckAttempt && staleCheckCandidate
+								&& staleCheckAttempt.revision_id === staleCheckRevisionId
+								&& staleCheckAttempt.candidate_id === staleCheckCandidate.candidate_id
+								&& staleCheckAttempt.candidate_sha256 === staleCheckCandidate.candidate_sha256
+								&& staleCheckAttempt.candidate_commit === staleCheckCandidate.commit_sha);
 
 							const runAuditAndSettle = async (attemptId: string, pushReceiptId: string, hasManifest: boolean) => {
 								if (!hasManifest) {
@@ -3210,7 +3227,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 								return okText(`Execution grant completed! Work item ${activeWorkId} delivered and closed.`);
 							};
 
-							if (liveAttempt) {
+							if (liveAttempt && !attemptMatchesItem) {
+								// OMP-195 (owner ruling 2026-08-31): recovery is grant-internal.
+								// Fall through to the first-turn path — begin_close_attempt
+								// supersedes the stale attempt service-side and binds a fresh
+								// attempt to this grant's candidate. Never resume it, never
+								// surface the manual-lane /summary instruction.
+								ctx.ui.notify(`Live close attempt ${liveAttempt.attemptId.slice(0, 8)} is bound to a prior candidate/revision — superseding it with a fresh attempt for this grant (OMP-195).`, "info");
+							} else if (liveAttempt) {
 								// Resumed turn. Deliveries are clear; continue from service state.
 								const pushReceipt = recoverReceipt("push", liveAttempt.candidateCommit);
 								const passReceipt = recoverReceipt("audit", liveAttempt.candidateCommit);

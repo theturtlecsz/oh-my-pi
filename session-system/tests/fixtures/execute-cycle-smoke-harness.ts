@@ -13,7 +13,7 @@ import { loadBearer, loadWorkConfig } from "../../extensions/workflow/config";
 import { freezeCandidateCommit } from "../../extensions/workflow/git";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
-const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue";
+const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue" | "stale-attempt";
 const probe = process.argv[2];
 const workKeyArg = process.argv[4];
 
@@ -575,6 +575,55 @@ if (scenario === "dirty") {
 	out.review = await reviewUntilSettled("claims unverified at baseline");
 	out.execAfterReview = JSON.parse(await execute({ action: "get_execution" }));
 	out.stopResult = await execute({ action: "stop_execution", body: "already-unmet scenario complete" });
+	out.uiCalls = uiCalls;
+} else if (scenario === "stale-attempt") {
+	// OMP-195: a live pre-grant close attempt bound to an old candidate and
+	// revision must not wedge the grant in a candidate_drift refusal — the
+	// review path supersedes it in-grant and completes autonomously.
+	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
+	const executeCmd = extension.commands.get("execute");
+	if (!executeCmd) throw new Error("execute command missing");
+	// A prior scenario (zero-path-queue) leaves its queue grant active with a
+	// pending item; clear it so this scenario can mint its own grants.
+	out.preclean = await execute({ action: "stop_execution", body: "clearing leftover grant from a prior scenario" });
+	// Grant A: freeze, push, and begin a close attempt, then stop the grant.
+	// The attempt survives live, bound to grant A's candidate and revision.
+	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	await execute({ action: "seal_execution_criteria", criteria: ["AC-1 deliver smoke feature"] });
+	const planFile = "local://execute-plan.md";
+	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Write feature\n\n## Verification\n1. Check feature\n");
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/smoke_feat.ts"] });
+	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+	fs.writeFileSync(path.join(probe, "src/smoke_feat.ts"), "export const feat = false;\n");
+	out.seedReview = await execute({ action: "begin_execution_review", body: "seed: attempt begun, grant abandoned before audit" });
+	// The post-yield checkpoint attestation/outbox bookkeeping bumps the grant
+	// version asynchronously; retry the stop until a fresh snapshot wins.
+	let stopResult = "";
+	for (let attempt = 0; attempt < 5 && !stopResult.includes("stopped"); attempt++) {
+		if (attempt > 0) {
+			const { promise, resolve } = Promise.withResolvers<void>();
+			setTimeout(resolve, 100);
+			await promise;
+		}
+		stopResult = await execute({ action: "stop_execution", body: "abandoning grant A with a live close attempt" });
+	}
+	out.stopResult = stopResult;
+	// Grant B on the same item: the criteria seal advances the revision and
+	// the plan stamp allocates a new candidate, so the stale attempt no
+	// longer matches the item's identity.
+	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	await execute({ action: "seal_execution_criteria", criteria: ["AC-1 deliver smoke feature"] });
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Fix feature\n\n## Verification\n1. Check feature\n");
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/smoke_feat.ts"] });
+	fs.writeFileSync(path.join(probe, "src/smoke_feat.ts"), "export const feat = true;\n");
+	subprocessCount = 1; // next auditor report: PASS
+	out.review = await reviewUntilSettled("feat is true; stale pre-grant attempt superseded in-grant");
+	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
 } else if (scenario === "freeze-probes") {
 	const mockUi = {

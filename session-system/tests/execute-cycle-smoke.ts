@@ -2656,7 +2656,54 @@ try {
 	const zeroPathView = (await (await fetch(`${baseUrl}/v1/work-items/${itemZeroPath.key}/workflow`, { headers })).json()) as { item: { state: string } };
 	assert.equal(zeroPathView.item.state, "DONE", "zero-path item closed DONE service-side");
 
-	console.log("execute-cycle-smoke: PASS (clean preflight, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety, zero-path baseline completion & queue advance)");
+	// Test Scenario: OMP-195 stale pre-grant close attempt superseded in-grant
+	const staleRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			operation_id: crypto.randomUUID(),
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			command: {
+				type: "create_work_batch",
+				payload: {
+					items: [
+						{
+							client_ref: "smoke-item-stale-attempt",
+							title: "Smoke Stale Attempt Feature",
+							description: "Feature whose earlier close attempt went stale",
+							scope: "smoke",
+							acceptance_criteria: [],
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
+					],
+				},
+			},
+		}),
+	})).json();
+	assert.equal(staleRes.receipt.state, "applied");
+	const itemStale = staleRes.result.items[0];
+
+	const staleOut = runHarness("stale-attempt", itemStale.key);
+	assert.ok(String(staleOut.seedReview).includes("Close attempt begun"), `stale seed begins a live attempt; got: ${staleOut.seedReview}`);
+	assert.ok(String(staleOut.stopResult).includes("stopped"), `seed grant stops cleanly; got: ${staleOut.stopResult}`);
+	assert.ok(
+		String(staleOut.review).includes("Execution grant completed") || String(staleOut.review).includes("delivered and closed"),
+		`stale-attempt grant completes autonomously; got: ${staleOut.review}`,
+	);
+	assert.ok(!String(staleOut.review).includes("candidate_drift"), "no candidate_drift refusal surfaced in-grant");
+	assert.ok(!String(staleOut.review).includes("rerun /summary"), "no manual-lane /summary instruction surfaced in-grant");
+	// harness JSON output — narrow one-off read of the grant projection
+	const staleExec = staleOut.finalExecution as { items?: { phase?: string }[] } | undefined;
+	assert.equal(staleExec?.items?.[0]?.phase, "completed", "stale-attempt item phase is completed");
+	const staleView = (await (await fetch(`${baseUrl}/v1/work-items/${itemStale.key}/workflow`, { headers })).json()) as { item: { state: string }; close_attempts?: { state: string }[] };
+	assert.equal(staleView.item.state, "DONE", "stale-attempt item closed DONE service-side");
+	assert.ok((staleView.close_attempts ?? []).some(a => a.state === "superseded"), "the stale pre-grant attempt is superseded, not resumed");
+
+	console.log("execute-cycle-smoke: PASS (clean preflight, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety, zero-path baseline completion & queue advance, stale pre-grant attempt supersede)");
 } finally {
 	cleanup();
 }
