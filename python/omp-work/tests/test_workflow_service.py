@@ -3232,6 +3232,70 @@ def _tcb_manifest():
     return sha256(manifest), manifest
 
 
+def test_execution_lookup_accepts_grant_id_work_id_and_key(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(
+        service,
+        workspace_id,
+        "Execution lookup selectors",
+        description="Lookup this execution by grant, work id, or key",
+    )
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": {
+                    "owner_input_id": str(uuid4()),
+                    "owner_session_id": "session-lookup",
+                    "normalized_command": f"/execute {item['key']}",
+                    "workspace_id": str(workspace_id),
+                    "repository": "oh-my-pi",
+                    "nonce": str(uuid4()),
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": item["work_id"],
+                        "revision_id": item["revision_id"],
+                        "position": 0,
+                        "original_request": "Lookup this execution by grant, work id, or key",
+                        "original_request_sha256": text_sha256(
+                            "Lookup this execution by grant, work id, or key"
+                        ),
+                        "initial_git_baseline": "0" * 40,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 200, body
+
+    views = []
+    for selector in (grant_id, item["work_id"], item["key"]):
+        response = service.client.get(
+            f"/v1/workspaces/{workspace_id}/execution/{selector}",
+            headers=_owner_headers(workspace_id),
+        )
+        assert response.status_code == 200, response.text
+        views.append(response.json())
+
+    assert [view["grant"]["grant_id"] for view in views] == [grant_id] * 3
+    assert [view["active_item"]["work_id"] for view in views] == [
+        item["work_id"]
+    ] * 3
+
+
 def test_execution_grant_lifecycle_pass(service) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)

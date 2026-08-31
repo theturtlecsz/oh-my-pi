@@ -1834,7 +1834,16 @@ export function createWorkflowHost(cfg: HostConfig) {
 						reason: "owner_interjection",
 						judgeSha256: tcb.judgeSha256,
 					});
-					pendingNotices.push(`[${TOOL_NAME}] Execution grant paused due to owner message. Use '/execute resume ${exec.activeItem?.work_id ?? ""}' to resume.`);
+					const resumeWorkId = exec.activeItem?.work_id ?? "";
+					let resumeTarget = resumeWorkId;
+					if (resumeWorkId) {
+						try {
+							resumeTarget = (await backend.findIssue(resumeWorkId))?.key ?? resumeWorkId;
+						} catch {
+							// Historical UUID notices remain resumable via getExecution fallback.
+						}
+					}
+					pendingNotices.push(`[${TOOL_NAME}] Execution grant paused due to owner message. Use '/execute resume ${resumeTarget}' to resume.`);
 				}
 			}
 			if (/^\s*\/plan\b/.test(event.originalText)) {
@@ -2377,6 +2386,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							preflight.targetIssue.key,
 							ctx,
 						);
+						return;
 					} else if (updated && updated.grant.state === "stopped") {
 						const postExec: ExecutionSnapshot = {
 							grant: updated.grant,

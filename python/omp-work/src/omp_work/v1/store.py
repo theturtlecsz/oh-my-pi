@@ -5149,19 +5149,32 @@ class PostgresWorkStore:
                     else:
                         raise WorkStoreError("invalid_request", ("execution grant not found",))
                 else:
+                    row = None
                     try:
-                        grant_uuid = UUID(value)
+                        requested_uuid = UUID(value)
                     except ValueError:
                         cur.execute(
                             "SELECT gi.grant_id FROM omp_work.execution_grant_items gi JOIN omp_work.work_aliases a ON a.workspace_id=gi.workspace_id AND a.work_id=gi.work_id JOIN omp_work.execution_grants g ON g.grant_id=gi.grant_id WHERE gi.workspace_id=%s AND a.key=%s ORDER BY g.created_at DESC LIMIT 1",
                             (workspace_id, value),
                         )
                         row = cur.fetchone()
-                        if not row:
-                            raise WorkStoreError(
-                                "invalid_request", ("execution grant not found",)
+                    else:
+                        cur.execute(
+                            "SELECT grant_id FROM omp_work.execution_grants WHERE workspace_id=%s AND grant_id=%s",
+                            (workspace_id, requested_uuid),
+                        )
+                        row = cur.fetchone()
+                        if row is None:
+                            cur.execute(
+                                "SELECT gi.grant_id FROM omp_work.execution_grant_items gi JOIN omp_work.execution_grants g ON g.grant_id=gi.grant_id WHERE gi.workspace_id=%s AND gi.work_id=%s ORDER BY g.created_at DESC LIMIT 1",
+                                (workspace_id, requested_uuid),
                             )
-                        grant_uuid = row["grant_id"]
+                            row = cur.fetchone()
+                    if not row:
+                        raise WorkStoreError(
+                            "invalid_request", ("execution grant not found",)
+                        )
+                    grant_uuid = row["grant_id"]
                 cur.execute(
                     f"SELECT {_GRANT_FIELDS} FROM omp_work.execution_grants WHERE workspace_id=%s AND grant_id=%s",
                     (workspace_id, grant_uuid),

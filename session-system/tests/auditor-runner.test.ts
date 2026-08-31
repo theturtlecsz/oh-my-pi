@@ -399,6 +399,183 @@ describe("native auditor runner (OMP-168)", () => {
 			dirtySpy.mockRestore();
 		}
 	});
+	test("pause notice argument round-trips through execute resume lookup", async () => {
+		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "pause-notice-cache-"));
+		const cacheFile = path.relative(
+			path.join(os.homedir(), ".omp", "agent"),
+			path.join(cacheDir, "work-cache.json"),
+		);
+		const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => Promise<any>>>();
+		const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		const notifications: string[] = [];
+		const sentMessages: Array<{ customType?: string; content?: string }> = [];
+		const lookupArgs: Array<string | undefined> = [];
+		const fakePi = {
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				commands.set(name, def.handler);
+			},
+			registerFlag: () => {},
+			on: (event: string, handler: (event: any, ctx: ExtensionContext) => Promise<any>) => {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			sendMessage: (message: { customType?: string; content?: string }) => {
+				sentMessages.push(message);
+			},
+			appendEntry: () => {},
+			getSessionId: () => "pause-notice-session",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const cwd = path.resolve(import.meta.dir, "../..");
+		const head = headCommit(cwd) ?? "0".repeat(40);
+		const workId = "c7a904ca-c979-4cc9-aa87-6063da842aec";
+		const revisionId = "f7eed1b9-7f74-4998-85d6-2bce9862067c";
+		const issue = { id: workId, key: "OMP-190", title: "Pause notice", project: "Bookends" };
+		const exec = {
+			grant: {
+				grant_id: "28a3950b-0abe-4a0c-a3ec-18438b8b3267",
+				workspace_id: "ws-1",
+				owner_id: "owner-1",
+				repository: cwd,
+				remote_ref: "refs/heads/main",
+				state: "active",
+				mode: "single",
+				grant_version: 1,
+				max_continuations: 8,
+				max_close_attempts: 5,
+				max_no_progress: 3,
+				continuations_scheduled: 0,
+				authorization_hash: "auth-hash",
+				judge_sha256: "",
+				created_at: new Date().toISOString(),
+				expires_at: new Date(Date.now() + 86400000).toISOString(),
+			},
+			items: [],
+			activeItem: {
+				item_id: "item-1",
+				workspace_id: "ws-1",
+				grant_id: "28a3950b-0abe-4a0c-a3ec-18438b8b3267",
+				work_id: workId,
+				position: 0,
+				phase: "executing",
+				claimed_revision_id: revisionId,
+				project_id: null,
+				original_request: "Pause notice",
+				original_request_sha256: "0".repeat(64),
+				close_attempts_started: 0,
+				consecutive_no_progress: 0,
+				initial_git_baseline: head,
+				current_git_baseline: head,
+			},
+		} as unknown as ExecutionSnapshot;
+		exec.items = [exec.activeItem!];
+
+		let failNextIssueLookup = false;
+		const mockBackend = {
+			cacheFile,
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			getExecution: async (selector?: string) => {
+				lookupArgs.push(selector);
+				return selector === undefined || selector === issue.key || selector === workId ? exec : null;
+			},
+			findIssue: async () => {
+				if (failNextIssueLookup) {
+					failNextIssueLookup = false;
+					return null;
+				}
+				return issue;
+			},
+			setExecutionState: async (input: { targetState: "active" | "paused" }) => {
+				exec.grant.state = input.targetState;
+				exec.grant.grant_version++;
+				return exec;
+			},
+			workClient: {
+				healthReady: async () => ({
+					ready: true,
+					contract_sha256: WORK_CONTRACT_SHA256,
+					service_fingerprint: "service-fp",
+					judge_manifest: { judge_sha256: "judge-sha" },
+				}),
+				workItem: async () => ({
+					work_id: workId,
+					state: "IN_PROGRESS",
+					project_id: null,
+					revision: { revision_id: revisionId },
+				}),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+		mockDiscovery();
+
+		const fakeCtx = {
+			cwd,
+			taskDepth: 0,
+			abort: () => {},
+			sessionManager: { getBranch: () => [] },
+			ui: {
+				notify: (text: string) => { notifications.push(text); },
+				theme: { fg: (_color: string, text: string) => text },
+				setStatus: () => {},
+			},
+		} as unknown as ExtensionContext;
+		const tcb = await computeAuditTcb(fakeCtx, mockBackend.workClient!);
+		exec.grant.judge_sha256 = tcb.judgeSha256;
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+
+		const pauseAndResume = async (fallback: boolean): Promise<string> => {
+			failNextIssueLookup = fallback;
+			const inputHandler = handlers.get("input")?.[0];
+			expect(inputHandler).toBeDefined();
+			await inputHandler!({ source: "user", originalText: "owner interjection" }, fakeCtx);
+			expect(exec.grant.state).toBe("paused");
+
+			const beforeStarts = handlers.get("before_agent_start") ?? [];
+			expect(beforeStarts.length).toBeGreaterThan(0);
+			let notice = "";
+			for (const beforeStart of beforeStarts) {
+				const injected = await beforeStart({}, fakeCtx);
+				const content = String(injected?.message?.content ?? "");
+				if (content.includes("Execution grant paused")) notice = content;
+			}
+			const match = notice.match(/\/execute resume ([^']+)'/);
+			expect(match).not.toBeNull();
+			const suggested = match![1]!;
+
+			const resume = commands.get("execute");
+			expect(resume).toBeDefined();
+			await resume!(`resume ${suggested}`, fakeCtx);
+			expect(exec.grant.state).toBe("active");
+			expect(notifications.at(-1)).toContain("Execution grant resumed");
+			return suggested;
+		};
+
+		try {
+			expect(await pauseAndResume(false)).toBe(issue.key);
+			expect(lookupArgs).toContain(issue.key);
+
+			expect(await pauseAndResume(true)).toBe(workId);
+			expect(lookupArgs).toContain(workId);
+			expect(sentMessages.some(message => message.customType === "work-execute")).toBe(true);
+		} finally {
+			dirtySpy.mockRestore();
+			fs.rmSync(cacheDir, { recursive: true, force: true });
+		}
+	});
+
 });
 
 describe("renderNextActionBanner table-driven coverage (OMP-168)", () => {
