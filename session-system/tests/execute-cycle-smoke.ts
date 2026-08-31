@@ -1530,7 +1530,14 @@ try {
 
 	// Recovery while active at the cap calls set_execution_state which atomically stops and cleans up
 	const recoveryCap = runHarness("recovery", capItem1.key);
-	assert.equal((recoveryCap.sentMessages as unknown[])?.length, 0, "recovery while active at cap sends zero turns");
+	// OMP-196: recovery-driven cap terminalization emits exactly one terminal
+	// closing notice (work-execution-status) — never a continuation turn.
+	const capMessages = (recoveryCap.sentMessages ?? []) as Array<{ customType?: string; content?: string }>;
+	assert.equal(capMessages.length, 1, "recovery while active at cap sends exactly the terminal notice");
+	assert.equal(capMessages[0]?.customType, "work-execution-status", "cap terminalization notice is work-execution-status");
+	assert.ok(capMessages[0]?.content?.includes("Execution grant stopped (max_continuations_exceeded)"), "notice names the cap terminal reason");
+	assert.ok(capMessages[0]?.content?.includes("Grant is terminal; resume is impossible."), "notice states terminality");
+	assert.ok(capMessages[0]?.content?.includes("Next: /execute"), "notice names the next command");
 
 	assert.equal(recoveryCap.exec?.grant?.state, "stopped", "grant stopped on cap exhaustion during recovery");
 	assert.equal(recoveryCap.exec?.grant?.terminal_reason, "max_continuations_exceeded", "terminal reason recorded");
