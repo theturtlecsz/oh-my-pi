@@ -1426,7 +1426,7 @@ class PostgresWorkStore:
                 (
                     envelope.workspace_id,
                     payload.work_id,
-                    ["blocked", "remediation_required", "budget_exhausted"],
+                    ["blocked", "remediation_required", "budget_exhausted", "superseded"],
                 ),
             )
             peeked = cur.fetchone()
@@ -1522,7 +1522,7 @@ class PostgresWorkStore:
                 (
                     envelope.workspace_id,
                     payload.work_id,
-                    ["blocked", "remediation_required", "budget_exhausted"],
+                    ["blocked", "remediation_required", "budget_exhausted", "superseded"],
                 ),
             )
             terminal = cur.fetchone()

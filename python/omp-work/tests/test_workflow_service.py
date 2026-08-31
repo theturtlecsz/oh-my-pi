@@ -1080,10 +1080,24 @@ def test_candidate_mutation_before_settle_supersedes_without_receipt(service) ->
     workspace_id = uuid4()
     _grant(service, workspace_id)
     item = _create(service, workspace_id, "drift target")
+    rider = _create(service, workspace_id, "drift carryover rider")
     plan = _plan(service, workspace_id, item)
     status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
     final = body["result"]["candidate"]
-    status, body = _begin(service, workspace_id, item)
+    status, body = _begin(
+        service,
+        workspace_id,
+        item,
+        identity={
+            "riders": [
+                {
+                    "work_id": rider["work_id"],
+                    "revision_id": rider["revision_id"],
+                    "evidence": "probe: candidate drift carryover",
+                }
+            ]
+        },
+    )
     attempt = body["result"]["attempt"]
     seal = _verify_and_seal(service, workspace_id, item, final, attempt)
     status, body = _reserve(
@@ -1135,6 +1149,25 @@ def test_candidate_mutation_before_settle_supersedes_without_receipt(service) ->
         and receipt["issuer"] == "work-service/auditor-settle"
     ]
     assert settle_audits == []
+
+    replacement_plan = _plan(service, workspace_id, item)
+    status, body = _finalize(
+        service, workspace_id, item, replacement_plan["candidate_id"]
+    )
+    assert status == 200, body
+    status, body = _begin(
+        service,
+        workspace_id,
+        item,
+        authorization_ref=f"summary:{uuid4()}",
+        identity={"riders": []},
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    carried = body["result"]["attempt"]["riders"]
+    assert len(carried) == 1
+    assert carried[0]["work_id"] == rider["work_id"]
+    assert carried[0]["revision_id"] == rider["revision_id"]
+    assert carried[0]["evidence"] == "probe: candidate drift carryover"
 
 
 def test_duplicate_begins_one_live_attempt(service) -> None:
@@ -1244,10 +1277,24 @@ def test_replan_supersedes_live_attempt(service) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)
     item = _create(service, workspace_id, "replan supersede target")
+    rider = _create(service, workspace_id, "replan supersede carryover rider")
     plan = _plan(service, workspace_id, item)
     status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
     assert status == 200, body
-    status, body = _begin(service, workspace_id, item)
+    status, body = _begin(
+        service,
+        workspace_id,
+        item,
+        identity={
+            "riders": [
+                {
+                    "work_id": rider["work_id"],
+                    "revision_id": rider["revision_id"],
+                    "evidence": "probe: superseded by new plan",
+                }
+            ]
+        },
+    )
     assert status == 200 and body["result"]["status"] == "applied"
     old_attempt = body["result"]["attempt"]
     replan = _plan(service, workspace_id, item)
@@ -1291,8 +1338,13 @@ def test_replan_supersedes_live_attempt(service) -> None:
     # Finalize the new plan and begin again: exactly one live attempt survives.
     status, body = _finalize(service, workspace_id, item, replan["candidate_id"])
     assert status == 200, body
-    status, body = _begin(service, workspace_id, item)
+    status, body = _begin(service, workspace_id, item, identity={"riders": []})
     assert status == 200 and body["result"]["status"] == "applied"
+    carried = body["result"]["attempt"]["riders"]
+    assert len(carried) == 1
+    assert carried[0]["work_id"] == rider["work_id"]
+    assert carried[0]["revision_id"] == rider["revision_id"]
+    assert carried[0]["evidence"] == "probe: superseded by new plan"
     workflow = service.client.get(
         "/v1/work-items/OMP-1/workflow", headers=_owner_headers(workspace_id)
     ).json()
