@@ -2582,28 +2582,29 @@ try {
 
 	const alreadyOut = runHarness("already-delivered", itemAlready.key);
 	assert.ok(
-		String(alreadyOut.review).includes("Execution grant completed") || String(alreadyOut.review).includes("delivered and closed"),
-		`already-delivered completes autonomously; got: ${alreadyOut.review}`,
-	);
-	assert.ok(
-		(alreadyOut.uiCalls as string[]).some(c => c.includes("binding baseline HEAD")),
-		"baseline-bind notice surfaced on the already-delivered freeze",
+		String(alreadyOut.review).includes("Candidate freeze refused") && String(alreadyOut.review).includes("has no verified grant baseline"),
+		`already-delivered empty diff refuses fail-closed pending baseline wiring; got: ${alreadyOut.review}`,
 	);
 	// harness JSON output — narrow one-off read of the grant projection
-	const alreadyExec = alreadyOut.finalExecution as { items?: { phase?: string }[] } | undefined;
-	assert.equal(alreadyExec?.items?.[0]?.phase, "completed", "already-delivered item phase is completed");
+	const alreadyExec = alreadyOut.execAfterReview as { activeItem?: { phase?: string } } | undefined;
+	assert.equal(alreadyExec?.activeItem?.phase, "executing", "refused freeze does not advance the item phase");
+	assert.ok(String(alreadyOut.stopResult).includes("stopped"), `grant remains cleanly stoppable after the refusal; got: ${alreadyOut.stopResult}`);
 	const alreadyView = (await (await fetch(`${baseUrl}/v1/work-items/${itemAlready.key}/workflow`, { headers })).json()) as { item: { state: string } };
-	assert.equal(alreadyView.item.state, "DONE", "already-delivered item closed DONE service-side");
+	assert.notEqual(alreadyView.item.state, "DONE", "no item closes through an unverified empty-diff adoption");
 
 	const unmetOut = runHarness("already-unmet", itemUnmet.key);
-	assert.ok(String(unmetOut.review).includes("NEEDS_FIX"), `already-unmet audit yields NEEDS_FIX; got: ${unmetOut.review}`);
+	assert.ok(
+		String(unmetOut.review).includes("Candidate freeze refused") && String(unmetOut.review).includes("has no verified grant baseline"),
+		`already-unmet empty diff refuses before any audit; got: ${unmetOut.review}`,
+	);
 	// harness JSON output — narrow one-off read of the grant projection
 	const unmetExec = unmetOut.execAfterReview as { activeItem?: { phase?: string } } | undefined;
-	assert.equal(unmetExec?.activeItem?.phase, "remediating", "empty-diff NEEDS_FIX lands in remediating, not completed");
+	assert.equal(unmetExec?.activeItem?.phase, "executing", "refused freeze does not advance the unmet item phase");
+	assert.ok(String(unmetOut.stopResult).includes("stopped"), `unmet grant remains cleanly stoppable; got: ${unmetOut.stopResult}`);
 	const unmetView = (await (await fetch(`${baseUrl}/v1/work-items/${itemUnmet.key}/workflow`, { headers })).json()) as { item: { state: string } };
 	assert.notEqual(unmetView.item.state, "DONE", "unmet item is not closed by an empty diff");
 
-	console.log("execute-cycle-smoke: PASS (clean preflight, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety)");
+	console.log("execute-cycle-smoke: PASS (clean preflight, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, empty-diff execution freeze fail-closed pending baseline wiring)");
 } finally {
 	cleanup();
 }

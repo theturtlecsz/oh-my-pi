@@ -367,20 +367,51 @@ describe("candidate freeze and push", () => {
 });
 
 describe("execution freeze (OMP-188)", () => {
-	test("binds baseline HEAD when sealed paths carry no changes (already-delivered)", async () => {
+	test("binds baseline HEAD when sealed paths carry no changes and HEAD equals the grant baseline", async () => {
 		const repo = makeRepo();
 		const head = git(repo, "rev-parse", "HEAD");
 		const ui = makeUi(true);
 		const outcome = await freezeCandidateCommit(ui, repo, "OMP-1", "cand-1", [], {
 			mode: "execution",
 			sealedPaths: ["seed.txt"],
+			expectedBaseline: head,
 		});
 		if ("refused" in outcome) throw new Error(`expected baseline bind, got refusal: ${outcome.reason}`);
 		expect(outcome.commitSha).toBe(head);
 		expect(outcome.paths).toEqual(["seed.txt"]);
 		expect(outcome.candidateSha256).toBe(candidateSha256(head, ["seed.txt"]));
 		expect(git(repo, "rev-parse", "HEAD")).toBe(head); // no new commit
-		expect(ui.notices.some(n => n.includes("binding baseline HEAD"))).toBe(true);
+		expect(ui.notices.some(n => n.includes("binding grant baseline HEAD"))).toBe(true);
+	});
+
+	test("refuses clean sealed paths without a verified grant baseline (fail closed)", async () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["seed.txt"],
+		});
+		expect("refused" in outcome && outcome.refused).toBe("failed");
+		expect("refused" in outcome ? outcome.reason : "").toContain("has no verified grant baseline");
+		expect(git(repo, "rev-parse", "HEAD")).toBe(head); // repo untouched
+	});
+
+	test("refuses a clean HEAD that moved off the grant baseline (foreign commit never adopted)", async () => {
+		const repo = makeRepo();
+		const baseline = git(repo, "rev-parse", "HEAD");
+		fs.writeFileSync(path.join(repo, "foreign.txt"), "unrelated post-grant work\n");
+		Bun.spawnSync(["git", "add", "--", "foreign.txt"], { cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "foreign clean commit"], { cwd: repo });
+		const movedHead = git(repo, "rev-parse", "HEAD");
+		expect(movedHead).not.toBe(baseline);
+		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["seed.txt"],
+			expectedBaseline: baseline,
+		});
+		expect("refused" in outcome && outcome.refused).toBe("failed");
+		expect("refused" in outcome ? outcome.reason : "").toContain("differs from grant baseline");
+		expect(git(repo, "rev-parse", "HEAD")).toBe(movedHead); // repo untouched
 	});
 
 	test("refuses failed when the repo has no HEAD commit", async () => {
