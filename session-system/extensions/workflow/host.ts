@@ -67,7 +67,7 @@ import {
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
-import { currentSymbolicRef, dirtyPaths, freezeCandidateCommit, headCommit, inProgressGitOp, parentCommit, pushCandidate, rangeDiffSha256, validateExecutionPaths } from "./git";
+import { currentSymbolicRef, dirtyPaths, freezeCandidateCommit, headCommit, inProgressGitOp, parentCommit, pushCandidate, rangeDiffSha256, runGit, validateExecutionPaths } from "./git";
 import {
 	cancelBatchPath,
 	consumeStagedCancelBatch,
@@ -182,6 +182,28 @@ function fmtElapsed(ms: number): string {
 	const m = Math.floor(ms / 60000);
 	if (m < 60) return `${m}m`;
 	return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`;
+}
+
+/** Authorization view of a dirty tree. Unlike dirtyPaths (which intentionally
+ * keeps only a rename's stageable destination), this includes both rename/copy
+ * source and destination so sealed-path recovery cannot delete a foreign path. */
+function executionRecoveryTouchedPaths(cwd: string, observedDirt: readonly string[]): string[] | null {
+	const top = runGit(cwd, ["rev-parse", "--show-toplevel"]);
+	if (!top.ok) return null;
+	const status = runGit(top.out, ["status", "--porcelain", "-z", "--untracked-files=all"]);
+	if (!status.ok) return null;
+
+	const tokens = status.raw.split("\0").filter(token => token.length > 0);
+	const paths = [...observedDirt];
+	for (let index = 0; index < tokens.length; index++) {
+		const entry = tokens[index]!;
+		paths.push(entry.slice(3));
+		if (entry[0] === "R" || entry[0] === "C") {
+			const original = tokens[++index];
+			if (original) paths.push(original);
+		}
+	}
+	return [...new Set(paths)];
 }
 
 /** Deterministic plain-words render — zero LLM, zero paths/hashes. Identifiers
@@ -1501,10 +1523,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 						: [],
 				);
 				const phaseAllowsSealedDirt = ["executing", "remediating"].includes(exec.activeItem.phase);
-				const foreignDirt = dirt.filter(path => !sealedPaths.has(path));
 				if (!phaseAllowsSealedDirt) {
 					return { ok: false, reason: `dirty worktree: ${dirt.join(", ")}` };
 				}
+				const touchedPaths = executionRecoveryTouchedPaths(ctx.cwd, dirt);
+				if (touchedPaths === null) {
+					return { ok: false, reason: "unable to inspect complete dirty path set" };
+				}
+				const foreignDirt = touchedPaths.filter(path => !sealedPaths.has(path));
 				if (foreignDirt.length > 0) {
 					return { ok: false, reason: `dirty worktree outside sealed paths: ${foreignDirt.join(", ")}` };
 				}

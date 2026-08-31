@@ -430,7 +430,13 @@ describe("native auditor runner (OMP-168)", () => {
 			zod: z,
 		} as unknown as ExtensionAPI;
 
-		const cwd = path.resolve(import.meta.dir, "../..");
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pause-notice-repo-"));
+		spawnSync("git", ["init", "-b", "main"], { cwd });
+		spawnSync("git", ["config", "user.name", "Test"], { cwd });
+		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd });
+		fs.writeFileSync(path.join(cwd, "foreign.txt"), "tracked foreign source\n");
+		spawnSync("git", ["add", "."], { cwd });
+		spawnSync("git", ["commit", "-m", "seed foreign source"], { cwd });
 		const head = headCommit(cwd) ?? "0".repeat(40);
 		const workId = "c7a904ca-c979-4cc9-aa87-6063da842aec";
 		const revisionId = "f7eed1b9-7f74-4998-85d6-2bce9862067c";
@@ -591,9 +597,19 @@ describe("native auditor runner (OMP-168)", () => {
 			expect(exec.grant.state).toBe("paused");
 			expect(notifications.at(-1)).toContain("dirty worktree outside sealed paths: foreign.txt");
 			expect(notifications.at(-1)).not.toContain("src/sealed.ts");
+
+			fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
+			fs.renameSync(path.join(cwd, "foreign.txt"), path.join(cwd, "src/sealed.ts"));
+			exec.grant.state = "paused";
+			dirt = ["src/sealed.ts"]; // dirtyPaths staging view intentionally omits rename source
+			await resume!(`resume ${issue.key}`, fakeCtx);
+			expect(exec.grant.state).toBe("paused");
+			expect(notifications.at(-1)).toContain("dirty worktree outside sealed paths: foreign.txt");
+			expect(notifications.at(-1)).not.toContain("src/sealed.ts");
 		} finally {
 			dirtySpy.mockRestore();
 			fs.rmSync(cacheDir, { recursive: true, force: true });
+			fs.rmSync(cwd, { recursive: true, force: true });
 		}
 	});
 
