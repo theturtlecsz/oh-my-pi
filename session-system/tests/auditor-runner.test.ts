@@ -275,6 +275,26 @@ describe("native auditor runner (OMP-168)", () => {
 
 		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow("output schema");
 	});
+
+	test("grant state guard denies remediation on stopped or canceled grants (OMP-186)", () => {
+		const formatTerminalRefusal = (verdict: string, grantState: string, terminalReason?: string | null, findings?: string) => {
+			if (grantState === "stopped" || grantState === "canceled") {
+				return `Audit verdict: ${verdict}.\nExecution grant ${grantState} (${terminalReason ?? grantState}).\n\nFindings:\n${findings ?? ""}`;
+			}
+			return `Audit verdict: ${verdict}.\n\nFindings:\n${findings ?? ""}\n\nUpdate plan, stamp plan, fix findings, and rerun review.`;
+		};
+
+		const stoppedMsg = formatTerminalRefusal("NEEDS_FIX", "stopped", "budget_exhausted", "AC-1 failed");
+		expect(stoppedMsg).toContain("Execution grant stopped (budget_exhausted)");
+		expect(stoppedMsg).not.toContain("Update plan, stamp plan");
+
+		const canceledMsg = formatTerminalRefusal("BLOCKED", "canceled", "owner_canceled", "AC-2 missing");
+		expect(canceledMsg).toContain("Execution grant canceled (owner_canceled)");
+		expect(canceledMsg).not.toContain("Update plan, stamp plan");
+
+		const activeMsg = formatTerminalRefusal("NEEDS_FIX", "active", null, "AC-1 failed");
+		expect(activeMsg).toContain("Update plan, stamp plan, fix findings, and rerun review.");
+	});
 });
 
 describe("renderNextActionBanner table-driven coverage (OMP-168)", () => {

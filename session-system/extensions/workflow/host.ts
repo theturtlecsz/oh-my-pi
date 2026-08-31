@@ -3143,6 +3143,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 											pendingNotices.push(`[${TOOL_NAME}] checkpoint delivery failed (${notice})`);
 										});
 									}
+									const currentExec = await backend.getExecution(params.work);
+									if (currentExec?.grant?.state === "stopped" || currentExec?.grant?.state === "canceled") {
+										return deny(`Audit verdict: ${settle.verdict}.\nExecution grant ${currentExec.grant.state} (${currentExec.grant.terminal_reason ?? currentExec.grant.state}).\n\nFindings:\n${settle.event?.renderedText ?? ""}`);
+									}
 									const reportSuffix = auditRun.payload ? `\n\n## Auditor Report\n${auditRun.payload}` : "";
 									return okText(`Audit verdict: ${settle.verdict}.\n\nFindings:\n${settle.event?.renderedText ?? ""}${reportSuffix}\n\nUpdate plan, stamp plan, fix findings, and rerun review.`);
 								}
@@ -3329,9 +3333,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 								authorizationRef: `execution:${exec.grant.grant_id}:${exec.activeItem.position}:${exec.activeItem.close_attempts_started + 1}`,
 								sessionId: exec.grant.authorization_hash,
 								startedAt: exec.grant.created_at,
-								startCommit: exec.activeItem.initial_git_baseline,
+								startCommit: exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline,
 								repository: isAbsolute(exec.grant.repository) ? exec.grant.repository : ctx.cwd,
-								diffSha256: rangeDiffSha256(ctx.cwd, exec.activeItem.initial_git_baseline, freeze.commitSha) ?? "",
+								diffSha256: rangeDiffSha256(ctx.cwd, exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline, freeze.commitSha) ?? "",
 								dirtyPaths: [],
 								authorization_kind: "execution",
 								execution_grant_id: exec.grant.grant_id,
