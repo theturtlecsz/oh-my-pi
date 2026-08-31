@@ -601,6 +601,17 @@ if (scenario === "dirty") {
 	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
 	fs.writeFileSync(path.join(probe, "src/smoke_feat.ts"), "export const feat = false;\n");
 	out.seedReview = await execute({ action: "begin_execution_review", body: "seed: attempt begun, grant abandoned before audit" });
+	// AC-2: the seeded attempt must be audit_ready — seal its audit manifest
+	// directly through the backend, then capture the pre-recovery snapshot
+	// (state + old candidate binding) before abandoning the grant.
+	const seedConfig = loadWorkConfig();
+	if (!seedConfig) throw new Error("work config missing for stale-attempt seed");
+	const seedBackend = createWorkBackend(seedConfig, () => loadBearer(seedConfig));
+	const seedIssue = await seedBackend.findIssue(workKeyArg || "OMP-1");
+	const sealOutcome = await seedBackend.sealAuditManifest(seedIssue);
+	if (sealOutcome.status === "refused") throw new Error(`seed manifest seal refused: ${JSON.stringify(sealOutcome.event)}`);
+	const seedDetail = await seedBackend.issueDetail(seedIssue.key);
+	out.seedAttempt = seedDetail.attemptSnapshot;
 	// The post-yield checkpoint attestation/outbox bookkeeping bumps the grant
 	// version asynchronously; retry the stop until a fresh snapshot wins.
 	let stopResult = "";

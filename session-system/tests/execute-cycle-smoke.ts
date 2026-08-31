@@ -2689,6 +2689,9 @@ try {
 
 	const staleOut = runHarness("stale-attempt", itemStale.key);
 	assert.ok(String(staleOut.seedReview).includes("Close attempt begun"), `stale seed begins a live attempt; got: ${staleOut.seedReview}`);
+	const seedAttempt = staleOut.seedAttempt as { state?: string; candidateId?: string } | undefined;
+	assert.equal(seedAttempt?.state, "audit_ready", "seeded stale attempt reaches audit_ready before the grant is abandoned");
+	assert.ok(seedAttempt?.candidateId, "seeded stale attempt carries its old candidate binding");
 	assert.ok(String(staleOut.stopResult).includes("stopped"), `seed grant stops cleanly; got: ${staleOut.stopResult}`);
 	assert.ok(
 		String(staleOut.review).includes("Execution grant completed") || String(staleOut.review).includes("delivered and closed"),
@@ -2699,9 +2702,12 @@ try {
 	// harness JSON output — narrow one-off read of the grant projection
 	const staleExec = staleOut.finalExecution as { items?: { phase?: string }[] } | undefined;
 	assert.equal(staleExec?.items?.[0]?.phase, "completed", "stale-attempt item phase is completed");
-	const staleView = (await (await fetch(`${baseUrl}/v1/work-items/${itemStale.key}/workflow`, { headers })).json()) as { item: { state: string }; close_attempts?: { state: string }[] };
+	const staleView = (await (await fetch(`${baseUrl}/v1/work-items/${itemStale.key}/workflow`, { headers })).json()) as { item: { state: string }; close_attempts?: { state: string; candidate_id?: string | null }[] };
 	assert.equal(staleView.item.state, "DONE", "stale-attempt item closed DONE service-side");
-	assert.ok((staleView.close_attempts ?? []).some(a => a.state === "superseded"), "the stale pre-grant attempt is superseded, not resumed");
+	assert.ok(
+		(staleView.close_attempts ?? []).some(a => a.state === "superseded" && a.candidate_id === seedAttempt?.candidateId),
+		"the audit_ready stale attempt (old candidate binding) is superseded, not resumed",
+	);
 
 	console.log("execute-cycle-smoke: PASS (clean preflight, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety, zero-path baseline completion & queue advance, stale pre-grant attempt supersede)");
 } finally {
