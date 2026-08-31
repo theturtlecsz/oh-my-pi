@@ -81,7 +81,7 @@ import {
 import { registerSessionLedger } from "./session-ledger";
 import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
-import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView } from "@oh-my-pi/pi-work-client";
 
 /** Tool actions — the canonical action set for the `work` tool. */
 export type CanonicalAction =
@@ -142,6 +142,10 @@ export interface HostConfig {
 	acceptEntry(data: Record<string, unknown>): boolean;
 	/** Optional source resolver override for test isolation. */
 	sourceResolver?: SourceResolver;
+	/** Optional work service preflight callback for test isolation. */
+	preflightWorkService?: () => Promise<void>;
+	/** Optional work service restart callback for test isolation. */
+	restartWorkService?: () => Promise<void>;
 }
 interface HostNowState {
 	issueId?: string;
@@ -166,6 +170,8 @@ interface HostNowState {
 	lastSentContinuation?: { grantId: string; preReservationVersion: number; newVersion: number; at: number };
 	/** OMP-196: closing notice and next command for terminal execution grant. */
 	terminalExecution?: { grantId: string; state: "stopped" | "canceled"; reason?: string; tally?: string; nextCommand?: string; at: number };
+	/** OMP-199: service-only judge refresh tracker. */
+	serviceRefresh?: { grantId: string; judgeSha256: string };
 }
 
 const TREE_GLYPH: Record<TreeItem["bucket"], string> = { done: "✔", working: "▶", stuck: "✖", onyou: "✋", next: "○" };
@@ -446,6 +452,31 @@ interface WorkflowToolParams {
 	paths?: string[];
 }
 
+async function preflightWorkServiceUnit(): Promise<void> {
+	const showProc = Bun.spawn(["systemctl", "--user", "show", "omp-work-service.service", "--property=LoadState"], {
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const showExit = await showProc.exited;
+	const showStdout = (await new Response(showProc.stdout).text()).trim();
+	const showStderr = (await new Response(showProc.stderr).text()).trim();
+	if (showExit !== 0 || !showStdout.includes("LoadState=loaded")) {
+		throw new Error(`omp-work-service.service is not loaded (${showStdout || showStderr || `exit ${showExit}`})`);
+	}
+}
+
+async function defaultRestartWorkService(): Promise<void> {
+	const restartProc = Bun.spawn(["systemctl", "--user", "restart", "omp-work-service.service"], {
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const restartExit = await restartProc.exited;
+	if (restartExit !== 0) {
+		const restartStderr = (await new Response(restartProc.stderr).text()).trim();
+		throw new Error(`systemctl --user restart omp-work-service.service failed (exit ${restartExit}): ${restartStderr}`);
+	}
+}
+
 export function createWorkflowHost(cfg: HostConfig) {
 	const backend = cfg.backend;
 	const CACHE_FILE = join(homedir(), ".omp", "agent", backend.cacheFile);
@@ -688,6 +719,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			obligationReview: state.obligationReview,
 			summaryRefusal: state.summaryRefusal,
 			carrier: state.carrier,
+			serviceRefresh: state.serviceRefresh,
 		});
 	}
 
@@ -3254,16 +3286,121 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (!params.body || !params.body.trim()) {
 								return deny("Verification evidence body is required for begin_execution_review (pass body:\"<exact test commands and results>\").");
 							}
-							const exec = await backend.getExecution(params.work);
+							let exec = await backend.getExecution(params.work);
 							if (!exec || exec.grant.state !== "active") return deny("no active execution grant");
 							if (!exec.activeItem || !["executing", "remediating", "reviewing"].includes(exec.activeItem.phase)) {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected executing, remediating, or reviewing`);
 							}
 							const activeWorkId = exec.activeItem.work_id;
-							const tcb = await computeAuditTcb(ctx, backend.workClient!);
+							let tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
 							const targetIssue = await backend.findIssue(exec.activeItem.work_id);
 							if (!targetIssue) return deny(`Target execution item ${exec.activeItem.work_id} not found`);
 
+							if (state.serviceRefresh && state.serviceRefresh.grantId !== exec.grant.grant_id) {
+								state.serviceRefresh = undefined;
+								persistSession();
+							}
+
+							const planStampData = exec.activeItem.plan_stamp as { candidate_id?: string; paths?: string[] } | undefined;
+							const sealedPaths: string[] = Array.isArray(planStampData?.paths) ? planStampData.paths : [];
+							const sealedSet = new Set(sealedPaths);
+							const dirt = dirtyPaths(ctx.cwd);
+							const hasMigrationDirt = dirt.some(p => p.startsWith("python/omp-work/src/omp_work/operations/migrations/"));
+							if (hasMigrationDirt) {
+								return deny("service refresh refused: migrations directory contains changes");
+							}
+
+							const hasPythonRuntime = dirt.some(p => p.startsWith("python/omp-work/src/omp_work/") && p.endsWith(".py") && sealedSet.has(p));
+
+							if (hasPythonRuntime) {
+								const hasUnsealedDirt = dirt.some(p => !sealedSet.has(p));
+								if (hasUnsealedDirt) {
+									return deny("service refresh refused: unsealed dirty paths in worktree");
+								}
+
+								const isAlreadyRefreshed = Boolean(
+									state.serviceRefresh
+									&& state.serviceRefresh.grantId === exec.grant.grant_id
+									&& state.serviceRefresh.judgeSha256 === tcb.judgeSha256
+									&& exec.grant.judge_sha256 === tcb.judgeSha256
+								);
+
+								if (!isAlreadyRefreshed) {
+									const preflightFn = cfg.preflightWorkService ?? (cfg.restartWorkService ? async () => {} : preflightWorkServiceUnit);
+									try {
+										await preflightFn();
+									} catch (err) {
+										return deny(`Service refresh refused: ${err instanceof Error ? err.message : String(err)}`);
+									}
+									const prospectiveTcb = tcb;
+									try {
+										await backend.setExecutionState({
+											grantId: exec.grant.grant_id,
+											expectedGrantVersion: exec.grant.grant_version,
+											targetState: "active",
+											reason: "service_refresh",
+											judgeSha256: prospectiveTcb.judgeSha256,
+										});
+									} catch (err) {
+										return deny(`Service refresh refused: ${err instanceof Error ? err.message : String(err)}`);
+									}
+
+									const restartFn = cfg.restartWorkService ?? defaultRestartWorkService;
+									try {
+										await restartFn();
+									} catch (err) {
+										return deny(`WorkService restart failed: ${err instanceof Error ? err.message : String(err)}`);
+									}
+
+									const startTime = Date.now();
+									let readyHealth: HealthView | null = null;
+									while (Date.now() - startTime < 5000) {
+										try {
+											const h = await backend.workClient!.healthReady();
+											if (h && h.ready) {
+												readyHealth = h;
+												break;
+											}
+										} catch {
+											// retry
+										}
+										await Bun.sleep(100);
+									}
+									if (!readyHealth) {
+										return deny("WorkService did not become ready within 5 seconds after restart");
+									}
+
+									const postRestartTcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
+									const refreshedExec = await backend.getExecution(params.work);
+									if (!refreshedExec || refreshedExec.grant.state !== "active") {
+										return deny("failed to fetch active execution grant after restart");
+									}
+
+									if (readyHealth.service_fingerprint !== prospectiveTcb.judgeManifest.service_fingerprint) {
+										return deny("service_fingerprint mismatch after restart");
+									}
+									if (refreshedExec.grant.judge_sha256 !== prospectiveTcb.judgeSha256 || postRestartTcb.judgeSha256 !== prospectiveTcb.judgeSha256) {
+										return deny("judge_sha256 mismatch after restart");
+									}
+
+									state.serviceRefresh = {
+										grantId: refreshedExec.grant.grant_id,
+										judgeSha256: refreshedExec.grant.judge_sha256,
+									};
+									persistSession();
+									await saveCache();
+
+									exec = refreshedExec;
+									if (!exec.activeItem) {
+										return deny("active execution item missing after restart");
+									}
+									tcb = postRestartTcb;
+								}
+							}
+
+							if (tcb.judgeSha256 !== exec.grant.judge_sha256) {
+								return deny("judge TCB drift");
+							}
 							// OMP-97: checkpoint deliveries settle only after the turn yields,
 							// and this handler IS the turn. Every service gate that demands an
 							// attested delivery is therefore satisfied across turns: queue the
@@ -3527,11 +3664,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 
 							// First turn: freeze, finalize, record evidence, push, begin attempt.
-							const planStampData = exec.activeItem.plan_stamp as { candidate_id?: string; paths?: string[] } | undefined;
-							const plannedCandidateId = detail.planPacket?.candidateId ?? planStampData?.candidate_id;
+							const candidateId = detail.planPacket?.candidateId ?? (exec.activeItem.plan_stamp as { candidate_id?: string } | undefined)?.candidate_id;
+							const plannedCandidateId = candidateId;
 							if (!plannedCandidateId) return deny("planned candidate ID missing from execution item");
 
-							const sealedPaths = planStampData?.paths ?? [];
 
 							// Step 10: Work contract change handling.
 							// If the execution mutates files in python/omp-work, compute prospective contract digest.

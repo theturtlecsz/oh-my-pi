@@ -1,3 +1,7 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import { spawnSync } from "node:child_process";
+import { WORK_CONTRACT_SHA256, type WorkClient } from "@oh-my-pi/pi-work-client";
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { z } from "zod";
@@ -301,6 +305,7 @@ describe("native auditor runner (OMP-168)", () => {
 		let grantState = "stopped";
 		let terminalReason: string | null = "budget_exhausted";
 		let getExecutionCallCount = 0;
+		let mockJudge = "judge-sha";
 		const mockBackend = {
 			cacheFile: "work-cache.json",
 			markerFile: ".work-project",
@@ -316,7 +321,7 @@ describe("native auditor runner (OMP-168)", () => {
 				getExecutionCallCount++;
 				const effectiveState = getExecutionCallCount % 2 === 1 ? "active" : grantState;
 				return {
-					grant: { grant_id: "grant-1", grant_version: 1, state: effectiveState, terminal_reason: terminalReason },
+					grant: { grant_id: "grant-1", grant_version: 1, state: effectiveState, terminal_reason: terminalReason, judge_sha256: mockJudge },
 					items: [{ position: 0, work_id: "work-1", phase: "executing", plan_stamp: { paths: [] } }],
 					activeItem: { position: 0, work_id: "work-1", phase: "executing", plan_stamp: { paths: [] }, close_attempts_started: 0 },
 				};
@@ -325,7 +330,7 @@ describe("native auditor runner (OMP-168)", () => {
 			reserveAuditorLaunch: async () => ({ status: "reserved", launchId: "launch-1" }),
 			settleAuditorLaunch: async () => ({ verdict: "NEEDS_FIX", event: { renderedText: "AC-1 failed" } }),
 			workClient: {
-				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				healthReady: async () => ({ contract_sha256: WORK_CONTRACT_SHA256, service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
 				workflow: async () => ({
 					close_attempts: [{ attempt_id: "att-1", revision_id: "rev-1", candidate_id: "cand-1", candidate_sha256: "sha-1", candidate_commit: "commit-1" }],
 					item: { current_revision_id: "rev-1", candidate: { candidate_id: "cand-1", candidate_sha256: "sha-1", commit_sha: "commit-1" } },
@@ -366,25 +371,33 @@ describe("native auditor runner (OMP-168)", () => {
 			ui: { notify: () => {} },
 		} as unknown as ExtensionContext;
 
-		// 1. Stopped grant returns denial with terminal reason
-		grantState = "stopped";
-		terminalReason = "budget_exhausted";
-		const stoppedResult = await registeredExecute!("call-1", { action: "begin_execution_review", body: "verification", work: "OMP-186" }, new AbortController().signal, undefined, fakeCtx);
-		expect(stoppedResult.content[0].text).toContain("Execution grant stopped (budget_exhausted)");
-		expect(stoppedResult.content[0].text).not.toContain("Update plan, stamp plan");
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		try {
+			const tcb = await computeAuditTcb(fakeCtx, mockBackend.workClient!);
+			mockJudge = tcb.judgeSha256;
 
-		// 2. Canceled grant returns denial with terminal reason
-		grantState = "canceled";
-		terminalReason = "owner_canceled";
-		const canceledResult = await registeredExecute!("call-2", { action: "begin_execution_review", body: "verification", work: "OMP-186" }, new AbortController().signal, undefined, fakeCtx);
-		expect(canceledResult.content[0].text).toContain("Execution grant canceled (owner_canceled)");
-		expect(canceledResult.content[0].text).not.toContain("Update plan, stamp plan");
+			// 1. Stopped grant returns denial with terminal reason
+			grantState = "stopped";
+			terminalReason = "budget_exhausted";
+			const stoppedResult = await registeredExecute!("call-1", { action: "begin_execution_review", body: "verification", work: "OMP-186" }, new AbortController().signal, undefined, fakeCtx);
+			expect(stoppedResult.content[0].text).toContain("Execution grant stopped (budget_exhausted)");
+			expect(stoppedResult.content[0].text).not.toContain("Update plan, stamp plan");
 
-		// 3. Active grant returns remediation instruction
-		grantState = "active";
-		terminalReason = null;
-		const activeResult = await registeredExecute!("call-3", { action: "begin_execution_review", body: "verification", work: "OMP-186" }, new AbortController().signal, undefined, fakeCtx);
-		expect(activeResult.content[0].text).toContain("Update plan, stamp plan, fix findings, and rerun review.");
+			// 2. Canceled grant returns denial with terminal reason
+			grantState = "canceled";
+			terminalReason = "owner_canceled";
+			const canceledResult = await registeredExecute!("call-2", { action: "begin_execution_review", body: "verification", work: "OMP-186" }, new AbortController().signal, undefined, fakeCtx);
+			expect(canceledResult.content[0].text).toContain("Execution grant canceled (owner_canceled)");
+			expect(canceledResult.content[0].text).not.toContain("Update plan, stamp plan");
+
+			// 3. Active grant returns remediation instruction
+			grantState = "active";
+			terminalReason = null;
+			const activeResult = await registeredExecute!("call-3", { action: "begin_execution_review", body: "verification", work: "OMP-186" }, new AbortController().signal, undefined, fakeCtx);
+			expect(activeResult.content[0].text).toContain("Update plan, stamp plan, fix findings, and rerun review.");
+		} finally {
+			dirtySpy.mockRestore();
+		}
 	});
 });
 
@@ -1250,6 +1263,753 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			expect(messages.some(m => m.customType === "work-execution-status" && m.content?.includes("Next: /execute OMP-176 --queue"))).toBe(true);
 		} finally {
 			dirtySpy.mockRestore();
+		}
+	});
+});
+
+describe("service refresh during autonomous execution review (OMP-199)", () => {
+	const defaultAuditor: AgentDefinition = {
+		name: "auditor",
+		description: "Auditor agent",
+		systemPrompt: "Audit prompt",
+		model: ["@audit"],
+		output: { properties: { report: { type: "string" } } },
+		source: "bundled",
+	};
+
+	function mockDiscovery(agent: AgentDefinition = defaultAuditor) {
+		return vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
+			agents: [agent],
+			projectAgentsDir: null,
+		});
+	}
+
+	function makeTempRepo(): { dir: string; cacheFile: string; headSha: string; cleanup: () => void } {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "service-refresh-test-"));
+		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "service-refresh-cache-"));
+		spawnSync("git", ["init", "-b", "main"], { cwd: dir });
+		spawnSync("git", ["config", "user.name", "Test"], { cwd: dir });
+		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+		fs.writeFileSync(path.join(dir, ".work-project"), "The Bookends\n");
+		fs.mkdirSync(path.join(dir, "python/omp-work/src/omp_work/v1"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "python/omp-work/src/omp_work/v1/store.py"), "# initial\n");
+		const contractDir = path.join(dir, "python/omp-work/src/omp_work/contracts/v1");
+		const realContractDir = path.resolve(import.meta.dir, "../../python/omp-work/src/omp_work/contracts/v1");
+		fs.cpSync(realContractDir, contractDir, { recursive: true });
+		spawnSync("git", ["add", "."], { cwd: dir });
+		spawnSync("git", ["commit", "-m", "initial commit"], { cwd: dir });
+		const head = headCommit(dir) ?? "0".repeat(40);
+		const cacheFile = path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(cacheDir, "work-cache.json"));
+		return {
+			dir,
+			cacheFile,
+			headSha: head,
+			cleanup: () => {
+				fs.rmSync(dir, { recursive: true, force: true });
+				fs.rmSync(cacheDir, { recursive: true, force: true });
+			},
+		};
+	}
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	test("service refresh happy path in temp git repo executes rebind -> restart -> readiness -> PASS audit -> completion", async () => {
+		const repo = makeTempRepo();
+		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
+		const fakePi = {
+			zod: z,
+			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
+				if (spec.name === "work") registeredExecute = spec.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			appendEntry: () => {},
+		} as unknown as ExtensionAPI;
+
+		// Modify sealed python file in real git repo
+		fs.writeFileSync(path.join(repo.dir, "python/omp-work/src/omp_work/v1/store.py"), "# modified source\n");
+
+		const callLog: string[] = [];
+		const exec: ExecutionSnapshot = {
+			grant: {
+				grant_id: "grant-199",
+				workspace_id: "ws-1",
+				owner_id: "owner-1",
+				repository: repo.dir,
+				remote_ref: "refs/heads/main",
+				state: "active",
+				mode: "single",
+				grant_version: 3,
+				max_continuations: 8,
+				max_close_attempts: 5,
+				max_no_progress: 3,
+				continuations_scheduled: 0,
+				authorization_hash: "auth-hash",
+				judge_sha256: "old-judge-sha-00000000000000000000000000000000000000000000000000000000",
+				created_at: new Date().toISOString(),
+				expires_at: new Date(Date.now() + 86400000).toISOString(),
+			},
+			items: [
+				{
+					item_id: "item-199",
+					workspace_id: "ws-1",
+					grant_id: "grant-199",
+					work_id: "uuid-199",
+					position: 0,
+					phase: "executing",
+					claimed_revision_id: "rev-1",
+					original_request: "test request",
+					original_request_sha256: "0".repeat(64),
+					criteria_sha256: "0".repeat(64),
+					plan_stamp_sha256: "0".repeat(64),
+					plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-199" },
+					close_attempts_started: 0,
+					consecutive_no_progress: 0,
+					initial_git_baseline: repo.headSha,
+					current_git_baseline: repo.headSha,
+				},
+			],
+			activeItem: {
+				item_id: "item-199",
+				workspace_id: "ws-1",
+				grant_id: "grant-199",
+				work_id: "uuid-199",
+				position: 0,
+				phase: "executing",
+				claimed_revision_id: "rev-1",
+				original_request: "test request",
+				original_request_sha256: "0".repeat(64),
+				criteria_sha256: "0".repeat(64),
+				plan_stamp_sha256: "0".repeat(64),
+				plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-199" },
+				close_attempts_started: 0,
+				consecutive_no_progress: 0,
+				initial_git_baseline: repo.headSha,
+				current_git_baseline: repo.headSha,
+			},
+		};
+
+		const mockBackend = {
+			cacheFile: repo.cacheFile,
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async (keyOrId: string) => ({ id: "uuid-199", key: "OMP-199", title: "Test 199", project: "The Bookends" }),
+			issueDetail: async () => ({ key: "OMP-199", attemptSnapshot: undefined }),
+			getExecution: async () => exec,
+			setExecutionState: async (input: { grantId: string; expectedGrantVersion: number; targetState: string; reason?: string | null; judgeSha256: string }) => {
+				callLog.push(`setExecutionState:${input.reason}`);
+				exec.grant.grant_version++;
+				exec.grant.judge_sha256 = input.judgeSha256;
+				return exec;
+			},
+			finalizeExecutionCandidate: async () => {
+				callLog.push("finalizeExecutionCandidate");
+				return { candidate_id: "cand-199", candidate_sha256: "cand-sha", commit_sha: "1".repeat(40) };
+			},
+			appendEvidence: async (_issue: unknown, kind: string) => {
+				callLog.push(`appendEvidence:${kind}`);
+				return { receipt_id: "receipt-199" };
+			},
+			beginCloseAttempt: async () => {
+				callLog.push("beginCloseAttempt");
+				return { status: "applied", attemptId: "att-199", event: { requiresDelivery: false } };
+			},
+			sealAuditManifest: async () => {
+				callLog.push("sealAuditManifest");
+				return { status: "applied" };
+			},
+			sealedAuditTask: async () => ({ taskSha256: "task-sha", taskBody: "task body" }),
+			reserveAuditorLaunch: async () => {
+				callLog.push("reserveAuditorLaunch");
+				return { status: "reserved", launchId: "launch-199" };
+			},
+			settleAuditorLaunch: async () => {
+				callLog.push("settleAuditorLaunch");
+				return { verdict: "PASS", event: { renderedText: "PASS" } };
+			},
+			recordCloseoutReview: async () => {
+				callLog.push("recordCloseoutReview");
+				return { status: "applied" };
+			},
+			completeExecutionItem: async () => {
+				callLog.push("completeExecutionItem");
+				exec.activeItem!.phase = "completed";
+				return exec;
+			},
+			workClient: {
+				healthReady: async () => {
+					callLog.push("healthReady");
+					return { ready: true, contract_sha256: "contract-sha", service_fingerprint: "prospective-fp-199", judge_manifest: { judge_sha256: "judge-sha" } };
+				},
+				workflow: async () => ({ receipts: [], auditor_launches: [], item: null, close_attempts: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		const restartMock = vi.fn(async () => {
+			callLog.push("restartWorkService");
+		});
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+			restartWorkService: restartMock,
+		})(fakePi);
+
+		expect(registeredExecute).toBeDefined();
+
+		mockDiscovery();
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0,
+			id: "att-199",
+			agent: "auditor",
+			agentSource: "bundled",
+			task: "task",
+			exitCode: 0,
+			output: JSON.stringify({ report: "VERDICT: PASS\n(none)" }),
+			stderr: "",
+			truncated: false,
+			durationMs: 10,
+			tokens: 10,
+			requests: 1,
+		} as executorModule.SingleResult);
+
+		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/main", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
+		vi.spyOn(gitModule, "rangeDiffSha256").mockReturnValue("diff-sha-199");
+
+		const fakeCtx = {
+			cwd: repo.dir,
+			taskDepth: 0,
+			sessionManager: { getBranch: () => [] },
+			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			ui: {
+				notify: () => {},
+				theme: { fg: (_c: string, t: string) => t },
+				setStatus: () => {},
+			},
+		} as unknown as ExtensionContext;
+
+		try {
+			const res = await registeredExecute!("call-1", {
+				action: "begin_execution_review",
+				work: "OMP-199",
+				body: "pytest passed: 53 passed",
+			}, new AbortController().signal, () => {}, fakeCtx);
+
+			expect(res.content[0]?.text).toContain("Execution grant completed");
+			expect(callLog).toContain("setExecutionState:service_refresh");
+			expect(callLog).toContain("restartWorkService");
+			expect(callLog).toContain("healthReady");
+			expect(callLog).toContain("finalizeExecutionCandidate");
+			expect(callLog).toContain("beginCloseAttempt");
+			expect(callLog).toContain("completeExecutionItem");
+
+			// Verify exact call order: rebind -> restart -> healthReady -> freeze -> beginCloseAttempt -> complete
+			const rebindIdx = callLog.indexOf("setExecutionState:service_refresh");
+			const restartIdx = callLog.indexOf("restartWorkService");
+			const healthIdx = callLog.lastIndexOf("healthReady");
+			const freezeIdx = callLog.indexOf("finalizeExecutionCandidate");
+			const attemptIdx = callLog.indexOf("beginCloseAttempt");
+			const completeIdx = callLog.indexOf("completeExecutionItem");
+
+			expect(rebindIdx).toBeLessThan(restartIdx);
+			expect(restartIdx).toBeLessThan(healthIdx);
+			expect(healthIdx).toBeLessThan(freezeIdx);
+			expect(freezeIdx).toBeLessThan(attemptIdx);
+			expect(attemptIdx).toBeLessThan(completeIdx);
+		} finally {
+			repo.cleanup();
+		}
+	});
+
+	test("service refresh refusal cases perform zero freeze, push, or audit calls", async () => {
+		const repo = makeTempRepo();
+		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
+		const fakePi = {
+			zod: z,
+			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
+				if (spec.name === "work") registeredExecute = spec.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			appendEntry: () => {},
+		} as unknown as ExtensionAPI;
+
+		const freezeSpy = vi.spyOn(gitModule, "freezeCandidateCommit");
+		const pushSpy = vi.spyOn(gitModule, "pushCandidate");
+
+		const callLog: string[] = [];
+		const exec: ExecutionSnapshot = {
+			grant: {
+				grant_id: "grant-199",
+				workspace_id: "ws-1",
+				owner_id: "owner-1",
+				repository: repo.dir,
+				remote_ref: "refs/heads/main",
+				state: "active",
+				mode: "single",
+				grant_version: 3,
+				max_continuations: 8,
+				max_close_attempts: 5,
+				max_no_progress: 3,
+				continuations_scheduled: 0,
+				authorization_hash: "auth-hash",
+				judge_sha256: "old-judge-sha-00000000000000000000000000000000000000000000000000000000",
+				created_at: new Date().toISOString(),
+				expires_at: new Date(Date.now() + 86400000).toISOString(),
+			},
+			items: [
+				{
+					item_id: "item-199",
+					workspace_id: "ws-1",
+					grant_id: "grant-199",
+					work_id: "uuid-199",
+					position: 0,
+					phase: "executing",
+					claimed_revision_id: "rev-1",
+					original_request: "test request",
+					original_request_sha256: "0".repeat(64),
+					criteria_sha256: "0".repeat(64),
+					plan_stamp_sha256: "0".repeat(64),
+					plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-199" },
+					close_attempts_started: 0,
+					consecutive_no_progress: 0,
+					initial_git_baseline: repo.headSha,
+					current_git_baseline: repo.headSha,
+				},
+			],
+			activeItem: {
+				item_id: "item-199",
+				workspace_id: "ws-1",
+				grant_id: "grant-199",
+				work_id: "uuid-199",
+				position: 0,
+				phase: "executing",
+				claimed_revision_id: "rev-1",
+				original_request: "test request",
+				original_request_sha256: "0".repeat(64),
+				criteria_sha256: "0".repeat(64),
+				plan_stamp_sha256: "0".repeat(64),
+				plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-199" },
+				close_attempts_started: 0,
+				consecutive_no_progress: 0,
+				initial_git_baseline: repo.headSha,
+				current_git_baseline: repo.headSha,
+			},
+		};
+
+		let shouldFailRestart = false;
+		let healthFp = "prospective-fp-199";
+		const mockBackend = {
+			cacheFile: repo.cacheFile,
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-199", key: "OMP-199", title: "Test 199", project: "The Bookends" }),
+			issueDetail: async () => ({ key: "OMP-199", attemptSnapshot: undefined }),
+			getExecution: async () => exec,
+			setExecutionState: async (input: { reason?: string | null; judgeSha256: string }) => {
+				callLog.push(`setExecutionState:${input.reason}`);
+				return exec;
+			},
+			finalizeExecutionCandidate: async () => {
+				callLog.push("finalizeExecutionCandidate");
+				return { candidate_id: "cand-199", candidate_sha256: "cand-sha", commit_sha: "1".repeat(40) };
+			},
+			appendEvidence: async () => {
+				callLog.push("appendEvidence");
+				return { receipt_id: "receipt-199" };
+			},
+			beginCloseAttempt: async () => {
+				callLog.push("beginCloseAttempt");
+				return { status: "applied", attemptId: "att-199", event: { requiresDelivery: false } };
+			},
+			sealAuditManifest: async () => {
+				callLog.push("sealAuditManifest");
+				return { status: "applied" };
+			},
+			reserveAuditorLaunch: async () => {
+				callLog.push("reserveAuditorLaunch");
+				return { status: "reserved", launchId: "launch-199" };
+			},
+			settleAuditorLaunch: async () => {
+				callLog.push("settleAuditorLaunch");
+				return { verdict: "PASS", event: { renderedText: "PASS" } };
+			},
+			completeExecutionItem: async () => {
+				callLog.push("completeExecutionItem");
+				return exec;
+			},
+			workClient: {
+				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: healthFp, judge_manifest: { judge_sha256: "judge-sha" } }),
+				workflow: async () => ({ receipts: [], auditor_launches: [], item: null, close_attempts: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		const restartMock = vi.fn(async () => {
+			if (shouldFailRestart) throw new Error("systemctl restart failed");
+			callLog.push("restartWorkService");
+		});
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+			restartWorkService: restartMock,
+		})(fakePi);
+
+		expect(registeredExecute).toBeDefined();
+		mockDiscovery();
+
+		const fakeCtx = {
+			cwd: repo.dir,
+			taskDepth: 0,
+			sessionManager: { getBranch: () => [] },
+			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			ui: {
+				notify: () => {},
+				theme: { fg: (_c: string, t: string) => t },
+				setStatus: () => {},
+			},
+		} as unknown as ExtensionContext;
+
+		try {
+			// 1. Refusal: unsealed dirt in real repo
+			callLog.length = 0;
+			freezeSpy.mockClear();
+			pushSpy.mockClear();
+			fs.writeFileSync(path.join(repo.dir, "python/omp-work/src/omp_work/v1/store.py"), "# modified\n");
+			fs.writeFileSync(path.join(repo.dir, "unsealed.txt"), "unsealed dirt\n");
+			let res = await registeredExecute!("call-1", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(res.content[0]?.text).toContain("unsealed dirty paths");
+			expect(freezeSpy).toHaveBeenCalledTimes(0);
+			expect(pushSpy).toHaveBeenCalledTimes(0);
+			expect(callLog.filter(c => c === "finalizeExecutionCandidate" || c === "beginCloseAttempt" || c === "reserveAuditorLaunch" || c === "completeExecutionItem")).toHaveLength(0);
+
+			// 2. Refusal: migration dirt in real repo (only migration file dirty)
+			fs.rmSync(path.join(repo.dir, "unsealed.txt"), { force: true });
+			spawnSync("git", ["checkout", "--", "python/omp-work/src/omp_work/v1/store.py"], { cwd: repo.dir });
+			fs.mkdirSync(path.join(repo.dir, "python/omp-work/src/omp_work/operations/migrations"), { recursive: true });
+			fs.writeFileSync(path.join(repo.dir, "python/omp-work/src/omp_work/operations/migrations/0024_test.sql"), "-- mig\n");
+			callLog.length = 0;
+			freezeSpy.mockClear();
+			pushSpy.mockClear();
+			res = await registeredExecute!("call-2", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(res.content[0]?.text).toContain("migrations directory contains changes");
+			expect(freezeSpy).toHaveBeenCalledTimes(0);
+			expect(pushSpy).toHaveBeenCalledTimes(0);
+			expect(callLog.filter(c => c === "finalizeExecutionCandidate" || c === "beginCloseAttempt" || c === "reserveAuditorLaunch" || c === "completeExecutionItem")).toHaveLength(0);
+
+			// 3. Refusal: non-service TCB drift (clean repo, mismatched judge)
+			fs.rmSync(path.join(repo.dir, "python/omp-work/src/omp_work/operations/migrations/0024_test.sql"), { force: true });
+			spawnSync("git", ["checkout", "."], { cwd: repo.dir });
+			callLog.length = 0;
+			freezeSpy.mockClear();
+			pushSpy.mockClear();
+			res = await registeredExecute!("call-3", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(res.content[0]?.text).toContain("judge TCB drift");
+			expect(freezeSpy).toHaveBeenCalledTimes(0);
+			expect(pushSpy).toHaveBeenCalledTimes(0);
+			expect(callLog.filter(c => c === "finalizeExecutionCandidate" || c === "beginCloseAttempt" || c === "reserveAuditorLaunch" || c === "completeExecutionItem")).toHaveLength(0);
+
+			// 4. Refusal: restart failure
+			fs.writeFileSync(path.join(repo.dir, "python/omp-work/src/omp_work/v1/store.py"), "# modified\n");
+			callLog.length = 0;
+			freezeSpy.mockClear();
+			pushSpy.mockClear();
+			shouldFailRestart = true;
+			res = await registeredExecute!("call-4", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(res.content[0]?.text).toContain("WorkService restart failed");
+			expect(freezeSpy).toHaveBeenCalledTimes(0);
+			expect(pushSpy).toHaveBeenCalledTimes(0);
+			expect(callLog.filter(c => c === "finalizeExecutionCandidate" || c === "beginCloseAttempt" || c === "reserveAuditorLaunch" || c === "completeExecutionItem")).toHaveLength(0);
+
+			// 5. Refusal: post-restart fingerprint mismatch
+			callLog.length = 0;
+			freezeSpy.mockClear();
+			pushSpy.mockClear();
+			shouldFailRestart = false;
+			let healthCallCount = 0;
+			mockBackend.workClient!.healthReady = async () => {
+				healthCallCount++;
+				const fp = healthCallCount === 1 ? "prospective-fp-199" : "mismatched-fp-999";
+				return { ready: true, contract_sha256: "contract-sha", service_fingerprint: fp, judge_manifest: { judge_sha256: "judge-sha" } };
+			};
+			res = await registeredExecute!("call-5", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(res.content[0]?.text).toContain("service_fingerprint mismatch");
+			expect(freezeSpy).toHaveBeenCalledTimes(0);
+			expect(pushSpy).toHaveBeenCalledTimes(0);
+			expect(callLog.filter(c => c === "finalizeExecutionCandidate" || c === "beginCloseAttempt" || c === "reserveAuditorLaunch" || c === "completeExecutionItem")).toHaveLength(0);
+
+			// 6. Refusal: preflight unit unloaded refusal
+			let preflightRegisteredExecute: typeof registeredExecute;
+			const preflightPi = {
+				zod: z,
+				registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
+					if (spec.name === "work") preflightRegisteredExecute = spec.execute;
+				},
+				registerMessageRenderer: () => {},
+				registerCommand: () => {},
+				registerFlag: () => {},
+				on: () => {},
+				sendMessage: () => {},
+				appendEntry: () => {},
+			} as unknown as ExtensionAPI;
+			createWorkflowHost({
+				backend: mockBackend,
+				teamNoun: "the ledger",
+				entryType: "work-now",
+				acceptEntry: () => true,
+				preflightWorkService: async () => { throw new Error("omp-work-service.service is not loaded"); },
+				restartWorkService: restartMock,
+			})(preflightPi);
+			callLog.length = 0;
+			freezeSpy.mockClear();
+			pushSpy.mockClear();
+			res = await preflightRegisteredExecute!("call-6", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(res.content[0]?.text).toContain("omp-work-service.service is not loaded");
+			expect(freezeSpy).toHaveBeenCalledTimes(0);
+			expect(pushSpy).toHaveBeenCalledTimes(0);
+			expect(callLog.filter(c => c.startsWith("setExecutionState"))).toHaveLength(0);
+		} finally {
+			repo.cleanup();
+		}
+	});
+
+	test("crash-retry case: idempotent refresh with new judge runs restart once and caches marker", async () => {
+		const repo = makeTempRepo();
+		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
+		const fakePi = {
+			zod: z,
+			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
+				if (spec.name === "work") registeredExecute = spec.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			appendEntry: () => {},
+		} as unknown as ExtensionAPI;
+
+		// Modify sealed python file
+		fs.writeFileSync(path.join(repo.dir, "python/omp-work/src/omp_work/v1/store.py"), "# modified source\n");
+
+		const fakeCtx = {
+			cwd: repo.dir,
+			taskDepth: 0,
+			sessionManager: { getBranch: () => [] },
+			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			ui: {
+				notify: () => {},
+				theme: { fg: (_c: string, t: string) => t },
+				setStatus: () => {},
+			},
+		} as unknown as ExtensionContext;
+
+		mockDiscovery();
+		const tcb = await computeAuditTcb(fakeCtx, {
+			healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "prospective-fp-199", judge_manifest: { judge_sha256: "judge-sha" } }),
+		} as unknown as WorkClient);
+
+		const exec: ExecutionSnapshot = {
+			grant: {
+				grant_id: "grant-199",
+				workspace_id: "ws-1",
+				owner_id: "owner-1",
+				repository: repo.dir,
+				remote_ref: "refs/heads/main",
+				state: "active",
+				mode: "single",
+				grant_version: 4,
+				max_continuations: 8,
+				max_close_attempts: 5,
+				max_no_progress: 3,
+				continuations_scheduled: 0,
+				authorization_hash: "auth-hash",
+				// Grant already carries the new judge SHA (as if previous turn set it before crash)
+				judge_sha256: tcb.judgeSha256,
+				created_at: new Date().toISOString(),
+				expires_at: new Date(Date.now() + 86400000).toISOString(),
+			},
+			items: [
+				{
+					item_id: "item-199",
+					workspace_id: "ws-1",
+					grant_id: "grant-199",
+					work_id: "uuid-199",
+					position: 0,
+					phase: "executing",
+					claimed_revision_id: "rev-1",
+					original_request: "test request",
+					original_request_sha256: "0".repeat(64),
+					criteria_sha256: "0".repeat(64),
+					plan_stamp_sha256: "0".repeat(64),
+					plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-199" },
+					close_attempts_started: 0,
+					consecutive_no_progress: 0,
+					initial_git_baseline: repo.headSha,
+					current_git_baseline: repo.headSha,
+				},
+			],
+			activeItem: {
+				item_id: "item-199",
+				workspace_id: "ws-1",
+				grant_id: "grant-199",
+				work_id: "uuid-199",
+				position: 0,
+				phase: "executing",
+				claimed_revision_id: "rev-1",
+				original_request: "test request",
+				original_request_sha256: "0".repeat(64),
+				criteria_sha256: "0".repeat(64),
+				plan_stamp_sha256: "0".repeat(64),
+				plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-199" },
+				close_attempts_started: 0,
+				consecutive_no_progress: 0,
+				initial_git_baseline: repo.headSha,
+				current_git_baseline: repo.headSha,
+			},
+		};
+
+		const callLog: string[] = [];
+		let pendingEvents = [
+			{
+				event_id: "ev-pending-1",
+				sequence: 1,
+				work_id: "uuid-199",
+				attempt_id: null,
+				launch_id: null,
+				event_type: "close_attempt_started",
+				reason_code: "started",
+				reason: "started",
+				legal_next_actions: [] as string[],
+				remaining_launches: 3,
+				remaining_reports: 2,
+				requires_fresh_authorization: false,
+				rendered_text: "close attempt started",
+				rendered_sha256: "0".repeat(64),
+				requires_delivery: true,
+				created_at: new Date().toISOString(),
+			},
+		];
+		const mockBackend = {
+			cacheFile: repo.cacheFile,
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => pendingEvents,
+			findIssue: async () => ({ id: "uuid-199", key: "OMP-199", title: "Test 199", project: "The Bookends" }),
+			issueDetail: async () => ({ key: "OMP-199", attemptSnapshot: undefined }),
+			getExecution: async () => exec,
+			setExecutionState: async (input: { reason?: string | null }) => {
+				callLog.push(`setExecutionState:${input.reason}`);
+				return exec;
+			},
+			finalizeExecutionCandidate: async () => {
+				callLog.push("finalizeExecutionCandidate");
+				return { candidate_id: "cand-199", candidate_sha256: "cand-sha", commit_sha: "1".repeat(40) };
+			},
+			appendEvidence: async (_issue: unknown, kind: string) => {
+				callLog.push(`appendEvidence:${kind}`);
+				return { receipt_id: "receipt-199" };
+			},
+			beginCloseAttempt: async () => {
+				callLog.push("beginCloseAttempt");
+				return { status: "applied", attemptId: "att-199", event: { requiresDelivery: false } };
+			},
+			sealAuditManifest: async () => {
+				callLog.push("sealAuditManifest");
+				return { status: "applied" };
+			},
+			sealedAuditTask: async () => ({ taskSha256: "task-sha", taskBody: "task body" }),
+			reserveAuditorLaunch: async () => {
+				callLog.push("reserveAuditorLaunch");
+				return { status: "reserved", launchId: "launch-199" };
+			},
+			settleAuditorLaunch: async () => {
+				callLog.push("settleAuditorLaunch");
+				return { verdict: "PASS", event: { renderedText: "PASS" } };
+			},
+			recordCloseoutReview: async () => {
+				callLog.push("recordCloseoutReview");
+				return { status: "applied" };
+			},
+			completeExecutionItem: async () => {
+				callLog.push("completeExecutionItem");
+				exec.activeItem!.phase = "completed";
+				return exec;
+			},
+			workClient: {
+				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "prospective-fp-199", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workflow: async () => ({ receipts: [], auditor_launches: [], item: null, close_attempts: [] }),
+			},
+		} as unknown as WorkflowBackend;
+		let restartCount = 0;
+		const restartMock = vi.fn(async () => {
+			restartCount++;
+			callLog.push("restartWorkService");
+		});
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+			restartWorkService: restartMock,
+		})(fakePi);
+
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0,
+			id: "att-199",
+			agent: "auditor",
+			agentSource: "bundled",
+			task: "task",
+			exitCode: 0,
+			output: JSON.stringify({ report: "VERDICT: PASS\n(none)" }),
+			stderr: "",
+			truncated: false,
+			durationMs: 10,
+			tokens: 10,
+			requests: 1,
+		} as executorModule.SingleResult);
+
+		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/main", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
+		vi.spyOn(gitModule, "rangeDiffSha256").mockReturnValue("diff-sha-199");
+
+		try {
+			// First run: executes idempotent refresh + restart once, caches marker, yields on pending delivery BEFORE candidate freeze
+			const res1 = await registeredExecute!("call-1", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(res1.content[0]?.text).toContain("queued for delivery");
+			expect(restartCount).toBe(1);
+			expect(callLog.filter(c => c === "setExecutionState:service_refresh")).toHaveLength(1);
+			expect(callLog).not.toContain("finalizeExecutionCandidate");
+			expect(gitModule.dirtyPaths(repo.dir)).toContain("python/omp-work/src/omp_work/v1/store.py");
+
+			// Second run: working tree is STILL dirty, but cached marker prevents a second refresh/restart
+			pendingEvents = [];
+			const res2 = await registeredExecute!("call-2", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(res2.content[0]?.text).toContain("Execution grant completed");
+			expect(restartCount).toBe(1);
+			expect(callLog.filter(c => c === "setExecutionState:service_refresh")).toHaveLength(1);
+		} finally {
+			repo.cleanup();
 		}
 	});
 });

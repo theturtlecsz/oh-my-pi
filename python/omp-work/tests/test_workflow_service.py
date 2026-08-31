@@ -5283,3 +5283,706 @@ def test_execution_grant_zero_path_lifecycle_and_remediation_widening(service) -
     assert body["result"]["item"]["phase"] == "executing"
     assert body["result"]["item"]["plan_stamp"]["paths"] == []
     assert body["result"]["item"]["plan_stamp"]["initial_paths"] == []
+
+
+def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
+    service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+
+    item = _create(
+        service,
+        workspace_id,
+        "Build python runtime feature",
+        description="The request description",
+    )
+    work_id = item["work_id"]
+    rev_id = item["revision_id"]
+
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    head_commit = "0" * 40
+
+    provenance = {
+        "owner_input_id": str(uuid4()),
+        "owner_session_id": "session-1",
+        "normalized_command": "/execute OMP-1",
+        "workspace_id": str(workspace_id),
+        "repository": "oh-my-pi",
+        "nonce": str(uuid4()),
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": provenance,
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(work_id),
+                        "revision_id": str(rev_id),
+                        "position": 0,
+                        "original_request": "The request description",
+                        "original_request_sha256": text_sha256(
+                            "The request description"
+                        ),
+                        "initial_git_baseline": head_commit,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 200, body
+
+    # Seal criteria
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_execution_criteria",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 1,
+                "work_id": str(work_id),
+                "expected_revision_id": str(rev_id),
+                "criteria": ["AC-1: criteria one"],
+                "description_sha256": text_sha256("The request description"),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    new_rev_id = body["result"]["revision"]["revision_id"]
+
+    # Stamp plan with Python runtime path
+    candidate_id = str(uuid4())
+    plan_content = "## Approach\n1. Step one\n\n## Verification\n1. Check one"
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 2,
+                "work_id": str(work_id),
+                "revision_id": str(new_rev_id),
+                "candidate_id": candidate_id,
+                "plan_file": "local://execute-omp-1-plan.md",
+                "plan_body": plan_content,
+                "plan_sha256": sha256(plan_content),
+                "approach": ["1. Step one"],
+                "verification": ["1. Check one"],
+                "paths": ["python/omp-work/src/omp_work/v1/store.py"],
+                "candidate_sha256": "1" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    plan_stamp_sha = body["result"]["item"]["plan_stamp_sha256"]
+    criteria_sha = body["result"]["item"]["criteria_sha256"]
+    # Prepare TS-only item in separate workspace before monkeypatch
+    workspace_ts = uuid4()
+    _grant(service, workspace_ts)
+    item_ts = _create(service, workspace_ts, "TS only item", description="TS request")
+    grant_ts_id = str(uuid4())
+    provenance_ts = dict(provenance, owner_input_id=str(uuid4()), nonce=str(uuid4()), workspace_id=str(workspace_ts))
+    status, body = _command(
+        service,
+        workspace_ts,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_ts_id,
+                "provenance": provenance_ts,
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(item_ts["work_id"]),
+                        "revision_id": str(item_ts["revision_id"]),
+                        "position": 0,
+                        "original_request": "TS request",
+                        "original_request_sha256": text_sha256("TS request"),
+                        "initial_git_baseline": head_commit,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 200, body
+    status, body = _command(
+        service,
+        workspace_ts,
+        {
+            "type": "seal_execution_criteria",
+            "payload": {
+                "grant_id": grant_ts_id,
+                "expected_grant_version": 1,
+                "work_id": str(item_ts["work_id"]),
+                "expected_revision_id": str(item_ts["revision_id"]),
+                "criteria": ["AC-1: criteria"],
+                "description_sha256": text_sha256("TS request"),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200
+    ts_rev = body["result"]["revision"]["revision_id"]
+    status, _ = _command(
+        service,
+        workspace_ts,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_ts_id,
+                "expected_grant_version": 2,
+                "work_id": str(item_ts["work_id"]),
+                "revision_id": str(ts_rev),
+                "candidate_id": str(uuid4()),
+                "plan_file": "local://plan.md",
+                "plan_body": plan_content,
+                "plan_sha256": sha256(plan_content),
+                "approach": ["1. Step one"],
+                "verification": ["1. Check one"],
+                "paths": ["packages/coding-agent/src/index.ts", "python/omp-work/src/omp_work/data.txt"],
+                "candidate_sha256": "1" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200
+    # Prepare migration-path item in separate workspace before monkeypatch
+    workspace_mig = uuid4()
+    _grant(service, workspace_mig)
+    item_mig = _create(service, workspace_mig, "Migration item", description="Mig request")
+    grant_mig_id = str(uuid4())
+    provenance_mig = dict(provenance, owner_input_id=str(uuid4()), nonce=str(uuid4()), workspace_id=str(workspace_mig))
+    status, _ = _command(
+        service,
+        workspace_mig,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_mig_id,
+                "provenance": provenance_mig,
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(item_mig["work_id"]),
+                        "revision_id": str(item_mig["revision_id"]),
+                        "position": 0,
+                        "original_request": "Mig request",
+                        "original_request_sha256": text_sha256("Mig request"),
+                        "initial_git_baseline": head_commit,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 200
+    status, body = _command(
+        service,
+        workspace_mig,
+        {
+            "type": "seal_execution_criteria",
+            "payload": {
+                "grant_id": grant_mig_id,
+                "expected_grant_version": 1,
+                "work_id": str(item_mig["work_id"]),
+                "expected_revision_id": str(item_mig["revision_id"]),
+                "criteria": ["AC-1: criteria"],
+                "description_sha256": text_sha256("Mig request"),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200
+    mig_rev = body["result"]["revision"]["revision_id"]
+    status, _ = _command(
+        service,
+        workspace_mig,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_mig_id,
+                "expected_grant_version": 2,
+                "work_id": str(item_mig["work_id"]),
+                "revision_id": str(mig_rev),
+                "candidate_id": str(uuid4()),
+                "plan_file": "local://plan.md",
+                "plan_body": plan_content,
+                "plan_sha256": sha256(plan_content),
+                "approach": ["1. Step one"],
+                "verification": ["1. Check one"],
+                "paths": ["python/omp-work/src/omp_work/operations/migrations/0024_x.sql", "python/omp-work/src/omp_work/v1/store.py"],
+                "candidate_sha256": "1" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200
+
+
+
+    # Direct DB trigger regression: arbitrary judge updates fail at trigger
+    with psycopg.connect(**service.config.connection_kwargs("postgres")) as conn:
+        with conn.cursor() as cur:
+            # 1. Non-service field modification fails
+            bad_manifest = dict(judge_manifest)
+            bad_manifest["auditor_agent_sha256"] = "9" * 64
+            with pytest.raises(psycopg.Error, match="service-only manifest deltas"):
+                cur.execute(
+                    "UPDATE omp_work.execution_grants SET judge_manifest=%s, judge_sha256=%s, grant_version=grant_version+1 WHERE grant_id=%s",
+                    (json.dumps(bad_manifest), sha256(bad_manifest), grant_id),
+                )
+            conn.rollback()
+
+            # 2. Extra key addition fails
+            extra_manifest = dict(judge_manifest)
+            extra_manifest["extra_key"] = "malicious"
+            with pytest.raises(psycopg.Error, match="service-only manifest deltas"):
+                cur.execute(
+                    "UPDATE omp_work.execution_grants SET judge_manifest=%s, judge_sha256=%s, grant_version=grant_version+1 WHERE grant_id=%s",
+                    (json.dumps(extra_manifest), sha256(extra_manifest), grant_id),
+                )
+            conn.rollback()
+    # Now simulate on-disk source change
+    import omp_work.v1.server as server_module
+    new_fp = "a" * 64
+    monkeypatch.setattr(server_module, "code_fingerprint", lambda: "beef" * 16)
+    monkeypatch.setattr("omp_work.operations.fingerprints.service_runtime_fingerprint", lambda: new_fp)
+    monkeypatch.setattr("omp_work.v1.server.service_runtime_fingerprint", lambda: new_fp)
+    monkeypatch.setattr("omp_work.v1.store.service_runtime_fingerprint", lambda: new_fp)
+
+    new_manifest = dict(judge_manifest)
+    new_manifest["service_fingerprint"] = new_fp
+    new_manifest["service_code_fingerprint"] = new_fp
+    new_manifest["service_migration_sha256"] = new_fp
+    new_judge_sha = sha256(new_manifest)
+
+    # 1. Ordinary write fails 503 service_stale
+    status, body = _command(
+        service,
+        workspace_id,
+        _batch([{"client_ref": "stale", "title": "must not land"}]),
+    )
+    assert status == 503 and body["error"]["code"] == "unavailable"
+
+    # 2. Service refresh with wrong prospective judge fails execution_judge_drift
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "target_state": "active",
+                "reason": "service_refresh",
+                "judge_sha256": "0" * 64,
+            },
+        },
+    )
+    assert status == 409 and body["error"]["code"] == "execution_judge_drift"
+
+    # 2b. Refusal when plan has no eligible .py runtime path (e.g. data.txt / TS path)
+    status, body = _command(
+        service,
+        workspace_ts,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_ts_id,
+                "expected_grant_version": 3,
+                "target_state": "active",
+                "reason": "service_refresh",
+                "judge_sha256": new_judge_sha,
+            },
+        },
+    )
+    assert status == 400 and body["error"]["code"] == "invalid_request"
+    assert any("at least one stamped .py path" in d for d in body["error"]["diagnostics"])
+
+    # 2c. Refusal when plan contains migration path
+    status, body = _command(
+        service,
+        workspace_mig,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_mig_id,
+                "expected_grant_version": 3,
+                "target_state": "active",
+                "reason": "service_refresh",
+                "judge_sha256": new_judge_sha,
+            },
+        },
+    )
+    assert status == 400 and body["error"]["code"] == "invalid_request"
+    assert any("migration paths" in d for d in body["error"]["diagnostics"])
+
+    # Query DB state before refresh
+    with psycopg.connect(**service.config.connection_kwargs("postgres")) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT judge_manifest, grant_version, state, continuations_scheduled FROM omp_work.execution_grants WHERE grant_id=%s", (grant_id,))
+            before_row = cur.fetchone()
+            before_manifest = before_row[0] if isinstance(before_row[0], dict) else json.loads(before_row[0])
+            before_ver = before_row[1]
+            before_state = before_row[2]
+            before_continuations = before_row[3]
+
+            cur.execute("SELECT phase FROM omp_work.execution_grant_items WHERE grant_id=%s AND work_id=%s", (grant_id, str(work_id)))
+            before_phase = cur.fetchone()[0]
+
+    # 3. Valid service_refresh succeeds under stale source
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "target_state": "active",
+                "reason": "service_refresh",
+                "judge_sha256": new_judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["grant_version"] == 4
+    assert body["result"]["grant"]["state"] == "active"
+    assert body["result"]["grant"]["judge_sha256"] == new_judge_sha
+
+    # Query DB state after refresh and assert invariants
+    with psycopg.connect(**service.config.connection_kwargs("postgres")) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT judge_manifest, grant_version, state, continuations_scheduled FROM omp_work.execution_grants WHERE grant_id=%s", (grant_id,))
+            after_row = cur.fetchone()
+            after_manifest = after_row[0] if isinstance(after_row[0], dict) else json.loads(after_row[0])
+            after_ver = after_row[1]
+            after_state = after_row[2]
+            after_continuations = after_row[3]
+
+            cur.execute("SELECT phase FROM omp_work.execution_grant_items WHERE grant_id=%s AND work_id=%s", (grant_id, str(work_id)))
+            after_phase = cur.fetchone()[0]
+
+    service_keys = {"service_fingerprint", "service_code_fingerprint", "service_migration_sha256"}
+    assert {k: v for k, v in after_manifest.items() if k not in service_keys} == {k: v for k, v in before_manifest.items() if k not in service_keys}
+    assert after_manifest["service_fingerprint"] == new_fp
+    assert after_manifest["service_code_fingerprint"] == new_fp
+    assert after_manifest["service_migration_sha256"] == new_fp
+    assert after_ver == before_ver + 1
+    assert after_state == "active"
+    assert after_continuations == before_continuations
+    assert after_phase == before_phase == "executing"
+    # 4. Repeating valid service_refresh is idempotent
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 4,
+                "target_state": "active",
+                "reason": "service_refresh",
+                "judge_sha256": new_judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["grant_version"] == 4
+
+    # 5. Simulate post-restart: create new service instance capturing new source snapshot
+    restarted_service = SimpleNamespace(
+        client=TestClient(create_app(service.config, capabilities_dir=service.capabilities)),
+        capabilities=service.capabilities,
+        config=service.config,
+    )
+
+    # 6. Old judge fails non-terminal command with execution_judge_drift
+    status, body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 4,
+                "target_state": "paused",
+                "reason": "testing_old_judge",
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 409 and body["error"]["code"] == "execution_judge_drift"
+
+    # 7. New judge can pause and resume
+    status, body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 4,
+                "target_state": "paused",
+                "reason": "testing_new_judge",
+                "judge_sha256": new_judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["state"] == "paused"
+
+    status, body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 5,
+                "target_state": "active",
+                "judge_sha256": new_judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["state"] == "active"
+
+    # 8. Complete review lifecycle under restarted service using new judge
+    final_commit = "1" * 40
+    final_cand_id = str(uuid4())
+    final_cand_sha = "2" * 64
+    _finalize(
+        restarted_service,
+        workspace_id,
+        {"work_id": work_id, "revision_id": new_rev_id},
+        candidate_id,
+        commit=final_commit,
+        final_id=final_cand_id,
+        candidate_hash=final_cand_sha,
+    )
+
+    push_receipt_id = str(uuid4())
+    status, body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "append_evidence",
+            "payload": {
+                "receipt": {
+                    "receipt_id": push_receipt_id,
+                    "work_id": str(work_id),
+                    "revision_id": str(new_rev_id),
+                    "candidate_id": str(final_cand_id),
+                    "kind": "push",
+                    "payload": {
+                        "repository": "oh-my-pi",
+                        "remote_url": "git@github.com:owner/oh-my-pi.git",
+                        "remote_ref": "refs/heads/main",
+                        "prior_tip": head_commit,
+                        "candidate_commit": final_commit,
+                        "result_tip": final_commit,
+                    },
+                    "payload_sha256": sha256(
+                        {
+                            "repository": "oh-my-pi",
+                            "remote_url": "git@github.com:owner/oh-my-pi.git",
+                            "remote_ref": "refs/heads/main",
+                            "prior_tip": head_commit,
+                            "candidate_commit": final_commit,
+                            "result_tip": final_commit,
+                        }
+                    ),
+                    "issuer": "test",
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                    "candidate_sha256": final_cand_sha,
+                    "candidate_commit": final_commit,
+                    "remote_ref": "refs/heads/main",
+                    "remote_commit": final_commit,
+                },
+            },
+        },
+    )
+    assert status == 200, body
+
+    attempt_id = str(uuid4())
+    status, begin_body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "begin_close_attempt",
+            "payload": {
+                "work_id": str(work_id),
+                "attempt_id": attempt_id,
+                "authorization_ref": f"execution:{grant_id}:0:1",
+                "owner_session_id": "session-1",
+                "owner_session_started_at": datetime.now(timezone.utc).isoformat(),
+                "owner_session_start_commit": head_commit,
+                "repository": "oh-my-pi",
+                "diff_sha256": "3" * 64,
+                "starting_dirty_paths": [],
+                "authorization_kind": "execution",
+                "execution_grant_id": grant_id,
+                "candidate_tree_sha": final_cand_sha,
+                "original_request_sha256": text_sha256("The request description"),
+                "criteria_sha256": criteria_sha,
+                "plan_stamp_sha256": plan_stamp_sha,
+                "judge_sha256": new_judge_sha,
+                "riders": [],
+            },
+        },
+    )
+    assert begin_body["result"]["status"] == "applied", begin_body["result"]["event"]["rendered_text"]
+    attempt_id = str(begin_body["result"]["attempt"]["attempt_id"])
+    begin_event = begin_body["result"]["event"]
+
+    verif_receipt_id = str(uuid4())
+    status, body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "append_evidence",
+            "payload": {
+                "receipt": {
+                    "receipt_id": verif_receipt_id,
+                    "work_id": str(work_id),
+                    "revision_id": str(new_rev_id),
+                    "candidate_id": str(final_cand_id),
+                    "kind": "verification",
+                    "payload": {"body": "tests passed"},
+                    "payload_sha256": sha256({"body": "tests passed"}),
+                    "issuer": "test",
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                    "candidate_sha256": final_cand_sha,
+                    "candidate_commit": final_commit,
+                },
+            },
+        },
+    )
+    assert status == 200, body
+
+    status, body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "seal_audit_manifest",
+            "payload": {
+                "attempt_id": attempt_id,
+                "verification_receipt_id": verif_receipt_id,
+            },
+        },
+    )
+    assert status == 200, body
+    task_sha = body["result"]["manifest"]["task_sha256"]
+
+    launch_id = str(uuid4())
+    status, body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "reserve_auditor_launch",
+            "payload": {
+                "attempt_id": attempt_id,
+                "task_sha256": task_sha,
+                "tool_call_id": "call-1",
+            },
+        },
+    )
+    assert status == 200, body
+    launch_id = body["result"]["launch"]["launch_id"]
+
+    status, settle_body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "settle_auditor_launch",
+            "payload": {
+                "attempt_id": attempt_id,
+                "launch_id": launch_id,
+                "transport_payload": PASS_REPORT,
+            },
+        },
+    )
+    assert status == 200, settle_body
+    assert settle_body["result"]["verdict"] == "PASS"
+    settle_event = settle_body["result"]["event"]
+
+    # Attest deliveries before completion
+    _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": begin_event["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": begin_event["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
+    _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": settle_event["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": settle_event["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
+
+    status, body = _record_review(
+        restarted_service,
+        workspace_id,
+        item,
+        {"candidate_id": final_cand_id, "candidate_sha256": final_cand_sha, "commit_sha": final_commit},
+        {"attempt_id": attempt_id, "revision_id": new_rev_id, "candidate_id": final_cand_id, "candidate_sha256": final_cand_sha, "candidate_commit": final_commit},
+        authorization_ref=f"execution:{grant_id}:0:1",
+    )
+    assert status == 200, body
+    _drain_deliveries(restarted_service, workspace_id, key=item["key"])
+
+    status, body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 6,
+                "work_id": str(work_id),
+                "attempt_id": attempt_id,
+                "push_receipt_id": push_receipt_id,
+                "judge_sha256": new_judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["state"] == "completed"
+    assert body["result"]["item"]["phase"] == "completed"

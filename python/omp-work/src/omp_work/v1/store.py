@@ -4355,6 +4355,83 @@ class PostgresWorkStore:
             )
         return updated_grant
 
+    def _refresh_execution_judge(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        envelope: CommandEnvelope,
+        grant: dict[str, object],
+        payload: object,
+    ) -> dict[str, object]:
+        if grant["state"] != "active":
+            raise WorkStoreError(
+                "execution_grant_inactive",
+                (f"cannot refresh judge for grant in state {grant['state']}",),
+            )
+
+        cur.execute(
+            f"SELECT {_GRANT_ITEM_FIELDS} FROM omp_work.execution_grant_items WHERE workspace_id=%s AND grant_id=%s AND phase IN ('executing', 'remediating', 'reviewing') FOR UPDATE",
+            (envelope.workspace_id, payload.grant_id),
+        )
+        active_item = cur.fetchone()
+        if active_item is None:
+            raise WorkStoreError(
+                "invalid_request",
+                ("no active grant item in executing/remediating/reviewing phase",),
+            )
+
+        plan_stamp = active_item.get("plan_stamp")
+        if isinstance(plan_stamp, str):
+            try:
+                plan_stamp = json.loads(plan_stamp)
+            except Exception:
+                plan_stamp = None
+
+        if not isinstance(plan_stamp, dict) or not plan_stamp.get("paths"):
+            raise WorkStoreError(
+                "invalid_request",
+                ("active item has no stamped plan paths",),
+            )
+
+        paths: list[str] = list(plan_stamp.get("paths") or [])
+        if any(p.startswith("python/omp-work/src/omp_work/operations/migrations/") for p in paths):
+            raise WorkStoreError(
+                "invalid_request",
+                ("service refresh refused: stamped plan contains migration paths",),
+            )
+
+        if not any(p.startswith("python/omp-work/src/omp_work/") and p.endswith(".py") for p in paths):
+            raise WorkStoreError(
+                "invalid_request",
+                ("service refresh requires at least one stamped .py path under python/omp-work/src/omp_work/",),
+            )
+
+        grant_judge_manifest = grant.get("judge_manifest") or {}
+        if isinstance(grant_judge_manifest, str):
+            grant_judge_manifest = json.loads(grant_judge_manifest)
+
+        new_manifest = dict(grant_judge_manifest)
+        cur_service_fp = service_runtime_fingerprint()
+        new_manifest["service_fingerprint"] = cur_service_fp
+        new_manifest["service_code_fingerprint"] = cur_service_fp
+        new_manifest["service_migration_sha256"] = cur_service_fp
+
+        expected_judge_sha256 = sha256(new_manifest)
+        if payload.judge_sha256 != expected_judge_sha256:
+            raise WorkStoreError(
+                "execution_judge_drift",
+                ("judge_sha256 mismatch",),
+            )
+
+        if grant["judge_sha256"] == expected_judge_sha256 and grant_judge_manifest == new_manifest:
+            return {k: v for k, v in grant.items() if k != "judge_manifest"}
+
+        cur.execute(
+            f"UPDATE omp_work.execution_grants SET judge_manifest=%s, judge_sha256=%s, grant_version=grant_version+1 WHERE workspace_id=%s AND grant_id=%s RETURNING {_GRANT_FIELDS}",
+            (json.dumps(new_manifest), expected_judge_sha256, envelope.workspace_id, payload.grant_id),
+        )
+        updated_grant = cur.fetchone()
+        return updated_grant
+
     def _set_execution_state(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -4369,6 +4446,15 @@ class PostgresWorkStore:
         if grant["grant_version"] != payload.expected_grant_version:
             raise WorkStoreError("revision_conflict", ("grant_version mismatch",))
         target = payload.target_state
+        if target == "active" and getattr(payload, "reason", None) == "service_refresh":
+            updated_grant = self._refresh_execution_judge(
+                cur, envelope, grant, payload
+            )
+            return {
+                "type": "set_execution_state",
+                "grant": _row_json(updated_grant),
+            }
+
         if grant["judge_sha256"] != payload.judge_sha256 and target not in (
             "stopped",
             "canceled",

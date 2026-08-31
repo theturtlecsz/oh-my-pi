@@ -20,7 +20,7 @@ from omp_work.operations.fingerprints import (
 )
 
 from .api_models import CommandResponse
-from .models import CommandEnvelope
+from .models import CommandEnvelope, SetExecutionStateCommand
 from .service import Principal, WorkError, WorkService
 from .store import PostgresWorkStore, WorkStore
 
@@ -239,14 +239,20 @@ def create_app(
             envelope = CommandEnvelope.model_validate(await request.json())
             principal = _principal(request, capabilities_dir)
             if code_fingerprint() + migration_set_sha256() != source_snapshot:
-                raise WorkError(
-                    "unavailable",
-                    status=503,
-                    diagnostics=(
-                        "service_stale: on-disk source or migration set changed since this service started (OMP-89)",
-                        "apply pending migrations, then restart the work service (python -m omp_work serve) — no command was executed and no budget was spent",
-                    ),
+                is_service_refresh = (
+                    isinstance(envelope.command, SetExecutionStateCommand)
+                    and envelope.command.payload.target_state == "active"
+                    and envelope.command.payload.reason == "service_refresh"
                 )
+                if not is_service_refresh:
+                    raise WorkError(
+                        "unavailable",
+                        status=503,
+                        diagnostics=(
+                            "service_stale: on-disk source or migration set changed since this service started (OMP-89)",
+                            "apply pending migrations, then restart the work service (python -m omp_work serve) — no command was executed and no budget was spent",
+                        ),
+                    )
             receipt, result = service.execute(principal, envelope)
             response = CommandResponse.model_validate(
                 {"receipt": receipt, "result": result}
