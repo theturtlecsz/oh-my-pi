@@ -207,6 +207,96 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(typeof resolvedKey).toBe("function");
 	});
 
+	test("behavioral: child session prompt resolves OAuth token when static registry key is unavailable (OMP-176)", async () => {
+		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "kimi-code/k3:high" } });
+		vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(sentinelSettings);
+		mockDiscovery();
+
+		const fakeAuthStorage = { hasOAuth: () => true, hasAuth: () => true };
+		const fakeResolver = vi.fn().mockReturnValue(async () => "oauth-valid-bearer");
+		const sentinelRegistry = {
+			getApiKey: vi.fn().mockResolvedValue(undefined),
+			authStorage: fakeAuthStorage,
+			resolver: fakeResolver,
+			getAvailable: () => [{ id: "k3", provider: "kimi-code", api: "openai-completions" }],
+		};
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const fakeCtx = {
+			cwd: repoRoot,
+			models: {
+				resolve: (role: string) =>
+					role === "@audit" ? { id: "k3", provider: "kimi-code", api: "openai-completions" } : undefined,
+			},
+			modelRegistry: sentinelRegistry,
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		let capturedExecutorOptions: executorModule.ExecutorOptions | undefined;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options) => {
+			capturedExecutorOptions = options;
+			const testModel = { id: "k3", provider: "kimi-code" } as unknown as Parameters<NonNullable<executorModule.ExecutorOptions["getApiKey"]>>[0];
+			const resolverFn = await options.getApiKey?.(testModel);
+			if (typeof resolverFn !== "function") {
+				return {
+					index: options.index,
+					id: options.id,
+					agent: options.agent.name,
+					agentSource: options.agent.source,
+					task: options.task,
+					exitCode: 1,
+					output: "",
+					stderr: "Error: No API key found for kimi-code",
+					error: "Error: No API key found for kimi-code",
+					truncated: false,
+					durationMs: 10,
+					tokens: 0,
+					requests: 0,
+				} as executorModule.SingleResult;
+			}
+			const resolvedToken = await resolverFn({});
+			if (!resolvedToken) {
+				return {
+					index: options.index,
+					id: options.id,
+					agent: options.agent.name,
+					agentSource: options.agent.source,
+					task: options.task,
+					exitCode: 1,
+					output: "",
+					stderr: "Error: No API key found for kimi-code",
+					error: "Error: No API key found for kimi-code",
+					truncated: false,
+					durationMs: 10,
+					tokens: 0,
+					requests: 0,
+				} as executorModule.SingleResult;
+			}
+			return {
+				index: options.index,
+				id: options.id,
+				agent: options.agent.name,
+				agentSource: options.agent.source,
+				task: options.task,
+				exitCode: 0,
+				output: JSON.stringify({ report: "VERDICT: PASS\nAll ACs verified." }),
+				stderr: "",
+				truncated: false,
+				durationMs: 50,
+				tokens: 150,
+				requests: 1,
+			} as executorModule.SingleResult;
+		});
+
+		const runner = await prepareNativeAuditRunner(fakeCtx);
+		const result = await runner("Run audit on OMP-176", "attempt-oauth-behavioral");
+
+		expect(result.started).toBe(true);
+		expect(result.error).toBeUndefined();
+		expect(result.payload).toContain("VERDICT: PASS");
+		expect(capturedExecutorOptions).toBeDefined();
+		expect(fakeResolver).toHaveBeenCalledWith(expect.objectContaining({ provider: "kimi-code" }), "attempt-oauth-behavioral");
+	});
+
 	test("fails if the auditor output schema is missing", async () => {
 		const fakeAgent: AgentDefinition = {
 			name: "auditor",

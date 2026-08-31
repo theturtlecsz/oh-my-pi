@@ -75,7 +75,7 @@ import type {
 	UsageReport,
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
-import { type Effort, streamSimple } from "@oh-my-pi/pi-ai";
+import { type Effort, resolveApiKeyOnce, streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
@@ -998,9 +998,11 @@ export class AgentSession {
 	}
 
 	#codeModeState: { namespacesInfo?: unknown };
+	#getApiKey?: Agent["getApiKey"];
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
+		this.#getApiKey = this.agent.getApiKey;
 		this.#codeModeState = config.codeModeState ?? {};
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
@@ -5812,7 +5814,9 @@ export class AgentSession {
 			}
 
 			// Validate API key
-			const apiKey = await this.#modelRegistry.getApiKey(this.model, this.sessionId);
+			const apiKey = this.#getApiKey
+				? await resolveApiKeyOnce(await this.#getApiKey(this.model))
+				: await this.#modelRegistry.getApiKey(this.model, this.sessionId);
 			if (!apiKey) {
 				throw new Error(
 					`No API key found for ${this.model.provider}.\n\n` +
