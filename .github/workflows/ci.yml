@@ -3,6 +3,7 @@ name: CI
 on:
    push:
       branches: [main]
+      tags: ["v*"]
       paths:
          - "packages/**"
          - "python/**"
@@ -66,11 +67,15 @@ on:
          - ".github/workflows/**"
    workflow_dispatch:
       inputs:
+         release_tag:
+            description: "Explicit release tag (e.g. v18.0.7) for manual release publish"
+            type: string
+            required: false
+            default: ""
          skip_npm:
             description: "Skip npm publish"
             type: boolean
             default: false
-
 # Release runs publish a `v*` tag pushed atomically with main HEAD; sharing
 # the cheap branch-wide `CI-refs/heads/main` group meant a later main push
 # silently cancelled the in-flight release and left the tag without a GitHub
@@ -137,9 +142,28 @@ jobs:
                     release_tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1 || true)
                   fi
                   ;;
+                *)
+                  if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.release_tag }}" ]; then
+                    candidate_tag="${{ inputs.release_tag }}"
+                    if echo "$candidate_tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-canary\.(0|[1-9][0-9]*))?$'; then
+                      if git tag --points-at HEAD | grep -Fxq "$candidate_tag"; then
+                        git fetch origin main --depth=100 || true
+                        if git merge-base --is-ancestor HEAD origin/main 2>/dev/null || [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main 2>/dev/null)" ]; then
+                          release_tag="$candidate_tag"
+                        else
+                          echo "::error title=Release Refused::Dispatch release tag $candidate_tag is not reachable from origin/main."
+                        fi
+                      else
+                        echo "::error title=Release Refused::Dispatch release tag $candidate_tag does not point to checked-out HEAD."
+                      fi
+                    else
+                      echo "::error title=Release Refused::Invalid release tag format: $candidate_tag"
+                    fi
+                  fi
+                  ;;
               esac
               if [ -n "$release_tag" ]; then
-                echo "HEAD carries release tag $release_tag; this run builds and publishes the release."
+                echo "Validated release tag $release_tag at HEAD; this run builds and publishes the release."
                 is_release=true
               fi
               if [[ "$release_tag" == *-canary.* ]]; then
@@ -967,7 +991,7 @@ jobs:
          - name: Expose PostgreSQL binaries
            run: |
               if ! command -v pg_config >/dev/null 2>&1 || [ "$(pg_config --version | grep -oE '[0-9]+' | head -n1)" != "18" ]; then
-                sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+                sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
                 curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/postgresql.gpg
                 sudo apt-get update
                 sudo apt-get install -y postgresql-18 postgresql-client-18

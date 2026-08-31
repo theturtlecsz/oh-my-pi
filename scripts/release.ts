@@ -35,6 +35,28 @@ export function validateExplicitVersion(version: string): string | null {
 	return match ? match[1] : null;
 }
 
+export function validateReleaseTag(tag: string): boolean {
+	return /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-canary\.(?:0|[1-9]\d*))?$/.test(tag);
+}
+
+export function releaseBranchName(version: string): string {
+	return `release/v${version}`;
+}
+
+export function releasePrTitle(version: string): string {
+	return `chore: bump version to v${version}`;
+}
+
+export function formatReleaseBranchPushArgs(version: string): string[] {
+	const branch = releaseBranchName(version);
+	return ["push", "origin", `HEAD:refs/heads/${branch}`];
+}
+
+export function formatReleaseTagPushArgs(version: string, sha: string): string[] {
+	const tagRef = `v${version}`;
+	return ["push", "origin", `${sha}:refs/tags/${tagRef}`];
+}
+
 function git(args: readonly string[]) {
 	return $`git -c core.fsmonitor=false -c core.untrackedCache=false -c fetch.pruneTags=false ${args}`;
 }
@@ -43,14 +65,19 @@ function git(args: readonly string[]) {
 // Shared functions
 // =============================================================================
 
-async function watchCI(): Promise<boolean> {
+async function watchCI(options: { tagRef?: string } = {}): Promise<boolean> {
 	const commitSha = (await git(["rev-parse", "HEAD"]).text()).trim();
-	console.log(`  Commit: ${commitSha.slice(0, 8)}`);
+	console.log(`  Commit: ${commitSha.slice(0, 8)}${options.tagRef ? ` (tag: ${options.tagRef})` : ""}`);
 
 	while (true) {
-		const runsOutput = await $`gh run list --commit ${commitSha} --json databaseId,status,conclusion,name`.text();
-		const runs: Array<{ databaseId: number; status: string; conclusion: string | null; name: string }> =
+		const runsOutput = await $`gh run list --commit ${commitSha} --json databaseId,status,conclusion,name,headBranch`.text();
+		let runs: Array<{ databaseId: number; status: string; conclusion: string | null; name: string; headBranch?: string }> =
 			JSON.parse(runsOutput);
+		if (options.tagRef) {
+			const bareTag = options.tagRef.replace(/^refs\/tags\//, "");
+			const tagRuns = runs.filter(r => r.headBranch === bareTag);
+			if (tagRuns.length > 0) runs = tagRuns;
+		}
 
 		if (runs.length === 0) {
 			console.log("  Waiting for CI to start...");
@@ -186,6 +213,49 @@ async function cmdWatch(): Promise<void> {
 	console.log("\n=== Watching CI ===\n");
 	const success = await watchCI();
 	process.exit(success ? 0 : 1);
+}
+
+async function cmdPublish(versionArg: string): Promise<void> {
+	const version = validateExplicitVersion(versionArg);
+	if (!version) {
+		console.error(`Error: Invalid release version: ${versionArg}`);
+		process.exit(1);
+	}
+
+	const currentBranch = (await git(["branch", "--show-current"]).text()).trim();
+	if (currentBranch !== "main") {
+		console.error(`Error: Post-merge publish must run on branch 'main', but current branch is '${currentBranch}'.`);
+		process.exit(1);
+	}
+
+	const clean = (await git(["status", "--porcelain"]).text()).trim();
+	if (clean !== "") {
+		console.error("Error: Working directory must be clean to publish release.");
+		process.exit(1);
+	}
+
+	console.log("Fetching latest origin/main...");
+	await git(["fetch", "origin", "main", "--tags"]);
+	const localHead = (await git(["rev-parse", "HEAD"]).text()).trim();
+	const remoteHead = (await git(["rev-parse", "origin/main"]).text()).trim();
+	if (localHead !== remoteHead) {
+		console.error(`Error: Local HEAD (${localHead.slice(0, 8)}) does not match origin/main (${remoteHead.slice(0, 8)}). Run 'git pull' first.`);
+		process.exit(1);
+	}
+
+	const tagRef = `v${version}`;
+	console.log(`Tagging HEAD (${localHead.slice(0, 8)}) as ${tagRef}...`);
+	await git(["tag", "-f", tagRef]);
+	console.log("Pushing release tag to remote...");
+	await git(formatReleaseTagPushArgs(version, localHead));
+	console.log(`Pushed tag ${tagRef}. Watching release CI...`);
+	const success = await watchCI({ tagRef });
+	if (success) {
+		console.log(`=== Published and Verified v${version} ===`);
+	} else {
+		console.error(`Release publish failed or cancelled for tag ${tagRef}.`);
+		process.exit(1);
+	}
 }
 
 export function parseVersion(v: string): [number, number, number] {
@@ -423,33 +493,20 @@ async function cmdRelease(versionOrBump: string): Promise<void> {
 	// tag we still create is only for `git describe`; losing it is harmless. The
 	// default Git LFS pre-push hook uploads the branch's LFS objects as part of
 	// this same atomic push — no separate `git lfs push` is needed.
-	console.log("Tagging and pushing to remote...");
-	const tagRef = `v${version}`;
+	console.log("Pushing release branch for pull request...");
+	const branchName = releaseBranchName(version);
 	const sha = (await git(["rev-parse", "HEAD"]).text()).trim();
-	await git(["tag", "-f", tagRef]);
-	await git(["push", "--atomic", "origin", "refs/heads/main:refs/heads/main", `${sha}:refs/tags/${tagRef}`]);
+	const pushArgs = formatReleaseBranchPushArgs(version);
+	await git(pushArgs);
+	console.log(`Pushed release branch ${branchName} (HEAD: ${sha.slice(0, 8)})`);
 	console.log();
-
-	// 9. Watch CI
-	console.log("Watching CI...");
-	const success = await watchCI();
-
-	if (success) {
-		console.log(`=== Released v${version} ===`);
-	} else {
-		// CI's `concurrency` block (.github/workflows/ci.yml) recognizes a
-		// release run by its `chore: bump version to vX.Y.Z` subject (#2564),
-		// so retries that keep that subject also get the per-sha, never-cancel
-		// group. Reword the body, not the subject.
-		console.log("\nTo retry after fixing (repeat until CI passes):");
-		console.log(`  git commit -m "chore: bump version to ${version}" -m "<what was fixed>"`);
-		console.log(`  git tag -f v${version}`);
-		console.log(
-			`  git push --atomic origin refs/heads/main:refs/heads/main "+$(git rev-parse HEAD):refs/tags/v${version}"`,
-		);
-		console.log("  bun scripts/release.ts watch");
-		process.exit(1);
-	}
+	console.log("=== Next Steps (PR & Approval Gate) ===");
+	console.log(`1. Open PR targeting main:`);
+	console.log(`   gh pr create --base main --head ${branchName} --title "${releasePrTitle(version)}" --fill`);
+	console.log(`2. After PR review and merge to main:`);
+	console.log(`   git checkout main && git pull`);
+	console.log(`   bun scripts/release.ts publish ${version}`);
+	console.log();
 }
 
 // =============================================================================
@@ -461,13 +518,21 @@ if (import.meta.main) {
 
 	if (!arg) {
 		console.error("Usage:");
-		console.error("  bun scripts/release.ts <version|major|minor|patch|canary>   Full release");
+		console.error("  bun scripts/release.ts <version|major|minor|patch|canary>   Stage release commit and push release PR branch");
+		console.error("  bun scripts/release.ts publish <version>             Publish release tag after PR merge to main");
 		console.error("  bun scripts/release.ts watch                         Watch CI for current commit");
 		process.exit(1);
 	}
 
 	if (arg === "watch") {
 		await cmdWatch();
+	} else if (arg === "publish") {
+		const version = process.argv[3];
+		if (!version) {
+			console.error("Error: Version required for publish subcommand (e.g. bun scripts/release.ts publish 18.0.7)");
+			process.exit(1);
+		}
+		await cmdPublish(version);
 	} else if (
 		arg === "major" ||
 		arg === "minor" ||
@@ -479,7 +544,8 @@ if (import.meta.main) {
 	} else {
 		console.error(`Unknown command or invalid version: ${arg}`);
 		console.error("Usage:");
-		console.error("  bun scripts/release.ts <version|major|minor|patch|canary>   Full release");
+		console.error("  bun scripts/release.ts <version|major|minor|patch|canary>   Stage release commit and push release PR branch");
+		console.error("  bun scripts/release.ts publish <version>             Publish release tag after PR merge to main");
 		console.error("  bun scripts/release.ts watch                         Watch CI for current commit");
 		process.exit(1);
 	}

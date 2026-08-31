@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bumpCanaryVersion, bumpVersion, validateExplicitVersion } from "./release";
+import { bumpCanaryVersion, bumpVersion, formatReleaseBranchPushArgs, formatReleaseTagPushArgs, releaseBranchName, releasePrTitle, validateExplicitVersion, validateReleaseTag } from "./release";
 
 describe("validateExplicitVersion", () => {
 	test("rejects malformed versions", () => {
@@ -63,5 +63,44 @@ describe("release version bumps", () => {
 
 	test("rejects explicit canary versions", () => {
 		expect(validateExplicitVersion("1.2.3-canary.1")).toBe(null);
+	});
+});
+
+describe("release branch and push formatting", () => {
+	test("formats release branch name", () => {
+		expect(releaseBranchName("18.0.7")).toBe("release/v18.0.7");
+	});
+
+	test("formats release PR title", () => {
+		expect(releasePrTitle("18.0.7")).toBe("chore: bump version to v18.0.7");
+	});
+
+	test("formats push arguments targeting release branch only (no tag, no direct main push)", () => {
+		const args = formatReleaseBranchPushArgs("18.0.7");
+		expect(args).toEqual(["push", "origin", "HEAD:refs/heads/release/v18.0.7"]);
+		expect(args.some(a => a.includes("refs/heads/main"))).toBe(false);
+		expect(args.some(a => a.includes("refs/tags/"))).toBe(false);
+	});
+
+	test("formats post-merge tag push arguments", () => {
+		const args = formatReleaseTagPushArgs("18.0.7", "a1b2c3d4e5f6");
+		expect(args).toEqual(["push", "origin", "a1b2c3d4e5f6:refs/tags/v18.0.7"]);
+	});
+});
+
+describe("validateReleaseTag", () => {
+	test("accepts valid semantic version tags", () => {
+		expect(validateReleaseTag("v18.0.7")).toBe(true);
+		expect(validateReleaseTag("v0.1.0")).toBe(true);
+		expect(validateReleaseTag("v18.0.7-canary.1")).toBe(true);
+	});
+
+	test("rejects malformed or un-prefixed tags", () => {
+		expect(validateReleaseTag("18.0.7")).toBe(false);
+		expect(validateReleaseTag("v18.0")).toBe(false);
+		expect(validateReleaseTag("v18.0.07")).toBe(false);
+		expect(validateReleaseTag("v18.0.7-beta.1")).toBe(false);
+		expect(validateReleaseTag("")).toBe(false);
+		expect(validateReleaseTag("random-tag")).toBe(false);
 	});
 });
