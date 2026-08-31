@@ -310,14 +310,32 @@ export async function resolveAnchorKey(
 	exec: ExecutionSnapshot,
 	targetKey?: string,
 ): Promise<string | undefined> {
-	if (targetKey && /^[A-Z]+-\d+$/.test(targetKey)) return targetKey;
+	if (targetKey) {
+		const directMatch = exec.items.find(it => it.work_id === targetKey);
+		if (directMatch) {
+			if (/^[A-Z]+-\d+$/.test(directMatch.work_id)) return directMatch.work_id;
+			try {
+				const issue = await backend.findIssue(directMatch.work_id);
+				if (issue?.key) return issue.key;
+			} catch {}
+		}
+		if (/^[A-Z]+-\d+$/.test(targetKey)) {
+			for (const it of exec.items) {
+				try {
+					const issue = await backend.findIssue(it.work_id);
+					if (issue?.key === targetKey) return targetKey;
+				} catch {}
+			}
+		}
+	}
 	const anchorItem = exec.items.find(i => i.phase !== "completed") ?? exec.activeItem ?? exec.items[0];
-	if (!anchorItem) return undefined;
-	if (/^[A-Z]+-\d+$/.test(anchorItem.work_id)) return anchorItem.work_id;
-	try {
-		const issue = await backend.findIssue(anchorItem.work_id);
-		if (issue?.key) return issue.key;
-	} catch {}
+	if (anchorItem) {
+		if (/^[A-Z]+-\d+$/.test(anchorItem.work_id)) return anchorItem.work_id;
+		try {
+			const issue = await backend.findIssue(anchorItem.work_id);
+			if (issue?.key) return issue.key;
+		} catch {}
+	}
 	return undefined;
 }
 
@@ -362,7 +380,7 @@ export function computeExecutionNoticeDetails(
 		termReason?.includes("no_progress_exceeded") ||
 		termReason?.includes("budget_exhausted"))
 	) {
-		nextCommandLine = `Next: /summary ${anchorKey}`;
+		nextCommandLine = `Next: /now ${anchorKey} then /summary`;
 	} else if (anchorKey) {
 		const queueSuffix = g.mode === "queue" ? " --queue" : "";
 		nextCommandLine = `Next: /execute ${anchorKey}${queueSuffix}`;
@@ -719,7 +737,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if (state.terminalExecution) {
 				const term = state.terminalExecution;
 				const parts = [
-					`✕ Grant ${term.grantId.slice(0, 8)} ${term.state} (${term.reason ?? term.state})`,
+					`✕ Grant ${term.grantId.slice(0, 8)} ${term.state} (terminal — resume impossible) (${term.reason ?? term.state})`,
 					term.tally,
 					term.nextCommand,
 				].filter(Boolean);
@@ -1641,10 +1659,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 							nextCommand: notice.nextCommandLine,
 							at: Date.now(),
 						};
-					} else if (exec && exec.grant.state === "active" && exec.activeItem) {
-						const preflight = await validateExecutionRecoveryPreflight(ctx, backend, exec, "active");
-						if (preflight.ok) {
-							const curVersion = exec.grant.grant_version;
+					} else {
+						state.terminalExecution = undefined;
+						if (exec && exec.grant.state === "active" && exec.activeItem) {
+							const preflight = await validateExecutionRecoveryPreflight(ctx, backend, exec, "active");
+							if (preflight.ok) {
+								const curVersion = exec.grant.grant_version;
 							const pendingOutbox = pendingOutboxEntries.find(
 								e => e.grantId === exec.grant.grant_id && outboxStatus.get(e.messageId) === "pending",
 							);
@@ -1723,6 +1743,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							} catch {}
 						}
 					}
+				}
 				} catch {}
 			}
 			footer(ctx);
@@ -2321,9 +2342,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 						};
 						await saveCache();
 						footer(ctx);
-						ctx.ui.notify(`Execution grant stopped: ${updated.grant.terminal_reason ?? "cap reached"} · ${notice.nextCommandLine}`, "warning");
+						ctx.ui.notify(`Execution grant stopped: ${updated.grant.terminal_reason ?? "cap reached"} · ${notice.tallyLine} · ${notice.nextCommandLine}`, "warning");
+						pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
+						return;
 					}
-					return;
 				}
 
 				if (sub === "cancel") {
@@ -2387,7 +2409,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 					ctx.ui.notify(`Issue ${rawKey} not found`, "error");
 					return;
 				}
-				state.terminalExecution = undefined;
 
 				let claims: ExecutionGrantItemClaim[];
 				if (isQueue) {
@@ -2446,6 +2467,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					judgeSha256: tcb.judgeSha256,
 					judgeManifest: tcb.judgeManifest,
 				});
+				state.terminalExecution = undefined;
 				state.identifier = issue.key;
 				state.issueId = issue.id;
 				state.title = issue.title;

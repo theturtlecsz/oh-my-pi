@@ -17,6 +17,9 @@ import {
 	RECEIPT_TTL_MS,
 	resetConfirmations,
 } from "../extensions/workflow/confirm";
+import * as gitModule from "../extensions/workflow/git";
+import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
+import { headCommit } from "../extensions/workflow/git";
 import {
 	computeExecutionNoticeDetails,
 	renderExecutionTerminalBanner,
@@ -688,27 +691,8 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			{ position: 2, work_id: "OMP-181", phase: "pending" },
 		],
 		terminal_reason: string | null = null,
-	): ExecutionSnapshot => ({
-		grant: {
-			grant_id: "ad5c45a7-1234-5678-9abc-def012345678",
-			workspace_id: "ws-1",
-			owner_id: "owner-1",
-			repository: "oh-my-pi",
-			remote_ref: "refs/heads/main",
-			state,
-			mode,
-			grant_version: 1,
-			max_continuations: 8,
-			max_close_attempts: 5,
-			max_no_progress: 3,
-			continuations_scheduled: 0,
-			terminal_reason,
-			authorization_hash: "auth-hash",
-			judge_sha256: "judge-sha",
-			created_at: new Date().toISOString(),
-			expires_at: new Date().toISOString(),
-		},
-		items: items.map(it => ({
+	): ExecutionSnapshot => {
+		const mappedItems = items.map(it => ({
 			item_id: `item-${it.position}`,
 			workspace_id: "ws-1",
 			grant_id: "ad5c45a7-1234-5678-9abc-def012345678",
@@ -722,9 +706,31 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			close_attempts_started: 0,
 			consecutive_no_progress: 0,
 			completed_at: it.completed_at,
-		})),
-		activeItem: (items.find(it => it.phase === "executing") as unknown as ExecutionSnapshot["activeItem"]) ?? null,
-	});
+		}));
+		return {
+			grant: {
+				grant_id: "ad5c45a7-1234-5678-9abc-def012345678",
+				workspace_id: "ws-1",
+				owner_id: "owner-1",
+				repository: "oh-my-pi",
+				remote_ref: "refs/heads/main",
+				state,
+				mode,
+				grant_version: 1,
+				max_continuations: 8,
+				max_close_attempts: 5,
+				max_no_progress: 3,
+				continuations_scheduled: 0,
+				terminal_reason,
+				authorization_hash: "auth-hash",
+				judge_sha256: "judge-sha",
+				created_at: new Date().toISOString(),
+				expires_at: new Date().toISOString(),
+			},
+			items: mappedItems,
+			activeItem: mappedItems.find(it => it.phase === "executing") ?? null,
+		};
+	};
 
 	test("closing notice on defect stop with blocking fix key (queue mode)", () => {
 		const exec = makeSnapshot("stopped", "queue", [
@@ -765,7 +771,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const notice = computeExecutionNoticeDetails(exec, "budget_exhausted", "OMP-176");
 		expect(notice.causeLine).toBe("Execution grant stopped (budget_exhausted). Grant is terminal; resume is impossible.");
 		expect(notice.tallyLine).toBe("Items: 1 completed, 2 skipped (of 3 items).");
-		expect(notice.nextCommandLine).toBe("Next: /summary OMP-176");
+		expect(notice.nextCommandLine).toBe("Next: /now OMP-176 then /summary");
 	});
 
 	test("closing notice on contract approval requirement (paused vs terminal)", () => {
@@ -814,17 +820,24 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const mockBackend = {
 			findIssue: async (keyOrId: string) => {
 				if (keyOrId === "uuid-176") return { key: "OMP-176" };
+				if (keyOrId === "uuid-180") return { key: "OMP-180" };
 				return null;
 			},
 		};
 		const exec = makeSnapshot("stopped", "queue", [
 			{ position: 0, work_id: "uuid-176", phase: "executing" },
+			{ position: 1, work_id: "uuid-180", phase: "pending" },
 		]);
 		const key = await resolveAnchorKey(mockBackend, exec);
 		expect(key).toBe("OMP-176");
 
-		const directKey = await resolveAnchorKey(mockBackend, exec, "OMP-180");
-		expect(directKey).toBe("OMP-180");
+		// Foreign targetKey that does not belong to the grant is ignored
+		const foreignKey = await resolveAnchorKey(mockBackend, exec, "OMP-999");
+		expect(foreignKey).toBe("OMP-176");
+
+		// Member targetKey is accepted
+		const memberKey = await resolveAnchorKey(mockBackend, exec, "uuid-180");
+		expect(memberKey).toBe("OMP-180");
 	});
 
 	test("stop_execution tool action returns full closing notice with cause, tally, and next command", async () => {
@@ -892,6 +905,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<void>>>();
 		const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
 		const statuses: Record<string, string> = {};
+		const notifications: string[] = [];
 		const fakePi = {
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
@@ -921,8 +935,98 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
 			pendingDeliveries: async () => [],
-			findIssue: async (key: string) => ({ id: `uuid-${key}`, key, title: `Test ${key}`, project: "Bookends" }),
+			findIssue: async (key: string) => {
+				if (key === "OMP-404") return null;
+				return { id: `uuid-${key}`, key, title: `Test ${key}`, project: "Bookends" };
+			},
 			getExecution: async () => exec,
+			currentNow: async () => ({ id: "uuid-999", key: "OMP-999", title: "Unrelated NOW", project: "Bookends" }),
+			setNowRemote: async () => {},
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			taskDepth: 0,
+			sessionManager: { getBranch: () => [] },
+			ui: {
+				notify: (t: string) => { notifications.push(t); },
+				theme: { fg: (_c: string, t: string) => t },
+				setStatus: (key: string, text: string | undefined) => {
+					if (text !== undefined) statuses[key] = text;
+					else delete statuses[key];
+				},
+			},
+		} as unknown as ExtensionContext;
+
+		const startHandlers = handlers.get("session_start") ?? [];
+		expect(startHandlers.length).toBeGreaterThan(0);
+		for (const h of startHandlers) {
+			await h({}, fakeCtx);
+		}
+
+		expect(statuses["work-now"]).toContain("✕ Grant ad5c45a7 stopped (terminal — resume impossible) (candidate_drift gate defect filed as OMP-195)");
+		expect(statuses["work-now"]).toContain("0 completed, 2 skipped (of 2 items).");
+		expect(statuses["work-now"]).toContain("Next: /execute OMP-195 then /execute OMP-176 --queue");
+
+		// Verify persistence across /now focus change to an unrelated issue
+		const nowCmd = commands.get("now");
+		if (nowCmd) {
+			await nowCmd("OMP-999", fakeCtx);
+			expect(statuses["work-now"]).toContain("✕ Grant ad5c45a7 stopped (terminal — resume impossible) (candidate_drift gate defect filed as OMP-195)");
+			expect(statuses["work-now"]).toContain("Next: /execute OMP-195 then /execute OMP-176 --queue");
+		}
+
+		// Verify persistence across rejected /execute start (issue not found)
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		try {
+			const execCmd = commands.get("execute");
+			if (execCmd) {
+				await execCmd("OMP-404", fakeCtx);
+				expect(notifications.some(n => n.includes("Issue OMP-404 not found"))).toBe(true);
+				expect(statuses["work-now"]).toContain("✕ Grant ad5c45a7 stopped (terminal — resume impossible) (candidate_drift gate defect filed as OMP-195)");
+			}
+		} finally {
+			dirtySpy.mockRestore();
+		}
+	});
+
+	test("session_start with active or null grant clears cached terminal execution state", async () => {
+		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<void>>>();
+		const statuses: Record<string, string> = {};
+		const fakePi = {
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: (event: string, handler: (e: unknown, ctx: ExtensionContext) => Promise<void>) => {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			sendMessage: () => {},
+			appendEntry: () => {},
+			getSessionId: () => "sess-1",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const mockBackend = {
+			cacheFile: "work-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async (key: string) => ({ id: `uuid-${key}`, key, title: `Test ${key}`, project: "Bookends" }),
+			getExecution: async () => null,
 			currentNow: async () => ({ id: "uuid-176", key: "OMP-176", title: "Test OMP-176", project: "Bookends" }),
 			setNowRemote: async () => {},
 			workClient: {
@@ -952,20 +1056,101 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		} as unknown as ExtensionContext;
 
 		const startHandlers = handlers.get("session_start") ?? [];
-		expect(startHandlers.length).toBeGreaterThan(0);
 		for (const h of startHandlers) {
 			await h({}, fakeCtx);
 		}
 
-		expect(statuses["work-now"]).toContain("✕ Grant ad5c45a7 stopped (candidate_drift gate defect filed as OMP-195)");
-		expect(statuses["work-now"]).toContain("0 completed, 2 skipped (of 2 items).");
-		expect(statuses["work-now"]).toContain("Next: /execute OMP-195 then /execute OMP-176 --queue");
+		expect(statuses["work-now"]).not.toContain("✕ Grant");
+		expect(statuses["work-now"]).toContain("NOW · Bookends");
+	});
 
-		// Verify persistence across /now focus change
-		const nowCmd = commands.get("now");
-		if (nowCmd) {
-			await nowCmd("OMP-180", fakeCtx);
-			expect(statuses["work-now"]).toContain("✕ Grant ad5c45a7 stopped (candidate_drift gate defect filed as OMP-195)");
+	test("/execute resume transitioning to stopped emits full notice and status message", async () => {
+		const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		const messages: Array<{ customType?: string; content?: string }> = [];
+		const notifications: string[] = [];
+		const fakePi = {
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				commands.set(name, def.handler);
+			},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: (msg: { customType?: string; content?: string }) => {
+				messages.push(msg);
+			},
+			appendEntry: () => {},
+			getSessionId: () => "sess-1",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const cwd = path.resolve(import.meta.dir, "../..");
+		const head = headCommit(cwd) ?? "0".repeat(40);
+		const exec = makeSnapshot("paused", "queue", [
+			{ position: 0, work_id: "OMP-176", phase: "executing" },
+			{ position: 1, work_id: "OMP-180", phase: "pending" },
+		], null);
+		exec.items[0]!.initial_git_baseline = head;
+		exec.items[0]!.current_git_baseline = head;
+		exec.activeItem!.initial_git_baseline = head;
+		exec.activeItem!.current_git_baseline = head;
+
+		const mockBackend = {
+			cacheFile: "work-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async (key: string) => ({ id: `uuid-${key}`, key, title: `Test ${key}`, project: "Bookends" }),
+			getExecution: async () => exec,
+			currentNow: async () => ({ id: "uuid-176", key: "OMP-176", title: "Test", project: "Bookends" }),
+			setExecutionState: async () => ({
+				grant: { ...exec.grant, state: "stopped" as const, terminal_reason: "max_continuations_exceeded" },
+			}),
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workItem: async () => ({
+					work_id: "uuid-176",
+					state: "IN_PROGRESS",
+					project_id: null,
+					revision: { revision_id: "rev-1" },
+				}),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const fakeCtx = {
+			cwd,
+			taskDepth: 0,
+			sessionManager: { getBranch: () => [] },
+			ui: {
+				notify: (text: string) => { notifications.push(text); },
+				theme: { fg: (_c: string, t: string) => t },
+				setStatus: () => {},
+			},
+		} as unknown as ExtensionContext;
+
+		const tcb = await computeAuditTcb(fakeCtx, mockBackend.workClient!);
+		exec.grant.judge_sha256 = tcb.judgeSha256;
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		try {
+			const resumeCmd = commands.get("execute");
+			expect(resumeCmd).toBeDefined();
+			await resumeCmd!("resume OMP-176", fakeCtx);
+
+			expect(notifications.some(n => n.includes("Execution grant stopped: max_continuations_exceeded"))).toBe(true);
+			expect(notifications.some(n => n.includes("Items: 0 completed, 2 skipped (of 2 items)."))).toBe(true);
+			expect(messages.some(m => m.customType === "work-execution-status" && m.content?.includes("Grant is terminal; resume is impossible."))).toBe(true);
+			expect(messages.some(m => m.customType === "work-execution-status" && m.content?.includes("Next: /execute OMP-176 --queue"))).toBe(true);
+		} finally {
+			dirtySpy.mockRestore();
 		}
 	});
 });
