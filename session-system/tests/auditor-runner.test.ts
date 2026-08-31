@@ -1153,4 +1153,103 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			dirtySpy.mockRestore();
 		}
 	});
+
+	test("session_start recovery transitioning to stopped emits full notice and updates status", async () => {
+		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<void>>>();
+		const messages: Array<{ customType?: string; content?: string }> = [];
+		const notifications: string[] = [];
+		const statuses: Record<string, string> = {};
+		const fakePi = {
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: (event: string, handler: (e: unknown, ctx: ExtensionContext) => Promise<void>) => {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			sendMessage: (msg: { customType?: string; content?: string }) => {
+				messages.push(msg);
+			},
+			appendEntry: () => {},
+			getSessionId: () => "sess-1",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const cwd = path.resolve(import.meta.dir, "../..");
+		const head = headCommit(cwd) ?? "0".repeat(40);
+		const exec = makeSnapshot("active", "queue", [
+			{ position: 0, work_id: "OMP-176", phase: "executing" },
+			{ position: 1, work_id: "OMP-180", phase: "pending" },
+		], null);
+		exec.items[0]!.initial_git_baseline = head;
+		exec.items[0]!.current_git_baseline = head;
+		exec.activeItem!.initial_git_baseline = head;
+		exec.activeItem!.current_git_baseline = head;
+
+		const mockBackend = {
+			cacheFile: "work-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async (key: string) => ({ id: `uuid-${key}`, key, title: `Test ${key}`, project: "Bookends" }),
+			getExecution: async () => exec,
+			currentNow: async () => ({ id: "uuid-176", key: "OMP-176", title: "Test", project: "Bookends" }),
+			setExecutionState: async () => ({
+				grant: { ...exec.grant, state: "stopped" as const, terminal_reason: "max_continuations_exceeded" },
+			}),
+			getPendingExecutionClaims: async () => [],
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workItem: async () => ({
+					work_id: "uuid-176",
+					state: "IN_PROGRESS",
+					project_id: null,
+					revision: { revision_id: "rev-1" },
+				}),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const fakeCtx = {
+			cwd,
+			taskDepth: 0,
+			sessionManager: { getBranch: () => [] },
+			ui: {
+				notify: (text: string) => { notifications.push(text); },
+				theme: { fg: (_c: string, t: string) => t },
+				setStatus: (key: string, text: string | undefined) => {
+					if (text !== undefined) statuses[key] = text;
+					else delete statuses[key];
+				},
+			},
+		} as unknown as ExtensionContext;
+
+		const tcb = await computeAuditTcb(fakeCtx, mockBackend.workClient!);
+		exec.grant.judge_sha256 = tcb.judgeSha256;
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		try {
+			const startHandlers = handlers.get("session_start") ?? [];
+			for (const h of startHandlers) {
+				await h({}, fakeCtx);
+			}
+
+			expect(notifications.some(n => n.includes("Execution grant stopped: max_continuations_exceeded"))).toBe(true);
+			expect(statuses["work-now"]).toContain("✕ Grant ad5c45a7 stopped (terminal — resume impossible) (max_continuations_exceeded)");
+			expect(statuses["work-now"]).toContain("0 completed, 2 skipped (of 2 items).");
+			expect(messages.some(m => m.customType === "work-execution-status" && m.content?.includes("Grant is terminal; resume is impossible."))).toBe(true);
+			expect(messages.some(m => m.customType === "work-execution-status" && m.content?.includes("Next: /execute OMP-176 --queue"))).toBe(true);
+		} finally {
+			dirtySpy.mockRestore();
+		}
+	});
 });

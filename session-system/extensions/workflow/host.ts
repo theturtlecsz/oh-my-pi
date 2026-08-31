@@ -1734,6 +1734,27 @@ export function createWorkflowHost(cfg: HostConfig) {
 											preflight.targetIssue.key,
 											ctx,
 										);
+									} else if (updated && updated.grant.state === "stopped") {
+										const postExec: ExecutionSnapshot = {
+											grant: updated.grant,
+											items: exec.items,
+											activeItem: null,
+										};
+										const anchorKey = (await resolveAnchorKey(backend, postExec, preflight.targetIssue.key)) ?? preflight.targetIssue.key;
+										const notice = computeExecutionNoticeDetails(postExec, updated.grant.terminal_reason ?? "cap reached", anchorKey);
+										state.terminalExecution = {
+											grantId: postExec.grant.grant_id,
+											state: "stopped",
+											reason: updated.grant.terminal_reason ?? "cap reached",
+											tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+											nextCommand: notice.nextCommandLine,
+											at: Date.now(),
+										};
+										await saveCache();
+										try {
+											ctx.ui.notify(`Execution grant stopped: ${updated.grant.terminal_reason ?? "cap reached"} · ${notice.tallyLine} · ${notice.nextCommandLine}`, "warning");
+										} catch {}
+										pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
 									}
 								}
 							}
