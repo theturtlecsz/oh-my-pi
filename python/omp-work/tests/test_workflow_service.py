@@ -2961,6 +2961,131 @@ def test_terminal_rider_carryover_revalidates_revision(service) -> None:
     assert "not on the sealed revision" in body["result"]["event"]["reason"]
 
 
+def test_terminal_rider_carryover_reversed_concurrent_begins(service) -> None:
+    """OMP-187 remediation: two concurrent replacement begins with reversed
+    primary/rider relationships must acquire one canonical work-row lock order
+    (carried riders pre-locked with the primary) — never an ABBA deadlock."""
+    import threading
+    import time
+
+    from omp_work.v1.store import PostgresWorkStore
+
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item_a = _create(service, workspace_id, "reversed carryover primary A")
+    item_b = _create(service, workspace_id, "reversed carryover primary B")
+
+    def seed_terminal(primary: dict, rider: dict, tag: str) -> None:
+        plan = _plan(service, workspace_id, primary)
+        status, body = _finalize(service, workspace_id, primary, plan["candidate_id"])
+        assert status == 200, body
+        final = body["result"]["candidate"]
+        status, body = _begin(
+            service,
+            workspace_id,
+            primary,
+            identity={
+                "riders": [
+                    {
+                        "work_id": rider["work_id"],
+                        "revision_id": rider["revision_id"],
+                        "evidence": f"probe: {tag}",
+                    }
+                ]
+            },
+        )
+        assert status == 200 and body["result"]["status"] == "applied", body
+        attempt = body["result"]["attempt"]
+        seal = _verify_and_seal(service, workspace_id, primary, final, attempt)
+        status, body = _reserve(
+            service, workspace_id, attempt["attempt_id"], seal["manifest"]["task_sha256"]
+        )
+        assert status == 200 and body["result"]["status"] == "applied", body
+        status, body = _settle(
+            service,
+            workspace_id,
+            attempt["attempt_id"],
+            body["result"]["launch"]["launch_id"],
+            {"report": NEEDS_FIX_REPORT},
+        )
+        assert status == 200, body
+        assert body["result"]["attempt"]["state"] == "remediation_required"
+        event = body["result"]["event"]
+        if event["requires_delivery"]:
+            status, attest_body = _attest(service, workspace_id, event)
+            assert status == 200 and attest_body["result"]["status"] == "applied"
+
+    seed_terminal(item_a, item_b, "a-carries-b")
+    seed_terminal(item_b, item_a, "b-carries-a")
+
+    gate_armed = threading.Event()
+    t1_at_hook = threading.Event()
+    release_t1 = threading.Event()
+    original_chain = PostgresWorkStore._lock_work_chain
+
+    def gated_chain(self, cur, ws, work_id):
+        result = original_chain(self, cur, ws, work_id)
+        if gate_armed.is_set() and str(work_id) == str(item_a["work_id"]):
+            gate_armed.clear()
+            t1_at_hook.set()
+            assert release_t1.wait(timeout=30), "gate never released"
+        return result
+
+    results: dict[str, tuple[int, dict]] = {}
+
+    def run_begin(name: str, primary: dict) -> None:
+        results[name] = _begin(
+            service,
+            workspace_id,
+            primary,
+            authorization_ref=f"summary:{uuid4()}",
+            identity={"riders": []},
+        )
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(PostgresWorkStore, "_lock_work_chain", gated_chain)
+        gate_armed.set()
+        t1 = threading.Thread(target=run_begin, args=("a", item_a))
+        t1.start()
+        assert t1_at_hook.wait(timeout=30), "thread 1 never reached the chain-lock gate"
+
+        t2 = threading.Thread(target=run_begin, args=("b", item_b))
+        t2.start()
+
+        # Deterministic gate: thread 2's canonical bulk lock ({A, B} sorted)
+        # must queue behind thread 1's pre-locked set — poll pg_stat_activity
+        # until its backend waits on a row lock, never a fixed sleep.
+        deadline = time.monotonic() + 15
+        blocked = False
+        with psycopg.connect(
+            **service.config.connection_kwargs("postgres"), autocommit=True
+        ) as conn:
+            while time.monotonic() < deadline:
+                with conn.cursor() as stat_cur:
+                    stat_cur.execute(
+                        "SELECT count(*) FROM pg_stat_activity WHERE datname=%s AND wait_event_type='Lock'",
+                        (service.config.database,),
+                    )
+                    if stat_cur.fetchone()[0] >= 1:
+                        blocked = True
+                        break
+                time.sleep(0.05)
+        assert blocked, "thread 2 never queued behind the canonical lock set"
+
+        release_t1.set()
+        t1.join(timeout=30)
+        t2.join(timeout=30)
+        assert not t1.is_alive() and not t2.is_alive(), "concurrent begins did not finish"
+
+    for name, rider in (("a", item_b), ("b", item_a)):
+        status, body = results[name]
+        assert status == 200, (name, body)
+        assert body["result"]["status"] == "applied", (name, body)
+        replacement = body["result"]["attempt"]
+        assert len(replacement["riders"]) == 1, (name, replacement["riders"])
+        assert replacement["riders"][0]["work_id"] == rider["work_id"]
+
+
 def test_terminal_work_authorization_refused(service) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)

@@ -1414,8 +1414,33 @@ class PostgresWorkStore:
         )
         # One global lock order (sorted work_id) across every close command that
         # touches multiple items — prevents deadlock between concurrent closes.
+        # OMP-187 carried riders join the same canonical set: peek the newest
+        # terminal non-completed attempt WITHOUT locking it (attempt rows lock
+        # only after work rows) purely to size the lock set; the authoritative
+        # discovery below re-reads under the held work locks and a stability
+        # guard refuses if the carried set grew past this peek.
+        peeked_carryover_ids: tuple[UUID, ...] = ()
+        if not payload.riders:
+            cur.execute(
+                "SELECT riders FROM omp_work.close_attempts WHERE workspace_id=%s AND work_id=%s AND state = ANY(%s) AND jsonb_array_length(riders) > 0 ORDER BY requested_at DESC, attempt_id DESC LIMIT 1",
+                (
+                    envelope.workspace_id,
+                    payload.work_id,
+                    ["blocked", "remediation_required", "budget_exhausted"],
+                ),
+            )
+            peeked = cur.fetchone()
+            if peeked is not None:
+                peeked_carryover_ids = tuple(
+                    UUID(str(rider["work_id"])) for rider in peeked["riders"]
+                )
         involved = sorted(
-            {payload.work_id, *(rider.work_id for rider in payload.riders)}, key=str
+            {
+                payload.work_id,
+                *(rider.work_id for rider in payload.riders),
+                *peeked_carryover_ids,
+            },
+            key=str,
         )
         if len(involved) > 1:
             cur.execute(
@@ -1512,6 +1537,20 @@ class PostgresWorkStore:
                     )
                     for rider in terminal["riders"]
                 )
+                # Stability guard: every carried rider must already sit inside
+                # the canonical pre-locked set; a concurrent transition that
+                # grew the carried set between peek and work-lock acquisition
+                # refuses (retryable) rather than locking out of canonical order.
+                involved_ids = {str(work_id) for work_id in involved}
+                if any(
+                    str(proof.work_id) not in involved_ids
+                    for proof in terminal_rider_proofs
+                ):
+                    return refused(
+                        "rider_carryover_changed",
+                        "a concurrent close-attempt transition changed the carried rider set",
+                        ("rerun /summary",),
+                    )
 
         # OMP-93 riders: sealed at begin, exact-revision-bound, evidence hashed
         # by the service. Sorted by work_id for deterministic lock order.
