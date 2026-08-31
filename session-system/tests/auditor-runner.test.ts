@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
+import { z } from "zod";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type Model, AssistantMessageEventStream } from "@oh-my-pi/pi-ai";
-import { AgentSession, SessionManager, Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { AgentSession, SessionManager, Settings, type ExtensionAPI, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { prepareNativeAuditRunner } from "../extensions/workflow/auditor-runner";
+import type { WorkflowBackend } from "../extensions/workflow/backend";
+import { createWorkflowHost } from "../extensions/workflow/host";
 import type { CloseAttemptSnapshot } from "../extensions/workflow/backend";
 import {
 	confirmWrite,
@@ -276,24 +279,106 @@ describe("native auditor runner (OMP-168)", () => {
 		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow("output schema");
 	});
 
-	test("grant state guard denies remediation on stopped or canceled grants (OMP-186)", () => {
-		const formatTerminalRefusal = (verdict: string, grantState: string, terminalReason?: string | null, findings?: string) => {
-			if (grantState === "stopped" || grantState === "canceled") {
-				return `Audit verdict: ${verdict}.\nExecution grant ${grantState} (${terminalReason ?? grantState}).\n\nFindings:\n${findings ?? ""}`;
-			}
-			return `Audit verdict: ${verdict}.\n\nFindings:\n${findings ?? ""}\n\nUpdate plan, stamp plan, fix findings, and rerun review.`;
-		};
+	test("grant state guard denies remediation on stopped or canceled grants (OMP-186)", async () => {
+		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
+		const fakePi = {
+			zod: z,
+			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
+				if (spec.name === "work") registeredExecute = spec.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+		} as unknown as ExtensionAPI;
+		let grantState = "stopped";
+		let terminalReason: string | null = "budget_exhausted";
+		let getExecutionCallCount = 0;
+		const mockBackend = {
+			cacheFile: "work-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "work-1", key: "OMP-186", title: "Test", project: "Bookends" }),
+			issueDetail: async () => ({
+				key: "OMP-186",
+				attemptSnapshot: { attemptId: "att-1", state: "audit_ready", candidateCommit: "commit-1", hasManifest: true },
+			}),
+			getExecution: async () => {
+				getExecutionCallCount++;
+				const effectiveState = getExecutionCallCount % 2 === 1 ? "active" : grantState;
+				return {
+					grant: { grant_id: "grant-1", grant_version: 1, state: effectiveState, terminal_reason: terminalReason },
+					items: [{ position: 0, work_id: "work-1", phase: "executing", plan_stamp: { paths: [] } }],
+					activeItem: { position: 0, work_id: "work-1", phase: "executing", plan_stamp: { paths: [] }, close_attempts_started: 0 },
+				};
+			},
+			sealedAuditTask: async () => ({ taskSha256: "task-sha", taskBody: "task body" }),
+			reserveAuditorLaunch: async () => ({ status: "reserved", launchId: "launch-1" }),
+			settleAuditorLaunch: async () => ({ verdict: "NEEDS_FIX", event: { renderedText: "AC-1 failed" } }),
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workflow: async () => ({
+					close_attempts: [{ attempt_id: "att-1", revision_id: "rev-1", candidate_id: "cand-1", candidate_sha256: "sha-1", candidate_commit: "commit-1" }],
+					item: { current_revision_id: "rev-1", candidate: { candidate_id: "cand-1", candidate_sha256: "sha-1", commit_sha: "commit-1" } },
+				}),
+			},
+		} as unknown as WorkflowBackend;
 
-		const stoppedMsg = formatTerminalRefusal("NEEDS_FIX", "stopped", "budget_exhausted", "AC-1 failed");
-		expect(stoppedMsg).toContain("Execution grant stopped (budget_exhausted)");
-		expect(stoppedMsg).not.toContain("Update plan, stamp plan");
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
 
-		const canceledMsg = formatTerminalRefusal("BLOCKED", "canceled", "owner_canceled", "AC-2 missing");
-		expect(canceledMsg).toContain("Execution grant canceled (owner_canceled)");
-		expect(canceledMsg).not.toContain("Update plan, stamp plan");
+		expect(registeredExecute).toBeDefined();
 
-		const activeMsg = formatTerminalRefusal("NEEDS_FIX", "active", null, "AC-1 failed");
-		expect(activeMsg).toContain("Update plan, stamp plan, fix findings, and rerun review.");
+		mockDiscovery();
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0,
+			id: "att-1",
+			agent: "auditor",
+			agentSource: "bundled",
+			task: "task",
+			exitCode: 0,
+			output: JSON.stringify({ report: "VERDICT: NEEDS_FIX\nAC-1 failed" }),
+			stderr: "",
+			truncated: false,
+			durationMs: 10,
+			tokens: 10,
+			requests: 1,
+		} as executorModule.SingleResult);
+
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			taskDepth: 0,
+			ui: { notify: () => {} },
+		} as unknown as ExtensionContext;
+
+		// 1. Stopped grant returns denial with terminal reason
+		grantState = "stopped";
+		terminalReason = "budget_exhausted";
+		const stoppedResult = await registeredExecute!("call-1", { action: "begin_execution_review", body: "verification", work: "OMP-186" }, new AbortController().signal, undefined, fakeCtx);
+		expect(stoppedResult.content[0].text).toContain("Execution grant stopped (budget_exhausted)");
+		expect(stoppedResult.content[0].text).not.toContain("Update plan, stamp plan");
+
+		// 2. Canceled grant returns denial with terminal reason
+		grantState = "canceled";
+		terminalReason = "owner_canceled";
+		const canceledResult = await registeredExecute!("call-2", { action: "begin_execution_review", body: "verification", work: "OMP-186" }, new AbortController().signal, undefined, fakeCtx);
+		expect(canceledResult.content[0].text).toContain("Execution grant canceled (owner_canceled)");
+		expect(canceledResult.content[0].text).not.toContain("Update plan, stamp plan");
+
+		// 3. Active grant returns remediation instruction
+		grantState = "active";
+		terminalReason = null;
+		const activeResult = await registeredExecute!("call-3", { action: "begin_execution_review", body: "verification", work: "OMP-186" }, new AbortController().signal, undefined, fakeCtx);
+		expect(activeResult.content[0].text).toContain("Update plan, stamp plan, fix findings, and rerun review.");
 	});
 });
 
