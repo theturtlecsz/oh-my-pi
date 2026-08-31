@@ -1456,12 +1456,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 			postVersion: number,
 			issueKey: string,
 			ctx?: ExtensionContext,
-		): Promise<void> {
+			replayEntry?: ExecutionOutboxEntry,
+		): Promise<boolean> {
 			let current: ExecutionSnapshot | null;
 			try {
 				current = await backend.getExecution(grantId);
 			} catch {
-				return;
+				return false;
 			}
 			if (
 				!current
@@ -1469,18 +1470,32 @@ export function createWorkflowHost(cfg: HostConfig) {
 				|| current.grant.state !== "active"
 				|| !current.activeItem
 			) {
-				return;
+				return false;
 			}
-			const messageId = randomUUID();
-			// Fail-closed: the pending entry MUST be persisted before sending.
-			pi.appendEntry(`${cfg.entryType}-execute-outbox`, {
+			if (
+				replayEntry
+				&& (
+					replayEntry.grantId !== grantId
+					|| replayEntry.preReservationVersion !== preReservationVersion
+					|| replayEntry.postVersion !== postVersion
+					|| replayEntry.status !== "pending"
+				)
+			) {
+				return false;
+			}
+
+			const pendingEntry: ExecutionOutboxEntry = replayEntry ?? {
 				grantId,
 				preReservationVersion,
 				postVersion,
-				messageId,
+				messageId: randomUUID(),
 				status: "pending",
 				at: new Date().toISOString(),
-			});
+			};
+			// Fail-closed: a fresh pending entry MUST persist before sending.
+			if (!replayEntry) {
+				pi.appendEntry(`${cfg.entryType}-execute-outbox`, pendingEntry);
+			}
 
 			pi.sendMessage({
 				customType: `${TOOL_NAME}-execute`,
@@ -1489,10 +1504,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 			try {
 				pi.appendEntry(`${cfg.entryType}-execute-outbox`, {
-					grantId,
-					preReservationVersion,
-					postVersion,
-					messageId,
+					...pendingEntry,
 					status: "delivered",
 					at: new Date().toISOString(),
 				});
@@ -1501,6 +1513,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					ctx?.ui?.notify?.(`Warning: failed to persist outbox delivery ack (${String(error)})`, "warning");
 				} catch {}
 			}
+			return true;
 		}
 
 		async function validateExecutionRecoveryPreflight(
@@ -1752,21 +1765,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 								e => e.grantId === exec.grant.grant_id && outboxStatus.get(e.messageId) === "pending",
 							);
 							if (pendingOutbox) {
-								pi.sendMessage({
-									customType: `${TOOL_NAME}-execute`,
-									content: prompt.render(executePromptTemplate, { key: preflight.targetIssue.key }),
-								}, { deliverAs: "nextTurn", triggerTurn: true });
-								try {
-									pi.appendEntry(`${cfg.entryType}-execute-outbox`, {
-										...pendingOutbox,
-										status: "delivered",
-										at: new Date().toISOString(),
-									});
-								} catch (error) {
-									try {
-										ctx.ui.notify(`Warning: failed to persist replay delivery ack (${String(error)})`, "warning");
-									} catch {}
-								}
+								await deliverExecutionMessage(
+									exec.grant.grant_id,
+									pendingOutbox.preReservationVersion,
+									pendingOutbox.postVersion,
+									preflight.targetIssue.key,
+									ctx,
+									pendingOutbox,
+								);
 							} else {
 								let pendingClaims: Array<{ command: Command; result?: CommandResult }>;
 								try {
@@ -3467,18 +3473,23 @@ export function createWorkflowHost(cfg: HostConfig) {
 							// attested delivery is therefore satisfied across turns: queue the
 							// delivery, schedule the execute continuation prompt, hand the
 							// turn back, and resume from service state on the next call.
-							const yieldForDeliveries = (events: Awaited<ReturnType<typeof backend.pendingDeliveries>>, phase: string) => {
+							const yieldForDeliveries = async (events: Awaited<ReturnType<typeof backend.pendingDeliveries>>, phase: string) => {
 								for (const ev of events) {
 									queueCheckpointDelivery(pi, backend, ev, notice => {
 										pendingNotices.push(`[${TOOL_NAME}] checkpoint delivery failed (${notice})`);
 									});
 								}
-								pi.sendMessage({
-									customType: `${TOOL_NAME}-execute`,
-									content: prompt.render(executePromptTemplate, { key: targetIssue.key }),
-								}, { deliverAs: "nextTurn", triggerTurn: true });
+								const sent = await deliverExecutionMessage(
+									exec.grant.grant_id,
+									exec.grant.grant_version,
+									exec.grant.grant_version,
+									targetIssue.key,
+									ctx,
+								);
 								return okText(
-									`${phase} — ${events.length} close-attempt checkpoint(s) queued for delivery. END YOUR TURN NOW with no further tool calls: the checkpoints inject when the turn yields, and the execution prompt returns automatically. Then call begin_execution_review again with the same verification body to continue.`,
+									sent
+										? `${phase} — ${events.length} close-attempt checkpoint(s) queued for delivery. END YOUR TURN NOW with no further tool calls: the checkpoints inject when the turn yields, and the execution prompt returns automatically. Then call begin_execution_review again with the same verification body to continue.`
+										: `${phase} — ${events.length} close-attempt checkpoint(s) queued for delivery. Grant is no longer active; no execution continuation prompt was sent.`,
 								);
 							};
 

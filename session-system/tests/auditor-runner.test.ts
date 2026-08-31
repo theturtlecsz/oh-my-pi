@@ -405,12 +405,22 @@ describe("native auditor runner (OMP-168)", () => {
 			path.join(os.homedir(), ".omp", "agent"),
 			path.join(cacheDir, "work-cache.json"),
 		);
-		const handlers = new Map<string, Array<(event: any, ctx: ExtensionContext) => Promise<any>>>();
+		type OutboxData = {
+			grantId: string;
+			preReservationVersion: number;
+			postVersion: number;
+			messageId: string;
+			status: "pending" | "delivered";
+			at: string;
+		};
+		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<unknown>>>();
 		const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
 		const notifications: string[] = [];
 		const sentMessages: Array<{ customType?: string; content?: string }> = [];
 		const lookupArgs: Array<string | undefined> = [];
 		const appendedEntries: string[] = [];
+		const appendedRecords: Array<{ customType: string; data?: OutboxData }> = [];
+		let branchEntries: Array<{ type: "custom"; customType: string; data: OutboxData }> = [];
 		const fakePi = {
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
@@ -418,7 +428,7 @@ describe("native auditor runner (OMP-168)", () => {
 				commands.set(name, def.handler);
 			},
 			registerFlag: () => {},
-			on: (event: string, handler: (event: any, ctx: ExtensionContext) => Promise<any>) => {
+			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<unknown>) => {
 				const list = handlers.get(event) ?? [];
 				list.push(handler);
 				handlers.set(event, list);
@@ -426,7 +436,13 @@ describe("native auditor runner (OMP-168)", () => {
 			sendMessage: (message: { customType?: string; content?: string }) => {
 				sentMessages.push(message);
 			},
-			appendEntry: (customType: string) => { appendedEntries.push(customType); },
+			appendEntry: (customType: string, data?: unknown) => {
+				appendedEntries.push(customType);
+				appendedRecords.push({
+					customType,
+					...(data && typeof data === "object" ? { data: data as OutboxData } : {}),
+				});
+			},
 			getSessionId: () => "pause-notice-session",
 			zod: z,
 		} as unknown as ExtensionAPI;
@@ -546,7 +562,7 @@ describe("native auditor runner (OMP-168)", () => {
 			cwd,
 			taskDepth: 0,
 			abort: () => {},
-			sessionManager: { getBranch: () => [] },
+			sessionManager: { getBranch: () => branchEntries },
 			ui: {
 				notify: (text: string) => { notifications.push(text); },
 				theme: { fg: (_color: string, text: string) => text },
@@ -586,6 +602,45 @@ describe("native auditor runner (OMP-168)", () => {
 		};
 
 		try {
+			const pendingReplay = (messageId: string): { type: "custom"; customType: string; data: OutboxData } => ({
+				type: "custom",
+				customType: "work-now-execute-outbox",
+				data: {
+					grantId: exec.grant.grant_id,
+					preReservationVersion: 0,
+					postVersion: exec.grant.grant_version,
+					messageId,
+					status: "pending",
+					at: new Date().toISOString(),
+				},
+			});
+			const sessionStarts = handlers.get("session_start") ?? [];
+			expect(sessionStarts.length).toBeGreaterThan(0);
+
+			branchEntries = [pendingReplay("active-replay")];
+			for (const start of sessionStarts) await start({}, fakeCtx);
+			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(1);
+			expect(appendedRecords.filter(record =>
+				record.customType === "work-now-execute-outbox"
+				&& record.data?.status === "delivered"
+				&& record.data?.messageId === "active-replay"
+			)).toHaveLength(1);
+			expect(appendedRecords.filter(record =>
+				record.customType === "work-now-execute-outbox"
+				&& record.data?.status === "pending"
+			)).toHaveLength(0);
+
+			sentMessages.length = 0;
+			appendedEntries.length = 0;
+			appendedRecords.length = 0;
+			branchEntries = [pendingReplay("completed-replay")];
+			suppressNextDelivery = true;
+			for (const start of sessionStarts) await start({}, fakeCtx);
+			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(0);
+			expect(appendedRecords.filter(record =>
+				record.customType === "work-now-execute-outbox"
+			)).toHaveLength(0);
+			branchEntries = [];
 			expect(await pauseAndResume(false)).toBe(issue.key);
 			expect(lookupArgs).toContain(issue.key);
 			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(1);
@@ -2032,9 +2087,11 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		}
 	});
 
-	test("crash-retry case: idempotent refresh with new judge runs restart once and caches marker", async () => {
+	test("execution delivery checkpoint race and crash-retry use one guarded continuation", async () => {
 		const repo = makeTempRepo();
 		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
+		const sentMessages: Array<{ customType?: string; content?: string }> = [];
+		const appendedEntries: string[] = [];
 		const fakePi = {
 			zod: z,
 			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
@@ -2044,8 +2101,8 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			registerCommand: () => {},
 			registerFlag: () => {},
 			on: () => {},
-			sendMessage: () => {},
-			appendEntry: () => {},
+			sendMessage: (message: { customType?: string; content?: string }) => { sentMessages.push(message); },
+			appendEntry: (customType: string) => { appendedEntries.push(customType); },
 		} as unknown as ExtensionAPI;
 
 		// Modify sealed python file
@@ -2150,6 +2207,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 				created_at: new Date().toISOString(),
 			},
 		];
+		let suppressCheckpointDelivery = false;
 		const mockBackend = {
 			cacheFile: repo.cacheFile,
 			markerFile: ".work-project",
@@ -2158,7 +2216,17 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			pendingDeliveries: async () => pendingEvents,
 			findIssue: async () => ({ id: "uuid-199", key: "OMP-199", title: "Test 199", project: "The Bookends" }),
 			issueDetail: async () => ({ key: "OMP-199", attemptSnapshot: undefined }),
-			getExecution: async () => exec,
+			getExecution: async (selector?: string) => {
+				if (suppressCheckpointDelivery && selector === exec.grant.grant_id) {
+					suppressCheckpointDelivery = false;
+					return {
+						...exec,
+						grant: { ...exec.grant, state: "completed" },
+						activeItem: null,
+					};
+				}
+				return exec;
+			},
 			setExecutionState: async (input: { reason?: string | null }) => {
 				callLog.push(`setExecutionState:${input.reason}`);
 				return exec;
@@ -2235,17 +2303,29 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		vi.spyOn(gitModule, "rangeDiffSha256").mockReturnValue("diff-sha-199");
 
 		try {
-			// First run: executes idempotent refresh + restart once, caches marker, yields on pending delivery BEFORE candidate freeze
+			// First run: active checkpoint continuation uses guarded helper and paired outbox.
 			const res1 = await registeredExecute!("call-1", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
 			expect(res1.content[0]?.text).toContain("queued for delivery");
 			expect(restartCount).toBe(1);
 			expect(callLog.filter(c => c === "setExecutionState:service_refresh")).toHaveLength(1);
 			expect(callLog).not.toContain("finalizeExecutionCandidate");
 			expect(gitModule.dirtyPaths(repo.dir)).toContain("python/omp-work/src/omp_work/v1/store.py");
+			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(1);
+			expect(appendedEntries.filter(type => type === "work-now-execute-outbox")).toHaveLength(2);
 
-			// Second run: working tree is STILL dirty, but cached marker prevents a second refresh/restart
+			// Original production race: checkpoint queued while active, but grant is
+			// completed at the exact delivery-seam re-fetch. No prompt or outbox.
+			sentMessages.length = 0;
+			appendedEntries.length = 0;
+			suppressCheckpointDelivery = true;
+			const suppressed = await registeredExecute!("call-2", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(suppressed.content[0]?.text).toContain("no execution continuation prompt was sent");
+			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(0);
+			expect(appendedEntries.filter(type => type === "work-now-execute-outbox")).toHaveLength(0);
+
+			// Third run: working tree is STILL dirty, but cached marker prevents a second refresh/restart.
 			pendingEvents = [];
-			const res2 = await registeredExecute!("call-2", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			const res2 = await registeredExecute!("call-3", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
 			expect(res2.content[0]?.text).toContain("Execution grant completed");
 			expect(restartCount).toBe(1);
 			expect(callLog.filter(c => c === "setExecutionState:service_refresh")).toHaveLength(1);
