@@ -164,6 +164,8 @@ interface HostNowState {
 	/** Opaque backend carrier (work: candidate ids/shas); persisted verbatim. */
 	carrier?: unknown;
 	lastSentContinuation?: { grantId: string; preReservationVersion: number; newVersion: number; at: number };
+	/** OMP-196: closing notice and next command for terminal execution grant. */
+	terminalExecution?: { grantId: string; state: "stopped" | "canceled"; reason?: string; tally?: string; nextCommand?: string; at: number };
 }
 
 const TREE_GLYPH: Record<TreeItem["bucket"], string> = { done: "✔", working: "▶", stuck: "✖", onyou: "✋", next: "○" };
@@ -294,6 +296,98 @@ export function renderSummaryResumeDigest(
 		"",
 		"Do not post second handoff files or separate prompt files; the loop charter lives in the closeout receipt.",
 	].join("\n");
+}
+
+export interface ExecutionNoticeDetails {
+	causeLine: string;
+	tallyLine: string;
+	nextCommandLine: string;
+	fullNotice: string;
+}
+
+export async function resolveAnchorKey(
+	backend: { findIssue: (keyOrId: string) => Promise<{ key: string } | null> },
+	exec: ExecutionSnapshot,
+	targetKey?: string,
+): Promise<string | undefined> {
+	if (targetKey && /^[A-Z]+-\d+$/.test(targetKey)) return targetKey;
+	const anchorItem = exec.items.find(i => i.phase !== "completed") ?? exec.activeItem ?? exec.items[0];
+	if (!anchorItem) return undefined;
+	if (/^[A-Z]+-\d+$/.test(anchorItem.work_id)) return anchorItem.work_id;
+	try {
+		const issue = await backend.findIssue(anchorItem.work_id);
+		if (issue?.key) return issue.key;
+	} catch {}
+	return undefined;
+}
+
+export function computeExecutionNoticeDetails(
+	exec: ExecutionSnapshot,
+	reason?: string | null,
+	targetKey?: string,
+): ExecutionNoticeDetails {
+	const g = exec.grant;
+	const termReason = reason ?? g.terminal_reason ?? g.state;
+	const isTerminal = g.state === "stopped" || g.state === "canceled" || g.state === "completed";
+	const causeLine = `Execution grant ${g.state} (${termReason}).${isTerminal ? " Grant is terminal; resume is impossible." : ""}`;
+
+	const completedCount = exec.items.filter(i => i.phase === "completed" || Boolean(i.completed_at)).length;
+	const totalCount = exec.items.length;
+	const skippedCount = Math.max(0, totalCount - completedCount);
+	const tallyLine = `Items: ${completedCount} completed, ${skippedCount} skipped (of ${totalCount} ${totalCount === 1 ? "item" : "items"}).`;
+
+	const anchorItem = exec.items.find(i => i.phase !== "completed") ?? exec.activeItem ?? exec.items[0];
+	const rawAnchor = targetKey ?? anchorItem?.work_id;
+	const anchorKey = rawAnchor && /^[A-Z]+-\d+$/.test(rawAnchor) ? rawAnchor : undefined;
+
+	const keyMatches = (termReason || "").match(/\b[A-Z]+-\d+\b/g) || [];
+	const blockingKey = keyMatches.find(k => k !== anchorKey);
+
+	let nextCommandLine = "";
+	if (blockingKey && anchorKey) {
+		const queueSuffix = g.mode === "queue" ? " --queue" : "";
+		nextCommandLine = `Next: /execute ${blockingKey} then /execute ${anchorKey}${queueSuffix}`;
+	} else if (blockingKey) {
+		nextCommandLine = `Next: /execute ${blockingKey}`;
+	} else if (anchorKey && termReason?.includes("contract_approval_required")) {
+		const afterApprove = isTerminal
+			? `/execute ${anchorKey}${g.mode === "queue" ? " --queue" : ""}`
+			: "/execute resume";
+		nextCommandLine = `Next: omp-work approve --issue ${anchorKey} then ${afterApprove}`;
+	} else if (
+		anchorKey &&
+		(termReason?.includes("max_close_attempts") ||
+		termReason?.includes("max_no_progress") ||
+		termReason?.includes("close_attempts_exceeded") ||
+		termReason?.includes("no_progress_exceeded") ||
+		termReason?.includes("budget_exhausted"))
+	) {
+		nextCommandLine = `Next: /summary ${anchorKey}`;
+	} else if (anchorKey) {
+		const queueSuffix = g.mode === "queue" ? " --queue" : "";
+		nextCommandLine = `Next: /execute ${anchorKey}${queueSuffix}`;
+	} else {
+		nextCommandLine = "Next: choose an issue with /now or /work status";
+	}
+
+	const fullNotice = `${causeLine}\n${tallyLine}\n${nextCommandLine}`;
+	return { causeLine, tallyLine, nextCommandLine, fullNotice };
+}
+
+export function renderExecutionTerminalBanner(
+	exec: ExecutionSnapshot | undefined,
+	targetKey?: string,
+): string[] {
+	if (!exec) return [];
+	const g = exec.grant;
+	if (g.state !== "stopped" && g.state !== "canceled") return [];
+	const details = computeExecutionNoticeDetails(exec, g.terminal_reason, targetKey);
+	return [
+		`STATUS: EXECUTION GRANT ${g.state} (terminal — resume impossible)`,
+		`CAUSE: ${g.terminal_reason ?? g.state}`,
+		`ITEMS: ${details.tallyLine.replace(/^Items:\s*/, "")}`,
+		`NEXT REQUIRED ACTION: ${details.nextCommandLine.replace(/^Next:\s*/, "")}`,
+	];
 }
 
 function sectionItems(content: string, heading: "Approach" | "Verification"): string[] {
@@ -622,7 +716,15 @@ export function createWorkflowHost(cfg: HostConfig) {
 					: undefined,
 				{ placement: "inline" },
 			);
-			if (state.identifier && state.treeCounts) {
+			if (state.terminalExecution) {
+				const term = state.terminalExecution;
+				const parts = [
+					`✕ Grant ${term.grantId.slice(0, 8)} ${term.state} (${term.reason ?? term.state})`,
+					term.tally,
+					term.nextCommand,
+				].filter(Boolean);
+				ctx.ui.setStatus(`${cfg.entryType}`, theme.fg("warning", parts.join(" · ") + warn));
+			} else if (state.identifier && state.treeCounts) {
 				// HOME-109 plain-words footer — never calls the network (runs every turn).
 				// ponytail: counts staleness ceiling = last goalTree() call (session start +
 				// every my_now); wire a refresh timer only if the owner notices.
@@ -1528,7 +1630,18 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if ((ctx?.taskDepth === 0 || ctx?.taskDepth === undefined) && backend.workClient) {
 				try {
 					const exec = await backend.getExecution();
-					if (exec && exec.grant.state === "active" && exec.activeItem) {
+					if (exec && (exec.grant.state === "stopped" || exec.grant.state === "canceled")) {
+						const anchorKey = await resolveAnchorKey(backend, exec, state.identifier);
+						const notice = computeExecutionNoticeDetails(exec, exec.grant.terminal_reason, anchorKey);
+						state.terminalExecution = {
+							grantId: exec.grant.grant_id,
+							state: exec.grant.state,
+							reason: exec.grant.terminal_reason ?? exec.grant.state,
+							tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+							nextCommand: notice.nextCommandLine,
+							at: Date.now(),
+						};
+					} else if (exec && exec.grant.state === "active" && exec.activeItem) {
 						const preflight = await validateExecutionRecoveryPreflight(ctx, backend, exec, "active");
 						if (preflight.ok) {
 							const curVersion = exec.grant.grant_version;
@@ -2145,12 +2258,17 @@ export function createWorkflowHost(cfg: HostConfig) {
 					}
 					const g = exec.grant;
 					const item = exec.activeItem;
+					const isTerminal = g.state === "stopped" || g.state === "canceled" || g.state === "completed";
+					const resolvedKey = await resolveAnchorKey(backend, exec, key);
+					const details = computeExecutionNoticeDetails(exec, g.terminal_reason, resolvedKey);
 					const lines = [
 						`── Execution Grant ${g.grant_id.slice(0, 8)} (${g.state}) ──`,
 						`Mode: ${g.mode} · Version: ${g.grant_version}`,
 						`Continuations: ${g.continuations_scheduled}/${g.max_continuations} · Attempts: ${g.max_close_attempts} · Max no-progress: ${g.max_no_progress}`,
 						...(item ? [`Active: ${item.work_id} (phase: ${item.phase}, attempts: ${item.close_attempts_started}, no-progress: ${item.consecutive_no_progress})`] : []),
 						...(g.terminal_reason ? [`Terminal reason: ${g.terminal_reason}`] : []),
+						details.tallyLine,
+						...(isTerminal ? [details.causeLine, details.nextCommandLine] : []),
 					];
 					ctx.ui.notify(lines.join(" · "), "info");
 					pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: lines.join("\n") }, { deliverAs: "nextTurn" });
@@ -2186,7 +2304,24 @@ export function createWorkflowHost(cfg: HostConfig) {
 							ctx,
 						);
 					} else if (updated && updated.grant.state === "stopped") {
-						ctx.ui.notify(`Execution grant stopped: ${updated.grant.terminal_reason ?? "cap reached"}`, "warning");
+						const postExec: ExecutionSnapshot = {
+							grant: updated.grant,
+							items: exec.items,
+							activeItem: null,
+						};
+						const resolvedKey = await resolveAnchorKey(backend, exec, key);
+						const notice = computeExecutionNoticeDetails(postExec, updated.grant.terminal_reason ?? "cap reached", resolvedKey);
+						state.terminalExecution = {
+							grantId: postExec.grant.grant_id,
+							state: "stopped",
+							reason: updated.grant.terminal_reason ?? "cap reached",
+							tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+							nextCommand: notice.nextCommandLine,
+							at: Date.now(),
+						};
+						await saveCache();
+						footer(ctx);
+						ctx.ui.notify(`Execution grant stopped: ${updated.grant.terminal_reason ?? "cap reached"} · ${notice.nextCommandLine}`, "warning");
 					}
 					return;
 				}
@@ -2199,14 +2334,32 @@ export function createWorkflowHost(cfg: HostConfig) {
 						return;
 					}
 					const tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
-					await backend.setExecutionState({
+					const updated = await backend.setExecutionState({
 						grantId: exec.grant.grant_id,
 						expectedGrantVersion: exec.grant.grant_version,
 						targetState: "canceled",
 						reason: "owner_cancel",
 						judgeSha256: tcb.judgeSha256,
 					});
-					ctx.ui.notify(`Execution grant canceled`, "info");
+					const postExec: ExecutionSnapshot = {
+						grant: updated.grant,
+						items: exec.items,
+						activeItem: null,
+					};
+					const resolvedKey = await resolveAnchorKey(backend, exec, key);
+					const notice = computeExecutionNoticeDetails(postExec, "owner_cancel", resolvedKey);
+					state.terminalExecution = {
+						grantId: postExec.grant.grant_id,
+						state: "canceled",
+						reason: "owner_cancel",
+						tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+						nextCommand: notice.nextCommandLine,
+						at: Date.now(),
+					};
+					await saveCache();
+					footer(ctx);
+					ctx.ui.notify(`Execution grant canceled · ${notice.tallyLine} · ${notice.nextCommandLine}`, "info");
+					pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
 					return;
 				}
 
@@ -2234,6 +2387,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					ctx.ui.notify(`Issue ${rawKey} not found`, "error");
 					return;
 				}
+				state.terminalExecution = undefined;
 
 				let claims: ExecutionGrantItemClaim[];
 				if (isQueue) {
@@ -2389,6 +2543,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 									text = `${banner.join("\n")}\n\n${msg}`;
 									break;
 								}
+								const exec = await backend.getExecution(workTarget);
+								if (exec && (exec.grant.state === "stopped" || exec.grant.state === "canceled")) {
+									const execBanner = renderExecutionTerminalBanner(exec, workTarget);
+									if (execBanner.length > 0) {
+										text = `${execBanner.join("\n")}\n\n${msg}`;
+										break;
+									}
+								}
 							} catch {
 								// unreadable target — try the next, else keep original refusal
 							}
@@ -2472,9 +2634,17 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (!params.work) return deny("work key required");
 							const i = await backend.issueDetail(params.work);
 							const banner = renderNextActionBanner(params.work, i.attemptSnapshot, summaryAuthorized);
+							let execBanner: string[] = [];
+							try {
+								const exec = await backend.getExecution(params.work);
+								if (exec && (exec.grant.state === "stopped" || exec.grant.state === "canceled")) {
+									execBanner = renderExecutionTerminalBanner(exec, params.work);
+								}
+							} catch {}
 							return okText(
 								[
 									...banner,
+									...execBanner,
 									`${params.work} ${i.title}`,
 									`state: ${i.state} · project: ${i.project ?? "none"} · labels: ${i.labels.join(",") || "none"}`,
 									i.description ?? "",
@@ -3145,7 +3315,19 @@ export function createWorkflowHost(cfg: HostConfig) {
 									}
 									const currentExec = await backend.getExecution(params.work);
 									if (currentExec?.grant?.state === "stopped" || currentExec?.grant?.state === "canceled") {
-										return deny(`Audit verdict: ${settle.verdict}.\nExecution grant ${currentExec.grant.state} (${currentExec.grant.terminal_reason ?? currentExec.grant.state}).\n\nFindings:\n${settle.event?.renderedText ?? ""}`);
+										const anchorKey = (await resolveAnchorKey(backend, currentExec, targetIssue.key)) ?? targetIssue.key;
+										const notice = computeExecutionNoticeDetails(currentExec, currentExec.grant.terminal_reason, anchorKey);
+										state.terminalExecution = {
+											grantId: currentExec.grant.grant_id,
+											state: currentExec.grant.state,
+											reason: currentExec.grant.terminal_reason ?? currentExec.grant.state,
+											tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+											nextCommand: notice.nextCommandLine,
+											at: Date.now(),
+										};
+										await saveCache();
+										footer(ctx);
+										return deny(`Audit verdict: ${settle.verdict}.\n${notice.fullNotice}\n\nFindings:\n${settle.event?.renderedText ?? ""}`);
 									}
 									const reportSuffix = auditRun.payload ? `\n\n## Auditor Report\n${auditRun.payload}` : "";
 									return okText(`Audit verdict: ${settle.verdict}.\n\nFindings:\n${settle.event?.renderedText ?? ""}${reportSuffix}\n\nUpdate plan, stamp plan, fix findings, and rerun review.`);
@@ -3181,25 +3363,59 @@ export function createWorkflowHost(cfg: HostConfig) {
 								if (nextPending) {
 									const dirt = dirtyPaths(ctx.cwd);
 									if (dirt.length > 0) {
-										await backend.setExecutionState({
+										const updated = await backend.setExecutionState({
 											grantId: completed.grant.grant_id,
 											expectedGrantVersion: completed.grant.grant_version,
 											targetState: "stopped",
 											reason: "execution_worktree_not_clean",
 											judgeSha256: tcb.judgeSha256,
 										});
-										return deny("execution_worktree_not_clean on queue advance: clean worktree required.");
+										const postExec: ExecutionSnapshot = {
+											grant: updated.grant,
+											items: completed.items,
+											activeItem: null,
+										};
+										const anchorKey = (await resolveAnchorKey(backend, postExec, targetIssue.key)) ?? targetIssue.key;
+										const notice = computeExecutionNoticeDetails(postExec, "execution_worktree_not_clean", anchorKey);
+										state.terminalExecution = {
+											grantId: postExec.grant.grant_id,
+											state: "stopped",
+											reason: "execution_worktree_not_clean",
+											tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+											nextCommand: notice.nextCommandLine,
+											at: Date.now(),
+										};
+										await saveCache();
+										footer(ctx);
+										return deny(`execution_worktree_not_clean on queue advance: clean worktree required.\n${notice.fullNotice}`);
 									}
 									const head = headCommit(ctx.cwd);
 									if (!head) {
-										await backend.setExecutionState({
+										const updated = await backend.setExecutionState({
 											grantId: completed.grant.grant_id,
 											expectedGrantVersion: completed.grant.grant_version,
 											targetState: "stopped",
 											reason: "no_head_commit",
 											judgeSha256: tcb.judgeSha256,
 										});
-										return deny("no head commit on queue advance");
+										const postExec: ExecutionSnapshot = {
+											grant: updated.grant,
+											items: completed.items,
+											activeItem: null,
+										};
+										const anchorKey = (await resolveAnchorKey(backend, postExec, targetIssue.key)) ?? targetIssue.key;
+										const notice = computeExecutionNoticeDetails(postExec, "no_head_commit", anchorKey);
+										state.terminalExecution = {
+											grantId: postExec.grant.grant_id,
+											state: "stopped",
+											reason: "no_head_commit",
+											tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+											nextCommand: notice.nextCommandLine,
+											at: Date.now(),
+										};
+										await saveCache();
+										footer(ctx);
+										return deny(`no head commit on queue advance.\n${notice.fullNotice}`);
 									}
 									const focusVersion = await backend.getFocusVersion();
 									await backend.activateExecutionItem({
@@ -3358,14 +3574,32 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const exec = await backend.getExecution(params.work);
 							if (!exec) return deny("no active execution grant found");
 							const tcb = await computeAuditTcb(ctx, backend.workClient!);
-							await backend.setExecutionState({
+							const reason = params.body ?? "model_stopped";
+							const updated = await backend.setExecutionState({
 								grantId: exec.grant.grant_id,
 								expectedGrantVersion: exec.grant.grant_version,
 								targetState: "stopped",
-								reason: params.body ?? "model_stopped",
+								reason,
 								judgeSha256: tcb.judgeSha256,
 							});
-							return okText(`Execution grant stopped: ${params.body ?? "model stopped"}`);
+							const postExec: ExecutionSnapshot = {
+								grant: updated.grant,
+								items: exec.items.map(it => it.work_id === exec.activeItem?.work_id ? { ...it, terminal_reason: reason } : it),
+								activeItem: null,
+							};
+							const anchorKey = (await resolveAnchorKey(backend, postExec, params.work ?? state.identifier)) ?? state.identifier;
+							const notice = computeExecutionNoticeDetails(postExec, reason, anchorKey);
+							state.terminalExecution = {
+								grantId: postExec.grant.grant_id,
+								state: "stopped",
+								reason,
+								tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+								nextCommand: notice.nextCommandLine,
+								at: Date.now(),
+							};
+							await saveCache();
+							footer(ctx);
+							return okText(notice.fullNotice);
 						}
 					}
 				} catch (e) {

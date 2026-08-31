@@ -11,15 +11,18 @@ import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { prepareNativeAuditRunner } from "../extensions/workflow/auditor-runner";
 import type { WorkflowBackend } from "../extensions/workflow/backend";
 import { createWorkflowHost } from "../extensions/workflow/host";
-import type { CloseAttemptSnapshot } from "../extensions/workflow/backend";
+import type { CloseAttemptSnapshot, ExecutionItemPhase, ExecutionSnapshot } from "../extensions/workflow/backend";
 import {
 	confirmWrite,
 	RECEIPT_TTL_MS,
 	resetConfirmations,
 } from "../extensions/workflow/confirm";
 import {
+	computeExecutionNoticeDetails,
+	renderExecutionTerminalBanner,
 	renderNextActionBanner,
 	renderSummaryResumeDigest,
+	resolveAnchorKey,
 } from "../extensions/workflow/host";
 
 describe("native auditor runner (OMP-168)", () => {
@@ -672,5 +675,297 @@ describe("audit judge TCB sealing (OMP-180)", () => {
 		const sha = getExecutorSha();
 		expect(typeof sha).toBe("string");
 		expect(sha).toMatch(/^[0-9a-f]{64}$/);
+	});
+});
+
+describe("terminal execution grant closing notices and banners (OMP-196)", () => {
+	const makeSnapshot = (
+		state: "stopped" | "canceled" | "active" | "paused" | "completed",
+		mode: "single" | "queue" = "queue",
+		items: Array<{ position: number; work_id: string; phase: ExecutionItemPhase; completed_at?: string }> = [
+			{ position: 0, work_id: "OMP-176", phase: "executing" },
+			{ position: 1, work_id: "OMP-180", phase: "pending" },
+			{ position: 2, work_id: "OMP-181", phase: "pending" },
+		],
+		terminal_reason: string | null = null,
+	): ExecutionSnapshot => ({
+		grant: {
+			grant_id: "ad5c45a7-1234-5678-9abc-def012345678",
+			workspace_id: "ws-1",
+			owner_id: "owner-1",
+			repository: "oh-my-pi",
+			remote_ref: "refs/heads/main",
+			state,
+			mode,
+			grant_version: 1,
+			max_continuations: 8,
+			max_close_attempts: 5,
+			max_no_progress: 3,
+			continuations_scheduled: 0,
+			terminal_reason,
+			authorization_hash: "auth-hash",
+			judge_sha256: "judge-sha",
+			created_at: new Date().toISOString(),
+			expires_at: new Date().toISOString(),
+		},
+		items: items.map(it => ({
+			item_id: `item-${it.position}`,
+			workspace_id: "ws-1",
+			grant_id: "ad5c45a7-1234-5678-9abc-def012345678",
+			work_id: it.work_id,
+			position: it.position,
+			phase: it.phase,
+			claimed_revision_id: "rev-1",
+			initial_git_baseline: "commit-0",
+			original_request: "req",
+			original_request_sha256: "req-sha",
+			close_attempts_started: 0,
+			consecutive_no_progress: 0,
+			completed_at: it.completed_at,
+		})),
+		activeItem: (items.find(it => it.phase === "executing") as unknown as ExecutionSnapshot["activeItem"]) ?? null,
+	});
+
+	test("closing notice on defect stop with blocking fix key (queue mode)", () => {
+		const exec = makeSnapshot("stopped", "queue", [
+			{ position: 0, work_id: "OMP-176", phase: "executing" },
+			{ position: 1, work_id: "OMP-180", phase: "pending" },
+			{ position: 2, work_id: "OMP-181", phase: "pending" },
+		], "candidate_drift gate defect filed as OMP-195");
+
+		const notice = computeExecutionNoticeDetails(exec, "candidate_drift gate defect filed as OMP-195", "OMP-176");
+		expect(notice.causeLine).toBe("Execution grant stopped (candidate_drift gate defect filed as OMP-195). Grant is terminal; resume is impossible.");
+		expect(notice.tallyLine).toBe("Items: 0 completed, 3 skipped (of 3 items).");
+		expect(notice.nextCommandLine).toBe("Next: /execute OMP-195 then /execute OMP-176 --queue");
+		expect(notice.fullNotice).toBe([
+			"Execution grant stopped (candidate_drift gate defect filed as OMP-195). Grant is terminal; resume is impossible.",
+			"Items: 0 completed, 3 skipped (of 3 items).",
+			"Next: /execute OMP-195 then /execute OMP-176 --queue",
+		].join("\n"));
+	});
+
+	test("closing notice on defect stop with blocking fix key (single mode)", () => {
+		const exec = makeSnapshot("stopped", "single", [
+			{ position: 0, work_id: "OMP-176", phase: "executing" },
+		], "blocked by OMP-195");
+
+		const notice = computeExecutionNoticeDetails(exec, "blocked by OMP-195", "OMP-176");
+		expect(notice.causeLine).toBe("Execution grant stopped (blocked by OMP-195). Grant is terminal; resume is impossible.");
+		expect(notice.tallyLine).toBe("Items: 0 completed, 1 skipped (of 1 item).");
+		expect(notice.nextCommandLine).toBe("Next: /execute OMP-195 then /execute OMP-176");
+	});
+
+	test("closing notice on partial queue completion and stop", () => {
+		const exec = makeSnapshot("stopped", "queue", [
+			{ position: 0, work_id: "OMP-170", phase: "completed", completed_at: new Date().toISOString() },
+			{ position: 1, work_id: "OMP-176", phase: "executing" },
+			{ position: 2, work_id: "OMP-180", phase: "pending" },
+		], "budget_exhausted");
+
+		const notice = computeExecutionNoticeDetails(exec, "budget_exhausted", "OMP-176");
+		expect(notice.causeLine).toBe("Execution grant stopped (budget_exhausted). Grant is terminal; resume is impossible.");
+		expect(notice.tallyLine).toBe("Items: 1 completed, 2 skipped (of 3 items).");
+		expect(notice.nextCommandLine).toBe("Next: /summary OMP-176");
+	});
+
+	test("closing notice on contract approval requirement (paused vs terminal)", () => {
+		const pausedExec = makeSnapshot("paused", "queue", [
+			{ position: 0, work_id: "OMP-180", phase: "executing" },
+		], "contract_approval_required:1a5441d9");
+		const pausedNotice = computeExecutionNoticeDetails(pausedExec, "contract_approval_required:1a5441d9", "OMP-180");
+		expect(pausedNotice.nextCommandLine).toBe("Next: omp-work approve --issue OMP-180 then /execute resume");
+
+		const stoppedExec = makeSnapshot("stopped", "queue", [
+			{ position: 0, work_id: "OMP-180", phase: "executing" },
+		], "contract_approval_required:1a5441d9");
+		const stoppedNotice = computeExecutionNoticeDetails(stoppedExec, "contract_approval_required:1a5441d9", "OMP-180");
+		expect(stoppedNotice.nextCommandLine).toBe("Next: omp-work approve --issue OMP-180 then /execute OMP-180 --queue");
+	});
+
+	test("closing notice on owner cancellation", () => {
+		const exec = makeSnapshot("canceled", "queue", [
+			{ position: 0, work_id: "OMP-180", phase: "executing" },
+		], "owner_cancel");
+
+		const notice = computeExecutionNoticeDetails(exec, "owner_cancel", "OMP-180");
+		expect(notice.causeLine).toBe("Execution grant canceled (owner_cancel). Grant is terminal; resume is impossible.");
+		expect(notice.nextCommandLine).toBe("Next: /execute OMP-180 --queue");
+	});
+
+	test("renderExecutionTerminalBanner returns 4-line banner for stopped/canceled grants", () => {
+		const exec = makeSnapshot("stopped", "queue", [
+			{ position: 0, work_id: "OMP-176", phase: "executing" },
+			{ position: 1, work_id: "OMP-180", phase: "pending" },
+		], "candidate_drift gate defect filed as OMP-195");
+
+		const banner = renderExecutionTerminalBanner(exec as any, "OMP-176");
+		expect(banner).toEqual([
+			"STATUS: EXECUTION GRANT stopped (terminal — resume impossible)",
+			"CAUSE: candidate_drift gate defect filed as OMP-195",
+			"ITEMS: 0 completed, 2 skipped (of 2 items).",
+			"NEXT REQUIRED ACTION: /execute OMP-195 then /execute OMP-176 --queue",
+		]);
+
+		const activeExec = makeSnapshot("active", "queue");
+		expect(renderExecutionTerminalBanner(activeExec, "OMP-176")).toEqual([]);
+	});
+
+	test("resolveAnchorKey resolves UUID to issue key via backend", async () => {
+		const mockBackend = {
+			findIssue: async (keyOrId: string) => {
+				if (keyOrId === "uuid-176") return { key: "OMP-176" };
+				return null;
+			},
+		};
+		const exec = makeSnapshot("stopped", "queue", [
+			{ position: 0, work_id: "uuid-176", phase: "executing" },
+		]);
+		const key = await resolveAnchorKey(mockBackend, exec);
+		expect(key).toBe("OMP-176");
+
+		const directKey = await resolveAnchorKey(mockBackend, exec, "OMP-180");
+		expect(directKey).toBe("OMP-180");
+	});
+
+	test("stop_execution tool action returns full closing notice with cause, tally, and next command", async () => {
+		let registeredExecute: ((id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }>) | undefined;
+		const fakePi = {
+			registerTool: (def: { execute: (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }> }) => {
+				registeredExecute = def.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const exec = makeSnapshot("active", "queue", [
+			{ position: 0, work_id: "OMP-176", phase: "executing" },
+			{ position: 1, work_id: "OMP-180", phase: "pending" },
+		]);
+
+		const mockBackend = {
+			cacheFile: "work-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-176", key: "OMP-176", title: "Test", project: "Bookends" }),
+			getExecution: async () => exec,
+			setExecutionState: async (input: { targetState: ExecutionSnapshot["grant"]["state"]; reason?: string }) => ({
+				grant: { ...exec.grant, state: input.targetState, terminal_reason: input.reason },
+			}),
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			taskDepth: 0,
+			ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+		} as unknown as ExtensionContext;
+
+		const result = await registeredExecute!(
+			"call-stop",
+			{ action: "stop_execution", body: "candidate_drift gate defect filed as OMP-195", work: "OMP-176" },
+			new AbortController().signal,
+			undefined,
+			fakeCtx,
+		);
+
+		expect(result.content[0].text).toContain("Execution grant stopped (candidate_drift gate defect filed as OMP-195). Grant is terminal; resume is impossible.");
+		expect(result.content[0].text).toContain("Items: 0 completed, 2 skipped (of 2 items).");
+		expect(result.content[0].text).toContain("Next: /execute OMP-195 then /execute OMP-176 --queue");
+	});
+
+	test("session_start populates footer status with terminal execution grant banner", async () => {
+		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<void>>>();
+		const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		const statuses: Record<string, string> = {};
+		const fakePi = {
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				commands.set(name, def.handler);
+			},
+			registerFlag: () => {},
+			on: (event: string, handler: (e: unknown, ctx: ExtensionContext) => Promise<void>) => {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			sendMessage: () => {},
+			appendEntry: () => {},
+			getSessionId: () => "sess-1",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const exec = makeSnapshot("stopped", "queue", [
+			{ position: 0, work_id: "OMP-176", phase: "executing" },
+			{ position: 1, work_id: "OMP-180", phase: "pending" },
+		], "candidate_drift gate defect filed as OMP-195");
+
+		const mockBackend = {
+			cacheFile: "work-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async (key: string) => ({ id: `uuid-${key}`, key, title: `Test ${key}`, project: "Bookends" }),
+			getExecution: async () => exec,
+			currentNow: async () => ({ id: "uuid-176", key: "OMP-176", title: "Test OMP-176", project: "Bookends" }),
+			setNowRemote: async () => {},
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			taskDepth: 0,
+			sessionManager: { getBranch: () => [] },
+			ui: {
+				notify: () => {},
+				theme: { fg: (_c: string, t: string) => t },
+				setStatus: (key: string, text: string | undefined) => {
+					if (text !== undefined) statuses[key] = text;
+					else delete statuses[key];
+				},
+			},
+		} as unknown as ExtensionContext;
+
+		const startHandlers = handlers.get("session_start") ?? [];
+		expect(startHandlers.length).toBeGreaterThan(0);
+		for (const h of startHandlers) {
+			await h({}, fakeCtx);
+		}
+
+		expect(statuses["work-now"]).toContain("✕ Grant ad5c45a7 stopped (candidate_drift gate defect filed as OMP-195)");
+		expect(statuses["work-now"]).toContain("0 completed, 2 skipped (of 2 items).");
+		expect(statuses["work-now"]).toContain("Next: /execute OMP-195 then /execute OMP-176 --queue");
+
+		// Verify persistence across /now focus change
+		const nowCmd = commands.get("now");
+		if (nowCmd) {
+			await nowCmd("OMP-180", fakeCtx);
+			expect(statuses["work-now"]).toContain("✕ Grant ad5c45a7 stopped (candidate_drift gate defect filed as OMP-195)");
+		}
 	});
 });
