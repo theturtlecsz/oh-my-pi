@@ -213,7 +213,7 @@ export function validateExecutionPath(path: string, root?: string): { valid: boo
 }
 
 export function validateExecutionPaths(paths: readonly string[], root?: string): { valid: boolean; error?: string; normalized: string[] } {
-	if (!paths.length) return { valid: false, error: "paths array must not be empty", normalized: [] };
+	if (!paths.length) return { valid: true, normalized: [] };
 	const normalized: string[] = [];
 	const seenExact = new Set<string>();
 	const seenCaseFold = new Set<string>();
@@ -331,7 +331,6 @@ export async function freezeCandidateCommit(
 
 		if (options.mode === "execution") {
 			const sealed = new Set(options.sealedPaths ?? []);
-			if (!sealed.size) return refuse("failed", "execution freeze requires non-empty sealed paths", "error");
 			const staged = runGit(root, ["diff", "--cached", "--name-only"]);
 			if (!staged.ok || staged.out !== "") return refuse("failed", "execution freeze refused: pre-staged entries in index", "error");
 			const unsealed = all.filter(p => !sealed.has(p));

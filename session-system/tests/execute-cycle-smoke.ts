@@ -2604,7 +2604,59 @@ try {
 	const unmetView = (await (await fetch(`${baseUrl}/v1/work-items/${itemUnmet.key}/workflow`, { headers })).json()) as { item: { state: string } };
 	assert.notEqual(unmetView.item.state, "DONE", "unmet item is not closed by an empty diff");
 
-	console.log("execute-cycle-smoke: PASS (clean preflight, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety)");
+	// Test Scenario: OMP-194 zero-path already-delivered baseline completion & queue advance
+	const zeroPathRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			operation_id: crypto.randomUUID(),
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			command: {
+				type: "create_work_batch",
+				payload: {
+					items: [
+						{
+							client_ref: "smoke-item-zero-path",
+							title: "Smoke Zero Path Feature",
+							description: "Zero path feature already delivered",
+							scope: "smoke",
+							acceptance_criteria: [],
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
+						{
+							client_ref: "smoke-item-zero-path-followup",
+							title: "Smoke Zero Path Followup Feature",
+							description: "Subsequent queued item",
+							scope: "smoke",
+							acceptance_criteria: [],
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
+					],
+				},
+			},
+		}),
+	})).json();
+	assert.equal(zeroPathRes.receipt.state, "applied");
+	const itemZeroPath = zeroPathRes.result.items[0];
+	const itemZeroPathFollowup = zeroPathRes.result.items[1];
+
+	const zeroPathOut = runHarness("zero-path-queue", itemZeroPath.key);
+	assert.ok(
+		(zeroPathOut.uiCalls as string[]).some(c => c.includes("binding grant baseline HEAD")),
+		"grant-baseline bind notice surfaced on zero-path freeze",
+	);
+	const zeroPathExec = zeroPathOut.finalExecution as { items?: { phase?: string }[]; activeItem?: { position?: number } } | undefined;
+	assert.equal(zeroPathExec?.items?.[0]?.phase, "completed", "zero-path item phase is completed");
+	assert.equal(zeroPathExec?.activeItem?.position, 1, "queue advanced to next item after zero-path completion");
+	const zeroPathView = (await (await fetch(`${baseUrl}/v1/work-items/${itemZeroPath.key}/workflow`, { headers })).json()) as { item: { state: string } };
+	assert.equal(zeroPathView.item.state, "DONE", "zero-path item closed DONE service-side");
+
+	console.log("execute-cycle-smoke: PASS (clean preflight, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety, zero-path baseline completion & queue advance)");
 } finally {
 	cleanup();
 }

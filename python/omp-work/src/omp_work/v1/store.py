@@ -4120,9 +4120,12 @@ class PostgresWorkStore:
 
         initial_paths = None
         if existing_plan_stamp and isinstance(existing_plan_stamp, dict):
-            initial_paths = existing_plan_stamp.get("initial_paths") or existing_plan_stamp.get("paths")
+            if "initial_paths" in existing_plan_stamp and existing_plan_stamp["initial_paths"] is not None:
+                initial_paths = existing_plan_stamp["initial_paths"]
+            elif "paths" in existing_plan_stamp and existing_plan_stamp["paths"] is not None:
+                initial_paths = existing_plan_stamp["paths"]
 
-        if grant_item["phase"] == "remediating" and initial_paths:
+        if grant_item["phase"] == "remediating" and initial_paths is not None:
             allowed_set = set(initial_paths)
             if not set(validated_paths).issubset(allowed_set):
                 raise WorkStoreError(
@@ -4130,7 +4133,7 @@ class PostgresWorkStore:
                     (f"remediation plan widens sealed paths beyond initial plan stamp: {sorted(set(validated_paths) - allowed_set)}",),
                 )
 
-        effective_initial_paths = list(initial_paths) if initial_paths else list(validated_paths)
+        effective_initial_paths = list(initial_paths) if initial_paths is not None else list(validated_paths)
 
         cur.execute(
             "SELECT current_revision_id FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s FOR UPDATE",

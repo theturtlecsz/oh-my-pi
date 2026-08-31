@@ -13,7 +13,7 @@ import { loadBearer, loadWorkConfig } from "../../extensions/workflow/config";
 import { freezeCandidateCommit } from "../../extensions/workflow/git";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
-const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet";
+const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue";
 const probe = process.argv[2];
 const workKeyArg = process.argv[4];
 
@@ -534,6 +534,24 @@ if (scenario === "dirty") {
 	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/already_delivered.ts"] });
 	subprocessCount = 1; // next auditor report: PASS
 	out.review = await reviewUntilSettled("verified at baseline: src/already_delivered.ts committed and correct; no changes required");
+	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
+	out.uiCalls = uiCalls;
+} else if (scenario === "zero-path-queue") {
+	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
+	const executeCmd = extension.commands.get("execute");
+	if (!executeCmd) throw new Error("execute command missing");
+	await executeCmd.handler(`${workKeyArg || "OMP-1"} --queue`, cmdCtx);
+	await execute({ action: "seal_execution_criteria", criteria: ["AC-1: zero-path feature already delivered"] });
+	const planFile = "local://execute-plan.md";
+	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
+	fs.writeFileSync(planDiskPath, "## Approach\n1. External config check\n\n## Verification\n1. Value-free probe check\n");
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: [] });
+	subprocessCount = 1; // next auditor report: PASS
+	out.review = await reviewUntilSettled("verified: zero-path change complete at baseline");
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
 } else if (scenario === "already-unmet") {

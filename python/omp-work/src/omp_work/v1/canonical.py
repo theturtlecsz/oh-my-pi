@@ -93,7 +93,7 @@ def validate_execution_path(path: str) -> None:
 def validate_execution_paths(paths: Iterable[str]) -> list[str]:
     path_list = list(paths)
     if not path_list:
-        raise ValueError("plan paths must not be empty")
+        return []
     for p in path_list:
         validate_execution_path(p)
     ordered = sorted(set(path_list), key=lambda p: p.encode("utf-8"))

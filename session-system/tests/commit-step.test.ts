@@ -17,7 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { candidateSha256 } from "@oh-my-pi/pi-work-client";
-import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256 } from "../extensions/workflow/git";
+import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, validateExecutionPaths } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -367,6 +367,44 @@ describe("candidate freeze and push", () => {
 });
 
 describe("execution freeze (OMP-188)", () => {
+	test("validateExecutionPaths accepts empty array", () => {
+		const res = validateExecutionPaths([]);
+		expect(res.valid).toBe(true);
+		expect(res.normalized).toEqual([]);
+	});
+
+	test("binds baseline HEAD when sealed paths are empty and HEAD equals the grant baseline", async () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const ui = makeUi(true);
+		const outcome = await freezeCandidateCommit(ui, repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: [],
+			expectedBaseline: head,
+		});
+		if ("refused" in outcome) throw new Error(`expected baseline bind, got refusal: ${outcome.reason}`);
+		expect(outcome.commitSha).toBe(head);
+		expect(outcome.paths).toEqual(["seed.txt"]);
+		expect(outcome.candidateSha256).toBe(candidateSha256(head, ["seed.txt"]));
+		expect(git(repo, "rev-parse", "HEAD")).toBe(head);
+		expect(ui.notices.some(n => n.includes("binding grant baseline HEAD"))).toBe(true);
+	});
+
+	test("refuses when sealed paths are empty and working tree is dirty (names unsealed path)", async () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		fs.writeFileSync(path.join(repo, "dirty.txt"), "unsealed change\n");
+		const ui = makeUi(true);
+		const outcome = await freezeCandidateCommit(ui, repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: [],
+			expectedBaseline: head,
+		});
+		expect("refused" in outcome && outcome.refused).toBe("failed");
+		expect("refused" in outcome ? outcome.reason : "").toContain("unsealed modified paths (dirty.txt)");
+		expect(git(repo, "rev-parse", "HEAD")).toBe(head);
+	});
+
 	test("binds baseline HEAD when sealed paths carry no changes and HEAD equals the grant baseline", async () => {
 		const repo = makeRepo();
 		const head = git(repo, "rev-parse", "HEAD");

@@ -2969,7 +2969,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected planning or remediating`);
 							}
 							if (!params.plan_file) return deny("plan_file required");
-							if (!params.paths || !params.paths.length) return deny("paths array required");
+							if (!params.paths) return deny("paths array required");
 							let planPath = params.plan_file;
 							let planContent: string | undefined;
 							let lastPlanError: unknown;

@@ -4757,3 +4757,314 @@ def test_execution_grant_project_drift_rejection(service) -> None:
     )
     assert status == 409
     assert any("project mismatch" in d for d in body["error"]["diagnostics"])
+
+
+def test_execution_grant_zero_path_lifecycle_and_remediation_widening(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "Zero Path Item", description="Zero path item description")
+    work_id, rev_id = item["work_id"], item["revision_id"]
+
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    head_commit = "0" * 40
+
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": {
+                    "owner_input_id": str(uuid4()),
+                    "owner_session_id": "session-1",
+                    "normalized_command": "/execute OMP-1",
+                    "workspace_id": str(workspace_id),
+                    "repository": "oh-my-pi",
+                    "nonce": str(uuid4()),
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(work_id),
+                        "revision_id": str(rev_id),
+                        "position": 0,
+                        "original_request": "Zero path item description",
+                        "original_request_sha256": text_sha256("Zero path item description"),
+                        "initial_git_baseline": head_commit,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 200, body
+
+    # Seal criteria
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_execution_criteria",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 1,
+                "work_id": str(work_id),
+                "expected_revision_id": str(rev_id),
+                "criteria": ["AC-1: criteria zero path"],
+                "description_sha256": text_sha256("Zero path item description"),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    new_rev_id = body["result"]["revision"]["revision_id"]
+
+    # Stamp zero-path plan
+    cand_1_id = str(uuid4())
+    plan_content = "## Approach\n1. External restoration\n\n## Verification\n1. Verification check"
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 2,
+                "work_id": str(work_id),
+                "revision_id": str(new_rev_id),
+                "candidate_id": cand_1_id,
+                "plan_file": "local://zero-path-plan.md",
+                "plan_body": plan_content,
+                "plan_sha256": sha256(plan_content),
+                "approach": ["1. External restoration"],
+                "verification": ["1. Verification check"],
+                "paths": [],
+                "candidate_sha256": "1" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    item_res = body["result"]["item"]
+    assert item_res["phase"] == "executing"
+    plan_stamp = item_res["plan_stamp"]
+    assert plan_stamp["paths"] == []
+    assert plan_stamp["initial_paths"] == []
+    plan_stamp_sha_1 = item_res["plan_stamp_sha256"]
+
+    # Finalize candidate 1
+    final_commit_1 = "1" * 40
+    final_cand_1_id = str(uuid4())
+    final_cand_1_sha = "2" * 64
+    _finalize(
+        service,
+        workspace_id,
+        {"work_id": work_id, "revision_id": new_rev_id},
+        cand_1_id,
+        commit=final_commit_1,
+        final_id=final_cand_1_id,
+        candidate_hash=final_cand_1_sha,
+    )
+
+    # Begin close attempt 1
+    att_1_id = str(uuid4())
+    status, begin_body_1 = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_close_attempt",
+            "payload": {
+                "work_id": str(work_id),
+                "attempt_id": att_1_id,
+                "authorization_ref": f"execution:{grant_id}:0:1",
+                "owner_session_id": "session-1",
+                "owner_session_started_at": datetime.now(timezone.utc).isoformat(),
+                "owner_session_start_commit": head_commit,
+                "repository": "oh-my-pi",
+                "diff_sha256": "3" * 64,
+                "starting_dirty_paths": [],
+                "authorization_kind": "execution",
+                "execution_grant_id": grant_id,
+                "candidate_tree_sha": final_cand_1_sha,
+                "original_request_sha256": text_sha256("Zero path item description"),
+                "criteria_sha256": sha256(["AC-1: criteria zero path"]),
+                "plan_stamp_sha256": plan_stamp_sha_1,
+                "judge_sha256": judge_sha,
+                "riders": [],
+            },
+        },
+    )
+    assert status == 200, begin_body_1
+    begin_event_1 = begin_body_1["result"]["event"]
+
+    verif_receipt_1_id = str(uuid4())
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "append_evidence",
+            "payload": {
+                "receipt": {
+                    "receipt_id": verif_receipt_1_id,
+                    "work_id": str(work_id),
+                    "revision_id": str(new_rev_id),
+                    "candidate_id": str(final_cand_1_id),
+                    "kind": "verification",
+                    "payload": {"body": "tests 1"},
+                    "payload_sha256": sha256({"body": "tests 1"}),
+                    "issuer": "test",
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                    "candidate_sha256": final_cand_1_sha,
+                    "candidate_commit": final_commit_1,
+                },
+            },
+        },
+    )
+    assert status == 200, body
+
+    # Seal manifest 1
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_audit_manifest",
+            "payload": {
+                "attempt_id": att_1_id,
+                "verification_receipt_id": verif_receipt_1_id,
+            },
+        },
+    )
+    assert status == 200, body
+    task_sha_1 = body["result"]["manifest"]["task_sha256"]
+
+    # Reserve launch 1
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "reserve_auditor_launch",
+            "payload": {
+                "attempt_id": att_1_id,
+                "task_sha256": task_sha_1,
+                "tool_call_id": "call-1",
+            },
+        },
+    )
+    assert status == 200, body
+    launch_1_id = body["result"]["launch"]["launch_id"]
+
+    # Settle launch 1 with BLOCKED_REPORT
+    status, settle_body_1 = _command(
+        service,
+        workspace_id,
+        {
+            "type": "settle_auditor_launch",
+            "payload": {
+                "attempt_id": att_1_id,
+                "launch_id": launch_1_id,
+                "transport_payload": BLOCKED_REPORT,
+            },
+        },
+    )
+    assert status == 200, settle_body_1
+    assert settle_body_1["result"]["verdict"] == "BLOCKED"
+    settle_event_1 = settle_body_1["result"]["event"]
+
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": begin_event_1["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": begin_event_1["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "attest_checkpoint_delivery",
+            "payload": {
+                "event_id": settle_event_1["event_id"],
+                "owner_session_id": "session-1",
+                "rendered_sha256": settle_event_1["rendered_sha256"],
+                "status": "delivered",
+            },
+        },
+    )
+
+    # Verify active execution grant and remediating phase
+    resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{grant_id}",
+        headers=_owner_headers(workspace_id),
+    )
+    assert resp.status_code == 200, resp.json()
+    exec_data = resp.json()
+    assert exec_data["grant"]["state"] == "active"
+    assert exec_data["items"][0]["phase"] == "remediating"
+
+    # Restamp with non-empty path -> must fail with invalid_request naming the widened path
+    cand_2_id = str(uuid4())
+    plan_content_2 = "## Approach\n1. Step one fixed\n\n## Verification\n1. Check one fixed"
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": str(work_id),
+                "revision_id": str(new_rev_id),
+                "candidate_id": cand_2_id,
+                "plan_file": "local://zero-path-plan-2.md",
+                "plan_body": plan_content_2,
+                "plan_sha256": sha256(plan_content_2),
+                "approach": ["1. Step one fixed"],
+                "verification": ["1. Check one fixed"],
+                "paths": ["src/feature.ts"],
+                "candidate_sha256": "4" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 400, body
+    assert any("remediation plan widens sealed paths beyond initial plan stamp" in d and "src/feature.ts" in d for d in body["error"]["diagnostics"])
+
+    # Restamp with [] -> must succeed
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": str(work_id),
+                "revision_id": str(new_rev_id),
+                "candidate_id": cand_2_id,
+                "plan_file": "local://zero-path-plan-2.md",
+                "plan_body": plan_content_2,
+                "plan_sha256": sha256(plan_content_2),
+                "approach": ["1. Step one fixed"],
+                "verification": ["1. Check one fixed"],
+                "paths": [],
+                "candidate_sha256": "4" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["item"]["phase"] == "executing"
+    assert body["result"]["item"]["plan_stamp"]["paths"] == []
+    assert body["result"]["item"]["plan_stamp"]["initial_paths"] == []

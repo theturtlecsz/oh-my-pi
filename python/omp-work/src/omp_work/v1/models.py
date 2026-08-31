@@ -803,7 +803,7 @@ class StampExecutionPlanPayload(StrictModel):
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approach: tuple[str, ...] = Field(min_length=1)
     verification: tuple[str, ...] = Field(min_length=1)
-    paths: tuple[str, ...] = Field(min_length=1)
+    paths: tuple[str, ...]
     candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -1213,4 +1213,5 @@ class Approval(StrictModel):
         "OMP-140",
         "OMP-147",
         "OMP-180",
+        "OMP-194",
     ]
