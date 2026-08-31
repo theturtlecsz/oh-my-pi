@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
-import { Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import * as sdkModule from "@oh-my-pi/pi-coding-agent";
+import { Settings, type CreateAgentSessionResult, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
@@ -231,69 +232,108 @@ describe("native auditor runner (OMP-168)", () => {
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
 
-		let capturedExecutorOptions: executorModule.ExecutorOptions | undefined;
-		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options) => {
-			capturedExecutorOptions = options;
-			const testModel = { id: "k3", provider: "kimi-code" } as unknown as Parameters<NonNullable<executorModule.ExecutorOptions["getApiKey"]>>[0];
-			const resolverFn = await options.getApiKey?.(testModel);
-			if (typeof resolverFn !== "function") {
-				return {
-					index: options.index,
-					id: options.id,
-					agent: options.agent.name,
-					agentSource: options.agent.source,
-					task: options.task,
-					exitCode: 1,
-					output: "",
-					stderr: "Error: No API key found for kimi-code",
-					error: "Error: No API key found for kimi-code",
-					truncated: false,
-					durationMs: 10,
-					tokens: 0,
-					requests: 0,
-				} as executorModule.SingleResult;
-			}
-			const resolvedToken = await resolverFn({});
-			if (!resolvedToken) {
-				return {
-					index: options.index,
-					id: options.id,
-					agent: options.agent.name,
-					agentSource: options.agent.source,
-					task: options.task,
-					exitCode: 1,
-					output: "",
-					stderr: "Error: No API key found for kimi-code",
-					error: "Error: No API key found for kimi-code",
-					truncated: false,
-					durationMs: 10,
-					tokens: 0,
-					requests: 0,
-				} as executorModule.SingleResult;
-			}
-			return {
-				index: options.index,
-				id: options.id,
-				agent: options.agent.name,
-				agentSource: options.agent.source,
-				task: options.task,
-				exitCode: 0,
-				output: JSON.stringify({ report: "VERDICT: PASS\nAll ACs verified." }),
-				stderr: "",
-				truncated: false,
-				durationMs: 50,
-				tokens: 150,
-				requests: 1,
-			} as executorModule.SingleResult;
-		});
+		let promptCalled = false;
+		let resolvedKeyAtPrompt: string | undefined;
+		let capturedCreateSessionOptions: Record<string, unknown> | undefined;
+		const listeners: Array<(event: Record<string, unknown>) => void> = [];
+		const mockSession = {
+			state: { messages: [] },
+			agent: { state: { systemPrompt: ["test"] } },
+			model: undefined,
+			extensionRunner: undefined,
+			getEnabledToolNames: () => ["read", "yield"],
+			getActiveToolNames: () => ["read", "yield"],
+			setActiveToolsByName: async () => {},
+			sessionManager: {
+				appendSessionInit: () => {},
+				appendMessage: () => {},
+				getCwd: () => repoRoot,
+			},
+			subscribe: (listener: (event: Record<string, unknown>) => void) => {
+				listeners.push(listener);
+				return () => {
+					const index = listeners.indexOf(listener);
+					if (index >= 0) listeners.splice(index, 1);
+				};
+			},
+			prompt: async () => {
+				promptCalled = true;
+				const getter = capturedCreateSessionOptions?.getApiKey;
+				if (typeof getter === "function") {
+					const resolverOrKey = await (getter as (model: unknown) => Promise<unknown>)({ id: "k3", provider: "kimi-code" });
+					if (typeof resolverOrKey === "function") {
+						resolvedKeyAtPrompt = await (resolverOrKey as () => Promise<string>)();
+					} else if (typeof resolverOrKey === "string") {
+						resolvedKeyAtPrompt = resolverOrKey;
+					}
+				} else {
+					resolvedKeyAtPrompt = await sentinelRegistry.getApiKey({ id: "k3", provider: "kimi-code" });
+				}
+				if (!resolvedKeyAtPrompt) {
+					throw new Error("No API key found for kimi-code.\n\nUse /login, set an API key environment variable, or create ~/.omp/agent/auth.json");
+				}
+				for (const listener of listeners) {
+					listener({
+						type: "tool_execution_end",
+						toolCallId: "tool-yield-1",
+						toolName: "yield",
+						args: { result: { data: { report: "VERDICT: PASS\nAll ACs verified." } } },
+						result: {
+							content: [{ type: "text", text: "Result submitted." }],
+							details: { status: "success", data: { report: "VERDICT: PASS\nAll ACs verified." } },
+						},
+						isError: false,
+					});
+					listener({
+						type: "message_end",
+						message: {
+							role: "assistant",
+							content: [
+								{
+									type: "toolCall",
+									id: "tool-yield-1",
+									name: "yield",
+									arguments: { result: { data: { report: "VERDICT: PASS\nAll ACs verified." } } },
+								},
+							],
+						},
+					});
+				}
+			},
+			extractToolData: () => ({
+				yield: { report: "VERDICT: PASS\nAll ACs verified." },
+			}),
+			getUsage: () => ({ input: 100, output: 200, totalTokens: 300 }),
+			isStreaming: false,
+			prepareForHeadlessAdvisorDrain: () => {},
+			waitForIdle: async () => {},
+			waitForAdvisorCatchup: async () => true,
+			getLastAssistantMessage: () => undefined,
+			abort: async () => {},
+			dispose: async () => {},
+			setIrcWakeTurnObserver: () => {},
+			subscribeRunState: () => () => {},
+			getActiveToolNames: () => ["read", "yield"],
+			getEnabledToolNames: () => ["read", "yield"],
+			setActiveToolsByName: async () => {},
+		};
 
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async (opts) => {
+			capturedCreateSessionOptions = opts as Record<string, unknown>;
+			return {
+				session: mockSession,
+				extensionsResult: {},
+				setToolUIContext: () => {},
+			} as unknown as CreateAgentSessionResult;
+		});
 		const runner = await prepareNativeAuditRunner(fakeCtx);
 		const result = await runner("Run audit on OMP-176", "attempt-oauth-behavioral");
 
 		expect(result.started).toBe(true);
 		expect(result.error).toBeUndefined();
 		expect(result.payload).toContain("VERDICT: PASS");
-		expect(capturedExecutorOptions).toBeDefined();
+		expect(promptCalled).toBe(true);
+		expect(resolvedKeyAtPrompt).toBe("oauth-valid-bearer");
 		expect(fakeResolver).toHaveBeenCalledWith(expect.objectContaining({ provider: "kimi-code" }), "attempt-oauth-behavioral");
 	});
 
