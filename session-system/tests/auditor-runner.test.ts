@@ -150,6 +150,63 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(result.payload).toBe(wrappedPayload);
 	});
 
+	test("forwards authStorage and getApiKey resolver for OAuth-backed @audit models (OMP-176)", async () => {
+		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "kimi-code/k3:high" } });
+		vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(sentinelSettings);
+		mockDiscovery();
+
+		let capturedOptions: executorModule.ExecutorOptions | undefined;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options) => {
+			capturedOptions = options;
+			return {
+				index: options.index,
+				id: options.id,
+				agent: options.agent.name,
+				agentSource: options.agent.source,
+				task: options.task,
+				exitCode: 0,
+				output: JSON.stringify({ report: "VERDICT: PASS\nAll ACs verified." }),
+				stderr: "",
+				truncated: false,
+				durationMs: 100,
+				tokens: 200,
+				requests: 1,
+			} as executorModule.SingleResult;
+		});
+
+		const fakeAuthStorage = { hasOAuth: () => true };
+		const fakeResolver = vi.fn().mockReturnValue(async () => "oauth-bearer-token");
+		const sentinelRegistry = {
+			getApiKey: () => Promise.resolve("key"),
+			authStorage: fakeAuthStorage,
+			resolver: fakeResolver,
+		};
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const fakeCtx = {
+			cwd: repoRoot,
+			models: {
+				resolve: (role: string) =>
+					role === "@audit" ? { id: "k3", provider: "kimi-code" } : undefined,
+			},
+			modelRegistry: sentinelRegistry,
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		const runner = await prepareNativeAuditRunner(fakeCtx);
+		const result = await runner("Run audit on OMP-176", "attempt-oauth-1");
+
+		expect(result.started).toBe(true);
+		expect(capturedOptions).toBeDefined();
+		expect(capturedOptions?.modelRegistry).toBe(sentinelRegistry as unknown as executorModule.ExecutorOptions["modelRegistry"]);
+		expect(capturedOptions?.authStorage).toBe(fakeAuthStorage as unknown as executorModule.ExecutorOptions["authStorage"]);
+		expect(typeof capturedOptions?.getApiKey).toBe("function");
+
+		const testModel = { id: "k3", provider: "kimi-code" } as unknown as Parameters<NonNullable<executorModule.ExecutorOptions["getApiKey"]>>[0];
+		const resolvedKey = await capturedOptions?.getApiKey?.(testModel);
+		expect(fakeResolver).toHaveBeenCalledWith(testModel, "attempt-oauth-1");
+		expect(typeof resolvedKey).toBe("function");
+	});
+
 	test("fails if the auditor output schema is missing", async () => {
 		const fakeAgent: AgentDefinition = {
 			name: "auditor",

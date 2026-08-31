@@ -63,6 +63,10 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext): Promise<N
 				task: taskBody,
 				modelOverride: agent.model,
 				modelRegistry: ctx.modelRegistry,
+				authStorage: ctx.modelRegistry?.authStorage,
+				getApiKey: ctx.modelRegistry?.resolver
+					? requestModel => ctx.modelRegistry.resolver(requestModel, attemptId)
+					: undefined,
 				modelRole: "audit",
 				outputSchema: agent.output,
 				outputSchemaSource: "agent",
