@@ -510,10 +510,9 @@ if (scenario === "dirty") {
 	out.uiCalls = uiCalls;
 	out.sentMessages = sentMessages;
 } else if (scenario === "already-delivered") {
-	// OMP-188 (fail-closed stage): the sealed path is already committed at the
-	// grant baseline, but the host does not yet pass expectedBaseline into the
-	// execution freeze — an empty sealed diff must refuse loudly instead of
-	// adopting HEAD, and the grant must remain cleanly stoppable.
+	// OMP-188/OMP-189: the sealed path is already committed and pushed at the
+	// grant baseline; with the host passing expectedBaseline, the cycle binds
+	// the baseline commit and completes autonomously.
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
 		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
@@ -533,14 +532,14 @@ if (scenario === "dirty") {
 	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
 	fs.writeFileSync(planDiskPath, "## Approach\n1. Verify the delivered feature\n\n## Verification\n1. Prove the delivered feature\n");
 	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/already_delivered.ts"] });
-	out.review = await execute({ action: "begin_execution_review", body: "verified at baseline: src/already_delivered.ts committed and correct; no changes required" });
-	out.execAfterReview = JSON.parse(await execute({ action: "get_execution" }));
-	out.stopResult = await execute({ action: "stop_execution", body: "already-delivered fail-closed scenario complete" });
+	subprocessCount = 1; // next auditor report: PASS
+	out.review = await reviewUntilSettled("verified at baseline: src/already_delivered.ts committed and correct; no changes required");
+	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
 } else if (scenario === "already-unmet") {
-	// OMP-188 AC-3 (fail-closed stage): an empty sealed diff with unmet
-	// criteria cannot even reach the audit — the freeze refuses first, so no
-	// completion path exists and the audit gate is never bypassed.
+	// OMP-189 AC-2: an empty sealed diff with UNMET criteria binds the
+	// baseline, reaches the audit, and ends NEEDS_FIX with no completion —
+	// the audit gate is the arbiter, never bypassed.
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
 		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
@@ -552,11 +551,12 @@ if (scenario === "dirty") {
 	const planFile = "local://execute-plan.md";
 	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
 	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
-	fs.writeFileSync(planDiskPath, "## Approach\n1. Claim the feature exists\n\n## Verification\n1. The freeze refuses the empty diff\n");
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Claim the feature exists\n\n## Verification\n1. The audit catches the gap\n");
 	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/never_written.ts"] });
-	out.review = await execute({ action: "begin_execution_review", body: "claims unverified at baseline" });
+	// subprocessCount stays 0: the first auditor report is NEEDS_FIX.
+	out.review = await reviewUntilSettled("claims unverified at baseline");
 	out.execAfterReview = JSON.parse(await execute({ action: "get_execution" }));
-	out.stopResult = await execute({ action: "stop_execution", body: "already-unmet fail-closed scenario complete" });
+	out.stopResult = await execute({ action: "stop_execution", body: "already-unmet scenario complete" });
 	out.uiCalls = uiCalls;
 } else if (scenario === "freeze-probes") {
 	const mockUi = {

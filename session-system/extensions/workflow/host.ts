@@ -3270,7 +3270,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 								targetIssue.key,
 								plannedCandidateId,
 								[],
-								{ mode: "execution", sealedPaths },
+								{
+									mode: "execution",
+									sealedPaths,
+									// OMP-189: prove the grant baseline to the freeze so an empty
+									// sealed diff adopts ONLY the commit this grant started from.
+									expectedBaseline: exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline,
+								},
 							);
 							if ("refused" in freeze) return deny(`Candidate freeze refused: ${freeze.reason}`);
 
