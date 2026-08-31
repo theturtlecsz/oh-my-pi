@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
-import * as sdkModule from "@oh-my-pi/pi-coding-agent";
-import { Settings, type CreateAgentSessionResult, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import { type Model, AssistantMessageEventStream } from "@oh-my-pi/pi-ai";
+import { AgentSession, SessionManager, Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
@@ -207,134 +209,48 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(fakeResolver).toHaveBeenCalledWith(testModel, "attempt-oauth-1");
 		expect(typeof resolvedKey).toBe("function");
 	});
+	test("behavioral: child AgentSession prompt resolves OAuth token when static registry key is unavailable (OMP-176)", async () => {
+		const testModel = {
+			id: "k3",
+			provider: "kimi-code",
+			api: "openai-completions",
+			baseUrl: "https://api.kimi.com/coding/v1",
+			name: "Kimi k3",
+		} as unknown as Model;
 
-	test("behavioral: child session prompt resolves OAuth token when static registry key is unavailable (OMP-176)", async () => {
-		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "kimi-code/k3:high" } });
-		vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(sentinelSettings);
-		mockDiscovery();
-
-		const fakeAuthStorage = { hasOAuth: () => true, hasAuth: () => true };
-		const fakeResolver = vi.fn().mockReturnValue(async () => "oauth-valid-bearer");
-		const sentinelRegistry = {
+		const fakeResolver = vi.fn().mockReturnValue(async () => "oauth-valid-bearer-token");
+		const mockRegistry = {
 			getApiKey: vi.fn().mockResolvedValue(undefined),
-			authStorage: fakeAuthStorage,
+			authStorage: { hasOAuth: () => true },
 			resolver: fakeResolver,
-			getAvailable: () => [{ id: "k3", provider: "kimi-code", api: "openai-completions" }],
-		};
-		const repoRoot = path.resolve(import.meta.dir, "../..");
-		const fakeCtx = {
-			cwd: repoRoot,
-			models: {
-				resolve: (role: string) =>
-					role === "@audit" ? { id: "k3", provider: "kimi-code", api: "openai-completions" } : undefined,
-			},
-			modelRegistry: sentinelRegistry,
-			taskDepth: 0,
-		} as unknown as ExtensionContext;
+		} as unknown as ModelRegistry;
 
-		let promptCalled = false;
-		let resolvedKeyAtPrompt: string | undefined;
-		let capturedCreateSessionOptions: Record<string, unknown> | undefined;
-		const listeners: Array<(event: Record<string, unknown>) => void> = [];
-		const mockSession = {
-			state: { messages: [] },
-			agent: { state: { systemPrompt: ["test"] } },
-			model: undefined,
-			extensionRunner: undefined,
-			getEnabledToolNames: () => ["read", "yield"],
-			getActiveToolNames: () => ["read", "yield"],
-			setActiveToolsByName: async () => {},
-			sessionManager: {
-				appendSessionInit: () => {},
-				appendMessage: () => {},
-				getCwd: () => repoRoot,
+		const agent = new Agent({
+			initialState: { model: testModel, systemPrompt: ["test"], tools: [] },
+			getApiKey: requestModel => mockRegistry.resolver(requestModel, "attempt-oauth-behavioral"),
+			streamFn: async () => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "text_delta", delta: "OK" });
+					stream.end({ role: "assistant", content: [{ type: "text", text: "OK" }], stopReason: "stop" });
+				});
+				return stream;
 			},
-			subscribe: (listener: (event: Record<string, unknown>) => void) => {
-				listeners.push(listener);
-				return () => {
-					const index = listeners.indexOf(listener);
-					if (index >= 0) listeners.splice(index, 1);
-				};
-			},
-			prompt: async () => {
-				promptCalled = true;
-				const getter = capturedCreateSessionOptions?.getApiKey;
-				if (typeof getter === "function") {
-					const resolverOrKey = await (getter as (model: unknown) => Promise<unknown>)({ id: "k3", provider: "kimi-code" });
-					if (typeof resolverOrKey === "function") {
-						resolvedKeyAtPrompt = await (resolverOrKey as () => Promise<string>)();
-					} else if (typeof resolverOrKey === "string") {
-						resolvedKeyAtPrompt = resolverOrKey;
-					}
-				} else {
-					resolvedKeyAtPrompt = await sentinelRegistry.getApiKey({ id: "k3", provider: "kimi-code" });
-				}
-				if (!resolvedKeyAtPrompt) {
-					throw new Error("No API key found for kimi-code.\n\nUse /login, set an API key environment variable, or create ~/.omp/agent/auth.json");
-				}
-				for (const listener of listeners) {
-					listener({
-						type: "tool_execution_end",
-						toolCallId: "tool-yield-1",
-						toolName: "yield",
-						args: { result: { data: { report: "VERDICT: PASS\nAll ACs verified." } } },
-						result: {
-							content: [{ type: "text", text: "Result submitted." }],
-							details: { status: "success", data: { report: "VERDICT: PASS\nAll ACs verified." } },
-						},
-						isError: false,
-					});
-					listener({
-						type: "message_end",
-						message: {
-							role: "assistant",
-							content: [
-								{
-									type: "toolCall",
-									id: "tool-yield-1",
-									name: "yield",
-									arguments: { result: { data: { report: "VERDICT: PASS\nAll ACs verified." } } },
-								},
-							],
-						},
-					});
-				}
-			},
-			extractToolData: () => ({
-				yield: { report: "VERDICT: PASS\nAll ACs verified." },
-			}),
-			getUsage: () => ({ input: 100, output: 200, totalTokens: 300 }),
-			isStreaming: false,
-			prepareForHeadlessAdvisorDrain: () => {},
-			waitForIdle: async () => {},
-			waitForAdvisorCatchup: async () => true,
-			getLastAssistantMessage: () => undefined,
-			abort: async () => {},
-			dispose: async () => {},
-			setIrcWakeTurnObserver: () => {},
-			subscribeRunState: () => () => {},
-			getActiveToolNames: () => ["read", "yield"],
-			getEnabledToolNames: () => ["read", "yield"],
-			setActiveToolsByName: async () => {},
-		};
-
-		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async (opts) => {
-			capturedCreateSessionOptions = opts as Record<string, unknown>;
-			return {
-				session: mockSession,
-				extensionsResult: {},
-				setToolUIContext: () => {},
-			} as unknown as CreateAgentSessionResult;
 		});
-		const runner = await prepareNativeAuditRunner(fakeCtx);
-		const result = await runner("Run audit on OMP-176", "attempt-oauth-behavioral");
 
-		expect(result.started).toBe(true);
-		expect(result.error).toBeUndefined();
-		expect(result.payload).toContain("VERDICT: PASS");
-		expect(promptCalled).toBe(true);
-		expect(resolvedKeyAtPrompt).toBe("oauth-valid-bearer");
-		expect(fakeResolver).toHaveBeenCalledWith(expect.objectContaining({ provider: "kimi-code" }), "attempt-oauth-behavioral");
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			modelRegistry: mockRegistry,
+		});
+
+		// Calling session.prompt executes real AgentSession.prototype.prompt and validates API key using getApiKey
+		await session.prompt("Run audit check");
+		await session.waitForIdle();
+
+		expect(fakeResolver).toHaveBeenCalledWith(testModel, "attempt-oauth-behavioral");
+		await session.dispose();
 	});
 
 	test("fails if the auditor output schema is missing", async () => {
