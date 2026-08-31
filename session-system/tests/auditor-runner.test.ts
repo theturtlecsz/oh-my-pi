@@ -410,6 +410,7 @@ describe("native auditor runner (OMP-168)", () => {
 		const notifications: string[] = [];
 		const sentMessages: Array<{ customType?: string; content?: string }> = [];
 		const lookupArgs: Array<string | undefined> = [];
+		const appendedEntries: string[] = [];
 		const fakePi = {
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
@@ -425,7 +426,7 @@ describe("native auditor runner (OMP-168)", () => {
 			sendMessage: (message: { customType?: string; content?: string }) => {
 				sentMessages.push(message);
 			},
-			appendEntry: () => {},
+			appendEntry: (customType: string) => { appendedEntries.push(customType); },
 			getSessionId: () => "pause-notice-session",
 			zod: z,
 		} as unknown as ExtensionAPI;
@@ -481,6 +482,7 @@ describe("native auditor runner (OMP-168)", () => {
 		exec.items = [exec.activeItem!];
 
 		let failNextIssueLookup = false;
+		let suppressNextDelivery = false;
 		const mockBackend = {
 			cacheFile,
 			markerFile: ".work-project",
@@ -488,7 +490,20 @@ describe("native auditor runner (OMP-168)", () => {
 			scopeFix: "",
 			getExecution: async (selector?: string) => {
 				lookupArgs.push(selector);
-				return selector === undefined || selector === issue.key || selector === workId ? exec : null;
+				if (selector === exec.grant.grant_id && suppressNextDelivery) {
+					suppressNextDelivery = false;
+					return {
+						...exec,
+						grant: { ...exec.grant, state: "completed" },
+						activeItem: null,
+					};
+				}
+				return selector === undefined
+					|| selector === issue.key
+					|| selector === workId
+					|| selector === exec.grant.grant_id
+					? exec
+					: null;
 			},
 			findIssue: async () => {
 				if (failNextIssueLookup) {
@@ -573,10 +588,22 @@ describe("native auditor runner (OMP-168)", () => {
 		try {
 			expect(await pauseAndResume(false)).toBe(issue.key);
 			expect(lookupArgs).toContain(issue.key);
+			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(1);
+			expect(appendedEntries.filter(type => type === "work-now-execute-outbox")).toHaveLength(2);
 
+			sentMessages.length = 0;
+			appendedEntries.length = 0;
 			expect(await pauseAndResume(true)).toBe(workId);
 			expect(lookupArgs).toContain(workId);
-			expect(sentMessages.some(message => message.customType === "work-execute")).toBe(true);
+			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(1);
+			expect(appendedEntries.filter(type => type === "work-now-execute-outbox")).toHaveLength(2);
+
+			sentMessages.length = 0;
+			appendedEntries.length = 0;
+			suppressNextDelivery = true;
+			expect(await pauseAndResume(false)).toBe(issue.key);
+			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(0);
+			expect(appendedEntries.filter(type => type === "work-now-execute-outbox")).toHaveLength(0);
 
 			const resume = commands.get("execute");
 			expect(resume).toBeDefined();

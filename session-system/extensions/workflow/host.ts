@@ -1457,6 +1457,20 @@ export function createWorkflowHost(cfg: HostConfig) {
 			issueKey: string,
 			ctx?: ExtensionContext,
 		): Promise<void> {
+			let current: ExecutionSnapshot | null;
+			try {
+				current = await backend.getExecution(grantId);
+			} catch {
+				return;
+			}
+			if (
+				!current
+				|| current.grant.grant_id !== grantId
+				|| current.grant.state !== "active"
+				|| !current.activeItem
+			) {
+				return;
+			}
 			const messageId = randomUUID();
 			// Fail-closed: the pending entry MUST be persisted before sending.
 			pi.appendEntry(`${cfg.entryType}-execute-outbox`, {
