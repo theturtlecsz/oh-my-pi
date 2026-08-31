@@ -43,6 +43,7 @@ from .models import (
     OperationReceipt,
     OperationState,
     RelationEdge,
+    RiderProof,
     SameSessionFoundFixedPayload,
 )
 from .semantics import (
@@ -1485,11 +1486,39 @@ class PostgresWorkStore:
 
         live = self._live_attempt(cur, envelope.workspace_id, payload.work_id)
 
+        # OMP-187: a terminal non-completed attempt must not strand riders.
+        # Explicit riders win; a live attempt resumes its already-sealed riders;
+        # otherwise the newest terminal attempt is reconstructed as fresh proofs
+        # and revalidated through the same path as a new rider batch.
+        terminal_rider_proofs: tuple[RiderProof, ...] = ()
+        if not payload.riders and live is None:
+            cur.execute(
+                f"SELECT {_ATTEMPT_FIELDS} FROM omp_work.close_attempts WHERE workspace_id=%s AND work_id=%s AND state = ANY(%s) AND jsonb_array_length(riders) > 0 ORDER BY requested_at DESC, attempt_id DESC LIMIT 1 FOR UPDATE",
+                (
+                    envelope.workspace_id,
+                    payload.work_id,
+                    ["blocked", "remediation_required", "budget_exhausted"],
+                ),
+            )
+            terminal = cur.fetchone()
+            if terminal is not None:
+                terminal_rider_proofs = tuple(
+                    RiderProof.model_validate(
+                        {
+                            "work_id": rider["work_id"],
+                            "revision_id": rider["revision_id"],
+                            "evidence": rider["evidence"],
+                        }
+                    )
+                    for rider in terminal["riders"]
+                )
+
         # OMP-93 riders: sealed at begin, exact-revision-bound, evidence hashed
         # by the service. Sorted by work_id for deterministic lock order.
+        rider_proofs = tuple(payload.riders) or terminal_rider_proofs
         sealed_riders: list[dict[str, object]] = []
         seen_riders: set[str] = set()
-        for rider in sorted(payload.riders, key=lambda proof: str(proof.work_id)):
+        for rider in sorted(rider_proofs, key=lambda proof: str(proof.work_id)):
             rider_id = str(rider.work_id)
             if rider.work_id == payload.work_id or rider_id in seen_riders:
                 return refused(
@@ -1541,7 +1570,7 @@ class PostgresWorkStore:
                 }
             )
 
-        if not payload.riders and live is not None and live.get("riders"):
+        if not rider_proofs and live is not None and live.get("riders"):
             sealed_riders = list(live["riders"])
 
         incoming_identity = close_attempt_identity_sha256(

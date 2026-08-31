@@ -2789,6 +2789,178 @@ def test_resume_with_omitted_riders_retains_sealed_riders(service) -> None:
     assert body["result"]["event"]["event_type"] == "attempt_resumed"
 
 
+@pytest.mark.parametrize(
+    ("terminal_state", "report"),
+    [
+        ("remediation_required", NEEDS_FIX_REPORT),
+        ("blocked", BLOCKED_REPORT),
+        ("budget_exhausted", None),
+    ],
+)
+def test_terminal_rider_carryover(
+    service, terminal_state: str, report: str | None
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    rider = _create(service, workspace_id, f"rider for {terminal_state}")
+    item = _create(service, workspace_id, f"primary for {terminal_state}")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    riders = [
+        {
+            "work_id": rider["work_id"],
+            "revision_id": rider["revision_id"],
+            "evidence": f"probe: {terminal_state}",
+        }
+    ]
+    status, body = _begin(service, workspace_id, item, identity={"riders": riders})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    task_sha = seal["manifest"]["task_sha256"]
+
+    settle_events = []
+    if report is not None:
+        status, body = _reserve(
+            service, workspace_id, attempt["attempt_id"], task_sha
+        )
+        assert status == 200 and body["result"]["status"] == "applied", body
+        status, body = _settle(
+            service,
+            workspace_id,
+            attempt["attempt_id"],
+            body["result"]["launch"]["launch_id"],
+            {"report": report},
+        )
+        assert status == 200 and body["result"]["status"] == "applied", body
+        settle_events.append(body["result"]["event"])
+    else:
+        for _ in range(3):
+            status, body = _reserve(
+                service, workspace_id, attempt["attempt_id"], task_sha
+            )
+            assert status == 200 and body["result"]["status"] == "applied", body
+            status, body = _settle(
+                service,
+                workspace_id,
+                attempt["attempt_id"],
+                body["result"]["launch"]["launch_id"],
+                failed=True,
+            )
+            assert status == 200, body
+            settle_events.append(body["result"]["event"])
+
+    assert body["result"]["attempt"]["state"] == terminal_state
+    for event in settle_events:
+        if event["requires_delivery"]:
+            status, attest_body = _attest(service, workspace_id, event)
+            assert status == 200 and attest_body["result"]["status"] == "applied"
+
+    status, body = _begin(
+        service,
+        workspace_id,
+        item,
+        authorization_ref=f"summary:{uuid4()}",
+        identity={"riders": []},
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    replacement = body["result"]["attempt"]
+    assert replacement["attempt_id"] != attempt["attempt_id"]
+    assert len(replacement["riders"]) == 1
+    assert replacement["riders"][0]["work_id"] == rider["work_id"]
+    assert replacement["riders"][0]["revision_id"] == rider["revision_id"]
+    assert replacement["riders"][0]["evidence"] == f"probe: {terminal_state}"
+
+
+def test_terminal_rider_carryover_revalidates_revision(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    rider = _create(service, workspace_id, "rider revision changes")
+    item = _create(service, workspace_id, "primary rider revision changes")
+    plan = _plan(service, workspace_id, item)
+    status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
+    assert status == 200, body
+    final = body["result"]["candidate"]
+    status, body = _begin(
+        service,
+        workspace_id,
+        item,
+        identity={
+            "riders": [
+                {
+                    "work_id": rider["work_id"],
+                    "revision_id": rider["revision_id"],
+                    "evidence": "probe: original revision",
+                }
+            ]
+        },
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    attempt = body["result"]["attempt"]
+    seal = _verify_and_seal(service, workspace_id, item, final, attempt)
+    status, body = _reserve(
+        service,
+        workspace_id,
+        attempt["attempt_id"],
+        seal["manifest"]["task_sha256"],
+    )
+    launch_id = body["result"]["launch"]["launch_id"]
+    status, body = _settle(
+        service,
+        workspace_id,
+        attempt["attempt_id"],
+        launch_id,
+        {"report": NEEDS_FIX_REPORT},
+    )
+    assert status == 200 and body["result"]["attempt"]["state"] == "remediation_required"
+    event = body["result"]["event"]
+    if event["requires_delivery"]:
+        status, attest_body = _attest(service, workspace_id, event)
+        assert status == 200 and attest_body["result"]["status"] == "applied"
+
+    new_revision_id = uuid4()
+    revision = {
+        "revision_id": str(new_revision_id),
+        "work_id": rider["work_id"],
+        "revision_number": 2,
+        "title": "rider revision changes",
+        "description": "revised rider",
+        "scope": "",
+        "acceptance_criteria": [],
+        "content_sha256": sha256(
+            {"title": "rider revision changes", "description": "revised rider"}
+        ),
+        "created_by": "owner",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "revise_work",
+            "payload": {
+                "work_id": rider["work_id"],
+                "expected_revision_id": rider["revision_id"],
+                "revision": revision,
+            },
+        },
+    )
+    assert status == 200 and body["result"]["changed"] is True, body
+
+    status, body = _begin(
+        service,
+        workspace_id,
+        item,
+        authorization_ref=f"summary:{uuid4()}",
+        identity={"riders": []},
+    )
+    assert status == 200 and body["result"]["status"] == "refused", body
+    assert body["result"]["event"]["reason_code"] == "rider_binding_invalid"
+    assert "not on the sealed revision" in body["result"]["event"]["reason"]
+
+
 def test_terminal_work_authorization_refused(service) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)
