@@ -534,7 +534,8 @@ describe("native auditor runner (OMP-168)", () => {
 		} as unknown as ExtensionContext;
 		const tcb = await computeAuditTcb(fakeCtx, mockBackend.workClient!);
 		exec.grant.judge_sha256 = tcb.judgeSha256;
-		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		let dirt: string[] = [];
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockImplementation(() => dirt);
 
 		const pauseAndResume = async (fallback: boolean): Promise<string> => {
 			failNextIssueLookup = fallback;
@@ -570,6 +571,26 @@ describe("native auditor runner (OMP-168)", () => {
 			expect(await pauseAndResume(true)).toBe(workId);
 			expect(lookupArgs).toContain(workId);
 			expect(sentMessages.some(message => message.customType === "work-execute")).toBe(true);
+
+			const resume = commands.get("execute");
+			expect(resume).toBeDefined();
+			exec.activeItem!.plan_stamp = { paths: ["src/sealed.ts"] };
+			for (const phase of ["executing", "remediating"] as const) {
+				exec.activeItem!.phase = phase;
+				exec.grant.state = "paused";
+				dirt = ["src/sealed.ts"];
+				await resume!(`resume ${issue.key}`, fakeCtx);
+				expect(exec.grant.state).toBe("active");
+				expect(notifications.at(-1)).toContain("Execution grant resumed");
+			}
+
+			exec.activeItem!.phase = "remediating";
+			exec.grant.state = "paused";
+			dirt = ["src/sealed.ts", "foreign.txt"];
+			await resume!(`resume ${issue.key}`, fakeCtx);
+			expect(exec.grant.state).toBe("paused");
+			expect(notifications.at(-1)).toContain("dirty worktree outside sealed paths: foreign.txt");
+			expect(notifications.at(-1)).not.toContain("src/sealed.ts");
 		} finally {
 			dirtySpy.mockRestore();
 			fs.rmSync(cacheDir, { recursive: true, force: true });

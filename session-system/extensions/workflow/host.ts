@@ -1493,9 +1493,20 @@ export function createWorkflowHost(cfg: HostConfig) {
 				if (nonContractDirt.length > 0) {
 					return { ok: false, reason: `dirty worktree outside contract files: ${nonContractDirt.join(", ")}` };
 				}
-			} else {
-				if (dirt.length > 0) {
+			} else if (dirt.length > 0) {
+				const planStamp = exec.activeItem.plan_stamp as { paths?: unknown } | undefined;
+				const sealedPaths = new Set(
+					Array.isArray(planStamp?.paths)
+						? planStamp.paths.filter((path): path is string => typeof path === "string")
+						: [],
+				);
+				const phaseAllowsSealedDirt = ["executing", "remediating"].includes(exec.activeItem.phase);
+				const foreignDirt = dirt.filter(path => !sealedPaths.has(path));
+				if (!phaseAllowsSealedDirt) {
 					return { ok: false, reason: `dirty worktree: ${dirt.join(", ")}` };
+				}
+				if (foreignDirt.length > 0) {
+					return { ok: false, reason: `dirty worktree outside sealed paths: ${foreignDirt.join(", ")}` };
 				}
 			}
 
