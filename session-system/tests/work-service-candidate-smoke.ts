@@ -148,7 +148,13 @@ try {
 			if (res.exitCode !== 0) throw new Error(`migration ${f} failed: ${res.stderr.toString()}`);
 			psqlAdmin(`INSERT INTO omp_control.schema_migrations(ordinal, filename, sha256, contract_version, contract_sha256, postgres_major) VALUES (${ordinal}, '${f}', '${sha}', 'work.omp.dev/v1', '${WORK_CONTRACT_SHA256}', 18) ON CONFLICT (ordinal) DO NOTHING;`, "omp_work");
 		}
-		psqlAdmin(`INSERT INTO omp_control.runtime_compatibility (contract_version, contract_sha256, migration_set_sha256, postgres_major) VALUES ('work.omp.dev/v1', '${WORK_CONTRACT_SHA256}', 'test', 18) ON CONFLICT (singleton) DO UPDATE SET contract_version=EXCLUDED.contract_version, contract_sha256=EXCLUDED.contract_sha256, migration_set_sha256=EXCLUDED.migration_set_sha256, postgres_major=EXCLUDED.postgres_major;`, "omp_work");
+		// Readiness compares this row against the computed migration-set digest
+		// (collect_health `compatible`); a placeholder value keeps the service
+		// permanently not-ready.
+		const shaRun = Bun.spawnSync(["uv", "run", "python", "-c", "from omp_work.operations.database import migration_set_sha256; print(migration_set_sha256(), end='')"], { cwd: pythonDir });
+		if (shaRun.exitCode !== 0) throw new Error(`migration_set_sha256 failed: ${shaRun.stderr.toString()}`);
+		const migrationSetSha = shaRun.stdout.toString().trim();
+		psqlAdmin(`INSERT INTO omp_control.runtime_compatibility (contract_version, contract_sha256, migration_set_sha256, postgres_major) VALUES ('work.omp.dev/v1', '${WORK_CONTRACT_SHA256}', '${migrationSetSha}', 18) ON CONFLICT (singleton) DO UPDATE SET contract_version=EXCLUDED.contract_version, contract_sha256=EXCLUDED.contract_sha256, migration_set_sha256=EXCLUDED.migration_set_sha256, postgres_major=EXCLUDED.postgres_major;`, "omp_work");
 		py(["ops", "capabilities", "init", "--workspace-id", WORKSPACE, "--owner-id", OWNER, "--base-url", baseUrl]);
 		// Projects enter the ledger only via the Linear import (no v1 command
 		// creates them). Seed the smoke project the way the importer leaves it.
