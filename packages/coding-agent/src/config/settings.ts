@@ -2249,7 +2249,11 @@ export class Settings {
 					await fs.promises.rename(src, dst);
 				} catch (error) {
 					if (!isEnoent(error)) {
-						logger.warn("Settings: failed to rotate config backup generation", { src, dst, error: String(error) });
+						logger.warn("Settings: failed to rotate config backup generation", {
+							src,
+							dst,
+							error: String(error),
+						});
 					}
 				}
 			}

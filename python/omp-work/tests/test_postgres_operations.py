@@ -46,7 +46,7 @@ def config(tmp_path: Path) -> OperationsConfig:
 
 def test_pinned_migration_set_is_forward_only() -> None:
     files = migrations()
-    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+    assert [ordinal for ordinal, _ in files] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     assert all(path.name.startswith(f"{ordinal:04d}_") for ordinal, path in files)
     assert len(migration_set_sha256()) == 64
 
@@ -547,13 +547,23 @@ def test_execution_grant_triggers_enforce_immutability_and_monotonicity(config: 
             ("max_no_progress", "5"),
             ("authorization_hash", f"'{'f' * 64}'"),
             ("provenance", "'{\"tampered\": true}'::jsonb"),
-            ("judge_sha256", f"'{'e' * 64}'"),
-            ("judge_manifest", "'{\"tampered\": true}'::jsonb"),
             ("focus_version_at_grant", "5"),
             ("created_at", "clock_timestamp()"),
         ]:
             with psycopg.connect(**app_kwargs) as connection:
                 with pytest.raises(psycopg.Error, match="identity and admission parameters are immutable"):
+                    with connection.transaction(), connection.cursor() as cursor:
+                        cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
+                        cursor.execute(f"UPDATE omp_work.execution_grants SET {col} = {val} WHERE grant_id = %s", (grant_id,))
+        # Migration 0023 (OMP-199): judge fields left the identity-immutable set;
+        # bare mutation (no version bump, non-service manifest delta) trips the
+        # rotation restriction instead.
+        for col, val in [
+            ("judge_sha256", f"'{'e' * 64}'"),
+            ("judge_manifest", "'{\"tampered\": true}'::jsonb"),
+        ]:
+            with psycopg.connect(**app_kwargs) as connection:
+                with pytest.raises(psycopg.Error, match="judge rotation is restricted to service-only manifest deltas"):
                     with connection.transaction(), connection.cursor() as cursor:
                         cursor.execute("SELECT set_config('omp.workspace_id', %s, true), set_config('omp.actor_id', %s, true)", (str(workspace_id), str(actor_id)))
                         cursor.execute(f"UPDATE omp_work.execution_grants SET {col} = {val} WHERE grant_id = %s", (grant_id,))
