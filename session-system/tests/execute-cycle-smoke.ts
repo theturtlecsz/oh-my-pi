@@ -1360,21 +1360,22 @@ if (args[0] === "api") {
 	fs.rmSync(corruptClaimPath, { force: true });
 	await cancelGrant(corruptCase.startOut.exec?.grant?.grant_id, corruptCase.startOut.exec?.grant?.grant_version, corruptCase.startOut.exec?.grant?.judge_sha256);
 
-	// 2. Drift Probe: Dirty worktree sends zero turns
+	// 2. Isolation probe: owner-checkout dirt does not block managed-worktree recovery.
 	const dirtyCase = await createAndStartDisposableGrant("dirty");
 	fs.writeFileSync(path.join(probe, "drift-dirt.txt"), "dirt\n");
 	const recoveryDirt = runHarness("recovery", dirtyCase.item.key);
-	assert.equal((recoveryDirt.sentMessages as unknown[])?.length, 0, "dirty worktree sends zero turns");
+	assert.equal((recoveryDirt.sentMessages as unknown[])?.length, 1, "owner dirt stays outside execution recovery");
+	assert.equal(fs.readFileSync(path.join(probe, "drift-dirt.txt"), "utf8"), "dirt\n", "owner dirt remains untouched");
 	fs.rmSync(path.join(probe, "drift-dirt.txt"), { force: true });
-	await cancelGrant(dirtyCase.startOut.exec?.grant?.grant_id, dirtyCase.startOut.exec?.grant?.grant_version, dirtyCase.startOut.exec?.grant?.judge_sha256);
+	await cancelGrant(recoveryDirt.exec?.grant?.grant_id, recoveryDirt.exec?.grant?.grant_version, recoveryDirt.exec?.grant?.judge_sha256);
 	const headCase = await createAndStartDisposableGrant("head");
 	fs.writeFileSync(path.join(probe, "drift-head.txt"), "head drift\n");
 	Bun.spawnSync(["git", "add", "drift-head.txt"], { cwd: probe });
 	Bun.spawnSync(["git", "commit", "-m", "drift head"], { cwd: probe });
 	const recoveryHead = runHarness("recovery", headCase.item.key);
-	assert.equal((recoveryHead.sentMessages as unknown[])?.length, 0, "changed HEAD sends zero turns");
+	assert.equal((recoveryHead.sentMessages as unknown[])?.length, 1, "owner HEAD drift stays outside execution recovery");
 	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
-	await cancelGrant(headCase.startOut.exec?.grant?.grant_id, headCase.startOut.exec?.grant?.grant_version, headCase.startOut.exec?.grant?.judge_sha256);
+	await cancelGrant(recoveryHead.exec?.grant?.grant_id, recoveryHead.exec?.grant?.grant_version, recoveryHead.exec?.grant?.judge_sha256);
 
 	// 4. Drift Probe: Changed revision sends zero turns
 	const revCase = await createAndStartDisposableGrant("revision");

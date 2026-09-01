@@ -29,7 +29,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt, setProjectDir } from "@oh-my-pi/pi-utils";
 import digestPromptTemplate from "./digest-prompt.md" with { type: "text" };
 import executePromptTemplate from "./execute-prompt.md" with { type: "text" };
 import kindDescriptionText from "./kind-description.md" with { type: "text" };
@@ -782,6 +782,47 @@ export function createWorkflowHost(cfg: HostConfig) {
 		} finally {
 			executionRelocationInProgress = false;
 		}
+	}
+
+	async function relocateRecoveredExecutionSession(
+		ctx: ExtensionContext,
+		exec: ExecutionSnapshot,
+		key: string,
+	): Promise<ExtensionContext> {
+		const baseline = exec.activeItem?.current_git_baseline ?? exec.activeItem?.initial_git_baseline;
+		if (!baseline) throw new Error("execution workspace baseline is missing");
+		const workspace = await executionWorkspaceManager.ensure(
+			contextCwd(ctx),
+			key,
+			exec.grant.grant_id,
+			baseline,
+			{ create: false },
+		);
+		const movable = ctx.sessionManager as unknown as {
+			getCwd?(): string;
+			moveTo?(cwd: string): Promise<void>;
+		};
+		let relocatedCwd = contextCwd(ctx);
+		if (resolve(relocatedCwd) !== resolve(workspace.path)) {
+			if (typeof movable.moveTo !== "function" || typeof movable.getCwd !== "function") {
+				throw new Error("session manager cannot relocate active execution recovery");
+			}
+			executionRelocationInProgress = true;
+			try {
+				await movable.moveTo(workspace.path);
+				setProjectDir(workspace.path);
+				relocatedCwd = movable.getCwd();
+			} finally {
+				executionRelocationInProgress = false;
+			}
+		}
+		if (resolve(relocatedCwd) !== resolve(workspace.path)) {
+			throw new Error(`execution recovery relocation did not take effect: ${relocatedCwd}`);
+		}
+		state.executionWorkspace = { ...workspace, key };
+		persistSession();
+		await saveCache();
+		return { ...ctx, cwd: relocatedCwd };
 	}
 	function persistSession() {
 		piRef.appendEntry(cfg.entryType, {
@@ -1665,6 +1706,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		}
 
 		pi.on("session_start", async (_e, ctx) => {
+			let sessionCtx: ExtensionContext = ctx;
 			preExistingDirtyPaths = dirtyPaths(ctx.cwd);
 			closeoutAuthorized = false;
 			sessionStartCommit = headCommit(ctx.cwd);
@@ -1815,105 +1857,115 @@ export function createWorkflowHost(cfg: HostConfig) {
 					} else {
 						state.terminalExecution = undefined;
 						if (exec && exec.grant.state === "active" && exec.activeItem) {
-							const preflight = await validateExecutionRecoveryPreflight(ctx, backend, exec, "active");
-							if (preflight.ok) {
-								const curVersion = exec.grant.grant_version;
-							const pendingOutbox = pendingOutboxEntries.find(
-								e => e.grantId === exec.grant.grant_id && outboxStatus.get(e.messageId) === "pending",
-							);
-							if (pendingOutbox) {
-								await deliverExecutionMessage(
-									exec.grant.grant_id,
-									pendingOutbox.preReservationVersion,
-									pendingOutbox.postVersion,
-									preflight.targetIssue.key,
-									ctx,
-									pendingOutbox,
-								);
+							const anchorKey = await resolveAnchorKey(backend, exec, state.identifier);
+							if (!anchorKey) {
+								sessionCtx.ui.notify("Execution recovery skipped: grant anchor key is unavailable", "warning");
 							} else {
-								let pendingClaims: Array<{ command: Command; result?: CommandResult }>;
 								try {
-									pendingClaims = (await backend.getPendingExecutionClaims?.()) ?? [];
+									sessionCtx = await relocateRecoveredExecutionSession(sessionCtx, exec, anchorKey);
+									preExistingDirtyPaths = dirtyPaths(sessionCtx.cwd);
+									sessionStartCommit = headCommit(sessionCtx.cwd);
 								} catch (error) {
-									try {
-										ctx.ui.notify(`Recovery blocked by unreadable claim: ${String(error)}`, "error");
-									} catch {}
+									sessionCtx.ui.notify(`Execution recovery skipped: ${String(error)}`, "warning");
 									return;
 								}
-								const committedClaim = pendingClaims.find(c => {
-									if (c.command.type !== "set_execution_state") return false;
-									const p = c.command.payload as { grant_id: string; expected_grant_version: number };
-									if (p.grant_id !== exec.grant.grant_id) return false;
-									const res = c.result;
-									return res && res.type === "set_execution_state" && res.grant.grant_version === curVersion;
-								});
-
-								if (committedClaim && !deliveredPostVersions.has(`${exec.grant.grant_id}:${curVersion}`)) {
-									const preVer = (committedClaim.command.payload as { expected_grant_version: number }).expected_grant_version;
-									deliveredPreReservations.add(`${exec.grant.grant_id}:${preVer}`);
-									deliveredPostVersions.add(`${exec.grant.grant_id}:${curVersion}`);
-									await deliverExecutionMessage(
-										exec.grant.grant_id,
-										preVer,
-										curVersion,
-										preflight.targetIssue.key,
-										ctx,
+								const preflight = await validateExecutionRecoveryPreflight(sessionCtx, backend, exec, "active");
+								if (preflight.ok) {
+									const curVersion = exec.grant.grant_version;
+									const pendingOutbox = pendingOutboxEntries.find(
+										e => e.grantId === exec.grant.grant_id && outboxStatus.get(e.messageId) === "pending",
 									);
-								} else if (
-									!deliveredPreReservations.has(`${exec.grant.grant_id}:${curVersion}`) &&
-									!(curVersion > 1 && deliveredPostVersions.has(`${exec.grant.grant_id}:${curVersion}`))
-								) {
-									const updated = await backend.setExecutionState({
-										grantId: exec.grant.grant_id,
-										expectedGrantVersion: curVersion,
-										targetState: "active",
-										reason: "session_start_recovery",
-										judgeSha256: preflight.tcb.judgeSha256,
-									});
-									if (updated && updated.grant.state === "active") {
-										deliveredPreReservations.add(`${exec.grant.grant_id}:${curVersion}`);
-										deliveredPostVersions.add(`${exec.grant.grant_id}:${updated.grant.grant_version}`);
+									if (pendingOutbox) {
 										await deliverExecutionMessage(
 											exec.grant.grant_id,
-											curVersion,
-											updated.grant.grant_version,
+											pendingOutbox.preReservationVersion,
+											pendingOutbox.postVersion,
 											preflight.targetIssue.key,
-											ctx,
+											sessionCtx,
+											pendingOutbox,
 										);
-									} else if (updated && updated.grant.state === "stopped") {
-										const postExec: ExecutionSnapshot = {
-											grant: updated.grant,
-											items: exec.items,
-											activeItem: null,
-										};
-										const anchorKey = (await resolveAnchorKey(backend, postExec, preflight.targetIssue.key)) ?? preflight.targetIssue.key;
-										const notice = computeExecutionNoticeDetails(postExec, updated.grant.terminal_reason ?? "cap reached", anchorKey);
-										state.terminalExecution = {
-											grantId: postExec.grant.grant_id,
-											state: "stopped",
-											reason: updated.grant.terminal_reason ?? "cap reached",
-											tally: notice.tallyLine.replace(/^Items:\s*/, ""),
-											nextCommand: notice.nextCommandLine,
-											at: Date.now(),
-										};
-										await saveCache();
+									} else {
+										let pendingClaims: Array<{ command: Command; result?: CommandResult }>;
 										try {
-											ctx.ui.notify(`Execution grant stopped: ${updated.grant.terminal_reason ?? "cap reached"} · ${notice.tallyLine} · ${notice.nextCommandLine}`, "warning");
-										} catch {}
-										pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
+											pendingClaims = (await backend.getPendingExecutionClaims?.()) ?? [];
+										} catch (error) {
+											sessionCtx.ui.notify(`Recovery blocked by unreadable claim: ${String(error)}`, "error");
+											return;
+										}
+										const committedClaim = pendingClaims.find(c => {
+											if (c.command.type !== "set_execution_state") return false;
+											const payload = c.command.payload;
+											if (payload.grant_id !== exec.grant.grant_id) return false;
+											const result = c.result;
+											return result && result.type === "set_execution_state" && result.grant.grant_version === curVersion;
+										});
+
+										if (
+											committedClaim?.command.type === "set_execution_state" &&
+											!deliveredPostVersions.has(`${exec.grant.grant_id}:${curVersion}`)
+										) {
+											const preVer = committedClaim.command.payload.expected_grant_version;
+											deliveredPreReservations.add(`${exec.grant.grant_id}:${preVer}`);
+											deliveredPostVersions.add(`${exec.grant.grant_id}:${curVersion}`);
+											await deliverExecutionMessage(
+												exec.grant.grant_id,
+												preVer,
+												curVersion,
+												preflight.targetIssue.key,
+												sessionCtx,
+											);
+										} else if (
+											!deliveredPreReservations.has(`${exec.grant.grant_id}:${curVersion}`) &&
+											!(curVersion > 1 && deliveredPostVersions.has(`${exec.grant.grant_id}:${curVersion}`))
+										) {
+											const updated = await backend.setExecutionState({
+												grantId: exec.grant.grant_id,
+												expectedGrantVersion: curVersion,
+												targetState: "active",
+												reason: "session_start_recovery",
+												judgeSha256: preflight.tcb.judgeSha256,
+											});
+											if (updated && updated.grant.state === "active") {
+												deliveredPreReservations.add(`${exec.grant.grant_id}:${curVersion}`);
+												deliveredPostVersions.add(`${exec.grant.grant_id}:${updated.grant.grant_version}`);
+												await deliverExecutionMessage(
+													exec.grant.grant_id,
+													curVersion,
+													updated.grant.grant_version,
+													preflight.targetIssue.key,
+													sessionCtx,
+												);
+											} else if (updated && updated.grant.state === "stopped") {
+												const postExec: ExecutionSnapshot = {
+													grant: updated.grant,
+													items: exec.items,
+													activeItem: null,
+												};
+												const resolvedKey = (await resolveAnchorKey(backend, postExec, preflight.targetIssue.key)) ?? preflight.targetIssue.key;
+												const notice = computeExecutionNoticeDetails(postExec, updated.grant.terminal_reason ?? "cap reached", resolvedKey);
+												state.terminalExecution = {
+													grantId: postExec.grant.grant_id,
+													state: "stopped",
+													reason: updated.grant.terminal_reason ?? "cap reached",
+													tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+													nextCommand: notice.nextCommandLine,
+													at: Date.now(),
+												};
+												await saveCache();
+												sessionCtx.ui.notify(`Execution grant stopped: ${updated.grant.terminal_reason ?? "cap reached"} · ${notice.tallyLine} · ${notice.nextCommandLine}`, "warning");
+												pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
+											}
+										}
 									}
+								} else {
+									sessionCtx.ui.notify(`Execution recovery skipped: ${preflight.reason}`, "warning");
 								}
 							}
-						} else {
-							try {
-								ctx.ui.notify(`Execution recovery skipped: ${preflight.reason}`, "warning");
-							} catch {}
 						}
 					}
-				}
 				} catch {}
 			}
-			footer(ctx);
+			footer(sessionCtx);
 		});
 
 		pi.on("session_switch", async (event, ctx) => {
