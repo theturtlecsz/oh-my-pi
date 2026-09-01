@@ -906,6 +906,72 @@ describe("merge confirmation gating (OMP-212)", () => {
 		expect(outcome.detail).toContain(`PR merged with 1 required check(s) passing and origin/main contains candidate ${candidateSha}`);
 	});
 
+	test("confirms completion when PR is merged to master and origin/master contains candidate commit", () => {
+		const repo = makeRepo("master");
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=master", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+
+		// Create candidate commit
+		fs.writeFileSync(path.join(repo, "feat-master.txt"), "feat master\n");
+		git(repo, "add", "--", "feat-master.txt");
+		git(repo, "commit", "-q", "-m", "feat master");
+		const candidateSha = git(repo, "rev-parse", "HEAD");
+
+		// Push candidate to execution branch AND merge to master on remote
+		git(repo, "push", "-q", "origin", `HEAD:refs/heads/execution/omp-212`);
+		git(repo, "push", "-q", "origin", `HEAD:refs/heads/master`);
+
+		const mockGhMaster: GhPrRunner = (_root: string, _query: string) => ({
+			ok: true,
+			out: {
+				pr: {
+					state: "MERGED",
+					baseRefName: "master",
+					headRefName: "execution/omp-212",
+				},
+				requiredChecks: [
+					{ name: "test", state: "SUCCESS", bucket: "pass", status: "COMPLETED", conclusion: "SUCCESS" },
+				],
+			},
+			err: "",
+		});
+
+		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/master", mockGhMaster);
+		expect(outcome.confirmed).toBe(true);
+		expect(outcome.detail).toContain(`PR merged with 1 required check(s) passing and origin/master contains candidate ${candidateSha}`);
+	});
+
+	test("updates stale local tracking ref during fetch and confirms ancestry when remote advances", () => {
+		const repo = makeRepo("main");
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=main", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
+		git(repo, "fetch", "-q", "origin");
+		const initialTrackingSha = git(repo, "rev-parse", "origin/main");
+
+		// Create candidate commit in another clone/branch and push to remote main
+		const pusher = makeRepo("main");
+		git(pusher, "remote", "add", "origin", remote);
+		git(pusher, "pull", "-q", "origin", "main");
+		fs.writeFileSync(path.join(pusher, "advanced.txt"), "advanced\n");
+		git(pusher, "add", "--", "advanced.txt");
+		git(pusher, "commit", "-q", "-m", "advanced");
+		const candidateSha = git(pusher, "rev-parse", "HEAD");
+		git(pusher, "push", "-q", "origin", `HEAD:refs/heads/execution/omp-212`);
+		git(pusher, "push", "-q", "origin", `HEAD:refs/heads/main`);
+
+		// Verify repo still has stale local origin/main tracking ref before verifyMergeConfirmation
+		expect(git(repo, "rev-parse", "origin/main")).toBe(initialTrackingSha);
+		expect(initialTrackingSha).not.toBe(candidateSha);
+
+		// verifyMergeConfirmation should update origin/main tracking ref via forced refspec and confirm
+		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing);
+		expect(outcome.confirmed).toBe(true);
+		expect(git(repo, "rev-parse", "origin/main")).toBe(candidateSha);
+	});
+
 	test("refuses completion when origin fetch fails", () => {
 		const repo = makeRepo();
 		// No origin remote configured

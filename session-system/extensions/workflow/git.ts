@@ -785,7 +785,7 @@ export function verifyMergeConfirmation(
 	}
 
 	// 2. Fetch origin default branch to verify ancestry against current remote tip
-	const fetch = runGit(root, ["fetch", "origin", resolvedDefault], 30_000);
+	const fetch = runGit(root, ["fetch", "origin", `+${resolvedDefault}:refs/remotes/origin/${defaultBranchName}`], 30_000);
 	if (!fetch.ok) {
 		return {
 			confirmed: false,
