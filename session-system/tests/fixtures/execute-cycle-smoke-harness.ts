@@ -393,27 +393,60 @@ if (scenario === "dirty") {
 	const realContractDir = path.join(repoRoot, "python/omp-work/src/omp_work/contracts/v1");
 	const ownerContractDir = path.join(probe, "python/omp-work/src/omp_work/contracts/v1");
 	fs.cpSync(realContractDir, ownerContractDir, { recursive: true });
-	// Commit the copied contract directory so preflight is clean
-	Bun.spawnSync(["git", "add", "python"], { cwd: probe });
-	Bun.spawnSync(["git", "commit", "-m", "add contract dir"], { cwd: probe });
+	fs.mkdirSync(path.join(probe, "packages/work-client/src"), { recursive: true });
+	fs.writeFileSync(path.join(probe, "packages/work-client/src/contract.ts"), "export const WORK_CONTRACT_SHA256 = \"baseline\";\n");
+	// Commit the baseline contract directory and client so preflight and initial stamp are clean
+	Bun.spawnSync(["git", "add", "python", "packages"], { cwd: probe });
+	Bun.spawnSync(["git", "commit", "-m", "add contract dir and client"], { cwd: probe });
 
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
 
-	// 1. Seal criteria
+	// 1. Seal criteria on clean baseline
 	await execute({ action: "seal_execution_criteria", criteria: ["AC-1: change contract"] });
 
 	const planFile = "local://execute-plan.md";
 	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
 	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
 	fs.writeFileSync(planDiskPath, "## Approach\n1. Modify contract\n\n## Verification\n1. Prove contract\n");
-	const executionContractDir = path.join(probe, "python/omp-work/src/omp_work/contracts/v1");
-	fs.writeFileSync(path.join(executionContractDir, "contract.json"), JSON.stringify({ contract_version: "work.omp.dev/v1", modified: true }));
+
+	// 2. Initial stamp with full deterministic contract closure while probe is clean (Criterion 1)
+	const initialContractClosure = [
+		"python/omp-work/src/omp_work/contracts/v1/contract.json",
+		"python/omp-work/src/omp_work/contracts/v1/approval.json",
+		"python/omp-work/src/omp_work/contracts/v1/schema.json",
+		"packages/work-client/src/contract.ts",
+	];
 	await execute({
 		action: "stamp_execution_plan",
 		plan_file: planFile,
-		paths: ["python/omp-work/src/omp_work/contracts/v1/contract.json"],
+		paths: initialContractClosure,
 	});
-	// 3. Begin execution review -> must be denied and grant paused
+
+	// Implementation begins after initial plan stamp
+	const executionContractDir = path.join(probe, "python/omp-work/src/omp_work/contracts/v1");
+	fs.writeFileSync(path.join(executionContractDir, "contract.json"), JSON.stringify({ contract_version: "work.omp.dev/v1", modified: true }));
+	fs.writeFileSync(path.join(probe, "packages/work-client/src/contract.ts"), "export const WORK_CONTRACT_SHA256 = \"modified\";\n");
+	// 2b. Test in-execution scope correction: unsealed dirty path refusal (Criterion 3)
+	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+	fs.writeFileSync(path.join(probe, "src/unsealed_dirt.ts"), "export const unsealed = true;\n");
+	const unsealedDirtRefused = await execute({
+		action: "stamp_execution_plan",
+		plan_file: planFile,
+		paths: [...initialContractClosure, "src/unsealed_dirt.ts"],
+	});
+	out.unsealedDirtRefused = unsealedDirtRefused.includes("Scope correction refused") && unsealedDirtRefused.includes("unsealed_dirt.ts");
+	fs.rmSync(path.join(probe, "src/unsealed_dirt.ts"), { force: true });
+
+	// 2c. Test in-execution scope correction: clean addition of unexpected helper succeeds (Criterion 2)
+	const scopeCorrectionResult = await execute({
+		action: "stamp_execution_plan",
+		plan_file: planFile,
+		paths: [...initialContractClosure, "src/contract_helper.ts"],
+	});
+	out.scopeCorrectionResult = scopeCorrectionResult.includes("plan stamped successfully");
+	fs.writeFileSync(path.join(probe, "src/contract_helper.ts"), "export const helper = true;\n");
+
+	// 3. Begin execution review -> must be denied and grant paused (Criterion 5)
 	const reviewDenied = await execute({
 		action: "begin_execution_review",
 		body: "testing contract change",
@@ -435,10 +468,24 @@ if (scenario === "dirty") {
 		approved_at: new Date().toISOString(),
 		issue: workKeyArg || "OMP-1",
 	}));
+	fs.writeFileSync(path.join(probe, "packages/work-client/src/contract.ts"), `export const WORK_CONTRACT_SHA256 = "${contractCheck.prospectiveDigest}";\n`);
 
 	// 6. Resume with approval -> succeeds
 	await executeCmd.handler("resume", cmdCtx);
 	out.resumedExecution = JSON.parse(await execute({ action: "get_execution" }));
+
+	// 7. Re-stamp plan in planning phase after resume
+	await execute({
+		action: "stamp_execution_plan",
+		plan_file: planFile,
+		paths: [...initialContractClosure, "src/contract_helper.ts"],
+	});
+
+	// 8. Review through audit PASS and completion (Criterion 6)
+	subprocessCount = 1;
+	const reviewContract = await reviewUntilSettled("contract changed and approved");
+	out.reviewContract = reviewContract;
+	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
 } else if (scenario === "start-only") {
 	const executeCmd = extension.commands.get("execute");

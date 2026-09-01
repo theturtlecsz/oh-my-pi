@@ -244,7 +244,12 @@ def create_app(
                     and envelope.command.payload.target_state == "active"
                     and envelope.command.payload.reason == "service_refresh"
                 )
-                if not is_service_refresh:
+                is_halt_or_pause = (
+                    isinstance(envelope.command, SetExecutionStateCommand)
+                    and envelope.command.payload.target_state
+                    in ("paused", "stopped", "canceled")
+                )
+                if not (is_service_refresh or is_halt_or_pause):
                     raise WorkError(
                         "unavailable",
                         status=503,

@@ -28,6 +28,7 @@ import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
 import { headCommit } from "../extensions/workflow/git";
 import {
 	computeExecutionNoticeDetails,
+	expandExecutionPlanClosure,
 	renderExecutionTerminalBanner,
 	renderNextActionBanner,
 	renderSummaryResumeDigest,
@@ -1057,6 +1058,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			close_attempts_started: 0,
 			consecutive_no_progress: 0,
 			completed_at: it.completed_at,
+			...it,
 		}));
 		return {
 			grant: {
@@ -1252,6 +1254,115 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		expect(result.content[0].text).toContain("Next: /execute OMP-195 then /execute OMP-176 --queue");
 	});
 
+	test("stamp_execution_plan in executing phase refuses unsealed dirty paths and allows clean re-planning", async () => {
+		let registeredExecute: ((id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }>) | undefined;
+		const fakePi = {
+			registerTool: (def: { execute: (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }> }) => {
+				registeredExecute = def.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const exec = makeSnapshot("active", "single", [
+			{
+				position: 0,
+				work_id: "OMP-176",
+				phase: "executing",
+				close_attempts_started: 0,
+				plan_stamp: { paths: ["src/initial.ts"] },
+			},
+		]);
+
+		let stampedPaths: string[] = [];
+		const mockBackend = {
+			cacheFile: "work-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-176", key: "OMP-176", title: "Test", project: "Bookends" }),
+			getExecution: async () => exec,
+			stampExecutionPlan: async (input: { paths: string[] }) => {
+				stampedPaths = input.paths;
+				return exec;
+			},
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "stamp-test-"));
+		fs.mkdirSync(path.join(testDir, "src"), { recursive: true });
+		const planPath = path.join(testDir, "plan.md");
+		fs.writeFileSync(planPath, "## Approach\n1. Step\n\n## Verification\n1. Check\n");
+
+		let mockDirt: string[] = ["src/initial.ts", "src/unsealed_dirt.ts"];
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockImplementation(() => mockDirt);
+
+		const fakeCtx = {
+			cwd: testDir,
+			taskDepth: 0,
+			ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+		} as unknown as ExtensionContext;
+
+		// 1. Unsealed dirty path is refused
+		const refused = await registeredExecute!(
+			"call-stamp-1",
+			{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/initial.ts", "src/unsealed_dirt.ts"] },
+			new AbortController().signal,
+			undefined,
+			fakeCtx,
+		);
+		expect(refused.content[0].text).toContain("Scope correction refused: worktree contains dirty unsealed path(s) [src/unsealed_dirt.ts]");
+
+		// 2. Clean addition of new path succeeds
+		mockDirt = ["src/initial.ts"]; // only already-sealed path is dirty
+		const allowed = await registeredExecute!(
+			"call-stamp-2",
+			{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/initial.ts", "src/new_clean.ts"] },
+			new AbortController().signal,
+			undefined,
+			fakeCtx,
+		);
+		expect(allowed.content[0].text).toContain("plan stamped successfully");
+		expect(stampedPaths).toEqual(["src/initial.ts", "src/new_clean.ts"]);
+
+		dirtySpy.mockRestore();
+		fs.rmSync(testDir, { recursive: true, force: true });
+	});
+
+	test("expandExecutionPlanClosure automatically includes approval, schema, and client dependencies for contract paths", () => {
+		const cwd = path.resolve(import.meta.dir, "../..");
+		const nonContract = expandExecutionPlanClosure(["src/foo.ts", "session-system/tests/bar.ts"], cwd);
+		expect(nonContract).toEqual(["src/foo.ts", "session-system/tests/bar.ts"]);
+
+		const contractOnly = expandExecutionPlanClosure(["python/omp-work/src/omp_work/contracts/v1/contract.json"], cwd);
+		expect(contractOnly).toContain("python/omp-work/src/omp_work/contracts/v1/contract.json");
+		expect(contractOnly).toContain("python/omp-work/src/omp_work/contracts/v1/approval.json");
+		expect(contractOnly).toContain("python/omp-work/src/omp_work/contracts/v1/schema.json");
+		expect(contractOnly).toContain("python/omp-work/src/omp_work/contracts/v1/api-schema.json");
+		expect(contractOnly).toContain("packages/work-client/src/contract.ts");
+
+		const modelsOnly = expandExecutionPlanClosure(["python/omp-work/src/omp_work/v1/models.py"], cwd);
+		expect(modelsOnly).toContain("python/omp-work/src/omp_work/contracts/v1/schema.json");
+		expect(modelsOnly).toContain("python/omp-work/src/omp_work/contracts/v1/approval.json");
+
+		const apiModelsOnly = expandExecutionPlanClosure(["python/omp-work/src/omp_work/v1/api_models.py"], cwd);
+		expect(apiModelsOnly).toContain("python/omp-work/src/omp_work/contracts/v1/api-schema.json");
+		expect(apiModelsOnly).toContain("python/omp-work/src/omp_work/contracts/v1/approval.json");
+	});
 	test("session_start populates footer status with terminal execution grant banner", async () => {
 		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<void>>>();
 		const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
