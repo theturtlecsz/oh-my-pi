@@ -4503,7 +4503,6 @@ class PostgresWorkStore:
         if grant["judge_sha256"] != payload.judge_sha256 and target not in (
             "stopped",
             "canceled",
-            "paused",
         ):
             raise WorkStoreError("execution_judge_drift", ("judge_sha256 mismatch",))
         now = datetime.now(UTC)

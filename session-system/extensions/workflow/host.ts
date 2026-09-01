@@ -222,7 +222,7 @@ function executionRecoveryTouchedPaths(cwd: string, observedDirt: readonly strin
 	for (let index = 0; index < tokens.length; index++) {
 		const entry = tokens[index]!;
 		paths.push(entry.slice(3));
-		if (entry[0] === "R" || entry[0] === "C") {
+		if (entry[0] === "R" || entry[0] === "C" || entry[1] === "R" || entry[1] === "C") {
 			const original = tokens[++index];
 			if (original) paths.push(original);
 		}
@@ -2022,7 +2022,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 						expectedGrantVersion: exec.grant.grant_version,
 						targetState: "paused",
 						reason: "owner_interjection",
-						judgeSha256: tcb.judgeSha256,
+						judgeSha256: exec.grant.judge_sha256,
 					});
 					const resumeWorkId = exec.activeItem?.work_id ?? "";
 					let resumeTarget = resumeWorkId;
@@ -4025,7 +4025,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										expectedGrantVersion: exec.grant.grant_version,
 										targetState: "paused",
 										reason: `contract_approval_required:${contractCheck.prospectiveDigest}`,
-										judgeSha256: tcb.judgeSha256,
+										judgeSha256: exec.grant.judge_sha256,
 									});
 									ctx.ui.notify(`Contract change detected. Execution grant paused awaiting owner approval for ${contractCheck.prospectiveDigest}. Run 'omp-work approve --issue ${targetIssue.key}' then '/execute resume' to continue.`, "warning");
 									return deny(`Contract approval required: prospective contract digest ${contractCheck.prospectiveDigest} is not approved in approval.json. Execution grant paused before candidate freeze. Run 'omp-work approve --issue ${targetIssue.key}' then '/execute resume'.`);

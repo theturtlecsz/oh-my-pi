@@ -1364,6 +1364,25 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			);
 			expect(renameRefused.content[0].text).toContain("Scope correction refused: worktree contains dirty unsealed path(s) [src/unsealed_old.ts]");
 
+			// 3b. Unstaged worktree rename (column Y = R) also captures source path
+			runGitSpy.mockImplementation((cwd, args) => {
+				if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+					return { ok: true, out: testDir, raw: testDir, err: "" };
+				}
+				if (args[0] === "status") {
+					const rawStr = " R src/initial.ts\0src/unsealed_unstaged.ts\0";
+					return { ok: true, out: rawStr, raw: rawStr, err: "" };
+				}
+				return { ok: true, out: "", raw: "", err: "" };
+			});
+			const unstagedRenameRefused = await registeredExecute!(
+				"call-stamp-3b",
+				{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/initial.ts", "src/new_clean.ts"] },
+				new AbortController().signal,
+				undefined,
+				fakeCtx,
+			);
+			expect(unstagedRenameRefused.content[0].text).toContain("Scope correction refused: worktree contains dirty unsealed path(s) [src/unsealed_unstaged.ts]");
 			// 4. Git status inspection failure fails closed
 			runGitSpy.mockImplementation((cwd, args) => {
 				if (args[0] === "status") return { ok: false, out: "", raw: "", err: "git failed" };
