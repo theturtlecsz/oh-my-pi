@@ -140,35 +140,44 @@ jobs:
               tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-canary\.(0|[1-9][0-9]*))?$'
               if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$RELEASE_TAG_INPUT" ]; then
                 candidate_tag="$RELEASE_TAG_INPUT"
-                if [[ ! "$candidate_tag" =~ [$'\r\n'] ]] && [[ "$candidate_tag" =~ $tag_pattern ]]; then
-                  git fetch origin --tags --depth=100 2>/dev/null || true
-                  if git tag --points-at HEAD | grep -Fxq "$candidate_tag"; then
-                    git fetch origin main --depth=100 2>/dev/null || true
-                    if git merge-base --is-ancestor HEAD origin/main 2>/dev/null || [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main 2>/dev/null)" ]; then
-                      release_tag="$candidate_tag"
-                    else
-                      echo "::error title=Release Refused::Dispatch release tag $candidate_tag is not reachable from origin/main."
-                    fi
-                  else
-                    echo "::error title=Release Refused::Dispatch release tag $candidate_tag does not point to checked-out HEAD."
-                  fi
-                else
-                  echo "::error title=Release Refused::Invalid release tag format: $candidate_tag"
+                if [[ "$candidate_tag" =~ [$'\r\n'] ]] || ! [[ "$candidate_tag" =~ $tag_pattern ]]; then
+                  echo "::error title=Release Refused::Invalid release tag format: $candidate_tag" >&2
+                  exit 1
                 fi
+                if ! git fetch origin --tags --depth=100; then
+                  echo "::error title=Release Refused::Failed to fetch tags from origin." >&2
+                  exit 1
+                fi
+                if ! git tag --points-at HEAD | grep -Fxq "$candidate_tag"; then
+                  echo "::error title=Release Refused::Dispatch release tag $candidate_tag does not point to checked-out HEAD." >&2
+                  exit 1
+                fi
+                if ! git fetch origin main --depth=100; then
+                  echo "::error title=Release Refused::Failed to fetch origin/main." >&2
+                  exit 1
+                fi
+                if ! git merge-base --is-ancestor HEAD origin/main 2>/dev/null && [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main 2>/dev/null)" ]; then
+                  echo "::error title=Release Refused::Dispatch release tag $candidate_tag is not reachable from origin/main." >&2
+                  exit 1
+                fi
+                release_tag="$candidate_tag"
               else
                 case "$REF" in
                   refs/tags/*)
                     candidate_tag="$REF_NAME"
-                    if [[ ! "$candidate_tag" =~ [$'\r\n'] ]] && [[ "$candidate_tag" =~ $tag_pattern ]]; then
-                      git fetch origin main --depth=100 2>/dev/null || true
-                      if git merge-base --is-ancestor HEAD origin/main 2>/dev/null || [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main 2>/dev/null)" ]; then
-                        release_tag="$candidate_tag"
-                      else
-                        echo "::error title=Release Refused::Pushed tag $candidate_tag is not reachable from origin/main."
-                      fi
-                    else
-                      echo "::warning title=Tag Ignored::Pushed tag $candidate_tag is not a valid release tag format."
+                    if [[ "$candidate_tag" =~ [$'\r\n'] ]] || ! [[ "$candidate_tag" =~ $tag_pattern ]]; then
+                      echo "::error title=Release Refused::Pushed tag $candidate_tag is not a valid release tag format." >&2
+                      exit 1
                     fi
+                    if ! git fetch origin main --depth=100; then
+                      echo "::error title=Release Refused::Failed to fetch origin/main." >&2
+                      exit 1
+                    fi
+                    if ! git merge-base --is-ancestor HEAD origin/main 2>/dev/null && [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main 2>/dev/null)" ]; then
+                      echo "::error title=Release Refused::Pushed tag $candidate_tag is not reachable from origin/main." >&2
+                      exit 1
+                    fi
+                    release_tag="$candidate_tag"
                     ;;
                   refs/heads/main)
                     if [ "$EVENT_NAME" != "pull_request" ]; then

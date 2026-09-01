@@ -266,6 +266,7 @@ describe("CI release_metadata workflow detection", () => {
 			RELEASE_TAG_INPUT: injectionPayload,
 		});
 
+		expect(result.exitCode).toBe(1);
 		expect(result.isRelease).toBe(false);
 		expect(result.releaseTag).toBe("");
 		expect(result.stdout).toContain("Invalid release tag format");
@@ -284,6 +285,7 @@ describe("CI release_metadata workflow detection", () => {
 			RELEASE_TAG_INPUT: multilinePayload,
 		});
 
+		expect(result.exitCode).toBe(1);
 		expect(result.isRelease).toBe(false);
 		expect(result.releaseTag).toBe("");
 		expect(result.stdout).toContain("Invalid release tag format");
@@ -299,6 +301,7 @@ describe("CI release_metadata workflow detection", () => {
 			RELEASE_TAG_INPUT: "18.0.7",
 		});
 
+		expect(result.exitCode).toBe(1);
 		expect(result.isRelease).toBe(false);
 		expect(result.releaseTag).toBe("");
 		expect(result.stdout).toContain("Invalid release tag format: 18.0.7");
@@ -320,6 +323,7 @@ describe("CI release_metadata workflow detection", () => {
 			RELEASE_TAG_INPUT: "v18.0.7",
 		});
 
+		expect(result.exitCode).toBe(1);
 		expect(result.isRelease).toBe(false);
 		expect(result.releaseTag).toBe("");
 		expect(result.stdout).toContain("does not point to checked-out HEAD");
@@ -340,9 +344,28 @@ describe("CI release_metadata workflow detection", () => {
 			RELEASE_TAG_INPUT: "v18.0.7",
 		});
 
+		expect(result.exitCode).toBe(1);
 		expect(result.isRelease).toBe(false);
 		expect(result.releaseTag).toBe("");
 		expect(result.stdout).toContain("is not reachable from origin/main");
+	});
+
+	test("workflow_dispatch fails when origin tag fetch fails", async () => {
+		const { local } = await setupGitRepos();
+		await $`git -C ${local} tag v18.0.7`.quiet();
+		// Point origin to an invalid location to simulate fetch failure
+		await $`git -C ${local} remote set-url origin /dev/null/nonexistent`.quiet();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "workflow_dispatch",
+			REF: "refs/heads/main",
+			REF_NAME: "main",
+			RELEASE_TAG_INPUT: "v18.0.7",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.isRelease).toBe(false);
+		expect(result.stdout).toContain("Failed to fetch");
 	});
 
 	test("push event to refs/tags/v* triggers release when tag is on origin/main", async () => {
@@ -356,6 +379,7 @@ describe("CI release_metadata workflow detection", () => {
 			REF_NAME: "v18.0.7",
 		});
 
+		expect(result.exitCode).toBe(0);
 		expect(result.isRelease).toBe(true);
 		expect(result.releaseTag).toBe("v18.0.7");
 	});
@@ -373,11 +397,31 @@ describe("CI release_metadata workflow detection", () => {
 			REF_NAME: "v18.0.7",
 		});
 
+		expect(result.exitCode).toBe(1);
 		expect(result.isRelease).toBe(false);
 		expect(result.releaseTag).toBe("");
 		expect(result.stdout).toContain("is not reachable from origin/main");
 	});
-	test("push event to refs/tags/* ignores tags with invalid format or shell metacharacters", async () => {
+
+	test("push event to refs/tags/* fails when origin/main fetch fails", async () => {
+		const { local } = await setupGitRepos();
+		await $`git -C ${local} tag v18.0.7`.quiet();
+		await $`git -C ${local} push origin v18.0.7`.quiet();
+		// Break origin remote to simulate fetch failure
+		await $`git -C ${local} remote set-url origin /dev/null/nonexistent`.quiet();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "push",
+			REF: "refs/tags/v18.0.7",
+			REF_NAME: "v18.0.7",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.isRelease).toBe(false);
+		expect(result.stdout).toContain("Failed to fetch origin/main");
+	});
+
+	test("push event to refs/tags/* refuses tags with invalid format or shell metacharacters", async () => {
 		const { local } = await setupGitRepos();
 
 		const injectionResult = await runDetectScript(local, {
@@ -385,18 +429,20 @@ describe("CI release_metadata workflow detection", () => {
 			REF: 'refs/tags/v99.0.0"; echo hacked',
 			REF_NAME: 'v99.0.0"; echo hacked',
 		});
+		expect(injectionResult.exitCode).toBe(1);
 		expect(injectionResult.isRelease).toBe(false);
 		expect(injectionResult.releaseTag).toBe("");
-		expect(injectionResult.stdout).toContain("Tag Ignored");
+		expect(injectionResult.stdout).toContain("not a valid release tag format");
 
 		const malformedResult = await runDetectScript(local, {
 			EVENT_NAME: "push",
 			REF: "refs/tags/v18.0",
 			REF_NAME: "v18.0",
 		});
+		expect(malformedResult.exitCode).toBe(1);
 		expect(malformedResult.isRelease).toBe(false);
 		expect(malformedResult.releaseTag).toBe("");
-		expect(malformedResult.stdout).toContain("Tag Ignored");
+		expect(malformedResult.stdout).toContain("not a valid release tag format");
 	});
 
 	test("push event to refs/heads/main with tag at HEAD triggers release", async () => {
