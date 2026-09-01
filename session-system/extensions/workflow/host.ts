@@ -67,7 +67,7 @@ import {
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
-import { currentSymbolicRef, dirtyPaths, freezeCandidateCommit, headCommit, inProgressGitOp, parentCommit, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runGit, validateExecutionPaths, verifyMergeConfirmation } from "./git";
+import { currentSymbolicRef, dirtyPaths, ensureUpToDateWithDefault, freezeCandidateCommit, headCommit, inProgressGitOp, mergePullRequest, parentCommit, pushCandidate, rangeDiffSha256, requiredStatusCheckCount, resolveDefaultBranch, runGit, validateExecutionPaths, verifyMergeConfirmation } from "./git";
 import {
 	cancelBatchPath,
 	consumeStagedCancelBatch,
@@ -2568,6 +2568,23 @@ export function createWorkflowHost(cfg: HostConfig) {
 				const defaultBranch = resolveDefaultBranch(ctx.cwd);
 				const isDefaultBranch = currentRef === defaultBranch || currentRef === "refs/heads/main" || currentRef === "refs/heads/master";
 				const remoteRef = isDefaultBranch ? `refs/heads/execution/${issue.key.toLowerCase()}` : currentRef;
+				// OMP-220: admission rebase-check — PASS candidates must stay
+				// mergeable, so refuse when HEAD is behind the origin default tip.
+				const upToDate = ensureUpToDateWithDefault(ctx.cwd, defaultBranch);
+				if (!upToDate.ok) {
+					ctx.ui.notify(`Cannot begin execution: ${upToDate.detail}`, "error");
+					return;
+				}
+				// OMP-220: completion-gate preflight — zero required status check
+				// contexts makes merge confirmation unsatisfiable at close time.
+				const requiredChecksPreflight = requiredStatusCheckCount(ctx.cwd, defaultBranch);
+				if (!requiredChecksPreflight.ok || requiredChecksPreflight.count === 0) {
+					ctx.ui.notify(
+						`Cannot begin execution: branch protection on ${defaultBranch} has no required status checks (${requiredChecksPreflight.detail}) — the completion gate would fail at close time; configure required checks first`,
+						"error",
+					);
+					return;
+				}
 				const tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
 				const statusRes = await backend.workflowState(issue.key);
 				const provenance: ExecutionProvenanceEnvelope = {
@@ -3609,7 +3626,20 @@ export function createWorkflowHost(cfg: HostConfig) {
 								if (!currentExec || !currentExec.activeItem) return deny("execution grant missing after settlement");
 								const remoteRef = currentExec.grant.remote_ref;
 								const defaultBranch = resolveDefaultBranch(ctx.cwd);
-								const mergeCheck = verifyMergeConfirmation(ctx.cwd, candidateCommit, remoteRef, defaultBranch);
+								let mergeCheck = verifyMergeConfirmation(ctx.cwd, candidateCommit, remoteRef, defaultBranch);
+								if (!mergeCheck.confirmed && mergeCheck.detail?.includes("expected MERGED")) {
+									// OMP-220: engine-driven delivery merge — the single sanctioned
+									// PR merge action; branch protection enforces required checks
+									// server-side, and the head-OID binding above guarantees only
+									// the audited candidate can be merged this way.
+									const deliveryBranch = remoteRef.startsWith("refs/heads/") ? remoteRef.slice("refs/heads/".length) : remoteRef;
+									const merged = mergePullRequest(ctx.cwd, deliveryBranch);
+									ctx.ui.notify(
+										merged.ok ? `delivery PR merged by engine: ${deliveryBranch}` : `engine PR merge failed: ${merged.detail}`,
+										merged.ok ? "info" : "warning",
+									);
+									if (merged.ok) mergeCheck = verifyMergeConfirmation(ctx.cwd, candidateCommit, remoteRef, defaultBranch);
+								}
 								if (!mergeCheck.confirmed) {
 									return deny(`Work item completion pending merge confirmation: ${mergeCheck.detail}. Pushing to ${remoteRef} alone does not mark the item delivered.`);
 								}

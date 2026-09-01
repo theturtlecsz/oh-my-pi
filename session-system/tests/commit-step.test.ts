@@ -17,7 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { candidateSha256 } from "@oh-my-pi/pi-work-client";
-import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, type GhPrRunner, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runBiomeCheck, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
+import { candidateDrift, dirtyPaths, ensureUpToDateWithDefault, findSecrets, freezeCandidateCommit, type GhPrRunner, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runBiomeCheck, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -742,13 +742,14 @@ describe("candidateDrift", () => {
 });
 
 describe("merge confirmation gating (OMP-212)", () => {
-	const mockGhPassing: GhPrRunner = (_root: string, _query: string) => ({
+	const mockGhPassing = (headRefOid: string): GhPrRunner => (_root: string, _query: string) => ({
 		ok: true,
 		out: {
 			pr: {
 				state: "MERGED",
 				baseRefName: "main",
 				headRefName: "execution/omp-212",
+				headRefOid,
 			},
 			requiredChecks: [
 				{ name: "test", state: "SUCCESS", bucket: "pass", status: "COMPLETED", conclusion: "SUCCESS" },
@@ -760,7 +761,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 	test("refuses completion for direct push to default branch (direct target-branch publication disabled)", () => {
 		const repo = makeRepo();
 		const head = git(repo, "rev-parse", "HEAD");
-		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/main", "refs/heads/main", mockGhPassing);
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/main", "refs/heads/main", mockGhPassing(head));
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("direct push to protected default branch is disabled");
 	});
@@ -876,6 +877,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 					state: "OPEN",
 					baseRefName: "main",
 					headRefName: "execution/omp-212",
+					headRefOid: head,
 				},
 				requiredChecks: [{ name: "test", state: "SUCCESS", bucket: "pass" }],
 			},
@@ -896,6 +898,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 					state: "MERGED",
 					baseRefName: "main",
 					headRefName: "execution/omp-212",
+					headRefOid: head,
 				},
 				requiredChecks: [],
 			},
@@ -916,6 +919,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 					state: "MERGED",
 					baseRefName: "main",
 					headRefName: "execution/omp-212",
+					headRefOid: head,
 				},
 				requiredChecks: [
 					{ name: "lint-required", state: "FAILURE", bucket: "fail", conclusion: "FAILURE" },
@@ -943,7 +947,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		git(repo, "push", "-q", "origin", `HEAD:refs/heads/execution/omp-212`);
 
 		// PR check passes but origin/main has not merged the candidate commit
-		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing);
+		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing(candidateSha));
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain(`candidate commit ${candidateSha} is not contained in origin/main`);
 	});
@@ -964,7 +968,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		git(repo, "push", "-q", "origin", `HEAD:refs/heads/execution/omp-212`);
 		git(repo, "push", "-q", "origin", `HEAD:refs/heads/main`);
 
-		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing);
+		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing(candidateSha));
 		expect(outcome.confirmed).toBe(true);
 		expect(outcome.detail).toContain(`PR merged with 1 required check(s) passing and origin/main contains candidate ${candidateSha}`);
 	});
@@ -992,6 +996,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 					state: "MERGED",
 					baseRefName: "master",
 					headRefName: "execution/omp-212",
+					headRefOid: candidateSha,
 				},
 				requiredChecks: [
 					{ name: "test", state: "SUCCESS", bucket: "pass", status: "COMPLETED", conclusion: "SUCCESS" },
@@ -1030,7 +1035,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 		expect(initialTrackingSha).not.toBe(candidateSha);
 
 		// verifyMergeConfirmation should update origin/main tracking ref via forced refspec and confirm
-		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing);
+		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing(candidateSha));
 		expect(outcome.confirmed).toBe(true);
 		expect(git(repo, "rev-parse", "origin/main")).toBe(candidateSha);
 	});
@@ -1039,8 +1044,93 @@ describe("merge confirmation gating (OMP-212)", () => {
 		const repo = makeRepo();
 		// No origin remote configured
 		const head = git(repo, "rev-parse", "HEAD");
-		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing);
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing(head));
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("fetch refs/heads/main failed");
+	});
+
+	// OMP-220: ancestry alone is not enough — the PR head must BE the audited candidate.
+	test("refuses a PR head that is a descendant of the audited candidate (unaudited post-PASS content)", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		fs.writeFileSync(path.join(repo, "feat.txt"), "feat\n");
+		git(repo, "add", "--", "feat.txt");
+		git(repo, "commit", "-q", "-m", "audited candidate");
+		const candidateSha = git(repo, "rev-parse", "HEAD");
+		fs.writeFileSync(path.join(repo, "fixup.txt"), "post-pass fixup\n");
+		git(repo, "add", "--", "fixup.txt");
+		git(repo, "commit", "-q", "-m", "unaudited fixup");
+		const fixupSha = git(repo, "rev-parse", "HEAD");
+		// Both reach the remote default branch: candidate ancestry WOULD pass.
+		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
+
+		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing(fixupSha));
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("is not the audited candidate");
+		expect(outcome.detail).toContain("re-freeze");
+	});
+
+	test("directs a conflicted open delivery PR to a fresh freeze instead of a hand sync merge", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const dirtyPrGh: GhPrRunner = () => ({
+			ok: true,
+			out: {
+				pr: {
+					state: "OPEN",
+					baseRefName: "main",
+					headRefName: "execution/omp-212",
+					headRefOid: head,
+					mergeStateStatus: "DIRTY",
+				},
+				requiredChecks: [{ name: "test", state: "SUCCESS", bucket: "pass" }],
+			},
+			err: "",
+		});
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", dirtyPrGh);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("merge-conflicted");
+		expect(outcome.detail).toContain("re-freeze from the updated main tip");
+	});
+});
+
+describe("admission rebase-check (OMP-220)", () => {
+	test("passes when HEAD contains the origin default tip and refuses when behind", () => {
+		const repo = makeRepo("main");
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=main", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
+
+		const upToDate = ensureUpToDateWithDefault(repo, "refs/heads/main");
+		expect(upToDate.ok).toBe(true);
+
+		// Another clone advances the remote default tip.
+		const pusher = makeRepo("main");
+		git(pusher, "remote", "add", "origin", remote);
+		git(pusher, "pull", "-q", "origin", "main");
+		fs.writeFileSync(path.join(pusher, "advanced.txt"), "advanced\n");
+		git(pusher, "add", "--", "advanced.txt");
+		git(pusher, "commit", "-q", "-m", "advanced");
+		git(pusher, "push", "-q", "origin", "HEAD:refs/heads/main");
+
+		const behind = ensureUpToDateWithDefault(repo, "refs/heads/main");
+		expect(behind.ok).toBe(false);
+		expect(behind.detail).toContain("HEAD is behind origin/main");
+		expect(behind.detail).toContain("conflict-free");
+
+		// Catching up restores admission.
+		git(repo, "merge", "-q", "refs/remotes/origin/main");
+		const caughtUp = ensureUpToDateWithDefault(repo, "refs/heads/main");
+		expect(caughtUp.ok).toBe(true);
+	});
+
+	test("fails closed when the repo has no origin remote", () => {
+		const repo = makeRepo("main");
+		const res = ensureUpToDateWithDefault(repo, "refs/heads/main");
+		expect(res.ok).toBe(false);
+		expect(res.detail).toContain("fetch origin main failed");
 	});
 });

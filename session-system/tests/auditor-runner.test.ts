@@ -2406,6 +2406,8 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
 		const headSpy = vi.spyOn(gitModule, "headCommit").mockReturnValue("1".repeat(40));
 		const refSpy = vi.spyOn(gitModule, "currentSymbolicRef").mockReturnValue("refs/heads/main");
+		const upToDateSpy = vi.spyOn(gitModule, "ensureUpToDateWithDefault").mockReturnValue({ ok: true, detail: "up to date" });
+		const checksSpy = vi.spyOn(gitModule, "requiredStatusCheckCount").mockReturnValue({ ok: true, count: 12, detail: "12 required status check context(s) on main" });
 		try {
 			const fakeCtx = {
 				cwd: "/tmp/repo",
@@ -2419,6 +2421,8 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			dirtySpy.mockRestore();
 			headSpy.mockRestore();
 			refSpy.mockRestore();
+			upToDateSpy.mockRestore();
+			checksSpy.mockRestore();
 		}
 	});
 
@@ -2566,6 +2570,8 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
 		const headSpy = vi.spyOn(gitModule, "headCommit").mockReturnValue("1".repeat(40));
 		const refSpy = vi.spyOn(gitModule, "currentSymbolicRef").mockReturnValue("refs/heads/master");
+		const upToDateSpy = vi.spyOn(gitModule, "ensureUpToDateWithDefault").mockReturnValue({ ok: true, detail: "up to date" });
+		const checksSpy = vi.spyOn(gitModule, "requiredStatusCheckCount").mockReturnValue({ ok: true, count: 12, detail: "12 required status check context(s) on master" });
 		const freezeSpy = vi.spyOn(gitModule, "freezeCandidateCommit").mockResolvedValue({
 			commitSha: "2".repeat(40),
 			treeSha: "tree-sha",
@@ -2639,12 +2645,153 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			dirtySpy.mockRestore();
 			headSpy.mockRestore();
 			refSpy.mockRestore();
+			upToDateSpy.mockRestore();
+			checksSpy.mockRestore();
 			freezeSpy.mockRestore();
 			pushSpy.mockRestore();
 			verifySpy.mockRestore();
 			rangeDiffSpy.mockRestore();
 			runSubprocessSpy.mockRestore();
 			discoverSpy.mockRestore();
+		}
+	});
+
+	// OMP-220: admission gates — behind-origin HEAD and empty required-check
+	// config are refused at admission, before any grant is minted.
+	test("refuses admission when HEAD is behind the origin default tip", async () => {
+		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		const fakePi = {
+			zod: z,
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				registeredCommands.set(name, def.handler);
+			},
+			registerFlag: () => {},
+			on: () => {},
+			appendEntry: () => {},
+			sendMessage: () => {},
+			getSessionId: () => "sess-220a",
+		} as unknown as ExtensionAPI;
+		let beginCalled = false;
+		const mockBackend = {
+			cacheFile: "test-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			workspaceId: "ws-1",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-220", key: "OMP-220", title: "Test 220", project: "The Bookends" }),
+			issueDetail: async () => ({ key: "OMP-220", attemptSnapshot: undefined }),
+			workflowState: async () => ({ open_blockers: [] }),
+			getFocusVersion: async () => 1,
+			beginExecution: async () => {
+				beginCalled = true;
+				throw new Error("must not begin");
+			},
+			workClient: {
+				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workItem: async () => ({
+					work_id: "uuid-220",
+					project_id: "proj-1",
+					revision: { revision_id: "rev-220", description: "desc" },
+				}),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+		createWorkflowHost({ backend: mockBackend, teamNoun: "the ledger", entryType: "work-now", acceptEntry: () => true })(fakePi);
+		const handler = registeredCommands.get("execute");
+		expect(handler).toBeDefined();
+		const notifications: string[] = [];
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		const headSpy = vi.spyOn(gitModule, "headCommit").mockReturnValue("1".repeat(40));
+		const refSpy = vi.spyOn(gitModule, "currentSymbolicRef").mockReturnValue("refs/heads/main");
+		const upToDateSpy = vi.spyOn(gitModule, "ensureUpToDateWithDefault").mockReturnValue({
+			ok: false,
+			detail: "HEAD is behind origin/main tip abcabcabcabc — run `git merge origin/main` (or pull) and retry so PASS candidates stay conflict-free",
+		});
+		const checksSpy = vi.spyOn(gitModule, "requiredStatusCheckCount").mockReturnValue({ ok: true, count: 12, detail: "12" });
+		try {
+			const fakeCtx = {
+				cwd: "/tmp/repo",
+				taskDepth: 0,
+				ui: { notify: (msg: string) => notifications.push(msg), theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+			} as unknown as ExtensionContext;
+			await handler!("OMP-220", fakeCtx);
+			expect(beginCalled).toBe(false);
+			expect(notifications.some(n => n.includes("HEAD is behind origin/main")), `notifications: ${JSON.stringify(notifications)}`).toBe(true);
+		} finally {
+			dirtySpy.mockRestore();
+			headSpy.mockRestore();
+			refSpy.mockRestore();
+			upToDateSpy.mockRestore();
+			checksSpy.mockRestore();
+		}
+	});
+
+	test("refuses admission when branch protection has zero required status checks", async () => {
+		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		const fakePi = {
+			zod: z,
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				registeredCommands.set(name, def.handler);
+			},
+			registerFlag: () => {},
+			on: () => {},
+			appendEntry: () => {},
+			sendMessage: () => {},
+			getSessionId: () => "sess-220b",
+		} as unknown as ExtensionAPI;
+		let beginCalled = false;
+		const mockBackend = {
+			cacheFile: "test-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			workspaceId: "ws-1",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-220", key: "OMP-220", title: "Test 220", project: "The Bookends" }),
+			issueDetail: async () => ({ key: "OMP-220", attemptSnapshot: undefined }),
+			workflowState: async () => ({ open_blockers: [] }),
+			getFocusVersion: async () => 1,
+			beginExecution: async () => {
+				beginCalled = true;
+				throw new Error("must not begin");
+			},
+			workClient: {
+				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workItem: async () => ({
+					work_id: "uuid-220",
+					project_id: "proj-1",
+					revision: { revision_id: "rev-220", description: "desc" },
+				}),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+		createWorkflowHost({ backend: mockBackend, teamNoun: "the ledger", entryType: "work-now", acceptEntry: () => true })(fakePi);
+		const handler = registeredCommands.get("execute");
+		expect(handler).toBeDefined();
+		const notifications: string[] = [];
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		const headSpy = vi.spyOn(gitModule, "headCommit").mockReturnValue("1".repeat(40));
+		const refSpy = vi.spyOn(gitModule, "currentSymbolicRef").mockReturnValue("refs/heads/main");
+		const upToDateSpy = vi.spyOn(gitModule, "ensureUpToDateWithDefault").mockReturnValue({ ok: true, detail: "up to date" });
+		const checksSpy = vi.spyOn(gitModule, "requiredStatusCheckCount").mockReturnValue({ ok: true, count: 0, detail: "0 required status check context(s) on main" });
+		try {
+			const fakeCtx = {
+				cwd: "/tmp/repo",
+				taskDepth: 0,
+				ui: { notify: (msg: string) => notifications.push(msg), theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+			} as unknown as ExtensionContext;
+			await handler!("OMP-220", fakeCtx);
+			expect(beginCalled).toBe(false);
+			expect(notifications.some(n => n.includes("no required status checks")), `notifications: ${JSON.stringify(notifications)}`).toBe(true);
+		} finally {
+			dirtySpy.mockRestore();
+			headSpy.mockRestore();
+			refSpy.mockRestore();
+			upToDateSpy.mockRestore();
+			checksSpy.mockRestore();
 		}
 	});
 });

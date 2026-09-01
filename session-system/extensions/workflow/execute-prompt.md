@@ -16,7 +16,7 @@ Follow this deterministic sequence without skipping steps or asking for manual c
    - Edit only within the sealed path set.
    - Run focused checks and reproduction commands to verify each step.
    - Run the repo lint/format gate on the stamped paths before review: `bun x biome check <stamped paths>` (or `bun run check:tools`) and fix findings first — the freeze refuses lint-red candidates.
-   - Call `work action:"begin_execution_review", body:"<exact test commands and reproduction results>"` to freeze candidate, record verification evidence, push remote commit, seal audit manifest, run native audit, and auto-complete on PASS.
+   - Call `work action:"begin_execution_review", body:"<exact test commands and reproduction results>"` to freeze candidate, record verification evidence, push remote commit, seal audit manifest, run native audit, and auto-complete on PASS. The engine merges the delivery PR itself once required checks pass — never merge by hand, and never push extra commits to the execution branch after the freeze (the completion gate binds the PR head to the audited candidate).
 5. **Remediation:** If audit reported `NEEDS_FIX` or `BLOCKED`:
    - The phase will be `remediating`.
    - Update plan at `local://execute-<lowercase-key>-plan.md` addressing only the named findings.

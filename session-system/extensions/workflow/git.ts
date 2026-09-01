@@ -620,6 +620,56 @@ export function resolveDefaultBranch(root: string): string {
 	return "refs/heads/main";
 }
 
+/** OMP-220: admission rebase-check — PASS candidates must stay conflict-free,
+ *  so /execute refuses to begin when HEAD is behind the origin default tip
+ *  (the OMP-218 delivery needed hand conflict surgery because its lineage
+ *  predated a merged PR). */
+export function ensureUpToDateWithDefault(root: string, defaultBranch?: string): { ok: boolean; detail: string } {
+	const resolvedDefault = defaultBranch ?? resolveDefaultBranch(root);
+	const name = resolvedDefault.startsWith("refs/heads/") ? resolvedDefault.slice("refs/heads/".length) : resolvedDefault;
+	const fetch = runGit(root, ["fetch", "origin", `+refs/heads/${name}:refs/remotes/origin/${name}`], 30_000);
+	if (!fetch.ok) return { ok: false, detail: `fetch origin ${name} failed: ${fetch.err.split("\n")[0]}` };
+	const tip = runGit(root, ["rev-parse", `refs/remotes/origin/${name}`]);
+	if (!tip.ok) return { ok: false, detail: `origin/${name} unresolvable: ${tip.err.split("\n")[0]}` };
+	const contained = runGit(root, ["merge-base", "--is-ancestor", tip.out, "HEAD"]);
+	if (!contained.ok) {
+		return {
+			ok: false,
+			detail: `HEAD is behind origin/${name} tip ${tip.out.slice(0, 12)} — run \`git merge origin/${name}\` (or pull) and retry so PASS candidates stay conflict-free`,
+		};
+	}
+	return { ok: true, detail: `HEAD contains origin/${name} tip ${tip.out.slice(0, 12)}` };
+}
+
+/** OMP-220: completion-gate preflight — a protection rule with ZERO required
+ *  status check contexts makes the merge-confirmation gate unsatisfiable at
+ *  close time; surface that at grant admission instead. */
+export function requiredStatusCheckCount(root: string, defaultBranch?: string): { ok: boolean; count: number; detail: string } {
+	const resolvedDefault = defaultBranch ?? resolveDefaultBranch(root);
+	const name = resolvedDefault.startsWith("refs/heads/") ? resolvedDefault.slice("refs/heads/".length) : resolvedDefault;
+	const r = spawnSync("gh", ["api", `repos/{owner}/{repo}/branches/${name}/protection/required_status_checks`, "--jq", ".contexts | length"], {
+		cwd: root,
+		encoding: "utf8",
+		timeout: 30_000,
+	});
+	if (r.status !== 0 || !r.stdout) {
+		return { ok: false, count: 0, detail: (r.stderr || (r.error ? r.error.message : "gh api required_status_checks failed")).split("\n")[0] };
+	}
+	const count = Number.parseInt(r.stdout.trim(), 10);
+	if (!Number.isFinite(count)) return { ok: false, count: 0, detail: `unparseable required check contexts count: ${r.stdout.trim()}` };
+	return { ok: true, count, detail: `${count} required status check context(s) on ${name}` };
+}
+
+/** OMP-220: engine-driven delivery merge — the single sanctioned PR merge
+ *  action (merge commit preserves the audited candidate SHA in ancestry;
+ *  squash/rebase would rewrite it and break the completion gate). Branch
+ *  protection still enforces required checks server-side. */
+export function mergePullRequest(root: string, branchName: string): { ok: boolean; detail: string } {
+	const r = spawnSync("gh", ["pr", "merge", branchName, "--merge"], { cwd: root, encoding: "utf8", timeout: 60_000 });
+	const detail = `${r.stdout ?? ""}\n${r.stderr ?? (r.error ? r.error.message : "")}`.trim().split("\n")[0] || "gh pr merge";
+	return { ok: r.status === 0 && !r.error, detail };
+}
+
 export function pushCandidate(root: string, commitSha: string, expectedBaseline?: string, targetRemoteRef?: string): PushOutcome {
 	try {
 		const remoteRef = targetRemoteRef ?? currentSymbolicRef(root);
@@ -709,6 +759,8 @@ export interface GhPrView {
 	state?: string;
 	baseRefName?: string;
 	headRefName?: string;
+	headRefOid?: string;
+	mergeStateStatus?: string;
 }
 
 export interface GhPrQueryResult {
@@ -719,7 +771,7 @@ export interface GhPrQueryResult {
 export type GhPrRunner = (root: string, queryRef: string) => { ok: boolean; out?: GhPrQueryResult; err: string };
 
 export const defaultGhPrRunner: GhPrRunner = (root: string, queryRef: string) => {
-	const prRes = spawnSync("gh", ["pr", "view", queryRef, "--json", "state,baseRefName,headRefName"], {
+	const prRes = spawnSync("gh", ["pr", "view", queryRef, "--json", "state,baseRefName,headRefName,headRefOid,mergeStateStatus"], {
 		cwd: root,
 		encoding: "utf8",
 		timeout: 30_000,
@@ -796,7 +848,25 @@ export function verifyMergeConfirmation(
 		};
 	}
 
+	// OMP-220: bind the delivery PR head to the audited candidate — ancestry
+	// alone lets unaudited post-PASS commits (sync merges, fixups) ride to the
+	// default branch. A mismatched head is refused toward a fresh freeze.
+	if (!pr.headRefOid || pr.headRefOid !== commitSha) {
+		return {
+			confirmed: false,
+			detail: `PR head ${pr.headRefOid ? pr.headRefOid.slice(0, 12) : "absent"} is not the audited candidate ${commitSha.slice(0, 12)} — unaudited content on the delivery branch; re-freeze from the updated ${defaultBranchName} tip and re-audit`,
+		};
+	}
+
 	if (pr.state !== "MERGED") {
+		// OMP-220: a conflicted delivery PR must never be hand-merged post-PASS —
+		// the resolution content would land unaudited. Direct to a fresh freeze.
+		if (pr.state === "OPEN" && pr.mergeStateStatus === "DIRTY") {
+			return {
+				confirmed: false,
+				detail: `PR for ${queryRef} is merge-conflicted with ${defaultBranchName} — a post-PASS sync merge is not permitted; re-freeze from the updated ${defaultBranchName} tip (stop this grant, \`git merge origin/${defaultBranchName}\`, rerun /execute)`,
+			};
+		}
 		return {
 			confirmed: false,
 			detail: `PR for ${queryRef} is ${pr.state ?? "unknown"}, expected MERGED`,
