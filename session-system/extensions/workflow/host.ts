@@ -222,12 +222,39 @@ function executionRecoveryTouchedPaths(cwd: string, observedDirt: readonly strin
 	for (let index = 0; index < tokens.length; index++) {
 		const entry = tokens[index]!;
 		paths.push(entry.slice(3));
-		if (entry[0] === "R" || entry[0] === "C") {
+		if (entry[0] === "R" || entry[0] === "C" || entry[1] === "R" || entry[1] === "C") {
 			const original = tokens[++index];
 			if (original) paths.push(original);
 		}
 	}
 	return [...new Set(paths)];
+}
+
+/** Deterministically expand known generated and approval dependencies for sealed execution paths (Criterion 1). */
+export function expandExecutionPlanClosure(paths: readonly string[], cwd: string): string[] {
+	const result = new Set<string>(paths);
+	const hasContractPaths = paths.some(
+		p =>
+			p.startsWith("python/omp-work/src/omp_work/contracts/v1/") ||
+			p === "python/omp-work/src/omp_work/v1/models.py" ||
+			p === "python/omp-work/src/omp_work/v1/api_models.py",
+	);
+	if (hasContractPaths) {
+		const contractDependencies = [
+			"python/omp-work/src/omp_work/contracts/v1/approval.json",
+			"python/omp-work/src/omp_work/contracts/v1/schema.json",
+			"python/omp-work/src/omp_work/contracts/v1/api-schema.json",
+			"packages/work-client/src/contract.ts",
+		];
+		for (const dep of contractDependencies) {
+			const fullPath = join(cwd, dep);
+			const parentDir = dirname(fullPath);
+			if (existsSync(fullPath) || existsSync(parentDir)) {
+				result.add(dep);
+			}
+		}
+	}
+	return [...result];
 }
 
 /** Deterministic plain-words render — zero LLM, zero paths/hashes. Identifiers
@@ -1630,27 +1657,24 @@ export function createWorkflowHost(cfg: HostConfig) {
 				return { ok: false, reason: "git operation in progress" };
 			}
 			const dirt = dirtyPaths(ctx.cwd);
-			if (exec.activeItem.phase === "awaiting_contract_approval" || exec.grant.terminal_reason?.startsWith("contract_approval_required")) {
-				const contractCheck = checkProspectiveContract(ctx.cwd);
-				if (!contractCheck.approved) {
-					return { ok: false, reason: `contract approval required for prospective digest ${contractCheck.prospectiveDigest}` };
+			if (dirt.length > 0) {
+				if (exec.activeItem.phase === "awaiting_contract_approval" || exec.grant.terminal_reason?.startsWith("contract_approval_required")) {
+					const contractCheck = checkProspectiveContract(ctx.cwd);
+					if (!contractCheck.approved) {
+						return { ok: false, reason: `contract approval required for prospective digest ${contractCheck.prospectiveDigest}` };
+					}
+				} else {
+					const phaseAllowsSealedDirt = ["executing", "remediating"].includes(exec.activeItem.phase);
+					if (!phaseAllowsSealedDirt) {
+						return { ok: false, reason: `dirty worktree: ${dirt.join(", ")}` };
+					}
 				}
-				const contractDir = "python/omp-work/src/omp_work/contracts/v1";
-				const nonContractDirt = dirt.filter(p => !p.startsWith(contractDir));
-				if (nonContractDirt.length > 0) {
-					return { ok: false, reason: `dirty worktree outside contract files: ${nonContractDirt.join(", ")}` };
-				}
-			} else if (dirt.length > 0) {
 				const planStamp = exec.activeItem.plan_stamp as { paths?: unknown } | undefined;
 				const sealedPaths = new Set(
 					Array.isArray(planStamp?.paths)
 						? planStamp.paths.filter((path): path is string => typeof path === "string")
 						: [],
 				);
-				const phaseAllowsSealedDirt = ["executing", "remediating"].includes(exec.activeItem.phase);
-				if (!phaseAllowsSealedDirt) {
-					return { ok: false, reason: `dirty worktree: ${dirt.join(", ")}` };
-				}
 				const touchedPaths = executionRecoveryTouchedPaths(ctx.cwd, dirt);
 				if (touchedPaths === null) {
 					return { ok: false, reason: "unable to inspect complete dirty path set" };
@@ -1998,7 +2022,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 						expectedGrantVersion: exec.grant.grant_version,
 						targetState: "paused",
 						reason: "owner_interjection",
-						judgeSha256: tcb.judgeSha256,
+						judgeSha256: exec.grant.judge_sha256,
 					});
 					const resumeWorkId = exec.activeItem?.work_id ?? "";
 					let resumeTarget = resumeWorkId;
@@ -3486,8 +3510,22 @@ export function createWorkflowHost(cfg: HostConfig) {
 						case "stamp_execution_plan": {
 							const exec = await backend.getExecution(params.work);
 							if (!exec || exec.grant.state !== "active") return deny("no active execution grant");
-							if (!exec.activeItem || !["planning", "remediating"].includes(exec.activeItem.phase)) {
+							const isExecutingReplan = exec.activeItem?.phase === "executing" && (exec.activeItem.close_attempts_started ?? 0) === 0;
+							if (!exec.activeItem || (!["planning", "remediating"].includes(exec.activeItem.phase) && !isExecutingReplan)) {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected planning or remediating`);
+							}
+							const prevPlanStamp = exec.activeItem.plan_stamp as { paths?: string[] } | undefined;
+							if (prevPlanStamp && (exec.activeItem.close_attempts_started ?? 0) === 0) {
+								const prevSealed = new Set(Array.isArray(prevPlanStamp?.paths) ? prevPlanStamp.paths : []);
+								const dirt = dirtyPaths(ctx.cwd);
+								const touchedPaths = executionRecoveryTouchedPaths(ctx.cwd, dirt);
+								if (touchedPaths === null) {
+									return deny("Scope correction refused: unable to inspect complete touched path set.");
+								}
+								const unsealedDirt = touchedPaths.filter(p => !prevSealed.has(p));
+								if (unsealedDirt.length > 0) {
+									return deny(`Scope correction refused: worktree contains dirty unsealed path(s) [${unsealedDirt.join(", ")}]. Revert or clean unsealed changes before re-planning.`);
+								}
 							}
 							if (!params.plan_file) return deny("plan_file required");
 							if (!params.paths) return deny("paths array required");
@@ -3533,7 +3571,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (approach.length === 0 || verification.length === 0) {
 								return deny("Plan requires non-empty ## Approach and ## Verification lists.");
 							}
-							const pathCheck = validateExecutionPaths(params.paths, ctx.cwd);
+							const expandedPaths = expandExecutionPlanClosure(params.paths, ctx.cwd);
+							const pathCheck = validateExecutionPaths(expandedPaths, ctx.cwd);
 							if (!pathCheck.valid) {
 								return deny(`Plan path validation failed: ${pathCheck.error}`);
 							}
@@ -3986,7 +4025,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										expectedGrantVersion: exec.grant.grant_version,
 										targetState: "paused",
 										reason: `contract_approval_required:${contractCheck.prospectiveDigest}`,
-										judgeSha256: tcb.judgeSha256,
+										judgeSha256: exec.grant.judge_sha256,
 									});
 									ctx.ui.notify(`Contract change detected. Execution grant paused awaiting owner approval for ${contractCheck.prospectiveDigest}. Run 'omp-work approve --issue ${targetIssue.key}' then '/execute resume' to continue.`, "warning");
 									return deny(`Contract approval required: prospective contract digest ${contractCheck.prospectiveDigest} is not approved in approval.json. Execution grant paused before candidate freeze. Run 'omp-work approve --issue ${targetIssue.key}' then '/execute resume'.`);

@@ -4620,7 +4620,6 @@ def test_execution_grant_pause_resume_and_terminal_judge_drift(
     assert status == 200, body
     assert body["result"]["grant"]["state"] == "paused"
     assert body["result"]["grant"]["paused_at"] is not None
-
     resp = service.client.get(
         f"/v1/workspaces/{workspace_id}/execution/{grant_id}",
         headers=_owner_headers(workspace_id),
@@ -6216,10 +6215,10 @@ def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
             "type": "complete_execution_item",
             "payload": {
                 "grant_id": grant_id,
-                "expected_grant_version": 6,
                 "work_id": str(work_id),
                 "attempt_id": attempt_id,
                 "push_receipt_id": push_receipt_id,
+                "expected_grant_version": 6,
                 "judge_sha256": new_judge_sha,
             },
         },
@@ -6227,3 +6226,188 @@ def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
     assert status == 200, body
     assert body["result"]["grant"]["state"] == "completed"
     assert body["result"]["item"]["phase"] == "completed"
+
+def test_execution_grant_pre_review_replan_and_stale_service_pause_stop(
+    service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+
+    item = _create(
+        service,
+        workspace_id,
+        "Replan test item",
+        description="Test description for replan and stale source",
+    )
+    work_id = item["work_id"]
+    rev_id = item["revision_id"]
+
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    head_commit = "0" * 40
+
+    provenance = {
+        "owner_input_id": str(uuid4()),
+        "owner_session_id": "session-replan",
+        "normalized_command": "/execute OMP-10",
+        "workspace_id": str(workspace_id),
+        "repository": "oh-my-pi",
+        "nonce": str(uuid4()),
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": provenance,
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(work_id),
+                        "revision_id": str(rev_id),
+                        "position": 0,
+                        "original_request": "Test description for replan and stale source",
+                        "original_request_sha256": text_sha256(
+                            "Test description for replan and stale source"
+                        ),
+                        "initial_git_baseline": head_commit,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 200, body
+
+    # Seal criteria
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_execution_criteria",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 1,
+                "work_id": str(work_id),
+                "expected_revision_id": str(rev_id),
+                "criteria": ["AC-1: criteria one"],
+                "description_sha256": text_sha256("Test description for replan and stale source"),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    new_rev_id = body["result"]["revision"]["revision_id"]
+
+    # 1. Initial stamp in planning
+    cand_1_id = str(uuid4())
+    plan_content = "## Approach\n1. Step one\n\n## Verification\n1. Check one"
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 2,
+                "work_id": str(work_id),
+                "revision_id": str(new_rev_id),
+                "candidate_id": cand_1_id,
+                "plan_file": "local://plan.md",
+                "plan_body": plan_content,
+                "plan_sha256": sha256(plan_content),
+                "approach": ["1. Step one"],
+                "verification": ["1. Check one"],
+                "paths": ["python/omp-work/src/omp_work/v1/server.py"],
+                "candidate_sha256": "1" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["item"]["phase"] == "executing"
+    assert body["result"]["item"]["plan_stamp"]["paths"] == ["python/omp-work/src/omp_work/v1/server.py"]
+    assert body["result"]["item"]["plan_stamp"]["initial_paths"] == ["python/omp-work/src/omp_work/v1/server.py"]
+
+    # 2. Re-stamp in executing phase (scope correction before review)
+    cand_2_id = str(uuid4())
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": str(work_id),
+                "revision_id": str(new_rev_id),
+                "candidate_id": cand_2_id,
+                "plan_file": "local://plan.md",
+                "plan_body": plan_content,
+                "plan_sha256": sha256(plan_content),
+                "approach": ["1. Step one"],
+                "verification": ["1. Check one"],
+                "paths": ["python/omp-work/src/omp_work/v1/server.py", "python/omp-work/src/omp_work/v1/store.py"],
+                "candidate_sha256": "2" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["item"]["phase"] == "executing"
+    assert body["result"]["item"]["plan_stamp"]["paths"] == ["python/omp-work/src/omp_work/v1/server.py", "python/omp-work/src/omp_work/v1/store.py"]
+    assert body["result"]["item"]["plan_stamp"]["initial_paths"] == ["python/omp-work/src/omp_work/v1/server.py", "python/omp-work/src/omp_work/v1/store.py"]
+
+    # 3. Simulate on-disk source modification causing stale service
+    import omp_work.v1.server as server_module
+    monkeypatch.setattr(server_module, "code_fingerprint", lambda: "c001" * 16)
+
+    # Ordinary write fails 503 service_stale
+    status, body = _command(
+        service,
+        workspace_id,
+        _batch([{"client_ref": "stale", "title": "must not land"}]),
+    )
+    assert status == 503 and body["error"]["code"] == "unavailable"
+
+    # Pausing grant succeeds under stale service
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 4,
+                "target_state": "paused",
+                "reason": "pause_under_stale_source",
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["state"] == "paused"
+
+    # Stopping grant succeeds under stale service
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 5,
+                "target_state": "stopped",
+                "reason": "model_stopped_stale",
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["state"] == "stopped"

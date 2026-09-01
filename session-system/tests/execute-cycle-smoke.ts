@@ -1142,7 +1142,12 @@ if (args[0] === "api") {
 	assert.ok((contractOut.resumeDeniedNotices as string[])?.length > 0, "resume without approval denied");
 	assert.equal(contractOut.resumedExecution?.grant?.state, "active", "grant resumed to active after approval");
 	assert.equal(contractOut.resumedExecution?.items?.[0]?.phase, "planning", "item resumed to planning after approval");
-	// Cancel grant 4 before starting scenario 7
+	assert.ok(contractOut.schemaGenerated, "schema generation executed and generated artifacts changed");
+	assert.ok(contractOut.unsealedDirtRefused, "unsealed dirty path refused during in-execution scope correction");
+	assert.ok(contractOut.scopeCorrectionResult, "scope correction in executing succeeded");
+	assert.equal(contractOut.finalExecution?.grant?.state, "completed", "contract grant completed to done");
+	assert.equal(contractOut.finalExecution?.items?.[0]?.phase, "completed", "contract item phase completed");
+	// Optional cancel helper if grant was not completed
 	const cancelGrant = async (grantId?: string, grantVer?: number, judgeSha?: string) => {
 		if (!grantId || grantVer === undefined) return;
 		const res = await (await fetch(`${baseUrl}/v1/commands`, {
@@ -1170,7 +1175,9 @@ if (args[0] === "api") {
 		assert.equal(res.result?.type, "set_execution_state");
 	};
 
-	await cancelGrant(contractOut.resumedExecution.grant.grant_id, contractOut.resumedExecution.grant.grant_version, contractOut.resumedExecution.grant.judge_sha256);
+	if (contractOut.finalExecution?.grant?.state !== "completed") {
+		await cancelGrant(contractOut.resumedExecution.grant.grant_id, contractOut.resumedExecution.grant.grant_version, contractOut.resumedExecution.grant.judge_sha256);
+	}
 
 	// Test Scenario 7: Independent Disposable Recovery & Drift Matrix
 	let recoverySeq = 0;

@@ -4168,7 +4168,10 @@ class PostgresWorkStore:
         grant_item = cur.fetchone()
         if grant_item is None:
             raise WorkStoreError("invalid_request", ("item claim not found",))
-        if grant_item["phase"] not in ("planning", "remediating"):
+        if grant_item["phase"] not in ("planning", "executing", "remediating") or (
+            grant_item["phase"] == "executing"
+            and grant_item.get("close_attempts_started", 0) > 0
+        ):
             raise WorkStoreError(
                 "invalid_request",
                 (f"item phase is {grant_item['phase']}, not planning/remediating",),
@@ -4201,7 +4204,10 @@ class PostgresWorkStore:
                     (f"remediation plan widens sealed paths beyond initial plan stamp: {sorted(set(validated_paths) - allowed_set)}",),
                 )
 
-        effective_initial_paths = list(initial_paths) if initial_paths is not None else list(validated_paths)
+        if grant_item["phase"] == "remediating" and initial_paths is not None:
+            effective_initial_paths = list(initial_paths)
+        else:
+            effective_initial_paths = list(validated_paths)
 
         cur.execute(
             "SELECT current_revision_id FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s FOR UPDATE",

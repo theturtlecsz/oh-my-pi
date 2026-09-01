@@ -14,6 +14,7 @@ Follow this deterministic sequence without skipping steps or asking for manual c
    - Call `work action:"stamp_execution_plan", plan_file: "local://execute-<lowercase-key>-plan.md", paths: ["path1", "path2"]`.
 4. **Implement & Verify:** If phase is `executing`:
    - Edit only within the sealed path set.
+   - If a scope omission is discovered before candidate freeze or review, re-stamp the plan via `work action:"stamp_execution_plan"` before editing unsealed paths (unsealed dirty changes will be refused).
    - Run focused checks and reproduction commands to verify each step.
    - Run the repo lint/format gate on the stamped paths before review: `bun x biome check <stamped paths>` (or `bun run check:tools`) and fix findings first — the freeze refuses lint-red candidates.
    - Call `work action:"begin_execution_review", body:"<exact test commands and reproduction results>"` to freeze candidate, record verification evidence, push remote commit, seal audit manifest, run native audit, and auto-complete on PASS. The engine merges the delivery PR itself once required checks pass — never merge by hand, and never push extra commits to the execution branch after the freeze (the completion gate binds the PR head to the audited candidate).
