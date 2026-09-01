@@ -17,7 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { candidateSha256 } from "@oh-my-pi/pi-work-client";
-import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, validateExecutionPaths } from "../extensions/workflow/git";
+import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, type GhPrRunner, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -364,6 +364,68 @@ describe("candidate freeze and push", () => {
 		const outcome = pushCandidate(repo, head);
 		expect(outcome.status).toBe("not_pushed");
 	});
+
+	test("pushCandidate pushes to explicit targetRemoteRef when provided (OMP-212)", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		const frozen = git(repo, "rev-parse", "HEAD");
+		const targetRef = "refs/heads/execution/omp-212";
+
+		const outcome = pushCandidate(repo, frozen, undefined, targetRef);
+		expect(outcome).toMatchObject({
+			status: "pushed",
+			remoteRef: targetRef,
+			remoteCommit: frozen,
+		});
+		expect(git(remote, "rev-parse", targetRef)).toBe(frozen);
+	});
+
+	test("pushCandidate preserves expectedBaseline as priorTip when pushing to new targetRemoteRef (OMP-212)", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		const baseline = git(repo, "rev-parse", "HEAD");
+		fs.writeFileSync(path.join(repo, "cand.txt"), "cand\n");
+		git(repo, "add", "--", "cand.txt");
+		git(repo, "commit", "-q", "-m", "cand");
+		const candidate = git(repo, "rev-parse", "HEAD");
+		const targetRef = "refs/heads/execution/omp-212";
+
+		const outcome = pushCandidate(repo, candidate, baseline, targetRef);
+		expect(outcome).toMatchObject({
+			status: "pushed",
+			remoteRef: targetRef,
+			remoteCommit: candidate,
+			priorTip: baseline,
+		});
+		expect(git(remote, "rev-parse", targetRef)).toBe(candidate);
+	});
+
+	test("pushCandidate proves containment on explicit targetRemoteRef when newer tip contains commit (OMP-212)", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		const frozen = git(repo, "rev-parse", "HEAD");
+		const targetRef = "refs/heads/execution/omp-212";
+
+		fs.writeFileSync(path.join(repo, "later.txt"), "later\n");
+		git(repo, "add", "--", "later.txt");
+		git(repo, "commit", "-q", "-m", "later");
+		const later = git(repo, "rev-parse", "HEAD");
+		git(repo, "push", "-q", "origin", `HEAD:${targetRef}`);
+
+		const outcome = pushCandidate(repo, frozen, undefined, targetRef);
+		expect(outcome).toMatchObject({
+			status: "contained",
+			remoteRef: targetRef,
+			remoteCommit: later,
+		});
+		expect(outcome.detail).toContain(`containment: ${later} contains ${frozen}`);
+	});
 });
 
 describe("execution freeze (OMP-188)", () => {
@@ -613,5 +675,167 @@ describe("candidateDrift", () => {
 		const head = git(repo, "rev-parse", "HEAD");
 		expect(candidateDrift(repo, null)).toEqual({ shape: "unrelated", head });
 		expect(candidateDrift(repo, undefined)).toEqual({ shape: "unrelated", head });
+	});
+});
+
+describe("merge confirmation gating (OMP-212)", () => {
+	const mockGhPassing: GhPrRunner = (_root: string, _query: string) => ({
+		ok: true,
+		out: {
+			pr: {
+				state: "MERGED",
+				baseRefName: "main",
+				headRefName: "execution/omp-212",
+			},
+			requiredChecks: [
+				{ name: "test", state: "SUCCESS", bucket: "pass", status: "COMPLETED", conclusion: "SUCCESS" },
+			],
+		},
+		err: "",
+	});
+
+	test("refuses completion for direct push to default branch (direct target-branch publication disabled)", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/main", "refs/heads/main", mockGhPassing);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("direct push to protected default branch is disabled");
+	});
+
+	test("refuses completion when gh PR query fails (missing or non-zero exit)", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const failingGh: GhPrRunner = () => ({ ok: false, err: "command not found: gh" });
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", failingGh);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("PR query failed");
+	});
+
+	test("refuses completion when PR base branch does not match default branch", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const wrongBaseGh: GhPrRunner = () => ({
+			ok: true,
+			out: {
+				pr: {
+					state: "MERGED",
+					baseRefName: "other-branch",
+				},
+				requiredChecks: [{ name: "test", state: "SUCCESS", bucket: "pass" }],
+			},
+			err: "",
+		});
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", wrongBaseGh);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("expected main");
+	});
+
+	test("refuses completion when PR state is OPEN or not MERGED", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const openPrGh: GhPrRunner = () => ({
+			ok: true,
+			out: {
+				pr: {
+					state: "OPEN",
+					baseRefName: "main",
+				},
+				requiredChecks: [{ name: "test", state: "SUCCESS", bucket: "pass" }],
+			},
+			err: "",
+		});
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", openPrGh);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("expected MERGED");
+	});
+
+	test("refuses completion when PR has no required status checks recorded", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const noChecksGh: GhPrRunner = () => ({
+			ok: true,
+			out: {
+				pr: {
+					state: "MERGED",
+					baseRefName: "main",
+				},
+				requiredChecks: [],
+			},
+			err: "",
+		});
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", noChecksGh);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("no required status checks");
+	});
+
+	test("refuses completion when optional check passes but required check fails/pending/cancelled/timed_out/skipped/null", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const failedCheckGh: GhPrRunner = () => ({
+			ok: true,
+			out: {
+				pr: {
+					state: "MERGED",
+					baseRefName: "main",
+				},
+				requiredChecks: [
+					{ name: "lint-required", state: "FAILURE", bucket: "fail", conclusion: "FAILURE" },
+				],
+			},
+			err: "",
+		});
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", failedCheckGh);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain('required check "lint-required" is not passing');
+	});
+
+	test("refuses completion when candidate is pushed to execution branch but not merged into origin/main", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
+
+		// Create candidate on execution branch
+		fs.writeFileSync(path.join(repo, "feat.txt"), "feat\n");
+		git(repo, "add", "--", "feat.txt");
+		git(repo, "commit", "-q", "-m", "feat");
+		const candidateSha = git(repo, "rev-parse", "HEAD");
+		git(repo, "push", "-q", "origin", `HEAD:refs/heads/execution/omp-212`);
+
+		// PR check passes but origin/main has not merged the candidate commit
+		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain(`candidate commit ${candidateSha} is not contained in origin/main`);
+	});
+
+	test("confirms completion when PR is merged with required checks and origin/main contains candidate commit", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+
+		// Create candidate commit
+		fs.writeFileSync(path.join(repo, "feat.txt"), "feat\n");
+		git(repo, "add", "--", "feat.txt");
+		git(repo, "commit", "-q", "-m", "feat");
+		const candidateSha = git(repo, "rev-parse", "HEAD");
+
+		// Push candidate to execution branch AND merge to main on remote
+		git(repo, "push", "-q", "origin", `HEAD:refs/heads/execution/omp-212`);
+		git(repo, "push", "-q", "origin", `HEAD:refs/heads/main`);
+
+		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing);
+		expect(outcome.confirmed).toBe(true);
+		expect(outcome.detail).toContain(`PR merged with 1 required check(s) passing and origin/main contains candidate ${candidateSha}`);
+	});
+
+	test("refuses completion when origin fetch fails", () => {
+		const repo = makeRepo();
+		// No origin remote configured
+		const head = git(repo, "rev-parse", "HEAD");
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("fetch refs/heads/main failed");
 	});
 });

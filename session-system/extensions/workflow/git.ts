@@ -546,8 +546,13 @@ export interface PushOutcome {
  *  remote tip first: tip equals the frozen commit → "remote_commit" (no push);
  *  tip provably contains it on the same branch → "contained" (no push, the
  *  branch is never rewound); otherwise push the exact commit and verify the
- *  remote ref resolves to it. Divergence and unverifiable containment fail
- *  closed as "not_pushed" naming both commits. NEVER throws. */
+ *  remote ref resolves to it. When targetRemoteRef is provided (e.g. execution
+ *  branch refs/heads/execution/<key>), push to that ref rather than the worktree's
+ *  symbolic ref. Divergence and unverifiable containment fail closed as
+ *  "not_pushed" naming both commits. NEVER throws.
+ *
+ *  Bootstrap semantics (OMP-212): the updated execution-branch push path takes
+ *  effect in a fresh session after this change itself is merged. */
 export function currentSymbolicRef(root: string): string | undefined {
 	const branch = runGit(root, ["symbolic-ref", "--quiet", "HEAD"]);
 	if (!branch.ok || !branch.out) return undefined;
@@ -555,9 +560,9 @@ export function currentSymbolicRef(root: string): string | undefined {
 	return ref.startsWith("refs/heads/") ? ref : undefined;
 }
 
-export function pushCandidate(root: string, commitSha: string, expectedBaseline?: string): PushOutcome {
+export function pushCandidate(root: string, commitSha: string, expectedBaseline?: string, targetRemoteRef?: string): PushOutcome {
 	try {
-		const remoteRef = currentSymbolicRef(root);
+		const remoteRef = targetRemoteRef ?? currentSymbolicRef(root);
 		if (!remoteRef) {
 			return { status: "not_pushed", detail: "detached HEAD — no branch to push" };
 		}
@@ -605,12 +610,13 @@ export function pushCandidate(root: string, commitSha: string, expectedBaseline?
 		const push = runGit(root, ["push", "origin", `${commitSha}:${remoteRef}`], 30_000);
 		const remoteCommit = verify();
 		if (remoteCommit === commitSha) {
+			const resolvedPrior = preTip ?? expectedBaseline ?? parentCommit(root, commitSha) ?? null;
 			return {
 				status: push.ok ? "pushed" : "remote_commit",
 				remoteUrl: remote.out,
 				remoteRef,
 				remoteCommit,
-				priorTip: preTip ?? null,
+				priorTip: resolvedPrior,
 				detail: push.ok ? undefined : `push command failed but remote ref carries the commit: ${push.err.split("\n")[0]}`,
 			};
 		}
@@ -624,4 +630,152 @@ export function pushCandidate(root: string, commitSha: string, expectedBaseline?
 	} catch (e) {
 		return { status: "not_pushed", detail: String(e) };
 	}
+}
+
+export interface MergeConfirmationOutcome {
+	confirmed: boolean;
+	detail?: string;
+}
+
+export interface GhPrCheck {
+	name?: string;
+	state?: string;
+	bucket?: string;
+	conclusion?: string;
+	status?: string;
+}
+
+export interface GhPrView {
+	state?: string;
+	baseRefName?: string;
+	headRefName?: string;
+}
+
+export interface GhPrQueryResult {
+	pr: GhPrView;
+	requiredChecks: GhPrCheck[];
+}
+
+export type GhPrRunner = (root: string, queryRef: string) => { ok: boolean; out?: GhPrQueryResult; err: string };
+
+export const defaultGhPrRunner: GhPrRunner = (root: string, queryRef: string) => {
+	const prRes = spawnSync("gh", ["pr", "view", queryRef, "--json", "state,baseRefName,headRefName"], {
+		cwd: root,
+		encoding: "utf8",
+		timeout: 30_000,
+	});
+	if (prRes.status !== 0 || !prRes.stdout) {
+		return { ok: false, err: prRes.stderr || (prRes.error ? prRes.error.message : "gh pr view failed") };
+	}
+	let pr: GhPrView;
+	try {
+		pr = JSON.parse(prRes.stdout);
+	} catch (e) {
+		return { ok: false, err: `gh pr view JSON parse error: ${String(e)}` };
+	}
+
+	const checksRes = spawnSync("gh", ["pr", "checks", queryRef, "--required", "--json", "name,state,bucket"], {
+		cwd: root,
+		encoding: "utf8",
+		timeout: 30_000,
+	});
+	if (checksRes.status !== 0 || !checksRes.stdout) {
+		return { ok: false, err: checksRes.stderr || (checksRes.error ? checksRes.error.message : "gh pr checks failed") };
+	}
+	let requiredChecks: GhPrCheck[];
+	try {
+		requiredChecks = JSON.parse(checksRes.stdout);
+	} catch (e) {
+		return { ok: false, err: `gh pr checks JSON parse error: ${String(e)}` };
+	}
+
+	return { ok: true, out: { pr, requiredChecks }, err: "" };
+};
+
+/** Verify merge confirmation into default branch before completing work items (OMP-212).
+ *  Work item completion under branch protection rulesets requires FAIL-CLOSED verification of BOTH:
+ *  1. A PR against the protected default branch with required checks passing and merged state, AND
+ *  2. origin/main fetched and containing the candidate commit (ancestry verified). */
+export function verifyMergeConfirmation(
+	root: string,
+	commitSha: string,
+	remoteRef: string,
+	defaultBranch = "refs/heads/main",
+	ghRunner: GhPrRunner = defaultGhPrRunner,
+): MergeConfirmationOutcome {
+	const defaultBranchName = defaultBranch.startsWith("refs/heads/") ? defaultBranch.slice("refs/heads/".length) : defaultBranch;
+	const isDefaultBranch = remoteRef === defaultBranch || remoteRef === defaultBranchName;
+	if (isDefaultBranch) {
+		return { confirmed: false, detail: "direct push to protected default branch is disabled; execution candidate must target a dedicated execution branch with merge confirmation" };
+	}
+	const branchName = remoteRef.startsWith("refs/heads/") ? remoteRef.slice("refs/heads/".length) : remoteRef;
+	const queryRef = branchName;
+	// 1. Query PR status and required checks via gh runner (fails closed)
+	const ghResult = ghRunner(root, queryRef);
+	if (!ghResult.ok || !ghResult.out || !ghResult.out.pr) {
+		return {
+			confirmed: false,
+			detail: `PR query failed for ${queryRef}: ${ghResult.err || "unable to query PR state or required checks"}`,
+		};
+	}
+
+	const { pr, requiredChecks } = ghResult.out;
+
+	if (pr.baseRefName && pr.baseRefName !== defaultBranchName) {
+		return {
+			confirmed: false,
+			detail: `PR base branch is ${pr.baseRefName}, expected ${defaultBranchName}`,
+		};
+	}
+
+	if (pr.state !== "MERGED") {
+		return {
+			confirmed: false,
+			detail: `PR for ${queryRef} is ${pr.state ?? "unknown"}, expected MERGED`,
+		};
+	}
+
+	if (!Array.isArray(requiredChecks) || requiredChecks.length === 0) {
+		return {
+			confirmed: false,
+			detail: `PR for ${queryRef} has no required status checks verified under ruleset`,
+		};
+	}
+
+	for (const check of requiredChecks) {
+		const isPass =
+			check.state === "SUCCESS" ||
+			check.bucket === "pass" ||
+			(check.status === "COMPLETED" && check.conclusion === "SUCCESS");
+		if (!isPass) {
+			return {
+				confirmed: false,
+				detail: `required check "${check.name ?? "unnamed"}" is not passing (state: ${check.state ?? "unknown"}, bucket: ${check.bucket ?? "unknown"}, conclusion: ${check.conclusion ?? "none"})`,
+			};
+		}
+	}
+
+	// 2. Fetch origin/main to verify ancestry against current remote tip
+	const fetch = runGit(root, ["fetch", "origin", defaultBranch], 30_000);
+	if (!fetch.ok) {
+		return {
+			confirmed: false,
+			detail: `fetch ${defaultBranch} failed: ${fetch.err || "unable to fetch origin"}`,
+		};
+	}
+
+	// 3. Ancestry verification: origin/main must contain the candidate commit
+	const ancestor = runGit(root, ["merge-base", "--is-ancestor", commitSha, `origin/${defaultBranchName}`]);
+	if (!ancestor.ok) {
+		const tip = runGit(root, ["rev-parse", `origin/${defaultBranchName}`]);
+		return {
+			confirmed: false,
+			detail: `candidate commit ${commitSha} is not contained in origin/${defaultBranchName} (tip: ${tip.out || "unknown"})`,
+		};
+	}
+
+	return {
+		confirmed: true,
+		detail: `PR merged with ${requiredChecks.length} required check(s) passing and origin/${defaultBranchName} contains candidate ${commitSha} (merge-base --is-ancestor verified)`,
+	};
 }

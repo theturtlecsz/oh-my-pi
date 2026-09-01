@@ -99,6 +99,12 @@ SCOPE line both say so. Non-git scratch dirs keep the old behavior (filing
 lands on team HOME, or NOW's project). Enforcement is native to the
 extension, never an LLM rule.
 
+## Execution lane & branch protection (OMP-212)
+
+When default branches enforce pull request rulesets (GH006 protection), execution grants push candidate commits to dedicated execution branches (e.g. `refs/heads/execution/<key>`) bound at grant admission. `pushCandidate` supports non-direct candidate push refs via `targetRemoteRef`, allowing `begin_execution_review` to complete candidate verification without requiring direct unapproved push to `main`. Work item completion remains gated on merge confirmation: a PR against the protected default branch with required checks passing and ancestry verification before ledger completion. Pushing an execution branch alone never marks the item delivered.
+
+**Bootstrap semantics:** the updated execution branch push path takes effect in a fresh session after this change itself is merged.
+
 ## History
 
 Built 2026-08-10 (HOME-27) after the end-to-end review: system previously

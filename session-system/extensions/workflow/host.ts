@@ -67,7 +67,7 @@ import {
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
-import { currentSymbolicRef, dirtyPaths, freezeCandidateCommit, headCommit, inProgressGitOp, parentCommit, pushCandidate, rangeDiffSha256, runGit, validateExecutionPaths } from "./git";
+import { currentSymbolicRef, dirtyPaths, freezeCandidateCommit, headCommit, inProgressGitOp, parentCommit, pushCandidate, rangeDiffSha256, runGit, validateExecutionPaths, verifyMergeConfirmation } from "./git";
 import {
 	cancelBatchPath,
 	consumeStagedCancelBatch,
@@ -3538,7 +3538,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								&& staleCheckAttempt.candidate_sha256 === staleCheckCandidate.candidate_sha256
 								&& staleCheckAttempt.candidate_commit === staleCheckCandidate.commit_sha);
 
-							const runAuditAndSettle = async (attemptId: string, pushReceiptId: string, hasManifest: boolean) => {
+							const runAuditAndSettle = async (attemptId: string, pushReceiptId: string, hasManifest: boolean, candidateCommit?: string) => {
 								if (!hasManifest) {
 									const sealOutcome = await backend.sealAuditManifest(targetIssue);
 									if (sealOutcome.status === "refused") {
@@ -3596,13 +3596,19 @@ export function createWorkflowHost(cfg: HostConfig) {
 									// PASS: completion is gated on this attested delivery.
 									return yieldForDeliveries([settle.event], "Audit PASS recorded");
 								}
-								return completeItem(attemptId, pushReceiptId);
+								return completeItem(attemptId, pushReceiptId, candidateCommit);
 							};
 
-							const completeItem = async (attemptId: string, pushReceiptId: string) => {
+							const completeItem = async (attemptId: string, pushReceiptId: string, candidateCommit?: string) => {
 								if (!pushReceiptId) return deny("push receipt missing for the frozen candidate — cannot complete");
+								if (!candidateCommit) return deny("candidate commit missing for merge confirmation verification");
 								const currentExec = await backend.getExecution(params.work);
 								if (!currentExec || !currentExec.activeItem) return deny("execution grant missing after settlement");
+								const remoteRef = currentExec.grant.remote_ref;
+								const mergeCheck = verifyMergeConfirmation(ctx.cwd, candidateCommit, remoteRef);
+								if (!mergeCheck.confirmed) {
+									return deny(`Work item completion pending merge confirmation: ${mergeCheck.detail}. Pushing to ${remoteRef} alone does not mark the item delivered.`);
+								}
 								const completed = await backend.completeExecutionItem({
 									grantId: currentExec.grant.grant_id,
 									expectedGrantVersion: currentExec.grant.grant_version,
@@ -3711,7 +3717,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								const pushReceipt = recoverReceipt("push", liveAttempt.candidateCommit);
 								const passReceipt = recoverReceipt("audit", liveAttempt.candidateCommit);
 								if (passReceipt?.verdict === "PASS") {
-									return completeItem(liveAttempt.attemptId, pushReceipt ? String(pushReceipt.receipt_id) : "");
+									return completeItem(liveAttempt.attemptId, pushReceipt ? String(pushReceipt.receipt_id) : "", liveAttempt.candidateCommit);
 								}
 								if (liveAttempt.state === "auditor_in_flight") {
 									// A prior turn crashed between reserve and settle: the service
@@ -3732,7 +3738,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										});
 									}
 								}
-								return runAuditAndSettle(liveAttempt.attemptId, pushReceipt ? String(pushReceipt.receipt_id) : "", liveAttempt.hasManifest);
+								return runAuditAndSettle(liveAttempt.attemptId, pushReceipt ? String(pushReceipt.receipt_id) : "", liveAttempt.hasManifest, liveAttempt.candidateCommit);
 							}
 
 							// First turn: freeze, finalize, record evidence, push, begin attempt.
@@ -3782,7 +3788,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
 							});
 
-							const push = await pushCandidate(ctx.cwd, freeze.commitSha, exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline);
+							const push = await pushCandidate(ctx.cwd, freeze.commitSha, exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline, exec.grant.remote_ref);
 							if (push.status !== "pushed" && push.status !== "remote_commit" && push.status !== "contained") {
 								return deny(`Remote push failed: ${push.detail ?? "push refused"}`);
 							}
@@ -3819,7 +3825,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (attemptOutcome.event?.requiresDelivery) {
 								return yieldForDeliveries([attemptOutcome.event], "Close attempt begun (candidate frozen and pushed)");
 							}
-							return runAuditAndSettle(attemptOutcome.attemptId!, pushReceiptId, false);
+							return runAuditAndSettle(attemptOutcome.attemptId!, pushReceiptId, false, freeze.commitSha);
 						}
 						case "stop_execution": {
 							const exec = await backend.getExecution(params.work);
