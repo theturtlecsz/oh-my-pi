@@ -160,7 +160,12 @@ jobs:
                   refs/tags/*)
                     candidate_tag="$REF_NAME"
                     if [[ ! "$candidate_tag" =~ [$'\r\n'] ]] && [[ "$candidate_tag" =~ $tag_pattern ]]; then
-                      release_tag="$candidate_tag"
+                      git fetch origin main --depth=100 2>/dev/null || true
+                      if git merge-base --is-ancestor HEAD origin/main 2>/dev/null || [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main 2>/dev/null)" ]; then
+                        release_tag="$candidate_tag"
+                      else
+                        echo "::error title=Release Refused::Pushed tag $candidate_tag is not reachable from origin/main."
+                      fi
                     else
                       echo "::warning title=Tag Ignored::Pushed tag $candidate_tag is not a valid release tag format."
                     fi

@@ -345,8 +345,10 @@ describe("CI release_metadata workflow detection", () => {
 		expect(result.stdout).toContain("is not reachable from origin/main");
 	});
 
-	test("push event to refs/tags/v* triggers release directly when tag is valid semver", async () => {
+	test("push event to refs/tags/v* triggers release when tag is on origin/main", async () => {
 		const { local } = await setupGitRepos();
+		await $`git -C ${local} tag v18.0.7`.quiet();
+		await $`git -C ${local} push origin v18.0.7`.quiet();
 
 		const result = await runDetectScript(local, {
 			EVENT_NAME: "push",
@@ -358,6 +360,23 @@ describe("CI release_metadata workflow detection", () => {
 		expect(result.releaseTag).toBe("v18.0.7");
 	});
 
+	test("push event to refs/tags/* refuses tag not reachable from origin/main", async () => {
+		const { local } = await setupGitRepos();
+		await $`git -C ${local} checkout -b unmerged-branch`.quiet();
+		await $`git -C ${local} commit --allow-empty -m "unmerged commit"`.quiet();
+		await $`git -C ${local} tag v18.0.7`.quiet();
+		await $`git -C ${local} push origin v18.0.7`.quiet();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "push",
+			REF: "refs/tags/v18.0.7",
+			REF_NAME: "v18.0.7",
+		});
+
+		expect(result.isRelease).toBe(false);
+		expect(result.releaseTag).toBe("");
+		expect(result.stdout).toContain("is not reachable from origin/main");
+	});
 	test("push event to refs/tags/* ignores tags with invalid format or shell metacharacters", async () => {
 		const { local } = await setupGitRepos();
 
@@ -419,5 +438,81 @@ describe("CI release_metadata workflow detection", () => {
 
 		expect(result.isRelease).toBe(false);
 		expect(result.releaseTag).toBe("");
+	});
+});
+
+describe("release publishing journey under branch protection", () => {
+	async function setupProtectedGitRepos(): Promise<{ origin: string; local: string }> {
+		const baseTemp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ci-branch-protect-test-"));
+		const origin = path.join(baseTemp, "origin.git");
+		const local = path.join(baseTemp, "local");
+
+		await $`git init --bare ${origin}`.quiet();
+		await $`git clone ${origin} ${local}`.quiet();
+		await $`git -C ${local} config user.name "Release Test"`.quiet();
+		await $`git -C ${local} config user.email "release@example.com"`.quiet();
+		await $`git -C ${local} commit --allow-empty -m "initial main commit"`.quiet();
+		await $`git -C ${local} branch -M main`.quiet();
+		await $`git -C ${local} push origin main`.quiet();
+
+		// Install update hook on origin to simulate branch protection on refs/heads/main
+		const updateHook = path.join(origin, "hooks", "update");
+		const hookContent = `#!/bin/bash
+refname="$1"
+if [ "$refname" = "refs/heads/main" ]; then
+  echo "GL-HOOK-ERR: Direct push to protected branch main is prohibited. Use a pull request." >&2
+  exit 1
+fi
+exit 0
+`;
+		await Bun.write(updateHook, hookContent);
+		await fs.promises.chmod(updateHook, 0o755);
+
+		return { origin, local };
+	}
+
+	test("proves direct push to main fails while release branch, PR merge, and tag publish succeed", async () => {
+		const { origin, local } = await setupProtectedGitRepos();
+
+		// 1. Create a version bump commit locally
+		await $`git -C ${local} commit --allow-empty -m "chore: bump version to 18.0.7"`.quiet();
+		const bumpSha = (await $`git -C ${local} rev-parse HEAD`.text()).trim();
+
+		// 2. Direct push to main MUST be rejected by branch protection hook
+		const directPushProc = Bun.spawn(["git", "-C", local, "push", "origin", "main"], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const directPushExit = await directPushProc.exited;
+		const directPushStderr = await new Response(directPushProc.stderr).text();
+		expect(directPushExit).not.toBe(0);
+		expect(directPushStderr).toContain("Direct push to protected branch main is prohibited");
+
+		// 3. Pushing release branch formatReleaseBranchPushArgs succeeds
+		const releaseBranchArgs = formatReleaseBranchPushArgs("18.0.7");
+		const branchPushProc = Bun.spawn(["git", "-C", local, ...releaseBranchArgs], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const branchPushExit = await branchPushProc.exited;
+		expect(branchPushExit).toBe(0);
+
+		// 4. Simulate PR approval and merge on origin
+		await $`git -C ${origin} update-ref refs/heads/main ${bumpSha}`.quiet();
+
+		// 5. Local checkouts/pulls main
+		await $`git -C ${local} checkout main`.quiet();
+		await $`git -C ${local} pull origin main`.quiet();
+		const localHead = (await $`git -C ${local} rev-parse HEAD`.text()).trim();
+		expect(localHead).toBe(bumpSha);
+
+		// 6. Post-merge tag publishing formatReleaseTagPushArgs succeeds
+		const tagPushArgs = formatReleaseTagPushArgs("18.0.7", localHead);
+		const tagPushProc = Bun.spawn(["git", "-C", local, ...tagPushArgs], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const tagPushExit = await tagPushProc.exited;
+		expect(tagPushExit).toBe(0);
 	});
 });
