@@ -1843,7 +1843,12 @@ describe("runGcCommand missing cwd and empty root pruning", () => {
 		expect(result.archive?.archived).toBe(0);
 		expect(result.archive?.prunedProjectRoots).toBe(0);
 		expect(await Bun.file(session).exists()).toBe(true);
-		expect(await fs.stat(projectDir).then(() => true, () => false)).toBe(true);
+		expect(
+			await fs.stat(projectDir).then(
+				() => true,
+				() => false,
+			),
+		).toBe(true);
 	});
 
 	test("prunes empty immediate project root directories after applied archive", async () => {
@@ -1853,7 +1858,12 @@ describe("runGcCommand missing cwd and empty root pruning", () => {
 			cwd: missingCwd,
 		});
 		const projectDir = path.dirname(session);
-		expect(await fs.stat(projectDir).then(() => true, () => false)).toBe(true);
+		expect(
+			await fs.stat(projectDir).then(
+				() => true,
+				() => false,
+			),
+		).toBe(true);
 
 		const result = await runGcCommand({
 			flags: {
@@ -1869,6 +1879,11 @@ describe("runGcCommand missing cwd and empty root pruning", () => {
 		expect(result.archive?.archived).toBe(1);
 		expect(result.archive?.prunedProjectRoots).toBe(1);
 		// Empty project directory was pruned
-		expect(await fs.stat(projectDir).then(() => true, () => false)).toBe(false);
+		expect(
+			await fs.stat(projectDir).then(
+				() => true,
+				() => false,
+			),
+		).toBe(false);
 	});
 });

@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { buildChildEnv, describeChunkFailure, withTempAgentDir } from "./ci-test-ts.ts";
 
 // The two ways a chunk reaches SIGKILL are indistinguishable by exit code, so

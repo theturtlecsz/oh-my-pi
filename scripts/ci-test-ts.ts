@@ -437,7 +437,9 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			);
 			continue;
 		}
-		throw new Error(`${testCommand.label} ${describeChunkFailure(outcome.exitCode, outcome.timedOut)}: ${renderedCommand}`);
+		throw new Error(
+			`${testCommand.label} ${describeChunkFailure(outcome.exitCode, outcome.timedOut)}: ${renderedCommand}`,
+		);
 	}
 }
 
@@ -463,10 +465,9 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 // `JSAbortSignal::visitAdditionalChildrenInGCThread` reading a dead `reason`
 // cell), where no marker/concurrency knob applies. That residual crash is
 // handled by retrying crashed chunks in a fresh process (MAX_CHUNK_ATTEMPTS).
-export function buildChildEnv(options: {
-	agentDir?: string;
-	baseEnv?: Record<string, string | undefined>;
-} = {}): Record<string, string | undefined> {
+export function buildChildEnv(
+	options: { agentDir?: string; baseEnv?: Record<string, string | undefined> } = {},
+): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...(options.baseEnv ?? Bun.env),
 		GITHUB_ACTIONS: "",
