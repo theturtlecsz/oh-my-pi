@@ -12,6 +12,8 @@ import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-regis
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
+import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { applyExtensionNewSessionSetup } from "../../packages/coding-agent/src/modes/controllers/extension-ui-controller";
 import { prepareNativeAuditRunner } from "../extensions/workflow/auditor-runner";
 import type { WorkflowBackend } from "../extensions/workflow/backend";
 import { createWorkflowHost } from "../extensions/workflow/host";
@@ -31,6 +33,45 @@ import {
 	renderSummaryResumeDigest,
 	resolveAnchorKey,
 } from "../extensions/workflow/host";
+
+const identityExecutionWorkspaceManager = {
+	primaryRoot: async (cwd: string) => cwd,
+	ensure: async (cwd: string, key: string, grantId: string, baseline: string) => ({
+		primaryRoot: cwd,
+		path: cwd,
+		branch: `execution/${key.toLowerCase()}`,
+		grantId,
+		baseline,
+		reused: false,
+	}),
+	cleanup: async () => ({ cleaned: true, detail: "identity cleanup" }),
+};
+
+describe("extension session relocation (OMP-213)", () => {
+	test("setup moves SessionManager before refreshing cwd-derived TUI state", async () => {
+		const source = fs.mkdtempSync(path.join(os.tmpdir(), "omp-213-source-"));
+		const target = fs.mkdtempSync(path.join(os.tmpdir(), "omp-213-target-"));
+		try {
+			const sessionManager = SessionManager.inMemory(source);
+			const applied: string[] = [];
+			await applyExtensionNewSessionSetup(
+				{
+					sessionManager,
+					applyCwdChange: async cwd => {
+						expect(sessionManager.getCwd()).toBe(cwd);
+						applied.push(cwd);
+					},
+				} as never,
+				{ setup: manager => manager.moveTo(target) },
+			);
+			expect(sessionManager.getCwd()).toBe(path.resolve(target));
+			expect(applied).toEqual([path.resolve(target)]);
+		} finally {
+			fs.rmSync(source, { recursive: true, force: true });
+			fs.rmSync(target, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("native auditor runner (OMP-168)", () => {
 	const defaultAuditor: AgentDefinition = {
@@ -555,6 +596,7 @@ describe("native auditor runner (OMP-168)", () => {
 			teamNoun: "the ledger",
 			entryType: "work-now",
 			acceptEntry: () => true,
+			executionWorkspaceManager: identityExecutionWorkspaceManager,
 		})(fakePi);
 		mockDiscovery();
 
@@ -1373,6 +1415,169 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		expect(statuses["work-now"]).toContain("NOW · Bookends");
 	});
 
+	test("session_start relocates an active grant before recovery delivery (OMP-213)", async () => {
+		const originalProjectDir = getProjectDir();
+		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<void>>>();
+		const messages: Array<{ customType?: string; content?: string }> = [];
+		const notifications: string[] = [];
+		const appended: string[] = [];
+		const fakePi = {
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<void>) => {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			sendMessage: (message: { customType?: string; content?: string }) => {
+				messages.push(message);
+			},
+			appendEntry: (customType: string) => {
+				appended.push(customType);
+			},
+			getSessionId: () => "recovery-relocation-session",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "recovery-owner-"));
+		const recoveredCwd = fs.mkdtempSync(path.join(os.tmpdir(), "recovery-worktree-"));
+		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "recovery-cache-"));
+		spawnSync("git", ["init", "-b", "main"], { cwd });
+		spawnSync("git", ["config", "user.name", "Test"], { cwd });
+		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd });
+		fs.writeFileSync(path.join(cwd, "seed.txt"), "seed\n");
+		spawnSync("git", ["add", "."], { cwd });
+		spawnSync("git", ["commit", "-m", "seed"], { cwd });
+		const head = headCommit(cwd) ?? "0".repeat(40);
+		const exec = makeSnapshot("active", "single", [{ position: 0, work_id: "OMP-213", phase: "executing" }]);
+		exec.activeItem!.initial_git_baseline = head;
+		exec.activeItem!.current_git_baseline = head;
+		exec.items[0]!.initial_git_baseline = head;
+		exec.items[0]!.current_git_baseline = head;
+		const ensureCalls: Array<{ grantId: string; create: boolean | undefined }> = [];
+		const workspaceManager = {
+			primaryRoot: async () => cwd,
+			ensure: async (_source: string, _key: string, grantId: string, baseline: string, options?: { create?: boolean }) => {
+				ensureCalls.push({ grantId, create: options?.create });
+				return {
+					primaryRoot: cwd,
+					path: recoveredCwd,
+					branch: "execution/omp-213-recovery",
+					grantId,
+					baseline,
+					reused: true,
+				};
+			},
+			cleanup: async () => ({ cleaned: true, detail: "test cleanup" }),
+		};
+		const issue = { id: "OMP-213", key: "OMP-213", title: "Recovery relocation", project: "Bookends" };
+		const mockBackend = {
+			cacheFile: path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(cacheDir, "work-cache.json")),
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			getExecution: async () => exec,
+			findIssue: async () => issue,
+			currentNow: async () => issue,
+			getPendingExecutionClaims: async () => [],
+			setExecutionState: async () => {
+				exec.grant.grant_version++;
+				return exec;
+			},
+			workClient: {
+				healthReady: async () => ({
+					ready: true,
+					contract_sha256: WORK_CONTRACT_SHA256,
+					service_fingerprint: "service-fp",
+					judge_manifest: { judge_sha256: "judge-sha" },
+				}),
+				workItem: async () => ({
+					work_id: "OMP-213",
+					state: "IN_PROGRESS",
+					project_id: null,
+					revision: { revision_id: "rev-1" },
+				}),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+			executionWorkspaceManager: workspaceManager,
+		})(fakePi);
+		const discoverSpy = vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
+			agents: [{
+				name: "auditor",
+				description: "Recovery test auditor",
+				systemPrompt: "Audit",
+				model: ["@audit"],
+				output: { properties: { report: { type: "string" } } },
+				source: "test",
+			}],
+			projectAgentsDir: null,
+		});
+
+		let activeCwd = cwd;
+		const branchEntries = [{
+			type: "custom",
+			customType: "work-now-execute-outbox",
+			data: {
+				grantId: exec.grant.grant_id,
+				preReservationVersion: 0,
+				postVersion: exec.grant.grant_version,
+				messageId: "recovery-relocation",
+				status: "pending",
+				at: new Date().toISOString(),
+			},
+		}];
+		const fakeCtx = {
+			cwd,
+			taskDepth: 0,
+			models: {},
+			sessionManager: {
+				getBranch: () => branchEntries,
+				getCwd: () => activeCwd,
+				moveTo: async (nextCwd: string) => {
+					activeCwd = nextCwd;
+				},
+			},
+			ui: {
+				notify: (text: string) => notifications.push(text),
+				theme: { fg: (_color: string, text: string) => text },
+				setStatus: () => {},
+			},
+		} as unknown as ExtensionContext;
+		const tcb = await computeAuditTcb(fakeCtx, mockBackend.workClient!);
+		exec.grant.judge_sha256 = tcb.judgeSha256;
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		const headSpy = vi.spyOn(gitModule, "headCommit").mockReturnValue(head);
+		try {
+			const starts = handlers.get("session_start") ?? [];
+			expect(starts.length).toBeGreaterThan(0);
+			for (const start of starts) await start({}, fakeCtx);
+			expect(activeCwd).toBe(recoveredCwd);
+			expect(ensureCalls).toEqual([{ grantId: exec.grant.grant_id, create: false }]);
+			expect(messages.some(message => message.customType === "work-execute")).toBe(true);
+			expect(appended).toContain("work-now-execute-outbox");
+			expect(notifications.some(message => message.includes("recovery skipped"))).toBe(false);
+		} finally {
+			dirtySpy.mockRestore();
+			headSpy.mockRestore();
+			discoverSpy.mockRestore();
+			setProjectDir(originalProjectDir);
+			expect(getProjectDir()).toBe(originalProjectDir);
+			fs.rmSync(cacheDir, { recursive: true, force: true });
+			fs.rmSync(recoveredCwd, { recursive: true, force: true });
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
 	test("/execute resume transitioning to stopped emits full notice and status message", async () => {
 		const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
 		const messages: Array<{ customType?: string; content?: string }> = [];
@@ -1433,6 +1638,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			teamNoun: "the ledger",
 			entryType: "work-now",
 			acceptEntry: () => true,
+			executionWorkspaceManager: identityExecutionWorkspaceManager,
 		})(fakePi);
 
 		const fakeCtx = {
@@ -1527,6 +1733,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			teamNoun: "the ledger",
 			entryType: "work-now",
 			acceptEntry: () => true,
+			executionWorkspaceManager: identityExecutionWorkspaceManager,
 		})(fakePi);
 
 		const fakeCtx = {
@@ -2397,6 +2604,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			teamNoun: "the ledger",
 			entryType: "work-now",
 			acceptEntry: () => true,
+			executionWorkspaceManager: identityExecutionWorkspaceManager,
 		})(fakePi);
 
 		const handler = registeredCommands.get("execute");
@@ -2561,6 +2769,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			teamNoun: "the ledger",
 			entryType: "work-now",
 			acceptEntry: () => true,
+			executionWorkspaceManager: identityExecutionWorkspaceManager,
 		})(fakePi);
 
 		const handler = registeredCommands.get("execute");

@@ -212,6 +212,15 @@ try {
 							state: "BACKLOG",
 							project_id: PROJECT,
 						},
+						{
+							client_ref: "smoke-item-isolation",
+							title: "Smoke Delivery Worktree Isolation",
+							description: "Prove managed execution worktree isolation\n\n## Owner question\nRun isolation smoke?",
+							scope: "smoke",
+							acceptance_criteria: ["AC-1 isolate owner checkout"],
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
 					],
 				},
 			},
@@ -222,12 +231,52 @@ try {
 	const item2 = createRes.result.items[1];
 	const queueItem2 = createRes.result.items[2];
 	const questionItem = createRes.result.items[3];
+	const isolationItem = createRes.result.items[4];
+	const smokeBin = path.join(home, "bin");
+	fs.mkdirSync(smokeBin, { recursive: true });
+	const ghShim = path.join(smokeBin, "gh");
+	fs.writeFileSync(
+		ghShim,
+		`#!/usr/bin/env bun
+const args = process.argv.slice(2);
+const run = (gitArgs, options = {}) => Bun.spawnSync(["git", ...gitArgs], { cwd: process.cwd(), ...options });
+const text = result => result.stdout.toString().trim();
+const remoteSha = ref => text(run(["ls-remote", "origin", ref])).split(/\\s+/)[0] || "";
+if (args[0] === "api") {
+  console.log("12");
+} else if (args[0] === "pr" && args[1] === "checks") {
+  console.log(JSON.stringify([{ name: "required-smoke", state: "SUCCESS", bucket: "pass" }]));
+} else if (args[0] === "pr" && args[1] === "view") {
+  const branch = args[2];
+  const candidate = remoteSha("refs/heads/" + branch);
+  const main = remoteSha("refs/heads/main");
+  run(["fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main", "+refs/heads/" + branch + ":refs/remotes/origin/" + branch]);
+  const merged = candidate && main && run(["merge-base", "--is-ancestor", candidate, main]).exitCode === 0;
+  console.log(JSON.stringify({ state: merged ? "MERGED" : "OPEN", baseRefName: "main", headRefName: branch, headRefOid: candidate, mergeStateStatus: "CLEAN" }));
+} else if (args[0] === "pr" && args[1] === "merge") {
+  const branch = args[2];
+  run(["fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main", "+refs/heads/" + branch + ":refs/remotes/origin/" + branch]);
+  const main = text(run(["rev-parse", "refs/remotes/origin/main"]));
+  const candidate = text(run(["rev-parse", "refs/remotes/origin/" + branch]));
+  const tree = text(run(["rev-parse", candidate + "^{tree}"]));
+  const env = { ...process.env, GIT_AUTHOR_NAME: "Smoke", GIT_AUTHOR_EMAIL: "smoke@example.invalid", GIT_COMMITTER_NAME: "Smoke", GIT_COMMITTER_EMAIL: "smoke@example.invalid" };
+  const merge = text(run(["commit-tree", tree, "-p", main, "-p", candidate, "-m", "smoke merge"], { env }));
+  const pushed = run(["push", "-q", "origin", merge + ":refs/heads/main"]);
+  if (pushed.exitCode !== 0) process.exit(pushed.exitCode);
+  console.log("merged");
+} else {
+  console.error("unsupported gh smoke invocation: " + args.join(" "));
+  process.exit(2);
+}
+`,
+	);
+	fs.chmodSync(ghShim, 0o755);
 	const runHarness = (scenario: string, phaseKey?: string, extraEnv?: Record<string, string>) => {
 		const args = [path.join(import.meta.dir, "fixtures/execute-cycle-smoke-harness.ts"), probe, scenario];
 		if (phaseKey) args.push(phaseKey);
 		const child = Bun.spawnSync([process.execPath, ...args], {
 			cwd: probe,
-			env: { ...process.env, HOME: home, XDG_CONFIG_HOME: xdg, PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent"), ...extraEnv },
+			env: { ...process.env, HOME: home, XDG_CONFIG_HOME: xdg, PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent"), PATH: `${smokeBin}:${process.env.PATH ?? ""}`, ...extraEnv },
 		});
 		if (child.exitCode !== 0) throw new Error(`harness scenario "${scenario}" failed:\n${child.stderr.toString()}`);
 		if (child.stderr.length > 0) console.error("HARNESS STDERR:", child.stderr.toString());
@@ -252,16 +301,27 @@ try {
 	assert.ok(embeddedNewFile.error?.includes("submodule"), "refusal names submodule");
 	fs.rmSync(path.join(probe, "embedded"), { recursive: true, force: true });
 
-	// Test Scenario 1: Preflight Dirty Worktree Refusal
-	const dirtyOut = runHarness("dirty", item1.key);
-	assert.ok((dirtyOut.notices as string[])?.length > 0, "dirty preflight refused");
-	assert.equal(dirtyOut.modelTurnCount, 0, "zero model turns executed when dirty at start");
+	// Test Scenario 1: Dirty owner checkout is isolated without a model turn.
+	const dirtyOut = runHarness("dirty", isolationItem.key);
+	assert.equal(dirtyOut.ownerDirtPreserved, true, `owner dirt remains only in owner checkout: ${JSON.stringify(dirtyOut)}`);
+	assert.equal(dirtyOut.normalWriteIsolated, true, "normal post-command write lands only in managed worktree");
+	assert.notEqual(dirtyOut.executionCwd, dirtyOut.ownerCwd, "execution session moved to managed worktree");
+	assert.ok(String(dirtyOut.executionBranch).includes("execution/"), "managed worktree uses execution branch");
+	assert.equal(dirtyOut.modelTurnCount, 0, "zero model turns executed before autonomous prompt");
+	assert.equal(dirtyOut.workspaceExistsAfterShutdown, true, "stopped grant preserves recoverable workspace");
+	const dirtyWorktreeCleanup = Bun.spawnSync(
+		["git", "worktree", "remove", "--force", String(dirtyOut.workspacePath)],
+		{ cwd: probe },
+	);
+	assert.equal(dirtyWorktreeCleanup.exitCode, 0, `dirty smoke worktree cleanup failed: ${dirtyWorktreeCleanup.stderr.toString()}`);
+	Bun.spawnSync(["git", "branch", "-D", String(dirtyOut.executionBranch)], { cwd: probe });
 
 	// Test Scenario 2: Full Single-Item Autonomous Execution Cycle via Host /execute
 	const singleOut = runHarness("single", item1.key);
 	assert.equal(singleOut.noBodyRefused, true, "begin_execution_review without body is refused");
 	assert.ok(String(singleOut.review1).includes("NEEDS_FIX"), `first review yields NEEDS_FIX; got: ${singleOut.review1}`);
 	assert.ok(String(singleOut.review2).includes("Execution grant completed") || String(singleOut.review2).includes("delivered and closed"), `execution completed on second review; got: ${singleOut.review2}`);
+	assert.equal(singleOut.workspaceExistsAfterShutdown, false, "completed grant removes managed worktree on shutdown");
 	// OMP-185: the execution close attempt (the auditor manifest's repository
 	// input) must carry the absolute worktree, not the basename identity.
 	const execAttemptRepoRes = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "postgres", "-d", "omp_work", "-t", "-A", "-c", "SELECT repository FROM omp_work.close_attempts WHERE authorization_kind='execution'"], {
@@ -269,7 +329,7 @@ try {
 	});
 	const execAttemptRepos = execAttemptRepoRes.stdout.toString().trim().split("\n").filter(Boolean);
 	assert.ok(execAttemptRepos.length >= 1, "execution close attempts recorded");
-	for (const attemptRepo of execAttemptRepos) assert.equal(attemptRepo, probe, "execution close attempt repository is the absolute worktree");
+	for (const attemptRepo of execAttemptRepos) assert.equal(attemptRepo, singleOut.workspacePath, "execution close attempt repository is the managed worktree");
 	// Prompt-shaped seal (no work param, mismatched derived proposal) must seal
 	// the stored criteria verbatim and surface them to the session.
 	assert.ok(
@@ -308,15 +368,18 @@ try {
 	// Initial audit receipt count baseline
 	const initialAuditReceipts = item1View.receipts.filter(r => r.kind === "audit").length;
 
+	git(probe, ["fetch", "-q", "origin"]);
+	git(probe, ["merge", "--ff-only", "-q", "origin/main"]);
+
 	// Test Scenario 3: Queue Mode Execution & Snapshot Boundary Filtering (AC-11)
 	const queueOut = runHarness("queue", item2.key);
-	assert.ok(queueOut.queueLength >= 2, "queue mode snapshots queue items");
+	assert.ok(queueOut.queueLength >= 2, `queue mode snapshots queue items: ${JSON.stringify(queueOut)}`);
 	assert.equal(queueOut.item0WorkId, item2.work_id, "named queue item is claim position 0");
 	const queueItemIds = (queueOut.finalExecution as any)?.items?.map((i: any) => i.work_id) ?? [];
 	assert.ok(!queueItemIds.includes(questionItem.work_id), "owner question item excluded from queue snapshot");
 	assert.ok(queueOut.postSnapshotWorkId, "post-snapshot item was created");
 	assert.ok(!queueItemIds.includes(queueOut.postSnapshotWorkId), "post-snapshot item excluded from queue snapshot");
-	assert.equal((queueOut.finalExecution as any)?.grant?.state, "completed", "queue execution completes at snapshot boundary");
+	assert.equal((queueOut.finalExecution as any)?.grant?.state, "completed", `queue execution completes at snapshot boundary: ${JSON.stringify(queueOut)}`);
 	assert.ok(String(queueOut.reviewQ1).includes("Advanced to next queue item") || String(queueOut.reviewQ1).includes("completed"), "queue item 1 completed");
 
 	// Verify post-snapshot item was left in BACKLOG state
@@ -1069,8 +1132,11 @@ try {
 	})).json();
 	const item4 = item4Res.result.items[0];
 
+	git(probe, ["fetch", "-q", "origin"]);
+	git(probe, ["merge", "--ff-only", "-q", "origin/main"]);
+
 	const contractOut = runHarness("contract-pause", item4.key);
-	assert.ok(String(contractOut.reviewDenied).includes("Contract approval required"), "review denied before candidate freeze");
+	assert.ok(String(contractOut.reviewDenied).includes("Contract approval required"), `review denied before candidate freeze: ${JSON.stringify(contractOut)}`);
 	assert.equal(contractOut.pausedExecution?.grant?.state, "paused", "grant atomically paused on contract change");
 	assert.equal(contractOut.pausedExecution?.items?.[0]?.phase, "awaiting_contract_approval", "item phase is awaiting_contract_approval");
 	assert.ok((contractOut.resumeDeniedNotices as string[])?.length > 0, "resume without approval denied");
@@ -1113,11 +1179,11 @@ try {
 		fs.rmSync(path.join(probe, "python"), { recursive: true, force: true });
 		fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
 		Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
+		Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
+		Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
+		Bun.spawnSync(["git", "push", "--force", "origin", "HEAD:refs/heads/main"], { cwd: probe });
 		if (branchName) {
 			Bun.spawnSync(["git", "checkout", "-B", branchName], { cwd: probe });
-		} else {
-			Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
-			Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
 		}
 		const itemRes = await (await fetch(`${baseUrl}/v1/commands`, {
 			method: "POST",
@@ -1155,6 +1221,7 @@ try {
 	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
 	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
 	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
+	Bun.spawnSync(["git", "push", "--force", "origin", "HEAD:refs/heads/main"], { cwd: probe });
 	const queueDirtBatch = await (await fetch(`${baseUrl}/v1/commands`, {
 		method: "POST",
 		headers,
@@ -1186,9 +1253,12 @@ try {
 		}),
 	})).json();
 	const qDirt1 = queueDirtBatch.result.items[0];
+	git(probe, ["fetch", "-q", "origin"]);
+	git(probe, ["merge", "-q", "--no-edit", "origin/main"]);
+
 	const queueDirtOut = runHarness("queue-dirt", qDirt1.key);
-	assert.ok(fs.existsSync(path.join(probe, "residual-dirt.txt")), "residual file still exists on disk");
-	assert.ok(String(queueDirtOut.reviewQ1).includes("execution_worktree_not_clean"), "queue advance with dirt refused");
+	assert.ok(fs.existsSync(path.join(String(queueDirtOut.workspacePath), "residual-dirt.txt")), "residual file remains in stopped execution workspace");
+	assert.ok(String(queueDirtOut.reviewQ1).includes("execution_worktree_not_clean"), `queue advance with dirt refused: ${JSON.stringify(queueDirtOut.uiCalls)}`);
 	assert.equal(queueDirtOut.finalExecution?.grant?.state, "stopped", "grant stopped on queue dirt");
 	assert.equal(queueDirtOut.finalExecution?.grant?.terminal_reason, "execution_worktree_not_clean", "terminal reason recorded for queue dirt");
 	assert.ok(queueDirtOut.finalExecution?.grant?.stopped_at, "stopped_at is set");
@@ -1198,7 +1268,12 @@ try {
 	assert.equal(qDirtFocus.work_id, null, "focus slot is cleared on queue dirt terminalization");
 	assert.ok(!((queueDirtOut.sentMessages as Array<{ content?: string }>) || []).some(m => typeof m?.content === "string" && m.content.includes(queueDirtBatch.result.items[1].key)), "no next-item continuation emitted");
 	assert.equal(queueDirtOut.finalExecution?.items[1]?.activated_at, null, "next item never activated");
-	fs.rmSync(path.join(probe, "residual-dirt.txt"), { force: true });
+	const queueDirtCleanup = Bun.spawnSync(
+		["git", "worktree", "remove", "--force", String(queueDirtOut.workspacePath)],
+		{ cwd: probe },
+	);
+	assert.equal(queueDirtCleanup.exitCode, 0, `queue-dirt worktree cleanup failed: ${queueDirtCleanup.stderr.toString()}`);
+	Bun.spawnSync(["git", "branch", "-D", String(queueDirtOut.executionBranch)], { cwd: probe });
 	// 1. Happy Path Recovery
 	const happy = await createAndStartDisposableGrant("happy");
 	const happyOut1 = runHarness("recovery", happy.item.key);
@@ -1285,21 +1360,22 @@ try {
 	fs.rmSync(corruptClaimPath, { force: true });
 	await cancelGrant(corruptCase.startOut.exec?.grant?.grant_id, corruptCase.startOut.exec?.grant?.grant_version, corruptCase.startOut.exec?.grant?.judge_sha256);
 
-	// 2. Drift Probe: Dirty worktree sends zero turns
+	// 2. Isolation probe: owner-checkout dirt does not block managed-worktree recovery.
 	const dirtyCase = await createAndStartDisposableGrant("dirty");
 	fs.writeFileSync(path.join(probe, "drift-dirt.txt"), "dirt\n");
 	const recoveryDirt = runHarness("recovery", dirtyCase.item.key);
-	assert.equal((recoveryDirt.sentMessages as unknown[])?.length, 0, "dirty worktree sends zero turns");
+	assert.equal((recoveryDirt.sentMessages as unknown[])?.length, 1, "owner dirt stays outside execution recovery");
+	assert.equal(fs.readFileSync(path.join(probe, "drift-dirt.txt"), "utf8"), "dirt\n", "owner dirt remains untouched");
 	fs.rmSync(path.join(probe, "drift-dirt.txt"), { force: true });
-	await cancelGrant(dirtyCase.startOut.exec?.grant?.grant_id, dirtyCase.startOut.exec?.grant?.grant_version, dirtyCase.startOut.exec?.grant?.judge_sha256);
+	await cancelGrant(recoveryDirt.exec?.grant?.grant_id, recoveryDirt.exec?.grant?.grant_version, recoveryDirt.exec?.grant?.judge_sha256);
 	const headCase = await createAndStartDisposableGrant("head");
 	fs.writeFileSync(path.join(probe, "drift-head.txt"), "head drift\n");
 	Bun.spawnSync(["git", "add", "drift-head.txt"], { cwd: probe });
 	Bun.spawnSync(["git", "commit", "-m", "drift head"], { cwd: probe });
 	const recoveryHead = runHarness("recovery", headCase.item.key);
-	assert.equal((recoveryHead.sentMessages as unknown[])?.length, 0, "changed HEAD sends zero turns");
+	assert.equal((recoveryHead.sentMessages as unknown[])?.length, 1, "owner HEAD drift stays outside execution recovery");
 	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
-	await cancelGrant(headCase.startOut.exec?.grant?.grant_id, headCase.startOut.exec?.grant?.grant_version, headCase.startOut.exec?.grant?.judge_sha256);
+	await cancelGrant(recoveryHead.exec?.grant?.grant_id, recoveryHead.exec?.grant?.grant_version, recoveryHead.exec?.grant?.judge_sha256);
 
 	// 4. Drift Probe: Changed revision sends zero turns
 	const revCase = await createAndStartDisposableGrant("revision");
@@ -2247,13 +2323,17 @@ try {
 	const judgeRecovery = runHarness("recovery", judgeItem.key);
 	assert.equal((judgeRecovery.sentMessages as unknown[])?.length, 0, "recovery on completed judge-isolated grant sends zero turns");
 
-	// 4. Verify the candidate commit contains the tampered files in git history
-	const judgeCandidateTree = git(probe, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]);
+	// 4. Verify the candidate retained on the execution ref contains tampered
+	// files while the owner checkout never received them.
+	const judgeRemoteRef = String(resumeOut.finalExecution?.grant?.remote_ref ?? "");
+	git(probe, ["fetch", "-q", "origin", judgeRemoteRef]);
+	const judgeCandidate = git(probe, ["rev-parse", "FETCH_HEAD"]);
+	const judgeCandidateTree = git(probe, ["diff-tree", "--no-commit-id", "--name-only", "-r", judgeCandidate]);
 	assert.ok(judgeCandidateTree.includes("session-system/agents/auditor.md"), "candidate commit includes modified auditor.md");
 	assert.ok(judgeCandidateTree.includes("session-system/extensions/workflow/audit-tcb.ts"), "candidate commit includes modified audit-tcb.ts");
 	assert.ok(judgeCandidateTree.includes("packages/coding-agent/src/task/executor.ts"), "candidate commit includes modified executor.ts");
-	fs.rmSync(path.join(probe, "session-system"), { recursive: true, force: true });
-	fs.rmSync(path.join(probe, "packages"), { recursive: true, force: true });
+	assert.equal(fs.existsSync(path.join(probe, "session-system/agents/auditor.md")), false, "owner checkout excludes candidate auditor.md");
+	assert.equal(fs.existsSync(path.join(probe, "packages/coding-agent/src/task/executor.ts")), false, "owner checkout excludes candidate executor.ts");
 	fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
 	Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
 	Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
@@ -2716,7 +2796,7 @@ try {
 		"the audit_ready stale attempt (old candidate binding) is superseded, not resumed",
 	);
 
-	console.log("execute-cycle-smoke: PASS (clean preflight, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety, zero-path baseline completion & queue advance, stale pre-grant attempt supersede)");
+	console.log("execute-cycle-smoke: PASS (managed-worktree owner isolation & completion cleanup, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety, zero-path baseline completion & queue advance, stale pre-grant attempt supersede)");
 } finally {
 	cleanup();
 }

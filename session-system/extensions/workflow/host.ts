@@ -8,10 +8,10 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { type Dirent, existsSync, readFileSync, realpathSync } from "node:fs";
+import { type Dirent, existsSync, readFileSync } from "node:fs";
 import { lstat, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
 import {
 	Container,
@@ -22,13 +22,14 @@ import {
 	Spacer,
 	Text,
 	type ExtensionAPI,
+	type ExtensionCommandContext,
 	type ExtensionContext,
 	type ExtensionModelQuery,
 	type Theme,
 } from "@oh-my-pi/pi-coding-agent";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt, setProjectDir } from "@oh-my-pi/pi-utils";
 import digestPromptTemplate from "./digest-prompt.md" with { type: "text" };
 import executePromptTemplate from "./execute-prompt.md" with { type: "text" };
 import kindDescriptionText from "./kind-description.md" with { type: "text" };
@@ -67,7 +68,26 @@ import {
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
-import { currentSymbolicRef, dirtyPaths, ensureUpToDateWithDefault, freezeCandidateCommit, headCommit, inProgressGitOp, mergePullRequest, parentCommit, pushCandidate, rangeDiffSha256, requiredStatusCheckCount, resolveDefaultBranch, runGit, validateExecutionPaths, verifyMergeConfirmation } from "./git";
+import {
+	currentSymbolicRef,
+	defaultExecutionWorkspaceManager,
+	dirtyPaths,
+	ensureUpToDateWithDefault,
+	type ExecutionWorkspace,
+	type ExecutionWorkspaceManager,
+	freezeCandidateCommit,
+	headCommit,
+	inProgressGitOp,
+	mergePullRequest,
+	parentCommit,
+	pushCandidate,
+	rangeDiffSha256,
+	requiredStatusCheckCount,
+	resolveDefaultBranch,
+	runGit,
+	validateExecutionPaths,
+	verifyMergeConfirmation,
+} from "./git";
 import {
 	cancelBatchPath,
 	consumeStagedCancelBatch,
@@ -146,6 +166,8 @@ export interface HostConfig {
 	preflightWorkService?: () => Promise<void>;
 	/** Optional work service restart callback for test isolation. */
 	restartWorkService?: () => Promise<void>;
+	/** Optional managed-worktree override for deterministic test isolation. */
+	executionWorkspaceManager?: ExecutionWorkspaceManager;
 }
 interface HostNowState {
 	issueId?: string;
@@ -172,6 +194,8 @@ interface HostNowState {
 	terminalExecution?: { grantId: string; state: "stopped" | "canceled"; reason?: string; tally?: string; nextCommand?: string; at: number };
 	/** OMP-199: service-only judge refresh tracker. */
 	serviceRefresh?: { grantId: string; judgeSha256: string };
+	/** Managed execution workspace; cleanup is armed only after grant completion. */
+	executionWorkspace?: ExecutionWorkspace & { key: string; cleanupReady?: boolean };
 }
 
 const TREE_GLYPH: Record<TreeItem["bucket"], string> = { done: "✔", working: "▶", stuck: "✖", onyou: "✋", next: "○" };
@@ -501,6 +525,7 @@ async function defaultRestartWorkService(): Promise<void> {
 
 export function createWorkflowHost(cfg: HostConfig) {
 	const backend = cfg.backend;
+	const executionWorkspaceManager = cfg.executionWorkspaceManager ?? defaultExecutionWorkspaceManager;
 	const CACHE_FILE = join(homedir(), ".omp", "agent", backend.cacheFile);
 	const projectFilter = resolveProjectMarker(backend.markerFile);
 	const gitRooted = spawnSync("git", ["-C", process.cwd(), "rev-parse", "--show-toplevel"], { encoding: "utf8" }).status === 0;
@@ -525,6 +550,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 	let state: HostNowState = {};
 	const resumedExecutionVersions = new Set<string>();
 	let digestPending = false;
+	let executionRelocationInProgress = false;
 	let digestInjectedThisSession = false;
 	let intakeActive = false;
 	let intakeScanRequired = false;
@@ -546,6 +572,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 	// or /done. FAIL CLOSED on unknown depth: subagent sessions never unlock.
 	let closeoutAuthorized = false;
 	const ownerSession = (ctx: { taskDepth?: number } | undefined): boolean => ctx?.taskDepth === 0;
+
+	const contextCwd = (ctx: Pick<ExtensionContext, "cwd" | "sessionManager">): string => {
+		const manager = ctx.sessionManager as { getCwd?: () => string } | undefined;
+		return manager?.getCwd?.() ?? ctx.cwd;
+	};
 
 	function hasIntakeScanHeadings(text: string): boolean {
 		const headingRegex = (title: string) =>
@@ -651,7 +682,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				confirm: (title: string, body: string) => ctx.ui.confirm(title, body),
 				notify: (msg: string, level?: "info" | "warning" | "error") => ctx.ui.notify(msg, level ?? "info"),
 			},
-			cwd: process.cwd(),
+			cwd: ctx.cwd,
 			preExistingDirtyPaths,
 			notices: pendingNotices,
 		};
@@ -727,6 +758,72 @@ export function createWorkflowHost(cfg: HostConfig) {
 			piRef.logger.warn(`${TOOL_NAME}-now: cache write failed`, { error: String(e) });
 		}
 	}
+
+	async function relocateExecutionSession(
+		ctx: ExtensionCommandContext,
+		workspace: ExecutionWorkspace,
+	): Promise<ExtensionCommandContext> {
+		const currentCwd = contextCwd(ctx);
+		if (resolve(currentCwd) === resolve(workspace.path)) {
+			return { ...ctx, cwd: currentCwd };
+		}
+		executionRelocationInProgress = true;
+		try {
+			const moved = await ctx.newSession({
+				parentSession: piRef.getSessionId(),
+				setup: sessionManager => sessionManager.moveTo(workspace.path),
+			});
+			if (moved.cancelled) throw new Error("execution workspace session relocation was canceled");
+			const relocatedCwd = contextCwd(ctx);
+			if (resolve(relocatedCwd) !== resolve(workspace.path)) {
+				throw new Error(`execution workspace relocation did not take effect: ${relocatedCwd}`);
+			}
+			return { ...ctx, cwd: relocatedCwd };
+		} finally {
+			executionRelocationInProgress = false;
+		}
+	}
+
+	async function relocateRecoveredExecutionSession(
+		ctx: ExtensionContext,
+		exec: ExecutionSnapshot,
+		key: string,
+	): Promise<ExtensionContext> {
+		const baseline = exec.activeItem?.current_git_baseline ?? exec.activeItem?.initial_git_baseline;
+		if (!baseline) throw new Error("execution workspace baseline is missing");
+		const workspace = await executionWorkspaceManager.ensure(
+			contextCwd(ctx),
+			key,
+			exec.grant.grant_id,
+			baseline,
+			{ create: false },
+		);
+		const movable = ctx.sessionManager as unknown as {
+			getCwd?(): string;
+			moveTo?(cwd: string): Promise<void>;
+		};
+		let relocatedCwd = contextCwd(ctx);
+		if (resolve(relocatedCwd) !== resolve(workspace.path)) {
+			if (typeof movable.moveTo !== "function" || typeof movable.getCwd !== "function") {
+				throw new Error("session manager cannot relocate active execution recovery");
+			}
+			executionRelocationInProgress = true;
+			try {
+				await movable.moveTo(workspace.path);
+				setProjectDir(workspace.path);
+				relocatedCwd = movable.getCwd();
+			} finally {
+				executionRelocationInProgress = false;
+			}
+		}
+		if (resolve(relocatedCwd) !== resolve(workspace.path)) {
+			throw new Error(`execution recovery relocation did not take effect: ${relocatedCwd}`);
+		}
+		state.executionWorkspace = { ...workspace, key };
+		persistSession();
+		await saveCache();
+		return { ...ctx, cwd: relocatedCwd };
+	}
 	function persistSession() {
 		piRef.appendEntry(cfg.entryType, {
 			backend: backend.name,
@@ -742,6 +839,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			summaryRefusal: state.summaryRefusal,
 			carrier: state.carrier,
 			serviceRefresh: state.serviceRefresh,
+			executionWorkspace: state.executionWorkspace,
 		});
 	}
 
@@ -916,7 +1014,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 	 *  per canonical working directory. Consumption requires an owner confirm
 	 *  bound to the exact keys and file digest, then a one-shot rename. */
 	async function stageRiders(ctx: ExtensionContext): Promise<{ riders: RiderProof[]; batch: StagedRiderBatch } | { refusal: string } | undefined> {
-		const path = riderBatchPath(getAgentDir(), process.cwd());
+		const path = riderBatchPath(getAgentDir(), ctx.cwd);
 		let batch: StagedRiderBatch | null;
 		try {
 			batch = readStagedRiderBatch(path);
@@ -949,7 +1047,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 	}
 
 	async function stageCancelBatch(nowKey: string, ctx: ExtensionContext): Promise<{ cancellations: CancellationProof[]; batch: StagedCancelBatch } | undefined | null> {
-		const path = cancelBatchPath(getAgentDir(), process.cwd());
+		const path = cancelBatchPath(getAgentDir(), ctx.cwd);
 		let batch: StagedCancelBatch | null;
 		try {
 			batch = readStagedCancelBatch(path);
@@ -978,7 +1076,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			return false;
 		}
 		const legacyPlan = auditBaseCommit === undefined;
-		const startCommit = auditBaseCommit ?? parentCommit(process.cwd(), commitSha);
+		const startCommit = auditBaseCommit ?? parentCommit(ctx.cwd, commitSha);
 		if (!startCommit) {
 			summaryBlockReason = "no audit base commit was available";
 			await recordSummaryRefusal(now, "no audit base commit was available (outside a git repo?)");
@@ -991,7 +1089,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			ctx.ui.notify("close attempt not begun — no audit-base dirty-path snapshot; restamp with /plan", "warning");
 			return false;
 		}
-		const diffSha256 = rangeDiffSha256(process.cwd(), startCommit, commitSha);
+		const diffSha256 = rangeDiffSha256(ctx.cwd, startCommit, commitSha);
 		if (!diffSha256) {
 			summaryBlockReason = `the ${startCommit.slice(0, 12)}..${commitSha.slice(0, 12)} audit diff could not be hashed`;
 			await recordSummaryRefusal(now, `the ${startCommit.slice(0, 12)}..${commitSha.slice(0, 12)} audit diff could not be hashed`);
@@ -1010,7 +1108,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			sessionId: piRef.getSessionId(),
 			startedAt: sessionStartedAt,
 			startCommit,
-			repository: process.cwd(),
+			repository: ctx.cwd,
 			diffSha256,
 			dirtyPaths: [...(auditBaseDirtyPaths ?? [])],
 			...(staged?.riders.length ? { riders: staged.riders } : {}),
@@ -1608,9 +1706,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 		}
 
 		pi.on("session_start", async (_e, ctx) => {
-			preExistingDirtyPaths = dirtyPaths(process.cwd());
+			let sessionCtx: ExtensionContext = ctx;
+			preExistingDirtyPaths = dirtyPaths(ctx.cwd);
 			closeoutAuthorized = false;
-			sessionStartCommit = headCommit(process.cwd());
+			sessionStartCommit = headCommit(ctx.cwd);
 			sessionStartedAt = new Date().toISOString();
 			summaryAuthorizationRef = undefined;
 			summaryAuthorized = false;
@@ -1741,7 +1840,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					}
 				}
 			}
-			if ((ctx?.taskDepth === 0 || ctx?.taskDepth === undefined) && backend.workClient) {
+			if (!executionRelocationInProgress && (ctx?.taskDepth === 0 || ctx?.taskDepth === undefined) && backend.workClient) {
 				try {
 					const exec = await backend.getExecution();
 					if (exec && (exec.grant.state === "stopped" || exec.grant.state === "canceled")) {
@@ -1758,113 +1857,123 @@ export function createWorkflowHost(cfg: HostConfig) {
 					} else {
 						state.terminalExecution = undefined;
 						if (exec && exec.grant.state === "active" && exec.activeItem) {
-							const preflight = await validateExecutionRecoveryPreflight(ctx, backend, exec, "active");
-							if (preflight.ok) {
-								const curVersion = exec.grant.grant_version;
-							const pendingOutbox = pendingOutboxEntries.find(
-								e => e.grantId === exec.grant.grant_id && outboxStatus.get(e.messageId) === "pending",
-							);
-							if (pendingOutbox) {
-								await deliverExecutionMessage(
-									exec.grant.grant_id,
-									pendingOutbox.preReservationVersion,
-									pendingOutbox.postVersion,
-									preflight.targetIssue.key,
-									ctx,
-									pendingOutbox,
-								);
+							const anchorKey = await resolveAnchorKey(backend, exec, state.identifier);
+							if (!anchorKey) {
+								sessionCtx.ui.notify("Execution recovery skipped: grant anchor key is unavailable", "warning");
 							} else {
-								let pendingClaims: Array<{ command: Command; result?: CommandResult }>;
 								try {
-									pendingClaims = (await backend.getPendingExecutionClaims?.()) ?? [];
+									sessionCtx = await relocateRecoveredExecutionSession(sessionCtx, exec, anchorKey);
+									preExistingDirtyPaths = dirtyPaths(sessionCtx.cwd);
+									sessionStartCommit = headCommit(sessionCtx.cwd);
 								} catch (error) {
-									try {
-										ctx.ui.notify(`Recovery blocked by unreadable claim: ${String(error)}`, "error");
-									} catch {}
+									sessionCtx.ui.notify(`Execution recovery skipped: ${String(error)}`, "warning");
 									return;
 								}
-								const committedClaim = pendingClaims.find(c => {
-									if (c.command.type !== "set_execution_state") return false;
-									const p = c.command.payload as { grant_id: string; expected_grant_version: number };
-									if (p.grant_id !== exec.grant.grant_id) return false;
-									const res = c.result;
-									return res && res.type === "set_execution_state" && res.grant.grant_version === curVersion;
-								});
-
-								if (committedClaim && !deliveredPostVersions.has(`${exec.grant.grant_id}:${curVersion}`)) {
-									const preVer = (committedClaim.command.payload as { expected_grant_version: number }).expected_grant_version;
-									deliveredPreReservations.add(`${exec.grant.grant_id}:${preVer}`);
-									deliveredPostVersions.add(`${exec.grant.grant_id}:${curVersion}`);
-									await deliverExecutionMessage(
-										exec.grant.grant_id,
-										preVer,
-										curVersion,
-										preflight.targetIssue.key,
-										ctx,
+								const preflight = await validateExecutionRecoveryPreflight(sessionCtx, backend, exec, "active");
+								if (preflight.ok) {
+									const curVersion = exec.grant.grant_version;
+									const pendingOutbox = pendingOutboxEntries.find(
+										e => e.grantId === exec.grant.grant_id && outboxStatus.get(e.messageId) === "pending",
 									);
-								} else if (
-									!deliveredPreReservations.has(`${exec.grant.grant_id}:${curVersion}`) &&
-									!(curVersion > 1 && deliveredPostVersions.has(`${exec.grant.grant_id}:${curVersion}`))
-								) {
-									const updated = await backend.setExecutionState({
-										grantId: exec.grant.grant_id,
-										expectedGrantVersion: curVersion,
-										targetState: "active",
-										reason: "session_start_recovery",
-										judgeSha256: preflight.tcb.judgeSha256,
-									});
-									if (updated && updated.grant.state === "active") {
-										deliveredPreReservations.add(`${exec.grant.grant_id}:${curVersion}`);
-										deliveredPostVersions.add(`${exec.grant.grant_id}:${updated.grant.grant_version}`);
+									if (pendingOutbox) {
 										await deliverExecutionMessage(
 											exec.grant.grant_id,
-											curVersion,
-											updated.grant.grant_version,
+											pendingOutbox.preReservationVersion,
+											pendingOutbox.postVersion,
 											preflight.targetIssue.key,
-											ctx,
+											sessionCtx,
+											pendingOutbox,
 										);
-									} else if (updated && updated.grant.state === "stopped") {
-										const postExec: ExecutionSnapshot = {
-											grant: updated.grant,
-											items: exec.items,
-											activeItem: null,
-										};
-										const anchorKey = (await resolveAnchorKey(backend, postExec, preflight.targetIssue.key)) ?? preflight.targetIssue.key;
-										const notice = computeExecutionNoticeDetails(postExec, updated.grant.terminal_reason ?? "cap reached", anchorKey);
-										state.terminalExecution = {
-											grantId: postExec.grant.grant_id,
-											state: "stopped",
-											reason: updated.grant.terminal_reason ?? "cap reached",
-											tally: notice.tallyLine.replace(/^Items:\s*/, ""),
-											nextCommand: notice.nextCommandLine,
-											at: Date.now(),
-										};
-										await saveCache();
+									} else {
+										let pendingClaims: Array<{ command: Command; result?: CommandResult }>;
 										try {
-											ctx.ui.notify(`Execution grant stopped: ${updated.grant.terminal_reason ?? "cap reached"} · ${notice.tallyLine} · ${notice.nextCommandLine}`, "warning");
-										} catch {}
-										pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
+											pendingClaims = (await backend.getPendingExecutionClaims?.()) ?? [];
+										} catch (error) {
+											sessionCtx.ui.notify(`Recovery blocked by unreadable claim: ${String(error)}`, "error");
+											return;
+										}
+										const committedClaim = pendingClaims.find(c => {
+											if (c.command.type !== "set_execution_state") return false;
+											const payload = c.command.payload;
+											if (payload.grant_id !== exec.grant.grant_id) return false;
+											const result = c.result;
+											return result && result.type === "set_execution_state" && result.grant.grant_version === curVersion;
+										});
+
+										if (
+											committedClaim?.command.type === "set_execution_state" &&
+											!deliveredPostVersions.has(`${exec.grant.grant_id}:${curVersion}`)
+										) {
+											const preVer = committedClaim.command.payload.expected_grant_version;
+											deliveredPreReservations.add(`${exec.grant.grant_id}:${preVer}`);
+											deliveredPostVersions.add(`${exec.grant.grant_id}:${curVersion}`);
+											await deliverExecutionMessage(
+												exec.grant.grant_id,
+												preVer,
+												curVersion,
+												preflight.targetIssue.key,
+												sessionCtx,
+											);
+										} else if (
+											!deliveredPreReservations.has(`${exec.grant.grant_id}:${curVersion}`) &&
+											!(curVersion > 1 && deliveredPostVersions.has(`${exec.grant.grant_id}:${curVersion}`))
+										) {
+											const updated = await backend.setExecutionState({
+												grantId: exec.grant.grant_id,
+												expectedGrantVersion: curVersion,
+												targetState: "active",
+												reason: "session_start_recovery",
+												judgeSha256: preflight.tcb.judgeSha256,
+											});
+											if (updated && updated.grant.state === "active") {
+												deliveredPreReservations.add(`${exec.grant.grant_id}:${curVersion}`);
+												deliveredPostVersions.add(`${exec.grant.grant_id}:${updated.grant.grant_version}`);
+												await deliverExecutionMessage(
+													exec.grant.grant_id,
+													curVersion,
+													updated.grant.grant_version,
+													preflight.targetIssue.key,
+													sessionCtx,
+												);
+											} else if (updated && updated.grant.state === "stopped") {
+												const postExec: ExecutionSnapshot = {
+													grant: updated.grant,
+													items: exec.items,
+													activeItem: null,
+												};
+												const resolvedKey = (await resolveAnchorKey(backend, postExec, preflight.targetIssue.key)) ?? preflight.targetIssue.key;
+												const notice = computeExecutionNoticeDetails(postExec, updated.grant.terminal_reason ?? "cap reached", resolvedKey);
+												state.terminalExecution = {
+													grantId: postExec.grant.grant_id,
+													state: "stopped",
+													reason: updated.grant.terminal_reason ?? "cap reached",
+													tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+													nextCommand: notice.nextCommandLine,
+													at: Date.now(),
+												};
+												await saveCache();
+												sessionCtx.ui.notify(`Execution grant stopped: ${updated.grant.terminal_reason ?? "cap reached"} · ${notice.tallyLine} · ${notice.nextCommandLine}`, "warning");
+												pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
+											}
+										}
 									}
+								} else {
+									sessionCtx.ui.notify(`Execution recovery skipped: ${preflight.reason}`, "warning");
 								}
 							}
-						} else {
-							try {
-								ctx.ui.notify(`Execution recovery skipped: ${preflight.reason}`, "warning");
-							} catch {}
 						}
 					}
-				}
 				} catch {}
 			}
-			footer(ctx);
+			footer(sessionCtx);
 		});
 
 		pi.on("session_switch", async (event, ctx) => {
-			preExistingDirtyPaths = dirtyPaths(process.cwd());
+			preExistingDirtyPaths = dirtyPaths(ctx.cwd);
 			closeoutAuthorized = false; // authorization never crosses transcripts
 			summaryAuthorized = false;
 			summaryBlockReason = undefined;
-			sessionStartCommit = headCommit(process.cwd());
+			sessionStartCommit = headCommit(ctx.cwd);
 			sessionStartedAt = new Date().toISOString();
 			summaryAuthorizationRef = undefined;
 			resetIntakeState();
@@ -2035,8 +2144,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 					planFilePath: event.planFilePath,
 					approach: sectionItems(event.planContent, "Approach"),
 					verification: sectionItems(event.planContent, "Verification"),
-					baseCommit: headCommit(process.cwd()) ?? undefined,
-					baseDirtyPaths: dirtyPaths(process.cwd()),
+					baseCommit: headCommit(ctx.cwd) ?? undefined,
+					baseDirtyPaths: dirtyPaths(ctx.cwd),
 				});
 				mergeCarrier(res.plannedCandidateId ? { plannedCandidateId: res.plannedCandidateId } : undefined);
 				armExecution(res.issue, stamp.hash);
@@ -2109,9 +2218,22 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 		pi.on("session_shutdown", async () => {
 			try {
-				if (state.obligationHandoff?.armed || state.obligationReview?.armed) await saveCache();
+				const workspace = state.executionWorkspace;
+				if (workspace?.cleanupReady) {
+					const exec = await backend.getExecution(workspace.key);
+					if (exec?.grant.grant_id === workspace.grantId && exec.grant.state === "completed") {
+						const cleanup = await executionWorkspaceManager.cleanup(workspace);
+						if (cleanup.cleaned) {
+							state.executionWorkspace = undefined;
+							persistSession();
+						} else {
+							pi.logger.warn(`${TOOL_NAME}-now: ${cleanup.detail}`);
+						}
+					}
+				}
+				if (state.obligationHandoff?.armed || state.obligationReview?.armed || !state.executionWorkspace) await saveCache();
 			} catch {
-				/* fail open */
+				/* fail open: a failed cleanup preserves the managed worktree */
 			}
 		});
 
@@ -2422,7 +2544,31 @@ export function createWorkflowHost(cfg: HostConfig) {
 						ctx.ui.notify("No execution grant found to resume", "error");
 						return;
 					}
-					const preflight = await validateExecutionRecoveryPreflight(ctx, backend, exec, "paused");
+					const resolvedKey = await resolveAnchorKey(backend, exec, key);
+					const baseline = exec.activeItem?.current_git_baseline ?? exec.activeItem?.initial_git_baseline;
+					if (!resolvedKey || !baseline) {
+						ctx.ui.notify("Cannot resume: execution workspace identity is incomplete", "error");
+						return;
+					}
+					let workspace: ExecutionWorkspace;
+					let activeCtx = ctx;
+					try {
+						workspace = await executionWorkspaceManager.ensure(
+							contextCwd(ctx),
+							resolvedKey,
+							exec.grant.grant_id,
+							baseline,
+							{ create: false },
+						);
+						activeCtx = await relocateExecutionSession(ctx, workspace);
+					} catch (error) {
+						ctx.ui.notify(`Cannot resume: ${String(error)}`, "error");
+						return;
+					}
+					state.executionWorkspace = { ...workspace, key: resolvedKey };
+					persistSession();
+					await saveCache();
+					const preflight = await validateExecutionRecoveryPreflight(activeCtx, backend, exec, "paused");
 					if (!preflight.ok) {
 						ctx.ui.notify(`Cannot resume: ${preflight.reason}`, "error");
 						return;
@@ -2435,13 +2581,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 						judgeSha256: preflight.tcb.judgeSha256,
 					});
 					if (updated && updated.grant.state === "active") {
-						ctx.ui.notify("Execution grant resumed", "info");
+						activeCtx.ui.notify("Execution grant resumed", "info");
 						await deliverExecutionMessage(
 							exec.grant.grant_id,
 							preVersion,
 							updated.grant.grant_version,
 							preflight.targetIssue.key,
-							ctx,
+							activeCtx,
 						);
 						return;
 					} else if (updated && updated.grant.state === "stopped") {
@@ -2512,13 +2658,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 					return;
 				}
 
-				const dirt = dirtyPaths(ctx.cwd);
-				if (dirt.length > 0) {
-					ctx.ui.notify(`execution_worktree_not_clean: repository has modified/untracked files (${dirt.slice(0, 3).join(", ")}${dirt.length > 3 ? "..." : ""}). Clean worktree required.`, "error");
+				const sourceCwd = contextCwd(ctx);
+				if (inProgressGitOp(sourceCwd)) {
+					ctx.ui.notify("Cannot begin execution: git operation in progress", "error");
 					return;
 				}
-
-				const head = headCommit(ctx.cwd);
+				const head = headCommit(sourceCwd);
 				if (!head) {
 					ctx.ui.notify("Not in a git repository", "error");
 					return;
@@ -2532,7 +2677,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 				let claims: ExecutionGrantItemClaim[];
 				if (isQueue) {
-					claims = await backend.snapshotQueue(projectFilter ?? undefined, issue.key, ctx.cwd);
+					claims = await backend.snapshotQueue(projectFilter ?? undefined, issue.key, sourceCwd);
 				} else {
 					const item = await backend.workClient?.workItem(issue.key);
 					if (!item) {
@@ -2560,24 +2705,20 @@ export function createWorkflowHost(cfg: HostConfig) {
 					return;
 				}
 
-				const currentRef = currentSymbolicRef(ctx.cwd);
+				const currentRef = currentSymbolicRef(sourceCwd);
 				if (!currentRef) {
 					ctx.ui.notify("Cannot begin execution: detached HEAD or invalid branch ref — run `git checkout <branch>` (e.g. `git checkout main`) and retry", "error");
 					return;
 				}
-				const defaultBranch = resolveDefaultBranch(ctx.cwd);
+				const defaultBranch = resolveDefaultBranch(sourceCwd);
 				const isDefaultBranch = currentRef === defaultBranch || currentRef === "refs/heads/main" || currentRef === "refs/heads/master";
 				const remoteRef = isDefaultBranch ? `refs/heads/execution/${issue.key.toLowerCase()}` : currentRef;
-				// OMP-220: admission rebase-check — PASS candidates must stay
-				// mergeable, so refuse when HEAD is behind the origin default tip.
-				const upToDate = ensureUpToDateWithDefault(ctx.cwd, defaultBranch);
+				const upToDate = ensureUpToDateWithDefault(sourceCwd, defaultBranch);
 				if (!upToDate.ok) {
 					ctx.ui.notify(`Cannot begin execution: ${upToDate.detail}`, "error");
 					return;
 				}
-				// OMP-220: completion-gate preflight — zero required status check
-				// contexts makes merge confirmation unsatisfiable at close time.
-				const requiredChecksPreflight = requiredStatusCheckCount(ctx.cwd, defaultBranch);
+				const requiredChecksPreflight = requiredStatusCheckCount(sourceCwd, defaultBranch);
 				if (!requiredChecksPreflight.ok || requiredChecksPreflight.count === 0) {
 					ctx.ui.notify(
 						`Cannot begin execution: branch protection on ${defaultBranch} has no required status checks (${requiredChecksPreflight.detail}) — the completion gate would fail at close time; configure required checks first`,
@@ -2585,19 +2726,18 @@ export function createWorkflowHost(cfg: HostConfig) {
 					);
 					return;
 				}
+				const primaryRoot = await executionWorkspaceManager.primaryRoot(sourceCwd);
 				const tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
-				const statusRes = await backend.workflowState(issue.key);
 				const provenance: ExecutionProvenanceEnvelope = {
 					owner_input_id: randomUUID(),
 					owner_session_id: pi.getSessionId() ?? randomUUID(),
 					normalized_command: `/execute ${trimmed}`,
 					workspace_id: backend.workspaceId,
-					repository: basename(ctx.cwd),
+					repository: basename(primaryRoot),
 					nonce: randomUUID(),
 					issued_at: new Date().toISOString(),
 				};
 				const expectedFocusVersion = await backend.getFocusVersion();
-
 				const begun = await backend.beginExecution({
 					provenance,
 					remoteRef,
@@ -2607,21 +2747,70 @@ export function createWorkflowHost(cfg: HostConfig) {
 					judgeSha256: tcb.judgeSha256,
 					judgeManifest: tcb.judgeManifest,
 				});
+
+				let workspace: ExecutionWorkspace | undefined;
+				let activeCtx = ctx;
+				try {
+					workspace = await executionWorkspaceManager.ensure(
+						sourceCwd,
+						issue.key,
+						begun.grant.grant_id,
+						head,
+						{ create: true },
+					);
+					if (headCommit(workspace.path) !== head) {
+						throw new Error(`execution workspace HEAD does not match sealed baseline ${head.slice(0, 12)}`);
+					}
+					const workspaceDirt = dirtyPaths(workspace.path);
+					if (workspaceDirt.length > 0) {
+						throw new Error(`execution workspace is not clean (${workspaceDirt.join(", ")})`);
+					}
+					activeCtx = await relocateExecutionSession(ctx, workspace);
+				} catch (error) {
+					const reason = `execution_workspace_provision_failed:${String(error)}`;
+					const stopped = await backend.setExecutionState({
+						grantId: begun.grant.grant_id,
+						expectedGrantVersion: begun.grant.grant_version,
+						targetState: "stopped",
+						reason,
+						judgeSha256: tcb.judgeSha256,
+					});
+					const postExec: ExecutionSnapshot = { grant: stopped.grant, items: begun.items, activeItem: null };
+					const notice = computeExecutionNoticeDetails(postExec, reason, issue.key);
+					if (workspace) state.executionWorkspace = { ...workspace, key: issue.key };
+					state.terminalExecution = {
+						grantId: stopped.grant.grant_id,
+						state: "stopped",
+						reason,
+						tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+						nextCommand: notice.nextCommandLine,
+						at: Date.now(),
+					};
+					persistSession();
+					await saveCache();
+					footer(activeCtx);
+					activeCtx.ui.notify(`Execution grant stopped: ${String(error)} · ${notice.tallyLine}`, "error");
+					pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
+					return;
+				}
+
 				state.terminalExecution = undefined;
+				state.executionWorkspace = { ...workspace, key: issue.key };
 				state.identifier = issue.key;
 				state.issueId = issue.id;
 				state.title = issue.title;
 				state.project = issue.project;
 				state.setAt = Date.now();
+				persistSession();
 				await saveCache();
-				footer(ctx);
-				ctx.ui.notify(`Execution grant started for ${issue.key} (${isQueue ? `queue: ${claims.length} items` : "single"})`, "info");
+				footer(activeCtx);
+				activeCtx.ui.notify(`Execution grant started for ${issue.key} in ${workspace.path} (${isQueue ? `queue: ${claims.length} items` : "single"})`, "info");
 				await deliverExecutionMessage(
 					begun.grant.grant_id,
 					0,
 					begun.grant.grant_version,
 					issue.key,
-					ctx,
+					activeCtx,
 				);
 			},
 		});
@@ -3735,6 +3924,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 										footer(ctx);
 									}
 									return okText(`Item ${activeWorkId} completed and passed audit! Advanced to next queue item ${nextIssue?.key ?? nextPending.work_id} (phase: criteria_pending).`);
+								}
+								if (state.executionWorkspace?.grantId === completed.grant.grant_id) {
+									state.executionWorkspace.cleanupReady = true;
+									persistSession();
+									await saveCache();
 								}
 								return okText(`Execution grant completed! Work item ${activeWorkId} delivered and closed.`);
 							};

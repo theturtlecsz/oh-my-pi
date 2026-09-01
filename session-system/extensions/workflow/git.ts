@@ -10,8 +10,11 @@
  * contracts/v1/candidate-hash.json and are pinned by commit-step.test.ts.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
-import { isAbsolute, join as joinPath } from "node:path";
+import { type Dirent, existsSync, lstatSync, readFileSync, statSync } from "node:fs";
+import { copyFile, lstat, mkdir, readdir, realpath, rmdir } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join as joinPath, resolve as resolvePath } from "node:path";
+import * as managedGit from "@oh-my-pi/pi-coding-agent/utils/git";
+import { getWorktreesDir, hashPath, isEnoent } from "@oh-my-pi/pi-utils";
 /** Run git in cwd; timeoutMs guards network ops (push). `raw` is untrimmed stdout —
  *  porcelain -z parsing needs the leading space of the first `XY path` entry. */
 export function runGit(cwd: string, args: string[], timeoutMs = 10_000): { ok: boolean; out: string; raw: string; err: string } {
@@ -20,6 +23,148 @@ export function runGit(cwd: string, args: string[], timeoutMs = 10_000): { ok: b
 	const err = (r.stderr ?? (r.error ? r.error.message : "")).trim();
 	return { ok: r.status === 0 && !r.error, out: raw.trim(), raw, err };
 }
+
+export interface ExecutionWorkspace {
+	primaryRoot: string;
+	path: string;
+	branch: string;
+	grantId: string;
+	baseline: string;
+	reused: boolean;
+}
+
+export interface ExecutionWorkspaceManager {
+	primaryRoot(cwd: string): Promise<string>;
+	ensure(
+		cwd: string,
+		key: string,
+		grantId: string,
+		baseline: string,
+		options?: { create?: boolean },
+	): Promise<ExecutionWorkspace>;
+	cleanup(workspace: ExecutionWorkspace): Promise<{ cleaned: boolean; detail: string }>;
+}
+
+async function materializeExecutionRuntime(primaryRoot: string, worktreePath: string): Promise<void> {
+	const worktreeNodeModules = joinPath(worktreePath, "node_modules");
+	if (existsSync(joinPath(worktreePath, "package.json")) && !existsSync(worktreeNodeModules)) {
+		const install = spawnSync("bun", ["install", "--frozen-lockfile"], {
+			cwd: worktreePath,
+			encoding: "utf8",
+			timeout: 300_000,
+			maxBuffer: 16 * 1024 * 1024,
+		});
+		if (install.status !== 0 || install.error) {
+			throw new Error(`execution workspace dependency install failed: ${(install.stderr ?? install.error?.message ?? "").trim().split("\n")[0]}`);
+		}
+	}
+
+	const nativeSource = joinPath(primaryRoot, "packages/natives/native");
+	const nativeTarget = joinPath(worktreePath, "packages/natives/native");
+	let nativeEntries: Dirent[];
+	try {
+		nativeEntries = await readdir(nativeSource, { withFileTypes: true });
+	} catch (error) {
+		if (isEnoent(error)) return;
+		throw error;
+	}
+	await mkdir(nativeTarget, { recursive: true });
+	for (const entry of nativeEntries) {
+		if (!entry.isFile() || !entry.name.endsWith(".node")) continue;
+		const source = joinPath(nativeSource, entry.name);
+		const target = joinPath(nativeTarget, entry.name);
+		if (existsSync(target) && statSync(target).size === statSync(source).size) continue;
+		await copyFile(source, target);
+	}
+}
+
+export async function executionPrimaryRoot(cwd: string): Promise<string> {
+	const primary = await managedGit.repo.primaryRoot(cwd);
+	if (!primary) throw new Error("execution workspace requires a Git repository");
+	return realpath(primary);
+}
+
+/** Provision or deterministically reuse an agent-managed execution worktree.
+ * Grant identity—not work key—owns the path and local branch, so terminal WIP
+ * from an older grant can never be rebound into a fresh authorization. */
+export async function ensureExecutionWorkspace(
+	cwd: string,
+	key: string,
+	grantId: string,
+	baseline: string,
+	options: { create?: boolean } = {},
+	worktreesRoot = getWorktreesDir(),
+): Promise<ExecutionWorkspace> {
+	if (!/^[0-9a-f]{40,64}$/.test(baseline)) throw new Error(`invalid execution baseline: ${baseline}`);
+	if (!/^[0-9a-f-]{36}$/.test(grantId)) throw new Error(`invalid execution grant id: ${grantId}`);
+	const primaryRoot = await executionPrimaryRoot(cwd);
+	const grantSlug = grantId.replaceAll("-", "");
+	const branch = `execution/${key.toLowerCase()}-${grantSlug}`;
+	const branchRef = `refs/heads/${branch}`;
+	const stablePath = joinPath(
+		worktreesRoot,
+		`execute-${key.toLowerCase()}-${grantSlug}-${hashPath(primaryRoot)}`,
+		basename(primaryRoot),
+	);
+
+	return managedGit.withRepoLock(primaryRoot, async () => {
+		const entries = await managedGit.worktree.list(primaryRoot);
+		const existing = entries.find(entry => entry.branch === branchRef);
+		if (existing) {
+			const path = await realpath(existing.path);
+			await materializeExecutionRuntime(primaryRoot, path);
+			return { primaryRoot, path, branch, grantId, baseline, reused: true };
+		}
+		if (!(await managedGit.ref.exists(primaryRoot, branchRef))) {
+			if (options.create === false) {
+				throw new Error(`execution workspace branch is missing for grant ${grantId}`);
+			}
+			await managedGit.branch.create(primaryRoot, branch, baseline);
+		}
+		try {
+			await lstat(stablePath);
+			throw new Error(`execution workspace path exists but is not registered: ${stablePath}`);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		await mkdir(dirname(stablePath), { recursive: true });
+		await managedGit.worktree.add(primaryRoot, stablePath, branch);
+		const path = await realpath(stablePath);
+		await materializeExecutionRuntime(primaryRoot, path);
+		return { primaryRoot, path, branch, grantId, baseline, reused: false };
+	});
+}
+
+/** Remove a completed execution worktree. Dirty or missing registrations stay
+ * recoverable; callers must prove ledger completion before invoking this. */
+export async function cleanupExecutionWorkspace(
+	workspace: ExecutionWorkspace,
+): Promise<{ cleaned: boolean; detail: string }> {
+	return managedGit.withRepoLock(workspace.primaryRoot, async () => {
+		const resolvedTarget = resolvePath(workspace.path);
+		const entries = await managedGit.worktree.list(workspace.primaryRoot);
+		const registered = entries.find(entry => resolvePath(entry.path) === resolvedTarget);
+		if (!registered) return { cleaned: false, detail: "execution worktree registration is missing; state preserved" };
+		if (dirtyPaths(workspace.path).length > 0) {
+			return { cleaned: false, detail: "execution worktree is dirty; state preserved" };
+		}
+		const removed = await managedGit.worktree.tryRemove(workspace.primaryRoot, workspace.path, { force: false });
+		if (!removed) return { cleaned: false, detail: "git refused execution worktree cleanup; state preserved" };
+		await managedGit.branch.tryDelete(workspace.primaryRoot, workspace.branch, { force: true });
+		try {
+			await rmdir(dirname(workspace.path));
+		} catch {
+			// A sibling or diagnostic artifact keeps its grant container recoverable.
+		}
+		return { cleaned: true, detail: "execution worktree and local branch removed" };
+	});
+}
+
+export const defaultExecutionWorkspaceManager: ExecutionWorkspaceManager = {
+	primaryRoot: executionPrimaryRoot,
+	ensure: ensureExecutionWorkspace,
+	cleanup: cleanupExecutionWorkspace,
+};
 
 export function inProgressGitOp(cwd: string): boolean {
 	try {

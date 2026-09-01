@@ -64,6 +64,20 @@ function toWireSelectOptions(options: ExtensionUISelectItem[]): CollabUiSelectIt
 	);
 }
 
+type ExtensionNewSessionOptions = Parameters<ExtensionCommandContextActions["newSession"]>[0];
+
+/** Apply a command-provided session setup and refresh every cwd-derived TUI
+ * cache when that setup relocates the SessionManager. */
+export async function applyExtensionNewSessionSetup(
+	ctx: Pick<InteractiveModeContext, "sessionManager" | "applyCwdChange">,
+	options?: ExtensionNewSessionOptions,
+): Promise<void> {
+	const before = ctx.sessionManager.getCwd();
+	await options?.setup?.(ctx.sessionManager);
+	const after = ctx.sessionManager.getCwd();
+	if (after !== before) await ctx.applyCwdChange(after);
+}
+
 export class ExtensionUiController {
 	#extensionTerminalInputUnsubscribers = new Set<() => void>();
 	#composerShapeDisposers: Array<() => void> = [];
@@ -81,6 +95,28 @@ export class ExtensionUiController {
 	 */
 	#toolUIContext: ExtensionUIContext | undefined;
 	constructor(private ctx: InteractiveModeContext) {}
+
+	async #newExtensionSession(options?: ExtensionNewSessionOptions): Promise<{ cancelled: boolean }> {
+		this.ctx.clearTransientSessionUi();
+		this.clearExtensionTerminalInputListeners();
+		this.clearHookWidgets();
+		const success = await this.ctx.session.newSession({ parentSession: options?.parentSession });
+		if (!success) return { cancelled: true };
+
+		await applyExtensionNewSessionSetup(this.ctx, options);
+		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
+		this.ctx.statusLine.invalidate();
+		this.ctx.statusLine.resetActiveTime();
+		this.ctx.clearTransientSessionUi();
+		this.ctx.resetTranscript();
+		this.ctx.present([
+			new Spacer(1),
+			new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
+		]);
+		await this.ctx.reloadTodos();
+		this.ctx.ui.requestRender(true, { clearScrollback: true });
+		return { cancelled: false };
+	}
 
 	#syncExtensionComposerShapes(): void {
 		this.disposeComposerShapes();
@@ -226,38 +262,7 @@ export class ExtensionUiController {
 				await this.ctx.reloadTodos();
 				this.ctx.showStatus("Reloaded session");
 			},
-			newSession: async options => {
-				this.ctx.clearTransientSessionUi();
-
-				// Create new session
-				this.clearExtensionTerminalInputListeners();
-				this.clearHookWidgets();
-				const success = await this.ctx.session.newSession({ parentSession: options?.parentSession });
-				if (!success) {
-					return { cancelled: true };
-				}
-				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
-
-				// Call setup callback if provided
-				if (options?.setup) {
-					await options.setup(this.ctx.sessionManager);
-				}
-
-				// Reset and update status line
-				this.ctx.statusLine.invalidate();
-				this.ctx.statusLine.resetActiveTime();
-				this.ctx.clearTransientSessionUi();
-				this.ctx.resetTranscript();
-
-				this.ctx.present([
-					new Spacer(1),
-					new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
-				]);
-				await this.ctx.reloadTodos();
-				this.ctx.ui.requestRender(true, { clearScrollback: true });
-
-				return { cancelled: false };
-			},
+			newSession: options => this.#newExtensionSession(options),
 			branch: async entryId => {
 				const result = await this.ctx.session.branch(entryId);
 				if (result.cancelled) {
@@ -461,35 +466,7 @@ export class ExtensionUiController {
 				await this.ctx.reloadTodos();
 				this.ctx.showStatus("Reloaded session");
 			},
-			newSession: async options => {
-				this.ctx.clearTransientSessionUi();
-
-				// Create new session
-				this.clearExtensionTerminalInputListeners();
-				this.clearHookWidgets();
-				const success = await this.ctx.session.newSession({ parentSession: options?.parentSession });
-				if (!success) {
-					return { cancelled: true };
-				}
-
-				// Call setup callback if provided
-				if (options?.setup) {
-					await options.setup(this.ctx.sessionManager);
-				}
-
-				// Clear UI state
-				this.ctx.clearTransientSessionUi();
-				this.ctx.resetTranscript();
-
-				this.ctx.present([
-					new Spacer(1),
-					new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
-				]);
-				await this.ctx.reloadTodos();
-				this.ctx.ui.requestRender(true, { clearScrollback: true });
-
-				return { cancelled: false };
-			},
+			newSession: options => this.#newExtensionSession(options),
 			branch: async entryId => {
 				const result = await this.ctx.session.branch(entryId);
 				if (result.cancelled) {
