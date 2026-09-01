@@ -294,6 +294,29 @@ function listPaths(paths: readonly string[]): string {
 	return paths.map(p => p.replace(/[\u0000-\u001f\u007f]/g, c => JSON.stringify(c).slice(1, -1))).join("\n");
 }
 
+/** OMP-218: freeze-time lint gate. A candidate that cannot pass the repo's
+ *  required CI lint (biome — CI's 'Lint, type check & web build') must never
+ *  freeze; the OMP-209 grant burned all 5 close attempts on a candidate whose
+ *  only defect was biome-detectable. Injectable for deterministic tests. */
+export type BiomeRunner = (root: string, paths: readonly string[]) => { ok: boolean; output: string };
+
+export const runBiomeCheck: BiomeRunner = (root, paths) => {
+	const r = spawnSync("bun", ["x", "biome", "check", "--no-errors-on-unmatched", "--", ...paths], {
+		cwd: root,
+		encoding: "utf8",
+		timeout: 120_000,
+		maxBuffer: 16 * 1024 * 1024,
+	});
+	const output = `${r.stdout ?? ""}\n${r.stderr ?? (r.error ? r.error.message : "")}`.trim();
+	return { ok: r.status === 0 && !r.error, output };
+};
+
+/** The gate applies only where required CI lint exists: a biome config at the
+ *  repository root. Harness fixtures and foreign repos without one skip it. */
+export function hasBiomeConfig(root: string): boolean {
+	return existsSync(joinPath(root, "biome.json")) || existsSync(joinPath(root, "biome.jsonc"));
+}
+
 /** /summary freeze (HOME-147, OMP-57): owner confirms exact path sets, only
  *  those paths are staged (literal pathspecs), added bytes are
  *  credential-scanned fail-closed, one local candidate commit
@@ -315,7 +338,7 @@ export async function freezeCandidateCommit(
 	key: string,
 	candidateId: string,
 	preExistingDirtyPaths: readonly string[] = [],
-	options: { mode?: "manual" | "execution"; sealedPaths?: readonly string[]; expectedBaseline?: string } = {},
+	options: { mode?: "manual" | "execution"; sealedPaths?: readonly string[]; expectedBaseline?: string; biomeRunner?: BiomeRunner } = {},
 ): Promise<FreezeOutcome> {
 	const refuse = (refused: FreezeRefusal["refused"], reason: string, level: "info" | "warning" | "error" = "warning"): FreezeRefusal => {
 		ui.notify(reason, level);
@@ -335,6 +358,22 @@ export async function freezeCandidateCommit(
 			if (!staged.ok || staged.out !== "") return refuse("failed", "execution freeze refused: pre-staged entries in index", "error");
 			const unsealed = all.filter(p => !sealed.has(p));
 			if (unsealed.length > 0) return refuse("failed", `execution freeze refused: unsealed modified paths (${unsealed.join(", ")})`, "error");
+			// OMP-218: refuse to freeze a candidate that required CI lint would
+			// reject — every freeze outcome (new commit, idempotent re-freeze,
+			// baseline adoption) is gated on sealed paths present on disk.
+			if (hasBiomeConfig(root)) {
+				const lintable = [...sealed].filter(p => existsSync(joinPath(root, p)));
+				if (lintable.length > 0) {
+					const lint = (options.biomeRunner ?? runBiomeCheck)(root, lintable);
+					if (!lint.ok) {
+						return refuse(
+							"failed",
+							`execution freeze refused: biome check failed on sealed paths — fix lint/format before review\n${lint.output.slice(0, 2000)}`,
+							"error",
+						);
+					}
+				}
+			}
 			for (const p of sealed) {
 				try {
 					const full = joinPath(root, p);

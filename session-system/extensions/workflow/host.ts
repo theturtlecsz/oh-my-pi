@@ -2562,7 +2562,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 				const currentRef = currentSymbolicRef(ctx.cwd);
 				if (!currentRef) {
-					ctx.ui.notify("Cannot begin execution: detached HEAD or invalid branch ref", "error");
+					ctx.ui.notify("Cannot begin execution: detached HEAD or invalid branch ref — run `git checkout <branch>` (e.g. `git checkout main`) and retry", "error");
 					return;
 				}
 				const defaultBranch = resolveDefaultBranch(ctx.cwd);
