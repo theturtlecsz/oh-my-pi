@@ -1637,7 +1637,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 				workspace_id: "ws-1",
 				owner_id: "owner-1",
 				repository: repo.dir,
-				remote_ref: "refs/heads/main",
+				remote_ref: "refs/heads/execution/omp-199",
 				state: "active",
 				mode: "single",
 				grant_version: 3,
@@ -1778,7 +1778,8 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			requests: 1,
 		} as executorModule.SingleResult);
 
-		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/main", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
+		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/execution/omp-199", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
+		vi.spyOn(gitModule, "verifyMergeConfirmation").mockReturnValue({ confirmed: true, detail: "PR merged and origin/main contains candidate" });
 		vi.spyOn(gitModule, "rangeDiffSha256").mockReturnValue("diff-sha-199");
 
 		const fakeCtx = {
@@ -2132,7 +2133,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 				workspace_id: "ws-1",
 				owner_id: "owner-1",
 				repository: repo.dir,
-				remote_ref: "refs/heads/main",
+				remote_ref: "refs/heads/execution/omp-199",
 				state: "active",
 				mode: "single",
 				grant_version: 4,
@@ -2299,7 +2300,8 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			requests: 1,
 		} as executorModule.SingleResult);
 
-		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/main", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
+		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/execution/omp-199", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
+		vi.spyOn(gitModule, "verifyMergeConfirmation").mockReturnValue({ confirmed: true, detail: "PR merged and origin/main contains candidate" });
 		vi.spyOn(gitModule, "rangeDiffSha256").mockReturnValue("diff-sha-199");
 
 		try {
@@ -2331,6 +2333,92 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			expect(callLog.filter(c => c === "setExecutionState:service_refresh")).toHaveLength(1);
 		} finally {
 			repo.cleanup();
+		}
+	});
+});
+
+describe("execution grant admission branch selection (OMP-212)", () => {
+	test("binds dedicated execution branch ref when starting on default branch main", async () => {
+		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		const fakePi = {
+			zod: z,
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				registeredCommands.set(name, def.handler);
+			},
+			registerFlag: () => {},
+			on: () => {},
+			appendEntry: () => {},
+			sendMessage: () => {},
+			getSessionId: () => "sess-1",
+		} as unknown as ExtensionAPI;
+
+		let capturedRemoteRef: string | undefined;
+		const mockBackend = {
+			cacheFile: "test-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			workspaceId: "ws-1",
+			pendingDeliveries: async () => [],
+			findIssue: async (_keyOrId: string) => ({ id: "uuid-212", key: "OMP-212", title: "Test 212", project: "The Bookends" }),
+			issueDetail: async () => ({ key: "OMP-212", attemptSnapshot: undefined }),
+			workflowState: async () => ({ open_blockers: [] }),
+			getFocusVersion: async () => 1,
+			beginExecution: async (input: { remoteRef: string }) => {
+				capturedRemoteRef = input.remoteRef;
+				return {
+					grant: {
+						grant_id: "grant-212",
+						grant_version: 1,
+						remote_ref: input.remoteRef,
+						state: "active",
+					},
+					items: [],
+					activeItem: null,
+				};
+			},
+			workClient: {
+				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workItem: async () => ({
+					work_id: "uuid-212",
+					project_id: "proj-1",
+					revision: {
+						revision_id: "rev-212",
+						description: "desc",
+					},
+				}),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const handler = registeredCommands.get("execute");
+		expect(handler).toBeDefined();
+
+		// Mock git operations
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		const headSpy = vi.spyOn(gitModule, "headCommit").mockReturnValue("1".repeat(40));
+		const refSpy = vi.spyOn(gitModule, "currentSymbolicRef").mockReturnValue("refs/heads/main");
+		try {
+			const fakeCtx = {
+				cwd: "/tmp/repo",
+				taskDepth: 0,
+				ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+			} as unknown as ExtensionContext;
+
+			await handler!("OMP-212", fakeCtx);
+			expect(capturedRemoteRef).toBe("refs/heads/execution/omp-212");
+		} finally {
+			dirtySpy.mockRestore();
+			headSpy.mockRestore();
+			refSpy.mockRestore();
 		}
 	});
 });

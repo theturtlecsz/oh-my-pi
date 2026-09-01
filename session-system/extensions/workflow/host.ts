@@ -2560,11 +2560,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 					return;
 				}
 
-				const remoteRef = currentSymbolicRef(ctx.cwd);
-				if (!remoteRef) {
+				const currentRef = currentSymbolicRef(ctx.cwd);
+				if (!currentRef) {
 					ctx.ui.notify("Cannot begin execution: detached HEAD or invalid branch ref", "error");
 					return;
 				}
+				const isDefaultBranch = currentRef === "refs/heads/main" || currentRef === "refs/heads/master";
+				const remoteRef = isDefaultBranch ? `refs/heads/execution/${issue.key.toLowerCase()}` : currentRef;
 				const tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
 				const statusRes = await backend.workflowState(issue.key);
 				const provenance: ExecutionProvenanceEnvelope = {
