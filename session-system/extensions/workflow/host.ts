@@ -2562,7 +2562,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 				const remoteRef = currentSymbolicRef(ctx.cwd);
 				if (!remoteRef) {
-					ctx.ui.notify("Cannot begin execution: detached HEAD or invalid branch ref", "error");
+					ctx.ui.notify("Cannot begin execution: detached HEAD or invalid branch ref — run `git checkout <branch>` (e.g. `git checkout main`) and retry", "error");
 					return;
 				}
 				const tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);

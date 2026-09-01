@@ -15,6 +15,7 @@ Follow this deterministic sequence without skipping steps or asking for manual c
 4. **Implement & Verify:** If phase is `executing`:
    - Edit only within the sealed path set.
    - Run focused checks and reproduction commands to verify each step.
+   - Run the repo lint/format gate on the stamped paths before review: `bun x biome check <stamped paths>` (or `bun run check:tools`) and fix findings first — the freeze refuses lint-red candidates.
    - Call `work action:"begin_execution_review", body:"<exact test commands and reproduction results>"` to freeze candidate, record verification evidence, push remote commit, seal audit manifest, run native audit, and auto-complete on PASS.
 5. **Remediation:** If audit reported `NEEDS_FIX` or `BLOCKED`:
    - The phase will be `remediating`.

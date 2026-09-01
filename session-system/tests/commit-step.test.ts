@@ -17,7 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { candidateSha256 } from "@oh-my-pi/pi-work-client";
-import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, validateExecutionPaths } from "../extensions/workflow/git";
+import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, runBiomeCheck, validateExecutionPaths } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -494,6 +494,69 @@ describe("execution freeze (OMP-188)", () => {
 		if ("refused" in second) throw new Error(`re-freeze refused: ${second.reason}`);
 		expect(second.commitSha).toBe(first.commitSha);
 		expect(second.candidateSha256).toBe(first.candidateSha256);
+	});
+
+	// OMP-218: a candidate that cannot pass required CI lint must never freeze.
+	test("execution freeze refuses when biome check fails on sealed paths", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, "biome.json"), "{}\n");
+		Bun.spawnSync(["git", "add", "--", "biome.json"], { cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "biome config"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "feat.ts"), "export const feat = true;\n");
+		const calls: string[][] = [];
+		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["feat.ts"],
+			biomeRunner: (_root, paths) => {
+				calls.push([...paths]);
+				return { ok: false, output: "format error: feat.ts" };
+			},
+		});
+		expect(calls).toEqual([["feat.ts"]]);
+		expect("refused" in outcome && outcome.refused).toBe("failed");
+		expect("refused" in outcome ? outcome.reason : "").toContain("biome check failed on sealed paths");
+		expect("refused" in outcome ? outcome.reason : "").toContain("format error: feat.ts");
+		expect(git(repo, "log", "-1", "--format=%s")).toBe("biome config"); // no candidate commit
+	});
+
+	test("execution freeze proceeds when biome check passes", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, "biome.json"), "{}\n");
+		Bun.spawnSync(["git", "add", "--", "biome.json"], { cwd: repo });
+		Bun.spawnSync(["git", "commit", "-q", "-m", "biome config"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "feat.ts"), "export const feat = true;\n");
+		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["feat.ts"],
+			biomeRunner: () => ({ ok: true, output: "" }),
+		});
+		if ("refused" in outcome) throw new Error(`expected freeze, got refusal: ${outcome.reason}`);
+		expect(outcome.paths).toEqual(["feat.ts"]);
+		expect(git(repo, "log", "-1", "--format=%s")).toBe("session candidate: OMP-1");
+	});
+
+	test("lint gate is skipped when the repo has no biome config", async () => {
+		const repo = makeRepo();
+		fs.writeFileSync(path.join(repo, "feat.ts"), "export const feat = true;\n");
+		let called = false;
+		const outcome = await freezeCandidateCommit(makeUi(true), repo, "OMP-1", "cand-1", [], {
+			mode: "execution",
+			sealedPaths: ["feat.ts"],
+			biomeRunner: () => {
+				called = true;
+				return { ok: false, output: "must not run" };
+			},
+		});
+		if ("refused" in outcome) throw new Error(`expected freeze, got refusal: ${outcome.reason}`);
+		expect(called).toBe(false);
+	});
+
+	test("default biome runner passes on a known-clean repo file", () => {
+		// Real `bun x biome check` invocation — catches flag/command construction
+		// errors that a fake runner cannot (a typo here would refuse every freeze).
+		const repoRoot = path.resolve(import.meta.dir, "..", "..");
+		const res = runBiomeCheck(repoRoot, ["scripts/release.ts"]);
+		expect(res.ok).toBe(true);
 	});
 });
 
