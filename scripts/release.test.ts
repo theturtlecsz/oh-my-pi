@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { $ } from "bun";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { bumpCanaryVersion, bumpVersion, filterRunsForTag, formatReleaseBranchPushArgs, formatReleaseTagPushArgs, releaseBranchName, releasePrTitle, validateExplicitVersion, validateReleaseTag } from "./release";
 
 describe("validateExplicitVersion", () => {
@@ -137,101 +141,282 @@ describe("filterRunsForTag", () => {
 	});
 });
 
-describe("workflow_dispatch and ref release detection logic", () => {
-	function evaluateReleaseDetection(params: {
-		eventName: string;
-		ref: string;
-		refName: string;
-		inputReleaseTag?: string;
-		tagsAtHead?: string[];
-	}): { isRelease: boolean; releaseTag: string; channel: string } {
-		let isRelease = false;
-		let releaseTag = "";
-		let channel = "stable";
+describe("CI release_metadata workflow detection", () => {
+	let originDir: string;
+	let localDir: string;
+	let detectScript: string;
 
-		if (params.eventName === "workflow_dispatch" && params.inputReleaseTag) {
-			const candidate = params.inputReleaseTag;
-			if (validateReleaseTag(candidate)) {
-				if (params.tagsAtHead?.includes(candidate)) {
-					releaseTag = candidate;
-				}
-			}
-		} else {
-			if (params.ref.startsWith("refs/tags/v")) {
-				releaseTag = params.refName;
-			} else if (params.ref === "refs/heads/main") {
-				if (params.eventName !== "pull_request") {
-					const matching = params.tagsAtHead?.find(t => /^v\d/.test(t));
-					if (matching) releaseTag = matching;
-				}
-			}
+	beforeAll(async () => {
+		const ciYml = await Bun.file(".github/workflows/ci.yml").text();
+		const detectStepMatch = ciYml.match(/id:\s*detect[\s\S]*?run:\s*\|\n([\s\S]*?)\n\s*check:/);
+		if (!detectStepMatch) {
+			throw new Error("Failed to extract detect script from .github/workflows/ci.yml");
 		}
+		// Strip leading 14 spaces of yaml indentation
+		detectScript = detectStepMatch[1]
+			.split("\n")
+			.map(line => line.replace(/^ {14}/, ""))
+			.join("\n");
+	});
 
-		if (releaseTag) {
-			isRelease = true;
-		}
-		if (releaseTag.includes("-canary.")) {
-			channel = "canary";
-		}
+	async function setupGitRepos(): Promise<{ origin: string; local: string }> {
+		const baseTemp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ci-release-test-"));
+		const origin = path.join(baseTemp, "origin.git");
+		const local = path.join(baseTemp, "local");
 
-		return { isRelease, releaseTag, channel };
+		await $`git init --bare ${origin}`.quiet();
+		await $`git clone ${origin} ${local}`.quiet();
+		await $`git -C ${local} config user.name "Test"`.quiet();
+		await $`git -C ${local} config user.email "test@example.com"`.quiet();
+		await $`git -C ${local} commit --allow-empty -m "initial commit"`.quiet();
+		await $`git -C ${local} branch -M main`.quiet();
+		await $`git -C ${local} push origin main`.quiet();
+
+		return { origin, local };
 	}
 
-	test("handles workflow_dispatch with valid release_tag on refs/heads/main", () => {
-		const result = evaluateReleaseDetection({
-			eventName: "workflow_dispatch",
-			ref: "refs/heads/main",
-			refName: "main",
-			inputReleaseTag: "v18.0.7",
-			tagsAtHead: ["v18.0.7"],
+	async function runDetectScript(
+		cwd: string,
+		env: {
+			EVENT_NAME: string;
+			REF: string;
+			REF_NAME: string;
+			RELEASE_TAG_INPUT?: string;
+		},
+	): Promise<{ isRelease: boolean; releaseTag: string; channel: string; exitCode: number; stdout: string }> {
+		const outputFile = path.join(cwd, ".github_output_tmp");
+		await Bun.write(outputFile, "");
+
+		const proc = Bun.spawn(["bash", "-c", detectScript], {
+			cwd,
+			env: {
+				...process.env,
+				EVENT_NAME: env.EVENT_NAME,
+				REF: env.REF,
+				REF_NAME: env.REF_NAME,
+				RELEASE_TAG_INPUT: env.RELEASE_TAG_INPUT ?? "",
+				GITHUB_OUTPUT: outputFile,
+			},
+			stdout: "pipe",
+			stderr: "pipe",
 		});
+
+		const stdout = await new Response(proc.stdout).text();
+		const stderr = await new Response(proc.stderr).text();
+		const exitCode = await proc.exited;
+
+		const outputContent = await Bun.file(outputFile).text();
+		const isReleaseMatch = outputContent.match(/^is-release=(true|false)$/m);
+		const releaseTagMatch = outputContent.match(/^release-tag=([^\n]*)$/m);
+		const channelMatch = outputContent.match(/^channel=([^\n]*)$/m);
+
+		return {
+			isRelease: isReleaseMatch ? isReleaseMatch[1] === "true" : false,
+			releaseTag: releaseTagMatch ? releaseTagMatch[1] : "",
+			channel: channelMatch ? channelMatch[1] : "",
+			exitCode,
+			stdout: stdout + stderr,
+		};
+	}
+
+	test("workflow_dispatch with valid release_tag on main branch triggers release", async () => {
+		const { local } = await setupGitRepos();
+		await $`git -C ${local} tag v18.0.7`.quiet();
+		await $`git -C ${local} push origin v18.0.7`.quiet();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "workflow_dispatch",
+			REF: "refs/heads/main",
+			REF_NAME: "main",
+			RELEASE_TAG_INPUT: "v18.0.7",
+		});
+
+		expect(result.exitCode).toBe(0);
 		expect(result.isRelease).toBe(true);
 		expect(result.releaseTag).toBe("v18.0.7");
 		expect(result.channel).toBe("stable");
 	});
 
-	test("handles workflow_dispatch with valid canary release_tag", () => {
-		const result = evaluateReleaseDetection({
-			eventName: "workflow_dispatch",
-			ref: "refs/heads/main",
-			refName: "main",
-			inputReleaseTag: "v18.0.7-canary.1",
-			tagsAtHead: ["v18.0.7-canary.1"],
+	test("workflow_dispatch with canary tag triggers canary release", async () => {
+		const { local } = await setupGitRepos();
+		await $`git -C ${local} tag v18.0.7-canary.1`.quiet();
+		await $`git -C ${local} push origin v18.0.7-canary.1`.quiet();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "workflow_dispatch",
+			REF: "refs/heads/main",
+			REF_NAME: "main",
+			RELEASE_TAG_INPUT: "v18.0.7-canary.1",
 		});
+
+		expect(result.exitCode).toBe(0);
 		expect(result.isRelease).toBe(true);
 		expect(result.releaseTag).toBe("v18.0.7-canary.1");
 		expect(result.channel).toBe("canary");
 	});
 
-	test("rejects workflow_dispatch with invalid release_tag format", () => {
-		const result = evaluateReleaseDetection({
-			eventName: "workflow_dispatch",
-			ref: "refs/heads/main",
-			refName: "main",
-			inputReleaseTag: "18.0.7",
-			tagsAtHead: ["18.0.7"],
+	test("workflow_dispatch refuses shell metacharacter injection attack", async () => {
+		const { local } = await setupGitRepos();
+
+		const injectionPayload = '"; release_tag=v99.0.0; candidate_tag="x';
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "workflow_dispatch",
+			REF: "refs/heads/main",
+			REF_NAME: "main",
+			RELEASE_TAG_INPUT: injectionPayload,
 		});
+
 		expect(result.isRelease).toBe(false);
 		expect(result.releaseTag).toBe("");
+		expect(result.stdout).toContain("Invalid release tag format");
 	});
 
-	test("detects tag push events", () => {
-		const result = evaluateReleaseDetection({
-			eventName: "push",
-			ref: "refs/tags/v18.0.7",
-			refName: "v18.0.7",
+	test("workflow_dispatch refuses multiline input attempting GITHUB_OUTPUT injection", async () => {
+		const { local } = await setupGitRepos();
+		await $`git -C ${local} tag v18.0.7`.quiet();
+		await $`git -C ${local} push origin v18.0.7`.quiet();
+
+		const multilinePayload = "v18.0.7\nrelease-tag=v99.0.0\nis-release=true";
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "workflow_dispatch",
+			REF: "refs/heads/main",
+			REF_NAME: "main",
+			RELEASE_TAG_INPUT: multilinePayload,
 		});
+
+		expect(result.isRelease).toBe(false);
+		expect(result.releaseTag).toBe("");
+		expect(result.stdout).toContain("Invalid release tag format");
+	});
+
+	test("workflow_dispatch refuses malformed or un-prefixed release tags", async () => {
+		const { local } = await setupGitRepos();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "workflow_dispatch",
+			REF: "refs/heads/main",
+			REF_NAME: "main",
+			RELEASE_TAG_INPUT: "18.0.7",
+		});
+
+		expect(result.isRelease).toBe(false);
+		expect(result.releaseTag).toBe("");
+		expect(result.stdout).toContain("Invalid release tag format: 18.0.7");
+	});
+
+	test("workflow_dispatch refuses tag that does not point to checked-out HEAD", async () => {
+		const { local } = await setupGitRepos();
+		// Tag initial commit
+		await $`git -C ${local} tag v18.0.7`.quiet();
+		await $`git -C ${local} push origin v18.0.7`.quiet();
+		// Advance HEAD without moving tag
+		await $`git -C ${local} commit --allow-empty -m "advance commit"`.quiet();
+		await $`git -C ${local} push origin main`.quiet();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "workflow_dispatch",
+			REF: "refs/heads/main",
+			REF_NAME: "main",
+			RELEASE_TAG_INPUT: "v18.0.7",
+		});
+
+		expect(result.isRelease).toBe(false);
+		expect(result.releaseTag).toBe("");
+		expect(result.stdout).toContain("does not point to checked-out HEAD");
+	});
+
+	test("workflow_dispatch refuses tag not reachable from origin/main", async () => {
+		const { local } = await setupGitRepos();
+		// Create a separate unmerged branch
+		await $`git -C ${local} checkout -b feature-unmerged`.quiet();
+		await $`git -C ${local} commit --allow-empty -m "unmerged feature"`.quiet();
+		await $`git -C ${local} tag v18.0.7`.quiet();
+		await $`git -C ${local} push origin v18.0.7`.quiet();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "workflow_dispatch",
+			REF: "refs/heads/feature-unmerged",
+			REF_NAME: "feature-unmerged",
+			RELEASE_TAG_INPUT: "v18.0.7",
+		});
+
+		expect(result.isRelease).toBe(false);
+		expect(result.releaseTag).toBe("");
+		expect(result.stdout).toContain("is not reachable from origin/main");
+	});
+
+	test("push event to refs/tags/v* triggers release directly when tag is valid semver", async () => {
+		const { local } = await setupGitRepos();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "push",
+			REF: "refs/tags/v18.0.7",
+			REF_NAME: "v18.0.7",
+		});
+
 		expect(result.isRelease).toBe(true);
 		expect(result.releaseTag).toBe("v18.0.7");
 	});
 
-	test("does not detect release on PR events", () => {
-		const result = evaluateReleaseDetection({
-			eventName: "pull_request",
-			ref: "refs/heads/main",
-			refName: "main",
-			tagsAtHead: ["v18.0.7"],
+	test("push event to refs/tags/* ignores tags with invalid format or shell metacharacters", async () => {
+		const { local } = await setupGitRepos();
+
+		const injectionResult = await runDetectScript(local, {
+			EVENT_NAME: "push",
+			REF: 'refs/tags/v99.0.0"; echo hacked',
+			REF_NAME: 'v99.0.0"; echo hacked',
 		});
+		expect(injectionResult.isRelease).toBe(false);
+		expect(injectionResult.releaseTag).toBe("");
+		expect(injectionResult.stdout).toContain("Tag Ignored");
+
+		const malformedResult = await runDetectScript(local, {
+			EVENT_NAME: "push",
+			REF: "refs/tags/v18.0",
+			REF_NAME: "v18.0",
+		});
+		expect(malformedResult.isRelease).toBe(false);
+		expect(malformedResult.releaseTag).toBe("");
+		expect(malformedResult.stdout).toContain("Tag Ignored");
+	});
+
+	test("push event to refs/heads/main with tag at HEAD triggers release", async () => {
+		const { local } = await setupGitRepos();
+		await $`git -C ${local} tag v18.0.7`.quiet();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "push",
+			REF: "refs/heads/main",
+			REF_NAME: "main",
+		});
+
+		expect(result.isRelease).toBe(true);
+		expect(result.releaseTag).toBe("v18.0.7");
+	});
+
+	test("push event to refs/heads/main without tag at HEAD does not trigger release", async () => {
+		const { local } = await setupGitRepos();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "push",
+			REF: "refs/heads/main",
+			REF_NAME: "main",
+		});
+
+		expect(result.isRelease).toBe(false);
+		expect(result.releaseTag).toBe("");
+	});
+
+	test("pull_request event does not trigger release even if tag points at HEAD", async () => {
+		const { local } = await setupGitRepos();
+		await $`git -C ${local} tag v18.0.7`.quiet();
+
+		const result = await runDetectScript(local, {
+			EVENT_NAME: "pull_request",
+			REF: "refs/heads/main",
+			REF_NAME: "main",
+		});
+
 		expect(result.isRelease).toBe(false);
 		expect(result.releaseTag).toBe("");
 	});
