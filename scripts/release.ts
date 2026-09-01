@@ -57,6 +57,15 @@ export function formatReleaseTagPushArgs(version: string, sha: string): string[]
 	return ["push", "origin", `${sha}:refs/tags/${tagRef}`];
 }
 
+export function filterRunsForTag<T extends { headBranch?: string }>(
+	runs: readonly T[],
+	tagRef?: string,
+): T[] {
+	if (!tagRef) return [...runs];
+	const bareTag = tagRef.replace(/^refs\/tags\//, "");
+	return runs.filter(r => r.headBranch === bareTag);
+}
+
 function git(args: readonly string[]) {
 	return $`git -c core.fsmonitor=false -c core.untrackedCache=false -c fetch.pruneTags=false ${args}`;
 }
@@ -74,9 +83,7 @@ async function watchCI(options: { tagRef?: string } = {}): Promise<boolean> {
 		let runs: Array<{ databaseId: number; status: string; conclusion: string | null; name: string; headBranch?: string }> =
 			JSON.parse(runsOutput);
 		if (options.tagRef) {
-			const bareTag = options.tagRef.replace(/^refs\/tags\//, "");
-			const tagRuns = runs.filter(r => r.headBranch === bareTag);
-			if (tagRuns.length > 0) runs = tagRuns;
+			runs = filterRunsForTag(runs, options.tagRef);
 		}
 
 		if (runs.length === 0) {

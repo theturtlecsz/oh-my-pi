@@ -118,14 +118,13 @@ jobs:
          # the GitHub release prerelease, and skip the stable-only brew tap.
          channel: ${{ steps.detect.outputs.channel }}
       steps:
-         # Only a main-branch run needs tags fetched, so `git tag --points-at
-         # HEAD` can see the freshly-pushed `v*`. A tag-ref dispatch reads the
-         # tag straight from `github.ref_name`, and fetching `--tags` while
-         # checkout uses an explicit tag refspec makes git refuse — so scope
-         # fetch-tags to main refs.
+         # Main-branch runs and workflow_dispatch events fetch tags so
+         # `git tag --points-at HEAD` can resolve the release tag. Tag-ref
+         # dispatches use explicit tag refspecs where `--tags` conflicts,
+         # so scope fetch-tags away from explicit tag refspecs.
          - uses: actions/checkout@v4
            with:
-              fetch-tags: ${{ github.ref == 'refs/heads/main' }}
+              fetch-tags: ${{ github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/')) }}
          - name: Detect release tag at HEAD
            id: detect
            shell: bash
@@ -133,35 +132,35 @@ jobs:
               is_release=false
               release_tag=""
               channel=stable
-              case "${{ github.ref }}" in
-                refs/tags/v[0-9]*)
-                  release_tag="${{ github.ref_name }}"
-                  ;;
-                refs/heads/main)
-                  if [ "${{ github.event_name }}" != "pull_request" ]; then
-                    release_tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1 || true)
-                  fi
-                  ;;
-                *)
-                  if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.release_tag }}" ]; then
-                    candidate_tag="${{ inputs.release_tag }}"
-                    if echo "$candidate_tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-canary\.(0|[1-9][0-9]*))?$'; then
-                      if git tag --points-at HEAD | grep -Fxq "$candidate_tag"; then
-                        git fetch origin main --depth=100 || true
-                        if git merge-base --is-ancestor HEAD origin/main 2>/dev/null || [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main 2>/dev/null)" ]; then
-                          release_tag="$candidate_tag"
-                        else
-                          echo "::error title=Release Refused::Dispatch release tag $candidate_tag is not reachable from origin/main."
-                        fi
-                      else
-                        echo "::error title=Release Refused::Dispatch release tag $candidate_tag does not point to checked-out HEAD."
-                      fi
+              if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.release_tag }}" ]; then
+                candidate_tag="${{ inputs.release_tag }}"
+                if echo "$candidate_tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-canary\.(0|[1-9][0-9]*))?$'; then
+                  git fetch origin --tags --depth=100 || true
+                  if git tag --points-at HEAD | grep -Fxq "$candidate_tag"; then
+                    git fetch origin main --depth=100 || true
+                    if git merge-base --is-ancestor HEAD origin/main 2>/dev/null || [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main 2>/dev/null)" ]; then
+                      release_tag="$candidate_tag"
                     else
-                      echo "::error title=Release Refused::Invalid release tag format: $candidate_tag"
+                      echo "::error title=Release Refused::Dispatch release tag $candidate_tag is not reachable from origin/main."
                     fi
+                  else
+                    echo "::error title=Release Refused::Dispatch release tag $candidate_tag does not point to checked-out HEAD."
                   fi
-                  ;;
-              esac
+                else
+                  echo "::error title=Release Refused::Invalid release tag format: $candidate_tag"
+                fi
+              else
+                case "${{ github.ref }}" in
+                  refs/tags/v[0-9]*)
+                    release_tag="${{ github.ref_name }}"
+                    ;;
+                  refs/heads/main)
+                    if [ "${{ github.event_name }}" != "pull_request" ]; then
+                      release_tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1 || true)
+                    fi
+                    ;;
+                esac
+              fi
               if [ -n "$release_tag" ]; then
                 echo "Validated release tag $release_tag at HEAD; this run builds and publishes the release."
                 is_release=true

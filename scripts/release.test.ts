@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bumpCanaryVersion, bumpVersion, formatReleaseBranchPushArgs, formatReleaseTagPushArgs, releaseBranchName, releasePrTitle, validateExplicitVersion, validateReleaseTag } from "./release";
+import { bumpCanaryVersion, bumpVersion, filterRunsForTag, formatReleaseBranchPushArgs, formatReleaseTagPushArgs, releaseBranchName, releasePrTitle, validateExplicitVersion, validateReleaseTag } from "./release";
 
 describe("validateExplicitVersion", () => {
 	test("rejects malformed versions", () => {
@@ -102,5 +102,137 @@ describe("validateReleaseTag", () => {
 		expect(validateReleaseTag("v18.0.7-beta.1")).toBe(false);
 		expect(validateReleaseTag("")).toBe(false);
 		expect(validateReleaseTag("random-tag")).toBe(false);
+	});
+});
+
+describe("filterRunsForTag", () => {
+	const mainRun = { databaseId: 101, status: "completed", conclusion: "success", name: "CI", headBranch: "main" };
+	const otherBranchRun = { databaseId: 102, status: "completed", conclusion: "success", name: "CI", headBranch: "feature" };
+	const tagRun = { databaseId: 201, status: "in_progress", conclusion: null, name: "CI", headBranch: "v18.0.7" };
+	const completedTagRun = { databaseId: 201, status: "completed", conclusion: "success", name: "CI", headBranch: "v18.0.7" };
+
+	test("returns all runs when no tagRef is specified", () => {
+		const runs = [mainRun, otherBranchRun];
+		expect(filterRunsForTag(runs)).toEqual(runs);
+		expect(filterRunsForTag(runs, undefined)).toEqual(runs);
+	});
+
+	test("filters strictly by bare tag name", () => {
+		const runs = [mainRun, tagRun];
+		expect(filterRunsForTag(runs, "v18.0.7")).toEqual([tagRun]);
+		expect(filterRunsForTag(runs, "refs/tags/v18.0.7")).toEqual([tagRun]);
+	});
+
+	test("returns empty array when tag run has not yet appeared even if prior main run succeeded", () => {
+		// Critical safety guard: existing completed main run must NOT be accepted before tag run starts
+		const runs = [mainRun];
+		const filtered = filterRunsForTag(runs, "v18.0.7");
+		expect(filtered).toEqual([]);
+	});
+
+	test("matches tag run once it appears alongside main run", () => {
+		const runs = [mainRun, completedTagRun];
+		const filtered = filterRunsForTag(runs, "v18.0.7");
+		expect(filtered).toEqual([completedTagRun]);
+	});
+});
+
+describe("workflow_dispatch and ref release detection logic", () => {
+	function evaluateReleaseDetection(params: {
+		eventName: string;
+		ref: string;
+		refName: string;
+		inputReleaseTag?: string;
+		tagsAtHead?: string[];
+	}): { isRelease: boolean; releaseTag: string; channel: string } {
+		let isRelease = false;
+		let releaseTag = "";
+		let channel = "stable";
+
+		if (params.eventName === "workflow_dispatch" && params.inputReleaseTag) {
+			const candidate = params.inputReleaseTag;
+			if (validateReleaseTag(candidate)) {
+				if (params.tagsAtHead?.includes(candidate)) {
+					releaseTag = candidate;
+				}
+			}
+		} else {
+			if (params.ref.startsWith("refs/tags/v")) {
+				releaseTag = params.refName;
+			} else if (params.ref === "refs/heads/main") {
+				if (params.eventName !== "pull_request") {
+					const matching = params.tagsAtHead?.find(t => /^v\d/.test(t));
+					if (matching) releaseTag = matching;
+				}
+			}
+		}
+
+		if (releaseTag) {
+			isRelease = true;
+		}
+		if (releaseTag.includes("-canary.")) {
+			channel = "canary";
+		}
+
+		return { isRelease, releaseTag, channel };
+	}
+
+	test("handles workflow_dispatch with valid release_tag on refs/heads/main", () => {
+		const result = evaluateReleaseDetection({
+			eventName: "workflow_dispatch",
+			ref: "refs/heads/main",
+			refName: "main",
+			inputReleaseTag: "v18.0.7",
+			tagsAtHead: ["v18.0.7"],
+		});
+		expect(result.isRelease).toBe(true);
+		expect(result.releaseTag).toBe("v18.0.7");
+		expect(result.channel).toBe("stable");
+	});
+
+	test("handles workflow_dispatch with valid canary release_tag", () => {
+		const result = evaluateReleaseDetection({
+			eventName: "workflow_dispatch",
+			ref: "refs/heads/main",
+			refName: "main",
+			inputReleaseTag: "v18.0.7-canary.1",
+			tagsAtHead: ["v18.0.7-canary.1"],
+		});
+		expect(result.isRelease).toBe(true);
+		expect(result.releaseTag).toBe("v18.0.7-canary.1");
+		expect(result.channel).toBe("canary");
+	});
+
+	test("rejects workflow_dispatch with invalid release_tag format", () => {
+		const result = evaluateReleaseDetection({
+			eventName: "workflow_dispatch",
+			ref: "refs/heads/main",
+			refName: "main",
+			inputReleaseTag: "18.0.7",
+			tagsAtHead: ["18.0.7"],
+		});
+		expect(result.isRelease).toBe(false);
+		expect(result.releaseTag).toBe("");
+	});
+
+	test("detects tag push events", () => {
+		const result = evaluateReleaseDetection({
+			eventName: "push",
+			ref: "refs/tags/v18.0.7",
+			refName: "v18.0.7",
+		});
+		expect(result.isRelease).toBe(true);
+		expect(result.releaseTag).toBe("v18.0.7");
+	});
+
+	test("does not detect release on PR events", () => {
+		const result = evaluateReleaseDetection({
+			eventName: "pull_request",
+			ref: "refs/heads/main",
+			refName: "main",
+			tagsAtHead: ["v18.0.7"],
+		});
+		expect(result.isRelease).toBe(false);
+		expect(result.releaseTag).toBe("");
 	});
 });
