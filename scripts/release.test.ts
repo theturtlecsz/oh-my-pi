@@ -1,9 +1,19 @@
+import { beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
-import { beforeAll, describe, expect, test } from "bun:test";
-import { bumpCanaryVersion, bumpVersion, filterRunsForTag, formatReleaseBranchPushArgs, formatReleaseTagPushArgs, releaseBranchName, releasePrTitle, validateExplicitVersion, validateReleaseTag } from "./release";
+import {
+	bumpCanaryVersion,
+	bumpVersion,
+	filterRunsForTag,
+	formatReleaseBranchPushArgs,
+	formatReleaseTagPushArgs,
+	releaseBranchName,
+	releasePrTitle,
+	validateExplicitVersion,
+	validateReleaseTag,
+} from "./release";
 
 describe("validateExplicitVersion", () => {
 	test("rejects malformed versions", () => {
@@ -111,9 +121,21 @@ describe("validateReleaseTag", () => {
 
 describe("filterRunsForTag", () => {
 	const mainRun = { databaseId: 101, status: "completed", conclusion: "success", name: "CI", headBranch: "main" };
-	const otherBranchRun = { databaseId: 102, status: "completed", conclusion: "success", name: "CI", headBranch: "feature" };
+	const otherBranchRun = {
+		databaseId: 102,
+		status: "completed",
+		conclusion: "success",
+		name: "CI",
+		headBranch: "feature",
+	};
 	const tagRun = { databaseId: 201, status: "in_progress", conclusion: null, name: "CI", headBranch: "v18.0.7" };
-	const completedTagRun = { databaseId: 201, status: "completed", conclusion: "success", name: "CI", headBranch: "v18.0.7" };
+	const completedTagRun = {
+		databaseId: 201,
+		status: "completed",
+		conclusion: "success",
+		name: "CI",
+		headBranch: "v18.0.7",
+	};
 
 	test("returns all runs when no tagRef is specified", () => {
 		const runs = [mainRun, otherBranchRun];
@@ -142,8 +164,6 @@ describe("filterRunsForTag", () => {
 });
 
 describe("CI release_metadata workflow detection", () => {
-	let originDir: string;
-	let localDir: string;
 	let detectScript: string;
 
 	beforeAll(async () => {

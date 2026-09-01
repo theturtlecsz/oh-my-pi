@@ -57,10 +57,7 @@ export function formatReleaseTagPushArgs(version: string, sha: string): string[]
 	return ["push", "origin", `${sha}:refs/tags/${tagRef}`];
 }
 
-export function filterRunsForTag<T extends { headBranch?: string }>(
-	runs: readonly T[],
-	tagRef?: string,
-): T[] {
+export function filterRunsForTag<T extends { headBranch?: string }>(runs: readonly T[], tagRef?: string): T[] {
 	if (!tagRef) return [...runs];
 	const bareTag = tagRef.replace(/^refs\/tags\//, "");
 	return runs.filter(r => r.headBranch === bareTag);
@@ -79,9 +76,15 @@ async function watchCI(options: { tagRef?: string } = {}): Promise<boolean> {
 	console.log(`  Commit: ${commitSha.slice(0, 8)}${options.tagRef ? ` (tag: ${options.tagRef})` : ""}`);
 
 	while (true) {
-		const runsOutput = await $`gh run list --commit ${commitSha} --json databaseId,status,conclusion,name,headBranch`.text();
-		let runs: Array<{ databaseId: number; status: string; conclusion: string | null; name: string; headBranch?: string }> =
-			JSON.parse(runsOutput);
+		const runsOutput =
+			await $`gh run list --commit ${commitSha} --json databaseId,status,conclusion,name,headBranch`.text();
+		let runs: Array<{
+			databaseId: number;
+			status: string;
+			conclusion: string | null;
+			name: string;
+			headBranch?: string;
+		}> = JSON.parse(runsOutput);
 		if (options.tagRef) {
 			runs = filterRunsForTag(runs, options.tagRef);
 		}
@@ -246,7 +249,9 @@ async function cmdPublish(versionArg: string): Promise<void> {
 	const localHead = (await git(["rev-parse", "HEAD"]).text()).trim();
 	const remoteHead = (await git(["rev-parse", "origin/main"]).text()).trim();
 	if (localHead !== remoteHead) {
-		console.error(`Error: Local HEAD (${localHead.slice(0, 8)}) does not match origin/main (${remoteHead.slice(0, 8)}). Run 'git pull' first.`);
+		console.error(
+			`Error: Local HEAD (${localHead.slice(0, 8)}) does not match origin/main (${remoteHead.slice(0, 8)}). Run 'git pull' first.`,
+		);
 		process.exit(1);
 	}
 
@@ -525,8 +530,12 @@ if (import.meta.main) {
 
 	if (!arg) {
 		console.error("Usage:");
-		console.error("  bun scripts/release.ts <version|major|minor|patch|canary>   Stage release commit and push release PR branch");
-		console.error("  bun scripts/release.ts publish <version>             Publish release tag after PR merge to main");
+		console.error(
+			"  bun scripts/release.ts <version|major|minor|patch|canary>   Stage release commit and push release PR branch",
+		);
+		console.error(
+			"  bun scripts/release.ts publish <version>             Publish release tag after PR merge to main",
+		);
 		console.error("  bun scripts/release.ts watch                         Watch CI for current commit");
 		process.exit(1);
 	}
@@ -551,8 +560,12 @@ if (import.meta.main) {
 	} else {
 		console.error(`Unknown command or invalid version: ${arg}`);
 		console.error("Usage:");
-		console.error("  bun scripts/release.ts <version|major|minor|patch|canary>   Stage release commit and push release PR branch");
-		console.error("  bun scripts/release.ts publish <version>             Publish release tag after PR merge to main");
+		console.error(
+			"  bun scripts/release.ts <version|major|minor|patch|canary>   Stage release commit and push release PR branch",
+		);
+		console.error(
+			"  bun scripts/release.ts publish <version>             Publish release tag after PR merge to main",
+		);
 		console.error("  bun scripts/release.ts watch                         Watch CI for current commit");
 		process.exit(1);
 	}
