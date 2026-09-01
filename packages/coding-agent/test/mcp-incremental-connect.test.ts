@@ -28,6 +28,21 @@ function fixtureConfig(): MCPStdioServerConfig {
 	return { type: "stdio", command: process.execPath, args: [FIXTURE_PATH] };
 }
 
+/**
+ * `connectServers` returns after `STARTUP_TIMEOUT_MS` (250 ms) and lets slow
+ * cold-starting servers register tools via the background `#onToolsChanged`
+ * chain (issue #2100 anti-blocking design). Await that signal before
+ * asserting on the tool registry; the per-test timeout bounds the wait.
+ */
+function waitForToolCount(manager: MCPManager, count: number): Promise<void> {
+	if (manager.getTools().length >= count) return Promise.resolve();
+	const { promise, resolve } = Promise.withResolvers<void>();
+	manager.setOnToolsChanged(tools => {
+		if (tools.length >= count) resolve();
+	});
+	return promise;
+}
+
 describe("MCP incremental connectServers", () => {
 	let workDir: string;
 	let manager: MCPManager;
@@ -44,6 +59,7 @@ describe("MCP incremental connectServers", () => {
 
 	it("keeps server A tools after incrementally connecting server B", async () => {
 		await manager.connectServers({ [SERVER_A]: fixtureConfig() }, {});
+		await waitForToolCount(manager, MANY_TOOL_COUNT);
 		expect(manager.getConnectionStatus(SERVER_A)).toBe("connected");
 		const afterA = manager.getTools();
 		expect(afterA.map(t => t.name)).toContain(TOOL_A);
@@ -51,6 +67,7 @@ describe("MCP incremental connectServers", () => {
 		expect(afterA.every(t => t.mcpServerName === SERVER_A)).toBe(true);
 
 		const result = await manager.connectServers({ [SERVER_B]: fixtureConfig() }, {});
+		await waitForToolCount(manager, MANY_TOOL_COUNT * 2);
 		expect(manager.getConnectionStatus(SERVER_A)).toBe("connected");
 		expect(manager.getConnectionStatus(SERVER_B)).toBe("connected");
 
@@ -60,12 +77,15 @@ describe("MCP incremental connectServers", () => {
 		expect(tools).toHaveLength(MANY_TOOL_COUNT * 2);
 		expect(tools.filter(t => t.mcpServerName === SERVER_A)).toHaveLength(MANY_TOOL_COUNT);
 		expect(tools.filter(t => t.mcpServerName === SERVER_B)).toHaveLength(MANY_TOOL_COUNT);
-		expect(result.tools.map(t => t.name)).toEqual(tools.map(t => t.name));
+		// `result.tools` is the registry snapshot at return time; late-arriving
+		// tools may only appear in the polled registry, never the reverse.
+		expect(tools.map(t => t.name)).toEqual(expect.arrayContaining(result.tools.map(t => t.name)));
 		expect(result.connectedServers).toContain(SERVER_B);
 	}, 20_000);
 
 	it("applyMcpToggleRuntime enable of B refreshes the A+B union", async () => {
 		await manager.connectServers({ [SERVER_A]: fixtureConfig() }, {});
+		await waitForToolCount(manager, MANY_TOOL_COUNT);
 		expect(manager.getTools()).toHaveLength(MANY_TOOL_COUNT);
 
 		const refreshed: string[][] = [];
@@ -85,6 +105,7 @@ describe("MCP incremental connectServers", () => {
 				exaApiKeys: [],
 			}),
 		});
+		await waitForToolCount(manager, MANY_TOOL_COUNT * 2);
 
 		expect(manager.getConnectionStatus(SERVER_A)).toBe("connected");
 		expect(manager.getConnectionStatus(SERVER_B)).toBe("connected");
@@ -92,9 +113,11 @@ describe("MCP incremental connectServers", () => {
 		expect(names).toContain(TOOL_A);
 		expect(names).toContain(TOOL_B);
 		expect(manager.getTools()).toHaveLength(MANY_TOOL_COUNT * 2);
-		expect(refreshed.at(-1)).toContain(TOOL_A);
-		expect(refreshed.at(-1)).toContain(TOOL_B);
-		expect(refreshed.at(-1)).toHaveLength(MANY_TOOL_COUNT * 2);
+		// The refresh callback receives the post-connect snapshot; server B's
+		// tools may still be in flight on a cold start. The guarded regression
+		// is that enabling B must never drop A's already-registered tools.
+		const lastRefresh = refreshed.at(-1) ?? [];
+		expect(lastRefresh.filter(name => name.startsWith(`mcp__${SERVER_A}_`))).toHaveLength(MANY_TOOL_COUNT);
 	}, 20_000);
 
 	it("notifies connection-status listeners on connect and transport loss", async () => {
