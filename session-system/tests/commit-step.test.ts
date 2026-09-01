@@ -17,17 +17,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { candidateSha256 } from "@oh-my-pi/pi-work-client";
-import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, type GhPrRunner, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
+import { candidateDrift, dirtyPaths, findSecrets, freezeCandidateCommit, type GhPrRunner, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
 let repoSeq = 0;
-const makeRepo = (): string => {
+const makeRepo = (branch = "main"): string => {
 	const repo = path.join(tempRoot, `repo-${repoSeq++}`);
 	fs.mkdirSync(repo, { recursive: true });
 	for (const args of [
-		["init", "-q"],
+		["init", `--initial-branch=${branch}`, "-q"],
 		["config", "user.email", "test@example.com"],
 		["config", "user.name", "Test"],
 	])
@@ -730,6 +730,79 @@ describe("merge confirmation gating (OMP-212)", () => {
 		expect(outcome.detail).toContain("expected main");
 	});
 
+	test("refuses completion when PR base branch is absent", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const absentBaseGh: GhPrRunner = () => ({
+			ok: true,
+			out: {
+				pr: {
+					state: "MERGED",
+					headRefName: "execution/omp-212",
+				},
+				requiredChecks: [{ name: "test", state: "SUCCESS", bucket: "pass" }],
+			},
+			err: "",
+		});
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", absentBaseGh);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("PR base branch is absent");
+	});
+
+	test("refuses completion when PR head branch is absent", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const absentHeadGh: GhPrRunner = () => ({
+			ok: true,
+			out: {
+				pr: {
+					state: "MERGED",
+					baseRefName: "main",
+				},
+				requiredChecks: [{ name: "test", state: "SUCCESS", bucket: "pass" }],
+			},
+			err: "",
+		});
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", absentHeadGh);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("PR head branch is absent");
+	});
+
+	test("refuses completion when PR head branch does not match candidate branch", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		const wrongHeadGh: GhPrRunner = () => ({
+			ok: true,
+			out: {
+				pr: {
+					state: "MERGED",
+					baseRefName: "main",
+					headRefName: "other-feature",
+				},
+				requiredChecks: [{ name: "test", state: "SUCCESS", bucket: "pass" }],
+			},
+			err: "",
+		});
+		const outcome = verifyMergeConfirmation(repo, head, "refs/heads/execution/omp-212", "refs/heads/main", wrongHeadGh);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("PR head branch is other-feature, expected execution/omp-212");
+	});
+
+	test("resolveDefaultBranch detects master vs main from remote or local", () => {
+		const repoMain = makeRepo("main");
+		expect(resolveDefaultBranch(repoMain)).toBe("refs/heads/main");
+
+		const repoMaster = makeRepo("master");
+		expect(resolveDefaultBranch(repoMaster)).toBe("refs/heads/master");
+
+		const remoteMaster = path.join(tempRoot, `remote-master-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "--initial-branch=master", "-q", remoteMaster]);
+		const repoRemote = makeRepo("temp");
+		git(repoRemote, "remote", "add", "origin", remoteMaster);
+		git(repoRemote, "push", "-q", "origin", "HEAD:refs/heads/master");
+		git(repoRemote, "fetch", "-q", "origin");
+		expect(resolveDefaultBranch(repoRemote)).toBe("refs/heads/master");
+	});
 	test("refuses completion when PR state is OPEN or not MERGED", () => {
 		const repo = makeRepo();
 		const head = git(repo, "rev-parse", "HEAD");
@@ -739,6 +812,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 				pr: {
 					state: "OPEN",
 					baseRefName: "main",
+					headRefName: "execution/omp-212",
 				},
 				requiredChecks: [{ name: "test", state: "SUCCESS", bucket: "pass" }],
 			},
@@ -758,6 +832,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 				pr: {
 					state: "MERGED",
 					baseRefName: "main",
+					headRefName: "execution/omp-212",
 				},
 				requiredChecks: [],
 			},
@@ -777,6 +852,7 @@ describe("merge confirmation gating (OMP-212)", () => {
 				pr: {
 					state: "MERGED",
 					baseRefName: "main",
+					headRefName: "execution/omp-212",
 				},
 				requiredChecks: [
 					{ name: "lint-required", state: "FAILURE", bucket: "fail", conclusion: "FAILURE" },

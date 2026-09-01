@@ -2421,4 +2421,87 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			refSpy.mockRestore();
 		}
 	});
+
+	test("binds dedicated execution branch ref when starting on default branch master", async () => {
+		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		const fakePi = {
+			zod: z,
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				registeredCommands.set(name, def.handler);
+			},
+			registerFlag: () => {},
+			on: () => {},
+			appendEntry: () => {},
+			sendMessage: () => {},
+			getSessionId: () => "sess-master",
+		} as unknown as ExtensionAPI;
+
+		let capturedRemoteRef: string | undefined;
+		const mockBackend = {
+			cacheFile: "test-cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			workspaceId: "ws-1",
+			pendingDeliveries: async () => [],
+			findIssue: async (_keyOrId: string) => ({ id: "uuid-master", key: "OMP-212", title: "Test Master", project: "The Bookends" }),
+			issueDetail: async () => ({ key: "OMP-212", attemptSnapshot: undefined }),
+			workflowState: async () => ({ open_blockers: [] }),
+			getFocusVersion: async () => 1,
+			beginExecution: async (input: { remoteRef: string }) => {
+				capturedRemoteRef = input.remoteRef;
+				return {
+					grant: {
+						grant_id: "grant-master",
+						grant_version: 1,
+						remote_ref: input.remoteRef,
+						state: "active",
+					},
+					items: [],
+					activeItem: null,
+				};
+			},
+			workClient: {
+				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workItem: async () => ({
+					work_id: "uuid-master",
+					project_id: "proj-1",
+					revision: {
+						revision_id: "rev-master",
+						description: "desc",
+					},
+				}),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const handler = registeredCommands.get("execute");
+		expect(handler).toBeDefined();
+
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		const headSpy = vi.spyOn(gitModule, "headCommit").mockReturnValue("1".repeat(40));
+		const refSpy = vi.spyOn(gitModule, "currentSymbolicRef").mockReturnValue("refs/heads/master");
+		try {
+			const fakeCtx = {
+				cwd: "/tmp/repo",
+				taskDepth: 0,
+				ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+			} as unknown as ExtensionContext;
+
+			await handler!("OMP-212", fakeCtx);
+			expect(capturedRemoteRef).toBe("refs/heads/execution/omp-212");
+		} finally {
+			dirtySpy.mockRestore();
+			headSpy.mockRestore();
+			refSpy.mockRestore();
+		}
+	});
 });

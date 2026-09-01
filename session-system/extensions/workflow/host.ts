@@ -67,7 +67,7 @@ import {
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
-import { currentSymbolicRef, dirtyPaths, freezeCandidateCommit, headCommit, inProgressGitOp, parentCommit, pushCandidate, rangeDiffSha256, runGit, validateExecutionPaths, verifyMergeConfirmation } from "./git";
+import { currentSymbolicRef, dirtyPaths, freezeCandidateCommit, headCommit, inProgressGitOp, parentCommit, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runGit, validateExecutionPaths, verifyMergeConfirmation } from "./git";
 import {
 	cancelBatchPath,
 	consumeStagedCancelBatch,
@@ -2565,7 +2565,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 					ctx.ui.notify("Cannot begin execution: detached HEAD or invalid branch ref", "error");
 					return;
 				}
-				const isDefaultBranch = currentRef === "refs/heads/main" || currentRef === "refs/heads/master";
+				const defaultBranch = resolveDefaultBranch(ctx.cwd);
+				const isDefaultBranch = currentRef === defaultBranch || currentRef === "refs/heads/main" || currentRef === "refs/heads/master";
 				const remoteRef = isDefaultBranch ? `refs/heads/execution/${issue.key.toLowerCase()}` : currentRef;
 				const tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
 				const statusRes = await backend.workflowState(issue.key);
@@ -3607,7 +3608,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 								const currentExec = await backend.getExecution(params.work);
 								if (!currentExec || !currentExec.activeItem) return deny("execution grant missing after settlement");
 								const remoteRef = currentExec.grant.remote_ref;
-								const mergeCheck = verifyMergeConfirmation(ctx.cwd, candidateCommit, remoteRef);
+								const defaultBranch = resolveDefaultBranch(ctx.cwd);
+								const mergeCheck = verifyMergeConfirmation(ctx.cwd, candidateCommit, remoteRef, defaultBranch);
 								if (!mergeCheck.confirmed) {
 									return deny(`Work item completion pending merge confirmation: ${mergeCheck.detail}. Pushing to ${remoteRef} alone does not mark the item delivered.`);
 								}

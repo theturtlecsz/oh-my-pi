@@ -560,6 +560,27 @@ export function currentSymbolicRef(root: string): string | undefined {
 	return ref.startsWith("refs/heads/") ? ref : undefined;
 }
 
+export function resolveDefaultBranch(root: string): string {
+	const originHead = runGit(root, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+	if (originHead.ok && originHead.out) {
+		const target = originHead.out.trim();
+		const prefix = "refs/remotes/origin/";
+		if (target.startsWith(prefix)) {
+			return `refs/heads/${target.slice(prefix.length)}`;
+		}
+	}
+	const masterCheck = runGit(root, ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/master"]);
+	const mainCheck = runGit(root, ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"]);
+	if (masterCheck.ok && !mainCheck.ok) {
+		return "refs/heads/master";
+	}
+	const localSymbolic = currentSymbolicRef(root);
+	if (localSymbolic === "refs/heads/master") {
+		return "refs/heads/master";
+	}
+	return "refs/heads/main";
+}
+
 export function pushCandidate(root: string, commitSha: string, expectedBaseline?: string, targetRemoteRef?: string): PushOutcome {
 	try {
 		const remoteRef = targetRemoteRef ?? currentSymbolicRef(root);
@@ -700,11 +721,12 @@ export function verifyMergeConfirmation(
 	root: string,
 	commitSha: string,
 	remoteRef: string,
-	defaultBranch = "refs/heads/main",
+	defaultBranch?: string,
 	ghRunner: GhPrRunner = defaultGhPrRunner,
 ): MergeConfirmationOutcome {
-	const defaultBranchName = defaultBranch.startsWith("refs/heads/") ? defaultBranch.slice("refs/heads/".length) : defaultBranch;
-	const isDefaultBranch = remoteRef === defaultBranch || remoteRef === defaultBranchName;
+	const resolvedDefault = defaultBranch ?? resolveDefaultBranch(root);
+	const defaultBranchName = resolvedDefault.startsWith("refs/heads/") ? resolvedDefault.slice("refs/heads/".length) : resolvedDefault;
+	const isDefaultBranch = remoteRef === resolvedDefault || remoteRef === defaultBranchName;
 	if (isDefaultBranch) {
 		return { confirmed: false, detail: "direct push to protected default branch is disabled; execution candidate must target a dedicated execution branch with merge confirmation" };
 	}
@@ -721,10 +743,17 @@ export function verifyMergeConfirmation(
 
 	const { pr, requiredChecks } = ghResult.out;
 
-	if (pr.baseRefName && pr.baseRefName !== defaultBranchName) {
+	if (!pr.baseRefName || pr.baseRefName !== defaultBranchName) {
 		return {
 			confirmed: false,
-			detail: `PR base branch is ${pr.baseRefName}, expected ${defaultBranchName}`,
+			detail: `PR base branch is ${pr.baseRefName ?? "absent"}, expected ${defaultBranchName}`,
+		};
+	}
+
+	if (!pr.headRefName || pr.headRefName !== branchName) {
+		return {
+			confirmed: false,
+			detail: `PR head branch is ${pr.headRefName ?? "absent"}, expected ${branchName}`,
 		};
 	}
 
@@ -755,16 +784,16 @@ export function verifyMergeConfirmation(
 		}
 	}
 
-	// 2. Fetch origin/main to verify ancestry against current remote tip
-	const fetch = runGit(root, ["fetch", "origin", defaultBranch], 30_000);
+	// 2. Fetch origin default branch to verify ancestry against current remote tip
+	const fetch = runGit(root, ["fetch", "origin", resolvedDefault], 30_000);
 	if (!fetch.ok) {
 		return {
 			confirmed: false,
-			detail: `fetch ${defaultBranch} failed: ${fetch.err || "unable to fetch origin"}`,
+			detail: `fetch ${resolvedDefault} failed: ${fetch.err || "unable to fetch origin"}`,
 		};
 	}
 
-	// 3. Ancestry verification: origin/main must contain the candidate commit
+	// 3. Ancestry verification: origin/<defaultBranchName> must contain the candidate commit
 	const ancestor = runGit(root, ["merge-base", "--is-ancestor", commitSha, `origin/${defaultBranchName}`]);
 	if (!ancestor.ok) {
 		const tip = runGit(root, ["rev-parse", `origin/${defaultBranchName}`]);
