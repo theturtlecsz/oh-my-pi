@@ -17,7 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { candidateSha256 } from "@oh-my-pi/pi-work-client";
-import { candidateDrift, dirtyPaths, ensureUpToDateWithDefault, findSecrets, freezeCandidateCommit, type GhPrRunner, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runBiomeCheck, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
+import { candidateDrift, cleanupExecutionWorkspace, dirtyPaths, ensureExecutionWorkspace, ensureUpToDateWithDefault, findSecrets, freezeCandidateCommit, type GhPrRunner, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runBiomeCheck, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -425,6 +425,66 @@ describe("candidate freeze and push", () => {
 			remoteCommit: later,
 		});
 		expect(outcome.detail).toContain(`containment: ${later} contains ${frozen}`);
+	});
+});
+
+describe("managed execution worktrees (OMP-213)", () => {
+	test("isolates owner dirt, reuses by grant, and cleans only when workspace is clean", async () => {
+		const repo = makeRepo();
+		const baseline = git(repo, "rev-parse", "HEAD");
+		fs.writeFileSync(path.join(repo, "owner-only.txt"), "owner dirt\n");
+		const worktreesRoot = path.join(tempRoot, `managed-${repoSeq++}`);
+		const grantId = "00000000-0000-7000-8000-000000000213";
+
+		const first = await ensureExecutionWorkspace(repo, "OMP-213", grantId, baseline, {}, worktreesRoot);
+		expect(first.reused).toBe(false);
+		expect(first.path).not.toBe(repo);
+		expect(path.basename(first.path)).toBe(path.basename(repo));
+		expect(first.branch).toContain("execution/omp-213-00000000");
+		expect(git(first.path, "rev-parse", "HEAD")).toBe(baseline);
+		expect(dirtyPaths(first.path)).toEqual([]);
+		expect(fs.readFileSync(path.join(repo, "owner-only.txt"), "utf8")).toBe("owner dirt\n");
+
+		fs.writeFileSync(path.join(first.path, "isolated-only.txt"), "isolated\n");
+		expect(fs.existsSync(path.join(repo, "isolated-only.txt"))).toBe(false);
+		const reused = await ensureExecutionWorkspace(repo, "OMP-213", grantId, baseline, {}, worktreesRoot);
+		expect(reused.path).toBe(first.path);
+		expect(reused.reused).toBe(true);
+
+		const dirtyCleanup = await cleanupExecutionWorkspace(first);
+		expect(dirtyCleanup.cleaned).toBe(false);
+		expect(fs.existsSync(first.path)).toBe(true);
+		fs.rmSync(path.join(first.path, "isolated-only.txt"));
+		const cleanCleanup = await cleanupExecutionWorkspace(first);
+		expect(cleanCleanup.cleaned).toBe(true);
+		expect(fs.existsSync(first.path)).toBe(false);
+		expect(fs.readFileSync(path.join(repo, "owner-only.txt"), "utf8")).toBe("owner dirt\n");
+	});
+
+	test("same work key never reuses a terminal grant workspace", async () => {
+		const repo = makeRepo();
+		const baseline = git(repo, "rev-parse", "HEAD");
+		const worktreesRoot = path.join(tempRoot, `managed-${repoSeq++}`);
+		const first = await ensureExecutionWorkspace(
+			repo,
+			"OMP-213",
+			"00000000-0000-7000-8000-000000000001",
+			baseline,
+			{},
+			worktreesRoot,
+		);
+		const second = await ensureExecutionWorkspace(
+			repo,
+			"OMP-213",
+			"00000000-0000-7000-8000-000000000002",
+			baseline,
+			{},
+			worktreesRoot,
+		);
+		expect(second.path).not.toBe(first.path);
+		expect(second.branch).not.toBe(first.branch);
+		await cleanupExecutionWorkspace(first);
+		await cleanupExecutionWorkspace(second);
 	});
 });
 

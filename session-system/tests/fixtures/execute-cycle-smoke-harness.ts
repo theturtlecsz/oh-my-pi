@@ -11,10 +11,12 @@ import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import { createWorkBackend } from "../../extensions/workflow/work";
 import { loadBearer, loadWorkConfig } from "../../extensions/workflow/config";
 import { freezeCandidateCommit } from "../../extensions/workflow/git";
+import { createWorkflowHost } from "../../extensions/workflow/host";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
 const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue" | "stale-attempt";
-const probe = process.argv[2];
+const ownerProbe = process.argv[2];
+let probe = ownerProbe;
 const workKeyArg = process.argv[4];
 
 if (!probe || !scenario) {
@@ -51,32 +53,31 @@ vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: any
 const loaded = await loadExtensions(["work-now.ts", "model-bookends.ts"].map(file => path.join(extDir, file)), probe);
 if (loaded.errors.length > 0) throw new Error(loaded.errors.map(error => error.error).join("; "));
 
+const missingYield = process.env.OMP_WORK_SMOKE_MISSING_YIELD === "1";
 let extensions = loaded.extensions;
-if (process.env.OMP_WORK_SMOKE_MISSING_YIELD === "1") {
-	const { createWorkflowHost } = await import("../../extensions/workflow/host");
-	const { createWorkBackend } = await import("../../extensions/workflow/work");
-	const { loadBearer, loadWorkConfig } = await import("../../extensions/workflow/config");
+if (missingYield) {
 	extensions = loaded.extensions.map((ext, idx) => {
-		if (idx === 0) {
-			return {
-				...ext,
-				factory: (pi: unknown) => {
-					const config = loadWorkConfig();
-					if (!config) return;
-					createWorkflowHost({
-						backend: createWorkBackend(config, () => loadBearer(config)),
-						teamNoun: "the ledger",
-						entryType: "work-now",
-						acceptEntry: data => data.backend === "work",
-						sourceResolver: (specifier: string) => specifier === "@oh-my-pi/pi-coding-agent/task/yield-assembly" ? undefined : import.meta.resolve(specifier),
-					})(pi as never);
-				},
-				tools: new Map(ext.tools),
-				commands: new Map(ext.commands),
-				handlers: new Map(),
-			};
-		}
-		return ext;
+		if (idx !== 0) return ext;
+		return {
+			...ext,
+			factory: (pi: unknown) => {
+				const config = loadWorkConfig();
+				if (!config) return;
+				createWorkflowHost({
+					backend: createWorkBackend(config, () => loadBearer(config)),
+					teamNoun: "the ledger",
+					entryType: "work-now",
+					acceptEntry: data => data.backend === "work",
+					sourceResolver: (specifier: string) =>
+						specifier === "@oh-my-pi/pi-coding-agent/task/yield-assembly"
+							? undefined
+							: import.meta.resolve(specifier),
+				})(pi as never);
+			},
+			tools: new Map(ext.tools),
+			commands: new Map(ext.commands),
+			handlers: new Map(),
+		};
 	});
 }
 const extension = extensions[0];
@@ -86,7 +87,7 @@ const uiCalls: string[] = [];
 const sentMessages: unknown[] = [];
 let modelTurnCount = 0;
 const sessionId = `smoke-exec-${scenario}`;
-const sessionBranchFile = path.join(path.dirname(probe), ".smoke-session-branch.json");
+const sessionBranchFile = path.join(path.dirname(ownerProbe), ".smoke-session-branch.json");
 const getBranch = () => {
 	try {
 		return JSON.parse(fs.readFileSync(sessionBranchFile, "utf8"));
@@ -99,11 +100,21 @@ const appendEntry = (customType: string, data: unknown) => {
 	list.push({ type: "custom", customType, data });
 	fs.writeFileSync(sessionBranchFile, JSON.stringify(list));
 };
+const fakeSessionManager = {
+	getCwd: () => probe,
+	getBranch,
+	getSessionId: () => sessionId,
+	getSessionName: () => undefined,
+	taskDepth: 0,
+	moveTo: async (cwd: string) => {
+		probe = path.resolve(cwd);
+	},
+};
 const runner = new ExtensionRunner(
 	extensions,
 	loaded.runtime,
 	probe,
-	{ getCwd: () => probe, getBranch, getSessionId: () => sessionId, taskDepth: 0 } as never,
+	fakeSessionManager as never,
 	{ getAvailable: () => [fableModel], hasProvider: () => true } as never,
 	undefined,
 	{ getModelRole: (role: string) => (role === "audit" ? "anthropic/claude-fable-5" : undefined), get: () => undefined, getStorage: () => undefined } as never,
@@ -135,7 +146,12 @@ runner.initialize(
 		shutdown: () => {},
 		getSystemPrompt: () => [],
 	} as never,
-	undefined,
+	{
+		newSession: async (options?: { setup?: (sessionManager: unknown) => Promise<void> }) => {
+			await options?.setup?.(fakeSessionManager);
+			return { cancelled: false };
+		},
+	} as never,
 	{
 		theme: { fg: (_c: string, text: string) => text },
 		setStatus: () => {},
@@ -151,14 +167,13 @@ const tool = extension.tools.get("work");
 if (!tool) throw new Error("work tool missing");
 
 await runner.emit({ type: "session_start" } as never);
-const ctx = runner.createContext();
 const cmdCtx = runner.createCommandContext();
 
 const pendingTurnDeliveries: Array<() => void> = [];
 
 async function execute(params: Record<string, unknown>): Promise<string> {
 	modelTurnCount++;
-	const toolDone = tool.definition.execute("t", params, undefined, undefined, ctx);
+	const toolDone = tool.definition.execute("t", params, undefined, undefined, runner.createContext());
 	const timeout = setTimeout(() => {
 		throw new Error(`tool call deadlocked awaiting turn-yield delivery: ${JSON.stringify(params)}`);
 	}, 120_000);
@@ -190,14 +205,23 @@ async function reviewUntilSettled(body?: string): Promise<string> {
 const out: Record<string, unknown> = {};
 
 if (scenario === "dirty") {
-	fs.writeFileSync(path.join(probe, "dirty.txt"), "dirty\n");
+	const ownerDirty = path.join(ownerProbe, "dirty.txt");
+	fs.writeFileSync(ownerDirty, "dirty\n");
 	const executeCmd = extension.commands.get("execute");
 	if (!executeCmd) throw new Error("execute command missing");
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
-	out.uiCalls = uiCalls;
-	out.notices = uiCalls.filter(c => c.includes("execution_worktree_not_clean"));
+	out.executionCwd = probe;
+	out.ownerCwd = ownerProbe;
+	out.ownerDirtPreserved = fs.existsSync(ownerDirty) && !fs.existsSync(path.join(probe, "dirty.txt"));
+	fs.writeFileSync(path.join(probe, "normal-tool-write.txt"), "isolated\n");
+	out.normalWriteIsolated =
+		fs.existsSync(path.join(probe, "normal-tool-write.txt")) &&
+		!fs.existsSync(path.join(ownerProbe, "normal-tool-write.txt"));
+	out.executionBranch = Bun.spawnSync(["git", "branch", "--show-current"], { cwd: probe }).stdout.toString().trim();
 	out.modelTurnCount = modelTurnCount;
-	fs.rmSync(path.join(probe, "dirty.txt"), { force: true });
+	out.stop = await execute({ action: "stop_execution", work: workKeyArg || "OMP-1", body: "smoke isolation preservation" });
+	out.uiCalls = uiCalls;
+	fs.rmSync(ownerDirty, { force: true });
 } else if (scenario === "single") {
 	const executeCmd = extension.commands.get("execute");
 	if (!executeCmd) throw new Error("execute command missing");
@@ -367,8 +391,8 @@ if (scenario === "dirty") {
 
 	// Copy real contract directory to probe so manifest and hashing match real contracts
 	const realContractDir = path.join(repoRoot, "python/omp-work/src/omp_work/contracts/v1");
-	const probeContractDir = path.join(probe, "python/omp-work/src/omp_work/contracts/v1");
-	fs.cpSync(realContractDir, probeContractDir, { recursive: true });
+	const ownerContractDir = path.join(probe, "python/omp-work/src/omp_work/contracts/v1");
+	fs.cpSync(realContractDir, ownerContractDir, { recursive: true });
 	// Commit the copied contract directory so preflight is clean
 	Bun.spawnSync(["git", "add", "python"], { cwd: probe });
 	Bun.spawnSync(["git", "commit", "-m", "add contract dir"], { cwd: probe });
@@ -382,7 +406,8 @@ if (scenario === "dirty") {
 	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
 	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
 	fs.writeFileSync(planDiskPath, "## Approach\n1. Modify contract\n\n## Verification\n1. Prove contract\n");
-	fs.writeFileSync(path.join(probeContractDir, "contract.json"), JSON.stringify({ contract_version: "work.omp.dev/v1", modified: true }));
+	const executionContractDir = path.join(probe, "python/omp-work/src/omp_work/contracts/v1");
+	fs.writeFileSync(path.join(executionContractDir, "contract.json"), JSON.stringify({ contract_version: "work.omp.dev/v1", modified: true }));
 	await execute({
 		action: "stamp_execution_plan",
 		plan_file: planFile,
@@ -594,7 +619,7 @@ if (scenario === "dirty") {
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
 	await execute({ action: "seal_execution_criteria", criteria: ["AC-1 deliver smoke feature"] });
 	const planFile = "local://execute-plan.md";
-	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	let planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
 	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
 	fs.writeFileSync(planDiskPath, "## Approach\n1. Write feature\n\n## Verification\n1. Check feature\n");
 	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/smoke_feat.ts"] });
@@ -628,6 +653,8 @@ if (scenario === "dirty") {
 	// the plan stamp allocates a new candidate, so the stale attempt no
 	// longer matches the item's identity.
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
 	await execute({ action: "seal_execution_criteria", criteria: ["AC-1 deliver smoke feature"] });
 	fs.writeFileSync(planDiskPath, "## Approach\n1. Fix feature\n\n## Verification\n1. Check feature\n");
 	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/smoke_feat.ts"] });
@@ -680,4 +707,13 @@ if (scenario === "dirty") {
 	out.headUnchanged = preHead === headAfter1 && preHead === headAfter2 && preHead === headAfter3;
 	out.uiCalls = uiCalls;
 }
+const shutdownWorkspace = probe;
+out.uiCalls ??= uiCalls;
+if (fs.existsSync(shutdownWorkspace)) {
+	out.executionBranch ??= Bun.spawnSync(["git", "branch", "--show-current"], { cwd: shutdownWorkspace }).stdout.toString().trim();
+}
+await runner.emit({ type: "session_shutdown" } as never);
+out.workspacePath = shutdownWorkspace;
+out.workspaceExistsAfterShutdown = fs.existsSync(shutdownWorkspace);
+out.ownerProbe = ownerProbe;
 console.log(JSON.stringify(out, null, 2));

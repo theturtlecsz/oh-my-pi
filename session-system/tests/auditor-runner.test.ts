@@ -12,6 +12,7 @@ import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-regis
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
+import { applyExtensionNewSessionSetup } from "../../packages/coding-agent/src/modes/controllers/extension-ui-controller";
 import { prepareNativeAuditRunner } from "../extensions/workflow/auditor-runner";
 import type { WorkflowBackend } from "../extensions/workflow/backend";
 import { createWorkflowHost } from "../extensions/workflow/host";
@@ -31,6 +32,45 @@ import {
 	renderSummaryResumeDigest,
 	resolveAnchorKey,
 } from "../extensions/workflow/host";
+
+const identityExecutionWorkspaceManager = {
+	primaryRoot: async (cwd: string) => cwd,
+	ensure: async (cwd: string, key: string, grantId: string, baseline: string) => ({
+		primaryRoot: cwd,
+		path: cwd,
+		branch: `execution/${key.toLowerCase()}`,
+		grantId,
+		baseline,
+		reused: false,
+	}),
+	cleanup: async () => ({ cleaned: true, detail: "identity cleanup" }),
+};
+
+describe("extension session relocation (OMP-213)", () => {
+	test("setup moves SessionManager before refreshing cwd-derived TUI state", async () => {
+		const source = fs.mkdtempSync(path.join(os.tmpdir(), "omp-213-source-"));
+		const target = fs.mkdtempSync(path.join(os.tmpdir(), "omp-213-target-"));
+		try {
+			const sessionManager = SessionManager.inMemory(source);
+			const applied: string[] = [];
+			await applyExtensionNewSessionSetup(
+				{
+					sessionManager,
+					applyCwdChange: async cwd => {
+						expect(sessionManager.getCwd()).toBe(cwd);
+						applied.push(cwd);
+					},
+				} as never,
+				{ setup: manager => manager.moveTo(target) },
+			);
+			expect(sessionManager.getCwd()).toBe(path.resolve(target));
+			expect(applied).toEqual([path.resolve(target)]);
+		} finally {
+			fs.rmSync(source, { recursive: true, force: true });
+			fs.rmSync(target, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("native auditor runner (OMP-168)", () => {
 	const defaultAuditor: AgentDefinition = {
@@ -555,6 +595,7 @@ describe("native auditor runner (OMP-168)", () => {
 			teamNoun: "the ledger",
 			entryType: "work-now",
 			acceptEntry: () => true,
+			executionWorkspaceManager: identityExecutionWorkspaceManager,
 		})(fakePi);
 		mockDiscovery();
 
@@ -1433,6 +1474,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			teamNoun: "the ledger",
 			entryType: "work-now",
 			acceptEntry: () => true,
+			executionWorkspaceManager: identityExecutionWorkspaceManager,
 		})(fakePi);
 
 		const fakeCtx = {
@@ -2397,6 +2439,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			teamNoun: "the ledger",
 			entryType: "work-now",
 			acceptEntry: () => true,
+			executionWorkspaceManager: identityExecutionWorkspaceManager,
 		})(fakePi);
 
 		const handler = registeredCommands.get("execute");
@@ -2561,6 +2604,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			teamNoun: "the ledger",
 			entryType: "work-now",
 			acceptEntry: () => true,
+			executionWorkspaceManager: identityExecutionWorkspaceManager,
 		})(fakePi);
 
 		const handler = registeredCommands.get("execute");
