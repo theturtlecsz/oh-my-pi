@@ -4584,7 +4584,7 @@ def test_execution_grant_pause_resume_and_terminal_judge_drift(
         },
     )
 
-    # Drifted pause is rejected
+    # Drifted pause succeeds
     status, body = _command(
         service,
         workspace_id,
@@ -4599,28 +4599,9 @@ def test_execution_grant_pause_resume_and_terminal_judge_drift(
             },
         },
     )
-    assert status == 409, body
-    assert body["error"]["code"] == "execution_judge_drift"
-
-    # Pause for contract approval
-    status, body = _command(
-        service,
-        workspace_id,
-        {
-            "type": "set_execution_state",
-            "payload": {
-                "grant_id": grant_id,
-                "target_state": "paused",
-                "expected_grant_version": 1,
-                "reason": "contract_approval_required: contract hash mismatch",
-                "judge_sha256": judge_sha,
-            },
-        },
-    )
     assert status == 200, body
     assert body["result"]["grant"]["state"] == "paused"
     assert body["result"]["grant"]["paused_at"] is not None
-
     resp = service.client.get(
         f"/v1/workspaces/{workspace_id}/execution/{grant_id}",
         headers=_owner_headers(workspace_id),
@@ -5960,7 +5941,8 @@ def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
         config=service.config,
     )
 
-    # 6. Old judge fails non-terminal command with execution_judge_drift
+    # 6. Old judge fails active resumption with execution_judge_drift
+    # (Pause is first executed with drifted judge, then active resume fails with old judge)
     status, body = _command(
         restarted_service,
         workspace_id,
@@ -5970,14 +5952,30 @@ def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
                 "grant_id": grant_id,
                 "expected_grant_version": 4,
                 "target_state": "paused",
-                "reason": "testing_old_judge",
+                "reason": "testing_pause_under_restarted_service",
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200 and body["result"]["grant"]["state"] == "paused"
+
+    status, body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 5,
+                "target_state": "active",
+                "reason": "testing_old_judge_resume",
                 "judge_sha256": judge_sha,
             },
         },
     )
     assert status == 409 and body["error"]["code"] == "execution_judge_drift"
-
     # 7. New judge can pause and resume
+    # 7. New judge can resume and pause
     status, body = _command(
         restarted_service,
         workspace_id,
@@ -5985,9 +5983,26 @@ def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
             "type": "set_execution_state",
             "payload": {
                 "grant_id": grant_id,
-                "expected_grant_version": 4,
+                "expected_grant_version": 5,
+                "target_state": "active",
+                "reason": "testing_new_judge_resume",
+                "judge_sha256": new_judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["grant"]["state"] == "active"
+
+    status, body = _command(
+        restarted_service,
+        workspace_id,
+        {
+            "type": "set_execution_state",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 6,
                 "target_state": "paused",
-                "reason": "testing_new_judge",
+                "reason": "testing_new_judge_pause",
                 "judge_sha256": new_judge_sha,
             },
         },
@@ -6002,7 +6017,7 @@ def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
             "type": "set_execution_state",
             "payload": {
                 "grant_id": grant_id,
-                "expected_grant_version": 5,
+                "expected_grant_version": 7,
                 "target_state": "active",
                 "judge_sha256": new_judge_sha,
             },
@@ -6216,10 +6231,10 @@ def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
             "type": "complete_execution_item",
             "payload": {
                 "grant_id": grant_id,
-                "expected_grant_version": 6,
                 "work_id": str(work_id),
                 "attempt_id": attempt_id,
                 "push_receipt_id": push_receipt_id,
+                "expected_grant_version": 8,
                 "judge_sha256": new_judge_sha,
             },
         },

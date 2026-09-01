@@ -1302,45 +1302,101 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			entryType: "work-now",
 			acceptEntry: () => true,
 		})(fakePi);
-
 		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "stamp-test-"));
+		spawnSync("git", ["init"], { cwd: testDir });
 		fs.mkdirSync(path.join(testDir, "src"), { recursive: true });
-		const planPath = path.join(testDir, "plan.md");
+		const planPath = path.join(os.tmpdir(), `stamp-plan-${crypto.randomUUID()}.md`);
 		fs.writeFileSync(planPath, "## Approach\n1. Step\n\n## Verification\n1. Check\n");
 
 		let mockDirt: string[] = ["src/initial.ts", "src/unsealed_dirt.ts"];
 		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockImplementation(() => mockDirt);
+		let runGitSpy: { mockRestore(): void; mockImplementation(fn: (cwd: string, args: string[]) => { ok: boolean; out: string; raw: string; err: string }): unknown } | undefined;
 
-		const fakeCtx = {
-			cwd: testDir,
-			taskDepth: 0,
-			ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
-		} as unknown as ExtensionContext;
+		try {
+			const fakeCtx = {
+				cwd: testDir,
+				taskDepth: 0,
+				ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+			} as unknown as ExtensionContext;
 
-		// 1. Unsealed dirty path is refused
-		const refused = await registeredExecute!(
-			"call-stamp-1",
-			{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/initial.ts", "src/unsealed_dirt.ts"] },
-			new AbortController().signal,
-			undefined,
-			fakeCtx,
-		);
-		expect(refused.content[0].text).toContain("Scope correction refused: worktree contains dirty unsealed path(s) [src/unsealed_dirt.ts]");
+			// 1. Unsealed dirty path is refused
+			const refused = await registeredExecute!(
+				"call-stamp-1",
+				{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/initial.ts", "src/unsealed_dirt.ts"] },
+				new AbortController().signal,
+				undefined,
+				fakeCtx,
+			);
+			expect(refused.content[0].text).toContain("Scope correction refused: worktree contains dirty unsealed path(s) [src/unsealed_dirt.ts]");
 
-		// 2. Clean addition of new path succeeds
-		mockDirt = ["src/initial.ts"]; // only already-sealed path is dirty
-		const allowed = await registeredExecute!(
-			"call-stamp-2",
-			{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/initial.ts", "src/new_clean.ts"] },
-			new AbortController().signal,
-			undefined,
-			fakeCtx,
-		);
-		expect(allowed.content[0].text).toContain("plan stamped successfully");
-		expect(stampedPaths).toEqual(["src/initial.ts", "src/new_clean.ts"]);
+			// 2. Clean addition of new path succeeds
+			mockDirt = ["src/initial.ts"]; // only already-sealed path is dirty
+			const allowed = await registeredExecute!(
+				"call-stamp-2",
+				{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/initial.ts", "src/new_clean.ts"] },
+				new AbortController().signal,
+				undefined,
+				fakeCtx,
+			);
+			expect(allowed.content[0].text).toContain("plan stamped successfully");
+			expect(stampedPaths).toEqual(["src/initial.ts", "src/new_clean.ts"]);
 
-		dirtySpy.mockRestore();
-		fs.rmSync(testDir, { recursive: true, force: true });
+			// 3. Rename source detection: renaming unsealed file to sealed destination is refused
+			runGitSpy = vi.spyOn(gitModule, "runGit");
+			runGitSpy.mockImplementation((cwd, args) => {
+				if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+					return { ok: true, out: testDir, raw: testDir, err: "" };
+				}
+				if (args[0] === "status") {
+					// porcelain -z for rename: R  src/initial.ts\0src/unsealed_old.ts\0
+					const rawStr = "R  src/initial.ts\0src/unsealed_old.ts\0";
+					return { ok: true, out: rawStr, raw: rawStr, err: "" };
+				}
+				return { ok: true, out: "", raw: "", err: "" };
+			});
+			mockDirt = ["src/initial.ts"]; // dirtyPaths only sees destination
+			const renameRefused = await registeredExecute!(
+				"call-stamp-3",
+				{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/initial.ts", "src/new_clean.ts"] },
+				new AbortController().signal,
+				undefined,
+				fakeCtx,
+			);
+			expect(renameRefused.content[0].text).toContain("Scope correction refused: worktree contains dirty unsealed path(s) [src/unsealed_old.ts]");
+
+			// 4. Git status inspection failure fails closed
+			runGitSpy.mockImplementation((cwd, args) => {
+				if (args[0] === "status") return { ok: false, out: "", raw: "", err: "git failed" };
+				return { ok: true, out: testDir, raw: testDir, err: "" };
+			});
+			const statusFailed = await registeredExecute!(
+				"call-stamp-4",
+				{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/initial.ts", "src/new_clean.ts"] },
+				new AbortController().signal,
+				undefined,
+				fakeCtx,
+			);
+			expect(statusFailed.content[0].text).toContain("Scope correction refused: unable to inspect complete touched path set");
+
+			// 5. Post-resume in planning phase with existing plan stamp refuses unsealed dirt
+			runGitSpy.mockRestore();
+			runGitSpy = undefined;
+			exec.activeItem!.phase = "planning"; // simulated phase after awaiting_contract_approval resume
+			mockDirt = ["src/initial.ts", "src/post_resume_unsealed.ts"];
+			const postResumeRefused = await registeredExecute!(
+				"call-stamp-5",
+				{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/initial.ts", "src/post_resume_unsealed.ts"] },
+				new AbortController().signal,
+				undefined,
+				fakeCtx,
+			);
+			expect(postResumeRefused.content[0].text).toContain("Scope correction refused: worktree contains dirty unsealed path(s) [src/post_resume_unsealed.ts]");
+		} finally {
+			runGitSpy?.mockRestore();
+			dirtySpy.mockRestore();
+			fs.rmSync(planPath, { force: true });
+			fs.rmSync(testDir, { recursive: true, force: true });
+		}
 	});
 
 	test("expandExecutionPlanClosure automatically includes approval, schema, and client dependencies for contract paths", () => {

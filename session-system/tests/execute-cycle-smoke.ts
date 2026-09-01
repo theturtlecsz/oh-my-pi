@@ -1142,6 +1142,7 @@ if (args[0] === "api") {
 	assert.ok((contractOut.resumeDeniedNotices as string[])?.length > 0, "resume without approval denied");
 	assert.equal(contractOut.resumedExecution?.grant?.state, "active", "grant resumed to active after approval");
 	assert.equal(contractOut.resumedExecution?.items?.[0]?.phase, "planning", "item resumed to planning after approval");
+	assert.ok(contractOut.schemaGenerated, "schema generation executed and generated artifacts changed");
 	assert.ok(contractOut.unsealedDirtRefused, "unsealed dirty path refused during in-execution scope correction");
 	assert.ok(contractOut.scopeCorrectionResult, "scope correction in executing succeeded");
 	assert.equal(contractOut.finalExecution?.grant?.state, "completed", "contract grant completed to done");

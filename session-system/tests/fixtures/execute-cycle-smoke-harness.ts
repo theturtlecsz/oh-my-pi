@@ -10,7 +10,7 @@ import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import { createWorkBackend } from "../../extensions/workflow/work";
 import { loadBearer, loadWorkConfig } from "../../extensions/workflow/config";
-import { freezeCandidateCommit } from "../../extensions/workflow/git";
+import { dirtyPaths, freezeCandidateCommit } from "../../extensions/workflow/git";
 import { createWorkflowHost } from "../../extensions/workflow/host";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
@@ -390,20 +390,23 @@ if (scenario === "dirty") {
 	Bun.spawnSync(["git", "reset", "--hard", "HEAD"], { cwd: probe });
 
 	// Copy real contract directory to probe so manifest and hashing match real contracts
-	const realContractDir = path.join(repoRoot, "python/omp-work/src/omp_work/contracts/v1");
-	const ownerContractDir = path.join(probe, "python/omp-work/src/omp_work/contracts/v1");
-	fs.cpSync(realContractDir, ownerContractDir, { recursive: true });
+	fs.writeFileSync(path.join(probe, ".gitignore"), "__pycache__/\n*.pyc\n");
+	const realPythonDir = path.join(repoRoot, "python/omp-work/src/omp_work");
+	const ownerPythonDir = path.join(probe, "python/omp-work/src/omp_work");
+	fs.cpSync(realPythonDir, ownerPythonDir, {
+		recursive: true,
+		filter: src => !src.includes("__pycache__") && !src.endsWith(".pyc"),
+	});
 	fs.mkdirSync(path.join(probe, "packages/work-client/src"), { recursive: true });
 	fs.writeFileSync(path.join(probe, "packages/work-client/src/contract.ts"), "export const WORK_CONTRACT_SHA256 = \"baseline\";\n");
-	// Commit the baseline contract directory and client so preflight and initial stamp are clean
-	Bun.spawnSync(["git", "add", "python", "packages"], { cwd: probe });
+	// Commit the baseline contract directory, gitignore, and client so preflight and initial stamp are clean
+	Bun.spawnSync(["git", "add", ".gitignore", "python", "packages"], { cwd: probe });
 	Bun.spawnSync(["git", "commit", "-m", "add contract dir and client"], { cwd: probe });
 
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
 
 	// 1. Seal criteria on clean baseline
 	await execute({ action: "seal_execution_criteria", criteria: ["AC-1: change contract"] });
-
 	const planFile = "local://execute-plan.md";
 	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
 	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
@@ -414,6 +417,7 @@ if (scenario === "dirty") {
 		"python/omp-work/src/omp_work/contracts/v1/contract.json",
 		"python/omp-work/src/omp_work/contracts/v1/approval.json",
 		"python/omp-work/src/omp_work/contracts/v1/schema.json",
+		"python/omp-work/src/omp_work/contracts/v1/api-schema.json",
 		"packages/work-client/src/contract.ts",
 	];
 	await execute({
@@ -422,9 +426,49 @@ if (scenario === "dirty") {
 		paths: initialContractClosure,
 	});
 
-	// Implementation begins after initial plan stamp
+	// Implementation begins after initial plan stamp:
+	// Modify contract.json, and execute real schema generation (Criterion 6)
 	const executionContractDir = path.join(probe, "python/omp-work/src/omp_work/contracts/v1");
-	fs.writeFileSync(path.join(executionContractDir, "contract.json"), JSON.stringify({ contract_version: "work.omp.dev/v1", modified: true }));
+	fs.writeFileSync(path.join(executionContractDir, "contract.json"), JSON.stringify({ contract_version: "work.omp.dev/v1", modified: true }, null, 2) + "\n");
+
+	// Execute real schema generation
+	const schemaPath = path.join(executionContractDir, "schema.json");
+	const genProc = Bun.spawnSync(
+		[
+			"uv",
+			"run",
+			"--project",
+			path.join(repoRoot, "python/omp-work"),
+			"python",
+			"-B",
+			"-c",
+			"from omp_work import generate_schema; import json; print(json.dumps(generate_schema(), indent=2, sort_keys=True))",
+		],
+		{
+			cwd: probe,
+			env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", PYTHONPATH: path.join(probe, "python/omp-work/src") },
+		},
+	);
+	function cleanPycache(dir: string): void {
+		if (!fs.existsSync(dir)) return;
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (entry.name === "__pycache__") {
+					fs.rmSync(full, { recursive: true, force: true });
+				} else {
+					cleanPycache(full);
+				}
+			}
+		}
+	}
+	cleanPycache(path.join(probe, "python"));
+	if (genProc.exitCode !== 0 || genProc.stdout.length === 0) {
+		throw new Error(`Schema generation failed with exit ${genProc.exitCode}: ${genProc.stderr?.toString("utf8")}`);
+	}
+	const generatedSchema = genProc.stdout.toString("utf8").trim() + "\n";
+	fs.writeFileSync(schemaPath, generatedSchema);
+	out.schemaGenerated = generatedSchema.length > 0 && fs.existsSync(schemaPath);
 	fs.writeFileSync(path.join(probe, "packages/work-client/src/contract.ts"), "export const WORK_CONTRACT_SHA256 = \"modified\";\n");
 	// 2b. Test in-execution scope correction: unsealed dirty path refusal (Criterion 3)
 	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
@@ -443,9 +487,9 @@ if (scenario === "dirty") {
 		plan_file: planFile,
 		paths: [...initialContractClosure, "src/contract_helper.ts"],
 	});
+	out.scopeCorrectionResultRaw = scopeCorrectionResult;
 	out.scopeCorrectionResult = scopeCorrectionResult.includes("plan stamped successfully");
 	fs.writeFileSync(path.join(probe, "src/contract_helper.ts"), "export const helper = true;\n");
-
 	// 3. Begin execution review -> must be denied and grant paused (Criterion 5)
 	const reviewDenied = await execute({
 		action: "begin_execution_review",

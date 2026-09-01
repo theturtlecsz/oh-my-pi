@@ -3514,11 +3514,15 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (!exec.activeItem || (!["planning", "remediating"].includes(exec.activeItem.phase) && !isExecutingReplan)) {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected planning or remediating`);
 							}
-							if (isExecutingReplan) {
-								const prevPlanStamp = exec.activeItem.plan_stamp as { paths?: string[] } | undefined;
+							const prevPlanStamp = exec.activeItem.plan_stamp as { paths?: string[] } | undefined;
+							if (prevPlanStamp && (exec.activeItem.close_attempts_started ?? 0) === 0) {
 								const prevSealed = new Set(Array.isArray(prevPlanStamp?.paths) ? prevPlanStamp.paths : []);
 								const dirt = dirtyPaths(ctx.cwd);
-								const unsealedDirt = dirt.filter(p => !prevSealed.has(p));
+								const touchedPaths = executionRecoveryTouchedPaths(ctx.cwd, dirt);
+								if (touchedPaths === null) {
+									return deny("Scope correction refused: unable to inspect complete touched path set.");
+								}
+								const unsealedDirt = touchedPaths.filter(p => !prevSealed.has(p));
 								if (unsealedDirt.length > 0) {
 									return deny(`Scope correction refused: worktree contains dirty unsealed path(s) [${unsealedDirt.join(", ")}]. Revert or clean unsealed changes before re-planning.`);
 								}
