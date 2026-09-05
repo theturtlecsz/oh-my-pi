@@ -1,30 +1,28 @@
 #!/usr/bin/env bun
-// verify-upstream-handoff.ts — completeness oracle for the OMP-156 upstream 18.0.6 merge.
+// verify-upstream-handoff.ts — completeness oracle for upstream incorporations (OMP-156,
+// generalized into the standing guardrail by OMP-229).
 //
 // Freezes one source record per zero-context fork diff hunk (base..fork) plus one per
 // binary/rename/delete record, then proves the fork matrix, upstream changelog ledger,
-// and human handoff account for every record before cutover.
+// and human handoff account for every record — and that every merge conflict predicted
+// by `git merge-tree` has a matrix row — before an upstream candidate may be accepted.
 //
-// Fixed invocation (OMP-156):
-//   bun scripts/verify-upstream-handoff.ts \
-//     --base ae2d3d6ea16a47aa5208bd123dcc4cfcc8756472 \
-//     --fork 79b037e420943010e03727d7cdb22f05e64507b7 \
-//     --target b4e8e856ad40294167679a3f88417c07429fe59b \
-//     --sources docs/upstream-18.0.6-fork-sources.tsv \
-//     --matrix docs/upstream-18.0.6-fork-matrix.tsv \
-//     --changelog docs/upstream-18.0.6-changelog.tsv \
-//     --handoff docs/upstream-18.0.6-upgrade.md \
-//     [--write-sources] [--allow-pending]
+// Record-driven invocation (standing guardrail):
+//   bun scripts/verify-upstream-handoff.ts --record docs/upstream/baseline.json [--allow-pending]
+//   bun scripts/verify-upstream-handoff.ts --record docs/upstream/reviews/<sha12>/review.json [--allow-pending]
+//
+// The record JSON pins base/fork/target commits, the changelog version range, and the
+// four record files (sources/matrix/changelog/handoff). Explicit flags (--base, --fork,
+// --target, --version-min, --version-max, --sources, --matrix, --changelog, --handoff)
+// remain available for ad-hoc runs and tests; --record excludes them.
 //
 // --write-sources: recompute source records from git and (over)write the sources TSV. Run
 // exactly once before merging to freeze the manifest; every later run must verify against it.
 // --allow-pending: permit proofs of the exact form `pending:<command or live probe>`. The
 // pre-cutover run must pass without this flag.
+// --report <file>: additionally write the itemized incompatibility report as markdown.
 
 import { createHash } from "node:crypto";
-
-export const VERSION_MIN = "17.3.3";
-export const VERSION_MAX = "18.0.6";
 
 export const SOURCES_HEADER = ["source_id", "path", "kind", "locator", "body_sha"] as const;
 export const MATRIX_HEADER = [
@@ -261,8 +259,13 @@ export function compareVersions(a: string, b: string): number {
 	return 0;
 }
 
-export function versionInRange(v: string): boolean {
-	return /^\d+\.\d+\.\d+$/.test(v) && compareVersions(v, VERSION_MIN) >= 0 && compareVersions(v, VERSION_MAX) <= 0;
+export interface VersionRange {
+	min: string;
+	max: string;
+}
+
+export function versionInRange(v: string, range: VersionRange): boolean {
+	return /^\d+\.\d+\.\d+$/.test(v) && compareVersions(v, range.min) >= 0 && compareVersions(v, range.max) <= 0;
 }
 
 const SECTION_SLUGS: Record<string, string> = {
@@ -272,7 +275,7 @@ const SECTION_SLUGS: Record<string, string> = {
 };
 
 /** Derive ledger entries from one package changelog at the pinned target. */
-export function deriveChangelogEntries(pkg: string, changelogText: string): DerivedEntry[] {
+export function deriveChangelogEntries(pkg: string, changelogText: string, range: VersionRange): DerivedEntry[] {
 	const out: DerivedEntry[] = [];
 	let version: string | null = null;
 	let section: string | null = null;
@@ -298,7 +301,7 @@ export function deriveChangelogEntries(pkg: string, changelogText: string): Deri
 			continue;
 		}
 		const slug = section ? SECTION_SLUGS[section] : undefined;
-		if (!version || !slug || !versionInRange(version)) continue;
+		if (!version || !slug || !versionInRange(version, range)) continue;
 		if (line.startsWith("- ")) {
 			flush();
 			indexInSection++;
@@ -389,6 +392,8 @@ export interface ValidateInput {
 	derivedEntries: DerivedEntry[];
 	forkPaths: Set<string>;
 	sharedPaths: Set<string>;
+	/** Paths `git merge-tree fork target` predicts as conflicted; empty when unknown. */
+	conflictPaths?: Set<string>;
 	handoffText: string;
 	allowPending: boolean;
 }
@@ -413,6 +418,7 @@ export function validate(input: ValidateInput): string[] {
 		derivedEntries,
 		forkPaths,
 		sharedPaths,
+		conflictPaths,
 		handoffText,
 		allowPending,
 	} = input;
@@ -471,8 +477,8 @@ export function validate(input: ValidateInput): string[] {
 		if (!["retained", "re-fitted", "dropped"].includes(row.classification)) {
 			errors.push(`${where}: invalid classification '${row.classification}'`);
 		}
-		if (row.classification === "dropped") {
-			errors.push(`${where}: 'dropped' requires Chris's recorded OMP-156 ruling — none exists`);
+		if (row.classification === "dropped" && !row.resolution.includes("owner-ruling:")) {
+			errors.push(`${where}: 'dropped' requires an explicit owner-ruling: reference in resolution`);
 		}
 		for (const sid of row.sourceIds) {
 			referencedSources.add(sid);
@@ -502,6 +508,14 @@ export function validate(input: ValidateInput): string[] {
 	}
 	for (const path of matrixShared) {
 		if (!sharedPaths.has(path)) errors.push(`matrix: path marked shared outside computed intersection — ${path}`);
+	}
+
+	// 3b. Conflicts: every merge-tree-predicted conflict must be accounted by a matrix
+	// row whose resolution/proof rules above already apply.
+	for (const path of conflictPaths ?? []) {
+		if (!matrixPaths.has(path)) {
+			errors.push(`conflict: predicted merge conflict in ${path} has no matrix row`);
+		}
 	}
 
 	// 4. Changelog ledger equals derived entry set.
@@ -548,17 +562,132 @@ export function validate(input: ValidateInput): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// CLI
+// Incompatibility report
 // ---------------------------------------------------------------------------
 
-interface Args {
+export type ReportCategory = "fork" | "upstream" | "conflict" | "proof" | "record";
+
+const REPORT_SECTIONS: Array<[ReportCategory, string]> = [
+	["fork", "Unaccounted fork behavior"],
+	["upstream", "Unaccounted upstream changes"],
+	["conflict", "Unresolved merge conflicts"],
+	["proof", "Failed or pending proofs"],
+	["record", "Record integrity"],
+];
+
+export function categorizeError(error: string): ReportCategory {
+	if (error.includes("pending proof")) return "proof";
+	if (error.startsWith("conflict:")) return "conflict";
+	if (error.startsWith("sources:") || error.startsWith("matrix")) return "fork";
+	if (error.startsWith("changelog")) return "upstream";
+	return "record";
+}
+
+/** Group validation errors into the itemized incompatibility report (markdown). */
+export function buildIncompatibilityReport(errors: string[]): string {
+	const byCategory = new Map<ReportCategory, string[]>();
+	for (const error of errors) {
+		const category = categorizeError(error);
+		const bucket = byCategory.get(category);
+		if (bucket) bucket.push(error);
+		else byCategory.set(category, [error]);
+	}
+	const lines = ["# Incompatibility report", "", `${errors.length} finding(s) block acceptance.`];
+	for (const [category, title] of REPORT_SECTIONS) {
+		const bucket = byCategory.get(category);
+		if (!bucket) continue;
+		lines.push("", `## ${title} (${bucket.length})`, "");
+		for (const error of bucket) lines.push(`- ${error}`);
+	}
+	lines.push("");
+	return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Record files (docs/upstream/baseline.json, docs/upstream/reviews/*/review.json)
+// ---------------------------------------------------------------------------
+
+export interface GuardrailRecord {
+	upstreamRepo: string;
+	upstreamVersion: string;
 	base: string;
 	fork: string;
 	target: string;
+	versionMin: string;
+	versionMax: string;
 	sources: string;
 	matrix: string;
 	changelog: string;
 	handoff: string;
+}
+
+export function parseRecord(text: string, label: string): GuardrailRecord {
+	let raw: unknown;
+	try {
+		raw = JSON.parse(text);
+	} catch (err) {
+		throw new Error(`${label}: invalid JSON — ${err instanceof Error ? err.message : err}`);
+	}
+	if (typeof raw !== "object" || raw === null) throw new Error(`${label}: not a JSON object`);
+	const record = raw as Record<string, unknown>;
+	const str = (key: string): string => {
+		const value = record[key];
+		if (typeof value !== "string" || !value.trim()) throw new Error(`${label}: missing or empty ${key}`);
+		return value;
+	};
+	for (const key of ["base", "fork", "target"]) {
+		if (!/^[0-9a-f]{40}$/.test(str(key))) throw new Error(`${label}: ${key} must be a full 40-hex commit`);
+	}
+	for (const key of ["version_min", "version_max", "upstream_version"]) {
+		if (!/^\d+\.\d+\.\d+$/.test(str(key))) throw new Error(`${label}: ${key} must be a final x.y.z version`);
+	}
+	return {
+		upstreamRepo: str("upstream_repo"),
+		upstreamVersion: str("upstream_version"),
+		base: str("base"),
+		fork: str("fork"),
+		target: str("target"),
+		versionMin: str("version_min"),
+		versionMax: str("version_max"),
+		sources: str("sources"),
+		matrix: str("matrix"),
+		changelog: str("changelog"),
+		handoff: str("handoff"),
+	};
+}
+
+/** Parse `git merge-tree --write-tree --no-messages` output into conflicted paths. */
+export function parseMergeTreeConflicts(output: string): Set<string> {
+	const paths = new Set<string>();
+	// First line is the written tree OID; the rest is the conflicted file info,
+	// one `<mode> <object> <stage>\t<filename>` line per conflicted stage.
+	for (const line of output.split("\n").filter(Boolean).slice(1)) {
+		const m = line.match(/^\d{6} [0-9a-f]{40} [1-3]\t(.+)$/);
+		paths.add(unquoteGitPath(m ? m[1] : line));
+	}
+	return paths;
+}
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+interface Pins {
+	base: string;
+	fork: string;
+	target: string;
+	versionMin: string;
+	versionMax: string;
+	sources: string;
+	matrix: string;
+	changelog: string;
+	handoff: string;
+}
+
+interface Args {
+	record?: string;
+	pins?: Pins;
+	report?: string;
 	writeSources: boolean;
 	allowPending: boolean;
 }
@@ -581,33 +710,57 @@ export function parseArgs(argv: string[]): Args {
 			throw new Error(`unexpected argument ${arg}`);
 		}
 	}
-	for (const key of ["base", "fork", "target", "sources", "matrix", "changelog", "handoff"]) {
+	const record = flags.get("record");
+	const report = flags.get("report");
+	const pinKeys = [
+		"base",
+		"fork",
+		"target",
+		"version-min",
+		"version-max",
+		"sources",
+		"matrix",
+		"changelog",
+		"handoff",
+	];
+	if (record) {
+		for (const key of pinKeys) {
+			if (flags.has(key)) throw new Error(`--record excludes --${key}`);
+		}
+		return { record, report, writeSources, allowPending };
+	}
+	for (const key of pinKeys) {
 		if (!flags.get(key)) throw new Error(`missing --${key}`);
 	}
 	for (const key of ["base", "fork", "target"]) {
 		if (!/^[0-9a-f]{40}$/.test(flags.get(key) as string)) throw new Error(`--${key} must be a full 40-hex commit`);
 	}
 	return {
-		base: flags.get("base") as string,
-		fork: flags.get("fork") as string,
-		target: flags.get("target") as string,
-		sources: flags.get("sources") as string,
-		matrix: flags.get("matrix") as string,
-		changelog: flags.get("changelog") as string,
-		handoff: flags.get("handoff") as string,
+		pins: {
+			base: flags.get("base") as string,
+			fork: flags.get("fork") as string,
+			target: flags.get("target") as string,
+			versionMin: flags.get("version-min") as string,
+			versionMax: flags.get("version-max") as string,
+			sources: flags.get("sources") as string,
+			matrix: flags.get("matrix") as string,
+			changelog: flags.get("changelog") as string,
+			handoff: flags.get("handoff") as string,
+		},
+		report,
 		writeSources,
 		allowPending,
 	};
 }
 
-async function git(args: string[]): Promise<string> {
+async function git(args: string[], okExitCodes: number[] = [0]): Promise<string> {
 	const proc = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "pipe" });
 	const [exitCode, stdout, stderr] = await Promise.all([
 		proc.exited,
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
 	]);
-	if (exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${stderr.trim()}`);
+	if (!okExitCodes.includes(exitCode)) throw new Error(`git ${args.join(" ")} failed: ${stderr.trim()}`);
 	return stdout;
 }
 
@@ -619,34 +772,6 @@ async function main(): Promise<void> {
 		console.error(`usage error: ${err instanceof Error ? err.message : err}`);
 		process.exit(2);
 	}
-	const range = `${args.base}..${args.fork}`;
-	const [rawText, numstatText, diffText, forkNames, targetNames] = await Promise.all([
-		git(["diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", range]),
-		git(["diff", "--numstat", "--no-renames", "--no-color", range]),
-		git(["diff", "--unified=0", "--no-renames", "--no-color", range]),
-		git(["diff", "--name-only", "--no-renames", "--no-color", range]),
-		git(["diff", "--name-only", "--no-renames", "--no-color", `${args.base}..${args.target}`]),
-	]);
-	const computedSources = computeSourceRecords(rawText, numstatText, diffText);
-
-	if (args.writeSources) {
-		await Bun.write(args.sources, formatSourcesTsv(computedSources));
-		console.log(`wrote ${computedSources.length} source records to ${args.sources}`);
-		return;
-	}
-
-	const forkPaths = new Set(forkNames.split("\n").filter(Boolean).map(unquoteGitPath));
-	const targetPaths = new Set(targetNames.split("\n").filter(Boolean).map(unquoteGitPath));
-	const sharedPaths = new Set([...forkPaths].filter(p => targetPaths.has(p)));
-
-	const changelogPaths = (await git(["ls-tree", "-r", "--name-only", args.target]))
-		.split("\n")
-		.filter(p => /^packages\/[^/]+\/CHANGELOG\.md$/.test(p));
-	const derivedEntries: DerivedEntry[] = [];
-	for (const clPath of changelogPaths) {
-		const pkg = clPath.split("/")[1];
-		derivedEntries.push(...deriveChangelogEntries(pkg, await git(["show", `${args.target}:${clPath}`])));
-	}
 
 	const readFile = async (path: string, label: string): Promise<string> => {
 		const file = Bun.file(path);
@@ -657,17 +782,66 @@ async function main(): Promise<void> {
 		return file.text();
 	};
 
+	let pins: Pins;
+	if (args.record) {
+		let parsed: GuardrailRecord;
+		try {
+			parsed = parseRecord(await readFile(args.record, "record"), args.record);
+		} catch (err) {
+			console.error(`ERROR: ${err instanceof Error ? err.message : err}`);
+			process.exit(1);
+		}
+		pins = parsed;
+	} else {
+		pins = args.pins as Pins;
+	}
+	const range = { min: pins.versionMin, max: pins.versionMax };
+
+	const diffRange = `${pins.base}..${pins.fork}`;
+	const [rawText, numstatText, diffText, forkNames, targetNames, mergeTreeText] = await Promise.all([
+		git(["diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", diffRange]),
+		git(["diff", "--numstat", "--no-renames", "--no-color", diffRange]),
+		git(["diff", "--unified=0", "--no-renames", "--no-color", diffRange]),
+		git(["diff", "--name-only", "--no-renames", "--no-color", diffRange]),
+		git(["diff", "--name-only", "--no-renames", "--no-color", `${pins.base}..${pins.target}`]),
+		// Explicit --merge-base: the pinned base commit removes any dependency on
+		// history connectivity, so depth-1 fetches of the three pins suffice (CI).
+		git(["merge-tree", "--write-tree", "--no-messages", "--merge-base", pins.base, pins.fork, pins.target], [0, 1]),
+	]);
+	const computedSources = computeSourceRecords(rawText, numstatText, diffText);
+
+	if (args.writeSources) {
+		await Bun.write(pins.sources, formatSourcesTsv(computedSources));
+		console.log(`wrote ${computedSources.length} source records to ${pins.sources}`);
+		return;
+	}
+
+	const forkPaths = new Set(forkNames.split("\n").filter(Boolean).map(unquoteGitPath));
+	const targetPaths = new Set(targetNames.split("\n").filter(Boolean).map(unquoteGitPath));
+	const sharedPaths = new Set([...forkPaths].filter(p => targetPaths.has(p)));
+	const conflictPaths = parseMergeTreeConflicts(mergeTreeText);
+
+	const changelogPaths = (await git(["ls-tree", "-r", "--name-only", pins.target]))
+		.split("\n")
+		.filter(p => /^packages\/[^/]+\/CHANGELOG\.md$/.test(p));
+	const derivedEntries: DerivedEntry[] = [];
+	for (const clPath of changelogPaths) {
+		const pkg = clPath.split("/")[1];
+		derivedEntries.push(...deriveChangelogEntries(pkg, await git(["show", `${pins.target}:${clPath}`]), range));
+	}
+
 	let errors: string[];
 	try {
 		errors = validate({
-			frozenSources: parseSourcesTsv(await readFile(args.sources, "sources")),
+			frozenSources: parseSourcesTsv(await readFile(pins.sources, "sources")),
 			computedSources,
-			matrix: parseMatrixTsv(await readFile(args.matrix, "matrix")),
-			changelogRows: parseChangelogTsv(await readFile(args.changelog, "changelog")),
+			matrix: parseMatrixTsv(await readFile(pins.matrix, "matrix")),
+			changelogRows: parseChangelogTsv(await readFile(pins.changelog, "changelog")),
 			derivedEntries,
 			forkPaths,
 			sharedPaths,
-			handoffText: await readFile(args.handoff, "handoff"),
+			conflictPaths,
+			handoffText: await readFile(pins.handoff, "handoff"),
 			allowPending: args.allowPending,
 		});
 	} catch (err) {
@@ -676,12 +850,16 @@ async function main(): Promise<void> {
 	}
 
 	if (errors.length) {
-		for (const e of errors) console.error(`ERROR: ${e}`);
+		const reportText = buildIncompatibilityReport(errors);
+		console.error(reportText);
+		if (args.report) await Bun.write(args.report, reportText);
 		console.error(
-			`FAIL: ${errors.length} error(s) — sources=${computedSources.length} shared=${sharedPaths.size} entries=${derivedEntries.length}`,
+			`FAIL: ${errors.length} error(s) — sources=${computedSources.length} shared=${sharedPaths.size} conflicts=${conflictPaths.size} entries=${derivedEntries.length}`,
 		);
 		process.exit(1);
 	}
+	if (args.report)
+		await Bun.write(args.report, "# Incompatibility report\n\nNo findings; acceptance is not blocked.\n");
 	console.log(
 		`PASS: sources=${computedSources.length} forkPaths=${forkPaths.size} shared=${sharedPaths.size} changelogEntries=${derivedEntries.length}${args.allowPending ? " (pending allowed)" : ""}`,
 	);

@@ -1,0 +1,14 @@
+{
+	"upstream_repo": "https://github.com/can1357/oh-my-pi",
+	"upstream_version": "18.0.6",
+	"base": "ae2d3d6ea16a47aa5208bd123dcc4cfcc8756472",
+	"fork": "79b037e420943010e03727d7cdb22f05e64507b7",
+	"target": "b4e8e856ad40294167679a3f88417c07429fe59b",
+	"version_min": "17.3.3",
+	"version_max": "18.0.6",
+	"sources": "docs/upstream-18.0.6-fork-sources.tsv",
+	"matrix": "docs/upstream-18.0.6-fork-matrix.tsv",
+	"changelog": "docs/upstream-18.0.6-changelog.tsv",
+	"handoff": "docs/upstream-18.0.6-upgrade.md",
+	"accepted_at": "2026-08-26"
+}

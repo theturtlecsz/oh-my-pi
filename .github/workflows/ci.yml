@@ -208,6 +208,41 @@ jobs:
       steps:
          - uses: actions/checkout@v4
          - uses: ./.github/actions/bun-install
+         # Standing upstream-compatibility guardrail (OMP-229).
+         # Every PR: the fork-behavior inventory must account for every path
+         # diverging from the accepted upstream baseline — fork behavior cannot
+         # change without a corresponding inventory update.
+         # Upstream-update PRs (any PR touching docs/upstream/baseline.json):
+         # additionally run the full record review, strict (no pending proofs),
+         # failing with the itemized incompatibility report in the step summary.
+         - name: Upstream guardrail (inventory consistency / full review)
+           if: github.event_name == 'pull_request'
+           shell: bash
+           env:
+              GH_TOKEN: ${{ github.token }}
+              PR_NUMBER: ${{ github.event.pull_request.number }}
+           run: |
+              set -euo pipefail
+              record=docs/upstream/baseline.json
+              upstream_repo="$(jq -er '.upstream_repo | select(test("^https://github\\.com/"))' "$record")"
+              fetch_commit() { # present in origin after acceptance; in upstream before
+                git cat-file -e "$1^{commit}" 2>/dev/null && return 0
+                git fetch --depth=1 origin "$1" 2>/dev/null || git fetch --depth=1 "$upstream_repo" "$1"
+              }
+              fetch_commit "$(jq -er '.target | select(test("^[0-9a-f]{40}$"))' "$record")"
+              bun scripts/upstream-inventory.ts
+              # Capture separately so a gh failure fails the step (set -e) instead
+              # of silently skipping the strict review via an empty pipe.
+              changed_files="$(gh pr diff "$PR_NUMBER" --name-only)"
+              if grep -qx "$record" <<<"$changed_files"; then
+                echo "baseline record changed — running the full standing-guardrail review (strict)"
+                fetch_commit "$(jq -er '.base | select(test("^[0-9a-f]{40}$"))' "$record")"
+                fetch_commit "$(jq -er '.fork | select(test("^[0-9a-f]{40}$"))' "$record")"
+                if ! bun scripts/verify-upstream-handoff.ts --record "$record" --report /tmp/incompatibility-report.md; then
+                  cat /tmp/incompatibility-report.md >> "$GITHUB_STEP_SUMMARY" || true
+                  exit 1
+                fi
+              fi
          - name: Verify Rust license compliance (cargo-deny 0.20.2)
            run: |
               cargo install --locked --version 0.20.2 cargo-deny
