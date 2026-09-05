@@ -33,6 +33,9 @@ on:
          - "bunfig.toml"
          - "package.json"
          - "patches/**"
+         # Upstream guardrail records: baseline/review-record-only changes must
+         # still run CI so the strict upstream-update review executes (OMP-229).
+         - "docs/upstream/**"
          - ".github/**"
          - ".github/workflows/**"
    pull_request:
@@ -63,6 +66,9 @@ on:
          - "bunfig.toml"
          - "package.json"
          - "patches/**"
+         # Upstream guardrail records — an upstream-update PR may touch only
+         # docs/upstream/**; it must trigger the strict full review (OMP-229).
+         - "docs/upstream/**"
          - ".github/**"
          - ".github/workflows/**"
    workflow_dispatch:

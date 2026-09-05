@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
 	categorizeError,
 	compareVersions,
 	computeSourceRecords,
+	computeUpstreamChanges,
 	deriveChangelogEntries,
 	formatSourcesTsv,
 	type MatrixRow,
@@ -22,6 +23,7 @@ import {
 	parseSourcesTsv,
 	type SourceRecord,
 	sourceId,
+	type UpstreamChange,
 	unquoteGitPath,
 	type ValidateInput,
 	validate,
@@ -187,6 +189,13 @@ describe("diff parsing", () => {
 			locator: "status:A",
 		});
 	});
+	test("computeUpstreamChanges maps raw diff rows to sorted per-path entries", () => {
+		expect(computeUpstreamChanges(rawText)).toEqual([
+			{ status: "M", blobs: "222222222222>333333333333", path: "assets/logo.png" },
+			{ status: "D", blobs: "444444444444>000000000000", path: "src/gone.ts" },
+			{ status: "A", blobs: "000000000000>111111111111", path: "src/new.ts" },
+		]);
+	});
 	test("unquoteGitPath decodes C-quoted paths", () => {
 		expect(unquoteGitPath('"a b.txt"')).toBe("a b.txt");
 		expect(unquoteGitPath("plain/path.ts")).toBe("plain/path.ts");
@@ -241,6 +250,7 @@ describe("parseRecord", () => {
 		matrix: "docs/upstream-18.0.6-fork-matrix.tsv",
 		changelog: "docs/upstream-18.0.6-changelog.tsv",
 		handoff: "docs/upstream-18.0.6-upgrade.md",
+		upstream_changes: ["M aaaaaaaaaaaa>bbbbbbbbbbbb shared.ts", "A 000000000000>cccccccccccc newdoc.md"],
 	};
 
 	test("parses a complete record", () => {
@@ -252,6 +262,22 @@ describe("parseRecord", () => {
 			versionMin: "17.3.3",
 			versionMax: "18.0.6",
 		});
+	});
+	test("parses the embedded upstream-change manifest", () => {
+		const parsed = parseRecord(JSON.stringify(record), "record");
+		expect(parsed.upstreamChanges).toEqual([
+			{ status: "M", blobs: "aaaaaaaaaaaa>bbbbbbbbbbbb", path: "shared.ts" },
+			{ status: "A", blobs: "000000000000>cccccccccccc", path: "newdoc.md" },
+		]);
+	});
+	test("rejects a record without the upstream-change manifest", () => {
+		const { upstream_changes: _changes, ...bare } = record;
+		expect(() => parseRecord(JSON.stringify(bare), "record")).toThrow(/missing upstream_changes manifest/);
+	});
+	test("rejects malformed upstream-change entries", () => {
+		expect(() => parseRecord(JSON.stringify({ ...record, upstream_changes: ["not an entry"] }), "record")).toThrow(
+			/malformed upstream_changes entry/,
+		);
 	});
 	test("rejects abbreviated commits", () => {
 		expect(() => parseRecord(JSON.stringify({ ...record, target: "b4e8e856ad" }), "record")).toThrow(/40-hex/);
@@ -321,6 +347,10 @@ function fixture(): ValidateInput {
 		{ ...derived[0], disposition: "adopted", proof: "merged with upstream" },
 		{ ...derived[1], disposition: "re-fitted", proof: "fork API preserved via adapter" },
 	];
+	const upstream: UpstreamChange[] = [
+		{ status: "M", blobs: "111111111111>222222222222", path: "shared.ts" },
+		{ status: "A", blobs: "000000000000>333333333333", path: "upstream-only.md" },
+	];
 	return {
 		frozenSources: sources,
 		computedSources: structuredClone(sources),
@@ -330,6 +360,8 @@ function fixture(): ValidateInput {
 		forkPaths: new Set(["shared.ts", "forkonly.ts", "asset.bin"]),
 		sharedPaths: new Set(["shared.ts"]),
 		conflictPaths: new Set(["shared.ts"]),
+		frozenUpstream: upstream,
+		computedUpstream: structuredClone(upstream),
 		handoffText: "s1 s2 s3 shared.ts forkonly.ts asset.bin pkg@18.0.6:added:1 pkg@18.0.6:breaking:1",
 		allowPending: false,
 	};
@@ -408,6 +440,29 @@ describe("validate", () => {
 		expect(errors.some(e => e.includes("conflict: predicted merge conflict in unlisted.ts"))).toBe(true);
 		expect(errors.some(e => e.includes("shared.ts has no matrix row"))).toBe(false);
 	});
+	test("flags unaccounted upstream changes, stale records, and content drift", () => {
+		const missing = fixture();
+		missing.frozenUpstream = missing.frozenUpstream.filter(c => c.path !== "upstream-only.md");
+		expect(
+			validate(missing).some(e => e.includes("upstream: unaccounted upstream change upstream-only.md (A)")),
+		).toBe(true);
+
+		const stale = fixture();
+		stale.frozenUpstream.push({ status: "D", blobs: "444444444444>000000000000", path: "phantom.md" });
+		expect(
+			validate(stale).some(e => e.includes("upstream: stale record phantom.md not present in base..target")),
+		).toBe(true);
+
+		const drift = fixture();
+		drift.frozenUpstream[0] = { ...drift.frozenUpstream[0], blobs: "111111111111>999999999999" };
+		expect(
+			validate(drift).some(e => e.includes("upstream: record shared.ts differs from recomputed upstream diff")),
+		).toBe(true);
+
+		const dupe = fixture();
+		dupe.frozenUpstream.push(dupe.frozenUpstream[0]);
+		expect(validate(dupe).some(e => e.includes("upstream: duplicate record for shared.ts"))).toBe(true);
+	});
 	test("gates pending proofs on --allow-pending", () => {
 		const input = fixture();
 		input.matrix[0].proof = "pending:bun test shared.test.ts";
@@ -469,6 +524,7 @@ describe("incompatibility report", () => {
 		expect(categorizeError("sources: missing record s9 (hunk a.ts -1 +1)")).toBe("fork");
 		expect(categorizeError("matrix: changed path missing — a.ts")).toBe("fork");
 		expect(categorizeError("matrix a.ts: empty resolution")).toBe("fork");
+		expect(categorizeError("upstream: unaccounted upstream change a.ts (M)")).toBe("upstream");
 		expect(categorizeError("changelog pkg@18.0.6:added:1: not derived from pinned-target changelogs")).toBe(
 			"upstream",
 		);
@@ -498,56 +554,41 @@ describe("incompatibility report", () => {
 // ---------------------------------------------------------------------------
 
 describe("parseArgs", () => {
-	const base = "ae2d3d6ea16a47aa5208bd123dcc4cfcc8756472";
-	const fork = "79b037e420943010e03727d7cdb22f05e64507b7";
-	const target = "b4e8e856ad40294167679a3f88417c07429fe59b";
-	const fixed = [
-		"--base",
-		base,
-		"--fork",
-		fork,
-		"--target",
-		target,
-		"--version-min",
-		"17.3.3",
-		"--version-max",
-		"18.0.6",
-		"--sources",
-		"docs/upstream-18.0.6-fork-sources.tsv",
-		"--matrix",
-		"docs/upstream-18.0.6-fork-matrix.tsv",
-		"--changelog",
-		"docs/upstream-18.0.6-changelog.tsv",
-		"--handoff",
-		"docs/upstream-18.0.6-upgrade.md",
-	];
-
-	test("parses the explicit pinned invocation", () => {
-		const args = parseArgs(fixed);
-		expect(args.pins).toMatchObject({ base, fork, target, versionMin: "17.3.3", versionMax: "18.0.6" });
-		expect(args).toMatchObject({ writeSources: false, allowPending: false });
-	});
 	test("parses the record-driven invocation", () => {
 		const args = parseArgs(["--record", "docs/upstream/baseline.json", "--allow-pending"]);
 		expect(args.record).toBe("docs/upstream/baseline.json");
-		expect(args.pins).toBeUndefined();
 		expect(args.allowPending).toBe(true);
-	});
-	test("record mode excludes explicit pin flags", () => {
-		expect(() => parseArgs(["--record", "r.json", "--base", base])).toThrow(/--record excludes --base/);
+		expect(args.writeSources).toBe(false);
 	});
 	test("parses the mode flags", () => {
-		expect(parseArgs([...fixed, "--write-sources"]).writeSources).toBe(true);
-		expect(parseArgs([...fixed, "--allow-pending"]).allowPending).toBe(true);
-		expect(parseArgs([...fixed, "--report", "/tmp/report.md"]).report).toBe("/tmp/report.md");
+		const base = ["--record", "docs/upstream/baseline.json"];
+		expect(parseArgs([...base, "--write-sources"]).writeSources).toBe(true);
+		expect(parseArgs([...base, "--report", "/tmp/report.md"]).report).toBe("/tmp/report.md");
 	});
-	test("rejects abbreviated commits", () => {
-		const short = [...fixed];
-		short[1] = "b4e8e856ad";
-		expect(() => parseArgs(short)).toThrow(/40-hex/);
+	test("requires --record", () => {
+		expect(() => parseArgs([])).toThrow(/missing --record/);
 	});
-	test("rejects missing required flags", () => {
-		expect(() => parseArgs(fixed.slice(0, 6))).toThrow(/missing --/);
+	test("rejects unknown flags and stray arguments", () => {
+		expect(() => parseArgs(["--record", "r.json", "--base", "abc"])).toThrow(/unexpected argument --base/);
+		expect(() => parseArgs(["--record", "r.json", "stray"])).toThrow(/unexpected argument stray/);
+	});
+});
+
+describe("ci workflow guardrail wiring", () => {
+	const ciPath = join(import.meta.dir, "..", ".github", "workflows", "ci.yml");
+	interface CiWorkflow {
+		on: { push: { paths: string[] }; pull_request: { paths: string[] } };
+		jobs: { check: { steps: Array<{ name?: string }> } };
+	}
+	const workflow = Bun.YAML.parse(readFileSync(ciPath, "utf8")) as CiWorkflow;
+
+	test("a baseline-only upstream-update PR triggers CI (docs/upstream/** in the paths filters)", () => {
+		expect(workflow.on.pull_request.paths).toContain("docs/upstream/**");
+		expect(workflow.on.push.paths).toContain("docs/upstream/**");
+	});
+	test("the required check job carries the guardrail step", () => {
+		const names = workflow.jobs.check.steps.map(s => s.name ?? "");
+		expect(names).toContain("Upstream guardrail (inventory consistency / full review)");
 	});
 });
 
@@ -580,7 +621,9 @@ describe.if(havePinnedCommits)("18.0.6 calibration", () => {
 			{ cwd: repoRoot, encoding: "utf8" },
 		);
 		expect(result.status, result.stderr).toBe(0);
-		expect(result.stdout).toContain("PASS: sources=869 forkPaths=378 shared=50 changelogEntries=129");
+		expect(result.stdout).toContain(
+			"PASS: sources=869 forkPaths=378 shared=50 changelogEntries=129 upstreamPaths=1961",
+		);
 	}, 30000);
 
 	test("a deliberately incomplete record fails with an itemized report", async () => {
@@ -604,5 +647,22 @@ describe.if(havePinnedCommits)("18.0.6 calibration", () => {
 		expect(result.stderr).toContain("## Unaccounted fork behavior");
 		expect(result.stderr).toContain(`changed path missing — ${removedPath}`);
 		expect(result.stderr).toContain("FAIL:");
+	}, 30000);
+
+	test("a record missing one upstream-change entry fails itemized under Unaccounted upstream changes", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "omp-guardrail-calib-"));
+		calibrationDirs.push(dir);
+		const record = JSON.parse(await Bun.file(join(repoRoot, "docs/upstream/baseline.json")).text());
+		const removed = record.upstream_changes.splice(500, 1)[0] as string;
+		const removedPath = removed.split(" ").slice(2).join(" ");
+		writeFileSync(join(dir, "record.json"), JSON.stringify(record));
+		const result = spawnSync(
+			"bun",
+			["scripts/verify-upstream-handoff.ts", "--record", join(dir, "record.json"), "--allow-pending"],
+			{ cwd: repoRoot, encoding: "utf8" },
+		);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("## Unaccounted upstream changes (1)");
+		expect(result.stderr).toContain(`upstream: unaccounted upstream change ${removedPath}`);
 	}, 30000);
 });

@@ -72,13 +72,16 @@ An upstream-update PR is any PR that modifies `docs/upstream/baseline.json`
 bun scripts/verify-upstream-handoff.ts --record docs/upstream/baseline.json --report <file>
 ```
 
-The review recomputes the frozen source manifest (`base..fork`), the fork
-matrix coverage, the changelog ledger for `(version_min..version_max]` at the
-pinned target, predicted merge conflicts (`git merge-tree fork target` — every
-conflicted path needs a matrix row), and handoff link completeness. Any
-unaccounted fork behavior, unaccounted upstream change, unresolved conflict,
-or failed proof fails the PR and emits the itemized incompatibility report,
-grouped by those categories, into the step summary.
+The review recomputes the frozen source manifest (`base..fork`), the record's
+embedded per-path upstream-change manifest (`base..target`, `upstream_changes`
+entries `"<status> <old12>><new12> <path>"` — every upstream change, including
+target-only paths the fork never touched, must be enumerated), the fork matrix
+coverage, the changelog ledger for `(version_min..version_max]` at the pinned
+target, predicted merge conflicts (`git merge-tree --merge-base base fork
+target` — every conflicted path needs a matrix row), and handoff link
+completeness. Any unaccounted fork behavior, unaccounted upstream change,
+unresolved conflict, or failed proof fails the PR and emits the itemized
+incompatibility report, grouped by those categories, into the step summary.
 
 ## Preparing a review (candidate → record)
 
@@ -88,12 +91,15 @@ grouped by those categories, into the step summary.
    merge base), `fork` (frozen fork commit), `target` (candidate commit),
    `version_min` (first version above the accepted baseline), `version_max`
    (candidate version), and the four record file paths inside the review dir.
-2. Freeze sources once:
-   `bun scripts/verify-upstream-handoff.ts --record <review.json> --write-sources`.
+2. Freeze the source and upstream-change manifests once:
+   `bun scripts/verify-upstream-handoff.ts --record <review.json> --write-sources`
+   (writes the sources TSV and embeds the `upstream_changes` manifest in the
+   record JSON).
 3. Build the matrix and changelog ledger; keep `pending:<command>` proofs while
-   work is in flight and verify with `--allow-pending`.
-4. The pre-merge run must eventually pass; final acceptance (the PR that moves
-   `baseline.json`) is strict — no pending proofs.
+   work is in flight and iterate manually with `--allow-pending`.
+4. Acceptance is strict everywhere it counts: the updater's pre-merge review,
+   its post-merge gate 1, and CI's upstream-update review all run without
+   `--allow-pending` — no pending proof can ride an incorporation.
 
 Committing the review record is expected and safe: the updater allows HEAD to
 differ from the record's `fork` pin only by changes under `docs/upstream/`
@@ -107,12 +113,12 @@ review is re-run against the current fork state.
 - **Pre-merge** (candidate not an ancestor): refuses to merge unless
   `docs/upstream/reviews/<sha12>/review.json` exists, pins exactly the supplied
   target with `fork` equal to the current HEAD (drift confined to
-  `docs/upstream/` allowed), and passes
-  `verify-upstream-handoff --record … --allow-pending`. Only then
+  `docs/upstream/` allowed), and passes the strict
+  `verify-upstream-handoff --record …` review (no pending proofs). Only then
   `git merge --no-ff <commit>`, then stop.
 - **Post-merge** (candidate is an ancestor): gate 1 re-verifies the accepted
-  baseline record, gate 2 checks the fork-behavior inventory, then the full
-  TS/Rust/Python/PostgreSQL gate chain (gates 3–12) with a clean-tree check.
+  baseline record (strict), gate 2 checks the fork-behavior inventory, then the
+  full TS/Rust/Python/PostgreSQL gate chain (gates 3–12) with a clean-tree check.
 
 ## Advancing the baseline
 
@@ -122,4 +128,4 @@ After a guarded incorporation is accepted and cut over, the update PR replaces
 the same PR — CI's full review gates exactly that PR. The 18.0.6 record
 (`docs/upstream-18.0.6-*.tsv`, `docs/upstream-18.0.6-upgrade.md`) remains the
 accepted baseline and the guardrail's known-good calibration case
-(`PASS: sources=869 forkPaths=378 shared=50 changelogEntries=129`).
+(`PASS: sources=869 forkPaths=378 shared=50 changelogEntries=129 upstreamPaths=1961`).

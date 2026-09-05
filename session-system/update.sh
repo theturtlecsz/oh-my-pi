@@ -139,7 +139,9 @@ if ! git merge-base --is-ancestor "$TARGET" HEAD; then
 			exit 1
 		fi
 	fi
-	if ! bun scripts/verify-upstream-handoff.ts --record "$REVIEW_JSON" --allow-pending; then
+	# Strict: no pending proofs may ride an incorporation (AC-5). --allow-pending
+	# exists only for manual iteration on an in-flight review, never here.
+	if ! bun scripts/verify-upstream-handoff.ts --record "$REVIEW_JSON"; then
 		echo "update.sh: standing guardrail review failed — resolve the incompatibility report before merging" >&2
 		exit 1
 	fi
@@ -160,7 +162,7 @@ run_gate() { # run_gate <label> <command...>
 	"$@"
 }
 
-run_gate 1 bun scripts/verify-upstream-handoff.ts --record docs/upstream/baseline.json --allow-pending
+run_gate 1 bun scripts/verify-upstream-handoff.ts --record docs/upstream/baseline.json
 run_gate 2 bun scripts/upstream-inventory.ts
 run_gate 3 bun test session-system/tests packages/work-client/test scripts/verify-upstream-handoff.test.ts
 run_gate 4 ./node_modules/.bin/tsc --noEmit -p session-system

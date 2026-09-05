@@ -264,7 +264,7 @@ describe("merge path", () => {
 		expect(git(fx.repo, "rev-parse", "HEAD^2")).toBe(fx.upstreamSha);
 		// only the pre-merge guardrail review runs; no install/natives/gates
 		expect(fx.logLines()).toEqual([
-			`bun scripts/verify-upstream-handoff.ts --record docs/upstream/reviews/${fx.upstreamSha.slice(0, 12)}/review.json --allow-pending`,
+			`bun scripts/verify-upstream-handoff.ts --record docs/upstream/reviews/${fx.upstreamSha.slice(0, 12)}/review.json`,
 		]);
 	});
 	test("a conflicted merge exits immediately with no install or gates", () => {
@@ -275,7 +275,7 @@ describe("merge path", () => {
 		expect(result.exitCode).not.toBe(0);
 		// only the pre-merge guardrail review reached the log
 		expect(fx.logLines()).toEqual([
-			`bun scripts/verify-upstream-handoff.ts --record docs/upstream/reviews/${fx.upstreamSha.slice(0, 12)}/review.json --allow-pending`,
+			`bun scripts/verify-upstream-handoff.ts --record docs/upstream/reviews/${fx.upstreamSha.slice(0, 12)}/review.json`,
 		]);
 		// merge stopped in conflict state for hand resolution
 		expect(git(fx.repo, "ls-files", "-u")).not.toBe("");
@@ -301,7 +301,7 @@ describe("ancestor gate path", () => {
 		expect(fx.logLines()).toEqual([
 			"bun install --frozen-lockfile",
 			"refresh-natives",
-			"bun scripts/verify-upstream-handoff.ts --record docs/upstream/baseline.json --allow-pending",
+			"bun scripts/verify-upstream-handoff.ts --record docs/upstream/baseline.json",
 			"bun scripts/upstream-inventory.ts",
 			"bun test session-system/tests packages/work-client/test scripts/verify-upstream-handoff.test.ts",
 			"tsc --noEmit -p session-system",

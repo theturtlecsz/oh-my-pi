@@ -394,6 +394,10 @@ export interface ValidateInput {
 	sharedPaths: Set<string>;
 	/** Paths `git merge-tree fork target` predicts as conflicted; empty when unknown. */
 	conflictPaths?: Set<string>;
+	/** Frozen per-path upstream-change manifest from the record. */
+	frozenUpstream: UpstreamChange[];
+	/** Recomputed per-path upstream changes from base..target. */
+	computedUpstream: UpstreamChange[];
 	handoffText: string;
 	allowPending: boolean;
 }
@@ -419,6 +423,8 @@ export function validate(input: ValidateInput): string[] {
 		forkPaths,
 		sharedPaths,
 		conflictPaths,
+		frozenUpstream,
+		computedUpstream,
 		handoffText,
 		allowPending,
 	} = input;
@@ -547,6 +553,32 @@ export function validate(input: ValidateInput): string[] {
 		if (!rowsById.has(id)) errors.push(`changelog: missing entry ${id}`);
 	}
 
+	// 4b. Frozen upstream-change manifest must equal the recomputed base..target set:
+	// every upstream change — including target-only paths untouched by the fork —
+	// must be enumerated by the record.
+	const frozenUpstreamByPath = new Map(frozenUpstream.map(c => [c.path, c]));
+	if (frozenUpstreamByPath.size !== frozenUpstream.length) {
+		const seen = new Set<string>();
+		for (const c of frozenUpstream) {
+			if (seen.has(c.path)) errors.push(`upstream: duplicate record for ${c.path}`);
+			seen.add(c.path);
+		}
+	}
+	const computedUpstreamByPath = new Map(computedUpstream.map(c => [c.path, c]));
+	for (const c of computedUpstream) {
+		const frozen = frozenUpstreamByPath.get(c.path);
+		if (!frozen) {
+			errors.push(`upstream: unaccounted upstream change ${c.path} (${c.status})`);
+		} else if (frozen.status !== c.status || frozen.blobs !== c.blobs) {
+			errors.push(`upstream: record ${c.path} differs from recomputed upstream diff`);
+		}
+	}
+	for (const path of frozenUpstreamByPath.keys()) {
+		if (!computedUpstreamByPath.has(path)) {
+			errors.push(`upstream: stale record ${path} not present in base..target`);
+		}
+	}
+
 	// 5. Handoff must link every surface, source, and changelog ID.
 	for (const id of surfaceIds) {
 		if (!handoffText.includes(id)) errors.push(`handoff: missing surface link ${id}`);
@@ -579,7 +611,7 @@ export function categorizeError(error: string): ReportCategory {
 	if (error.includes("pending proof")) return "proof";
 	if (error.startsWith("conflict:")) return "conflict";
 	if (error.startsWith("sources:") || error.startsWith("matrix")) return "fork";
-	if (error.startsWith("changelog")) return "upstream";
+	if (error.startsWith("changelog") || error.startsWith("upstream:")) return "upstream";
 	return "record";
 }
 
@@ -607,6 +639,12 @@ export function buildIncompatibilityReport(errors: string[]): string {
 // Record files (docs/upstream/baseline.json, docs/upstream/reviews/*/review.json)
 // ---------------------------------------------------------------------------
 
+export interface UpstreamChange {
+	status: string;
+	blobs: string;
+	path: string;
+}
+
 export interface GuardrailRecord {
 	upstreamRepo: string;
 	upstreamVersion: string;
@@ -619,6 +657,34 @@ export interface GuardrailRecord {
 	matrix: string;
 	changelog: string;
 	handoff: string;
+	upstreamChanges: UpstreamChange[];
+}
+
+const UPSTREAM_ENTRY = /^([A-Z]\d*) ([0-9a-f]{12}>[0-9a-f]{12}) (.+)$/;
+
+export function formatUpstreamEntry(change: UpstreamChange): string {
+	return `${change.status} ${change.blobs} ${change.path}`;
+}
+
+export function parseUpstreamEntry(entry: string, label: string): UpstreamChange {
+	const m = entry.match(UPSTREAM_ENTRY);
+	if (!m) throw new Error(`${label}: malformed upstream_changes entry '${entry.slice(0, 80)}'`);
+	return { status: m[1], blobs: m[2], path: m[3] };
+}
+
+/** Compute the per-path upstream-change manifest from `git diff --raw base..target` output. */
+export function computeUpstreamChanges(rawText: string): UpstreamChange[] {
+	const out = parseRawDiffChanges(rawText);
+	out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+	return out;
+
+	function parseRawDiffChanges(text: string): UpstreamChange[] {
+		return parseRawDiff(text).map(change => ({
+			status: change.status,
+			blobs: `${change.oldSha.slice(0, 12)}>${change.newSha.slice(0, 12)}`,
+			path: change.path,
+		}));
+	}
 }
 
 export function parseRecord(text: string, label: string): GuardrailRecord {
@@ -641,6 +707,14 @@ export function parseRecord(text: string, label: string): GuardrailRecord {
 	for (const key of ["version_min", "version_max", "upstream_version"]) {
 		if (!/^\d+\.\d+\.\d+$/.test(str(key))) throw new Error(`${label}: ${key} must be a final x.y.z version`);
 	}
+	const rawChanges = record.upstream_changes;
+	if (!Array.isArray(rawChanges)) {
+		throw new Error(`${label}: missing upstream_changes manifest — freeze it with --write-sources`);
+	}
+	const upstreamChanges = rawChanges.map((entry, i) => {
+		if (typeof entry !== "string") throw new Error(`${label}: upstream_changes[${i}] is not a string`);
+		return parseUpstreamEntry(entry, label);
+	});
 	return {
 		upstreamRepo: str("upstream_repo"),
 		upstreamVersion: str("upstream_version"),
@@ -653,6 +727,7 @@ export function parseRecord(text: string, label: string): GuardrailRecord {
 		matrix: str("matrix"),
 		changelog: str("changelog"),
 		handoff: str("handoff"),
+		upstreamChanges,
 	};
 }
 
@@ -672,21 +747,8 @@ export function parseMergeTreeConflicts(output: string): Set<string> {
 // CLI
 // ---------------------------------------------------------------------------
 
-interface Pins {
-	base: string;
-	fork: string;
-	target: string;
-	versionMin: string;
-	versionMax: string;
-	sources: string;
-	matrix: string;
-	changelog: string;
-	handoff: string;
-}
-
 interface Args {
-	record?: string;
-	pins?: Pins;
+	record: string;
 	report?: string;
 	writeSources: boolean;
 	allowPending: boolean;
@@ -702,7 +764,7 @@ export function parseArgs(argv: string[]): Args {
 			writeSources = true;
 		} else if (arg === "--allow-pending") {
 			allowPending = true;
-		} else if (arg.startsWith("--")) {
+		} else if (arg === "--record" || arg === "--report") {
 			const value = argv[++i];
 			if (value === undefined) throw new Error(`missing value for ${arg}`);
 			flags.set(arg.slice(2), value);
@@ -711,46 +773,8 @@ export function parseArgs(argv: string[]): Args {
 		}
 	}
 	const record = flags.get("record");
-	const report = flags.get("report");
-	const pinKeys = [
-		"base",
-		"fork",
-		"target",
-		"version-min",
-		"version-max",
-		"sources",
-		"matrix",
-		"changelog",
-		"handoff",
-	];
-	if (record) {
-		for (const key of pinKeys) {
-			if (flags.has(key)) throw new Error(`--record excludes --${key}`);
-		}
-		return { record, report, writeSources, allowPending };
-	}
-	for (const key of pinKeys) {
-		if (!flags.get(key)) throw new Error(`missing --${key}`);
-	}
-	for (const key of ["base", "fork", "target"]) {
-		if (!/^[0-9a-f]{40}$/.test(flags.get(key) as string)) throw new Error(`--${key} must be a full 40-hex commit`);
-	}
-	return {
-		pins: {
-			base: flags.get("base") as string,
-			fork: flags.get("fork") as string,
-			target: flags.get("target") as string,
-			versionMin: flags.get("version-min") as string,
-			versionMax: flags.get("version-max") as string,
-			sources: flags.get("sources") as string,
-			matrix: flags.get("matrix") as string,
-			changelog: flags.get("changelog") as string,
-			handoff: flags.get("handoff") as string,
-		},
-		report,
-		writeSources,
-		allowPending,
-	};
+	if (!record) throw new Error("missing --record");
+	return { record, report: flags.get("report"), writeSources, allowPending };
 }
 
 async function git(args: string[], okExitCodes: number[] = [0]): Promise<string> {
@@ -782,42 +806,52 @@ async function main(): Promise<void> {
 		return file.text();
 	};
 
-	let pins: Pins;
-	if (args.record) {
-		let parsed: GuardrailRecord;
-		try {
-			parsed = parseRecord(await readFile(args.record, "record"), args.record);
-		} catch (err) {
-			console.error(`ERROR: ${err instanceof Error ? err.message : err}`);
-			process.exit(1);
+	const recordText = await readFile(args.record, "record");
+	let pins: GuardrailRecord;
+	try {
+		if (args.writeSources) {
+			// The freeze may create the manifest for the first time; tolerate its
+			// absence here — parseRecord enforces it on every verification run.
+			const raw = JSON.parse(recordText) as Record<string, unknown>;
+			if (!Array.isArray(raw.upstream_changes)) raw.upstream_changes = [];
+			pins = parseRecord(JSON.stringify(raw), args.record);
+		} else {
+			pins = parseRecord(recordText, args.record);
 		}
-		pins = parsed;
-	} else {
-		pins = args.pins as Pins;
+	} catch (err) {
+		console.error(`ERROR: ${err instanceof Error ? err.message : err}`);
+		process.exit(1);
 	}
 	const range = { min: pins.versionMin, max: pins.versionMax };
 
 	const diffRange = `${pins.base}..${pins.fork}`;
-	const [rawText, numstatText, diffText, forkNames, targetNames, mergeTreeText] = await Promise.all([
+	const targetRange = `${pins.base}..${pins.target}`;
+	const [rawText, numstatText, diffText, forkNames, targetRawText, mergeTreeText] = await Promise.all([
 		git(["diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", diffRange]),
 		git(["diff", "--numstat", "--no-renames", "--no-color", diffRange]),
 		git(["diff", "--unified=0", "--no-renames", "--no-color", diffRange]),
 		git(["diff", "--name-only", "--no-renames", "--no-color", diffRange]),
-		git(["diff", "--name-only", "--no-renames", "--no-color", `${pins.base}..${pins.target}`]),
+		git(["diff", "--raw", "--no-renames", "--abbrev=40", "--no-color", targetRange]),
 		// Explicit --merge-base: the pinned base commit removes any dependency on
 		// history connectivity, so depth-1 fetches of the three pins suffice (CI).
 		git(["merge-tree", "--write-tree", "--no-messages", "--merge-base", pins.base, pins.fork, pins.target], [0, 1]),
 	]);
 	const computedSources = computeSourceRecords(rawText, numstatText, diffText);
+	const computedUpstream = computeUpstreamChanges(targetRawText);
 
 	if (args.writeSources) {
 		await Bun.write(pins.sources, formatSourcesTsv(computedSources));
-		console.log(`wrote ${computedSources.length} source records to ${pins.sources}`);
+		const raw = JSON.parse(recordText) as Record<string, unknown>;
+		raw.upstream_changes = computedUpstream.map(formatUpstreamEntry);
+		await Bun.write(args.record, `${JSON.stringify(raw, null, "\t")}\n`);
+		console.log(
+			`wrote ${computedSources.length} source records to ${pins.sources} and ${computedUpstream.length} upstream-change entries to ${args.record}`,
+		);
 		return;
 	}
 
 	const forkPaths = new Set(forkNames.split("\n").filter(Boolean).map(unquoteGitPath));
-	const targetPaths = new Set(targetNames.split("\n").filter(Boolean).map(unquoteGitPath));
+	const targetPaths = new Set(computedUpstream.map(c => c.path));
 	const sharedPaths = new Set([...forkPaths].filter(p => targetPaths.has(p)));
 	const conflictPaths = parseMergeTreeConflicts(mergeTreeText);
 
@@ -841,6 +875,8 @@ async function main(): Promise<void> {
 			forkPaths,
 			sharedPaths,
 			conflictPaths,
+			frozenUpstream: pins.upstreamChanges,
+			computedUpstream,
 			handoffText: await readFile(pins.handoff, "handoff"),
 			allowPending: args.allowPending,
 		});
@@ -854,14 +890,14 @@ async function main(): Promise<void> {
 		console.error(reportText);
 		if (args.report) await Bun.write(args.report, reportText);
 		console.error(
-			`FAIL: ${errors.length} error(s) — sources=${computedSources.length} shared=${sharedPaths.size} conflicts=${conflictPaths.size} entries=${derivedEntries.length}`,
+			`FAIL: ${errors.length} error(s) — sources=${computedSources.length} shared=${sharedPaths.size} conflicts=${conflictPaths.size} entries=${derivedEntries.length} upstreamPaths=${computedUpstream.length}`,
 		);
 		process.exit(1);
 	}
 	if (args.report)
 		await Bun.write(args.report, "# Incompatibility report\n\nNo findings; acceptance is not blocked.\n");
 	console.log(
-		`PASS: sources=${computedSources.length} forkPaths=${forkPaths.size} shared=${sharedPaths.size} changelogEntries=${derivedEntries.length}${args.allowPending ? " (pending allowed)" : ""}`,
+		`PASS: sources=${computedSources.length} forkPaths=${forkPaths.size} shared=${sharedPaths.size} changelogEntries=${derivedEntries.length} upstreamPaths=${computedUpstream.length}${args.allowPending ? " (pending allowed)" : ""}`,
 	);
 }
 
