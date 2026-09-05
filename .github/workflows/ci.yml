@@ -350,14 +350,15 @@ jobs:
       steps:
          - uses: actions/checkout@v4
 
-         # ---- PR path: latest release addons from npm ----
+         # ---- PR path: repository-matched release addons from npm ----
          - name: Fetch release native addons (npm)
            if: github.event_name == 'pull_request'
            shell: bash
            run: |
               set -euo pipefail
-              tarball="$(npm view @oh-my-pi/pi-natives-linux-x64@latest dist.tarball)"
-              echo "Fetching $tarball"
+              native_version="$(node -p "require('./packages/natives/package.json').version")"
+              tarball="$(npm view "@oh-my-pi/pi-natives-linux-x64@$native_version" dist.tarball)"
+              echo "Fetching @oh-my-pi/pi-natives-linux-x64@$native_version from $tarball"
               curl -fsSL --retry 3 "$tarball" | tar -xz -C "$RUNNER_TEMP"
               mkdir -p bazel-bin/natives-linux-x64-baseline bazel-bin/natives-linux-x64-modern
               cp "$RUNNER_TEMP/package/pi_natives.linux-x64-baseline.node" bazel-bin/natives-linux-x64-baseline/
@@ -373,21 +374,29 @@ jobs:
               # (exit 0 on a bogus addon); a script file enforces them in
               # both bun and node. Verified against a corrupt .node fixture.
               cat > "$RUNNER_TEMP/smoke-addons.js" <<'EOF'
-              for (const f of process.argv.slice(2)) {
-               const m = require(f);
-               if (!m || Object.keys(m).length === 0) {
-               	console.error(`addon failed to load: ${f}`);
-               	process.exit(1);
-               }
+              const expectedVersion = process.argv[2];
+              const expectedSentinel = `__piNativesV${expectedVersion.replace(/[^A-Za-z0-9]/g, "_")}`;
+              for (const f of process.argv.slice(3)) {
+                const m = require(f);
+                if (
+                  !m ||
+                  Object.keys(m).length === 0 ||
+                  typeof m[expectedSentinel] !== "function" ||
+                  typeof m.MacOSPowerAssertion?.start !== "function"
+                ) {
+                  console.error(`addon does not expose current repository contract: ${f}`);
+                  process.exit(1);
+                }
               }
               EOF
               loader=node
               if command -v bun >/dev/null 2>&1; then loader=bun; fi
               "$loader" "$RUNNER_TEMP/smoke-addons.js" \
+                "$(node -p "require('./packages/natives/package.json').version")" \
                 "$PWD/bazel-bin/natives-linux-x64-baseline/pi_natives.linux-x64-baseline.node" \
                 "$PWD/bazel-bin/natives-linux-x64-modern/pi_natives.linux-x64-modern.node"
          # Make the policy visible on the rare native-touching PR instead of
-         # leaving a reviewer to wonder which addons the tests exercised.
+         # leaving a reviewer to wonder which repository-matched addons the tests exercised.
          # Best-effort: a diff-API failure must not fail the job over a notice.
          - name: Note native changes tested against release addons
            if: github.event_name == 'pull_request'
@@ -397,7 +406,7 @@ jobs:
            run: |
               if gh pr diff ${{ github.event.pull_request.number }} --name-only 2>/dev/null \
                  | grep -qE '^(crates/|bazel/|Cargo\.(toml|lock)|MODULE\.bazel(\.lock)?|BUILD\.bazel|\.bazelrc|\.bazelignore|\.bazelversion|rust-toolchain\.toml|rustfmt\.toml)'; then
-                echo "::notice title=Native sources changed::PR CI tests against the latest release addons by design; native changes are validated post-merge on main and at release."
+                echo "::notice title=Native sources changed::PR CI tests against repository-version release addons by design; native changes are validated post-merge on main and at release."
               fi
 
          # ---- main path: bazel build of all Linux-hosted targets ----
