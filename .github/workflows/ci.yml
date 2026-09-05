@@ -33,6 +33,13 @@ on:
          - "bunfig.toml"
          - "package.json"
          - "patches/**"
+         # Upstream guardrail records: baseline/review-record-only changes must
+         # still run CI so the strict upstream-update review executes (OMP-229).
+         - "docs/upstream/**"
+         # Doc-only pushes touching inventoried paths (e.g. docs/upstream-guardrail.md)
+         # must still run the inventory check or their rows go stale, misattributing
+         # the failure to the next PR (OMP-229).
+         - "docs/**"
          - ".github/**"
          - ".github/workflows/**"
    pull_request:
@@ -63,6 +70,13 @@ on:
          - "bunfig.toml"
          - "package.json"
          - "patches/**"
+         # Upstream guardrail records — an upstream-update PR may touch only
+         # docs/upstream/**; it must trigger the strict full review (OMP-229).
+         - "docs/upstream/**"
+         # Doc-only PRs touching inventoried paths (e.g. docs/upstream-guardrail.md)
+         # must still run the inventory check or their rows go stale, misattributing
+         # the failure to the next PR (OMP-229).
+         - "docs/**"
          - ".github/**"
          - ".github/workflows/**"
    workflow_dispatch:
@@ -208,6 +222,60 @@ jobs:
       steps:
          - uses: actions/checkout@v4
          - uses: ./.github/actions/bun-install
+         # Standing upstream-compatibility guardrail (OMP-229).
+         # Every PR: the fork-behavior inventory must account for every path
+         # diverging from the accepted upstream baseline — fork behavior cannot
+         # change without a corresponding inventory update.
+         # Upstream-update PRs (any PR touching docs/upstream/baseline.json or a
+         # docs/upstream/reviews/*/review.json record): additionally run the full
+         # record review per changed record, strict (no pending proofs), fetching
+         # that record's own base/fork/target pins first and failing with the
+         # itemized incompatibility report in the step summary.
+         - name: Upstream guardrail (inventory consistency / full review)
+           if: github.event_name == 'pull_request'
+           shell: bash
+           env:
+              GH_TOKEN: ${{ github.token }}
+              PR_NUMBER: ${{ github.event.pull_request.number }}
+           run: |
+              set -euo pipefail
+              baseline=docs/upstream/baseline.json
+              # Fetch one pinned commit using the given record's own upstream repo
+              # (present in origin after acceptance; in upstream before).
+              fetch_commit() { # $1 = record path, $2 = commit sha
+                git cat-file -e "$2^{commit}" 2>/dev/null && return 0
+                local repo
+                repo="$(jq -er '.upstream_repo | select(test("^https://github\\.com/"))' "$1")"
+                git fetch --depth=1 origin "$2" 2>/dev/null || git fetch --depth=1 "$repo" "$2"
+              }
+              record_pin() { # $1 = record path, $2 = field (base|fork|target)
+                jq -er --arg f "$2" '.[$f] | select(test("^[0-9a-f]{40}$"))' "$1"
+              }
+              run_strict_review() { # $1 = record path
+                fetch_commit "$1" "$(record_pin "$1" base)"
+                fetch_commit "$1" "$(record_pin "$1" fork)"
+                fetch_commit "$1" "$(record_pin "$1" target)"
+                if ! bun scripts/verify-upstream-handoff.ts --record "$1" --report /tmp/incompatibility-report.md; then
+                  cat /tmp/incompatibility-report.md >> "$GITHUB_STEP_SUMMARY" || true
+                  exit 1
+                fi
+              }
+              # The inventory check needs the accepted baseline's target commit locally.
+              fetch_commit "$baseline" "$(record_pin "$baseline" target)"
+              bun scripts/upstream-inventory.ts
+              # Capture separately so a gh failure fails the step (set -e) instead
+              # of silently skipping the strict review via an empty pipe.
+              changed_files="$(gh pr diff "$PR_NUMBER" --name-only)"
+              if grep -qx "$baseline" <<<"$changed_files"; then
+                echo "baseline record changed — running the full standing-guardrail review (strict)"
+                run_strict_review "$baseline"
+              fi
+              changed_reviews="$(grep -E '^docs/upstream/reviews/[^/]+/review\.json$' <<<"$changed_files" || true)"
+              while IFS= read -r review_record; do
+                [ -n "$review_record" ] || continue
+                echo "review record changed — running the full standing-guardrail review (strict): $review_record"
+                run_strict_review "$review_record"
+              done <<<"$changed_reviews"
          - name: Verify Rust license compliance (cargo-deny 0.20.2)
            run: |
               cargo install --locked --version 0.20.2 cargo-deny

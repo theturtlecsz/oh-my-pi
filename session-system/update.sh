@@ -11,11 +11,16 @@
 #     e.g. systemd --user, ssh/gpg agents — are skipped with a warning:
 #     owner-accepted carve-out, OMP-157 2026-08-26)
 #   * fetches `upstream`, verifies the object resolves to exactly the supplied commit
-#   * target NOT an ancestor of HEAD  -> `git merge --no-ff <commit>` and stop.
+#   * target NOT an ancestor of HEAD  -> requires a passing standing-guardrail review
+#     record for exactly this candidate (docs/upstream/reviews/<first-12-hex>/review.json
+#     pinning this target with fork == current HEAD, verified by
+#     scripts/verify-upstream-handoff.ts), then `git merge --no-ff <commit>` and stop.
+#     No review record, a mismatched record, or a failing review refuses the merge —
+#     no incorporation path bypasses the guardrail (OMP-229).
 #     A conflicted or otherwise failed merge exits immediately: resolve by hand, commit,
 #     then re-run. No install, native refresh, verifier, or gate runs on this path.
 #   * target IS an ancestor of HEAD   -> frozen install, native refresh, then the full
-#     OMP-156 gate list (verifier + TS/Rust/Python/PostgreSQL) verbatim and in order.
+#     gate list (guardrail verifier + inventory + TS/Rust/Python/PostgreSQL) in order.
 #     Success additionally requires the tracked tree to still be clean afterwards.
 #
 # This script never pushes, never installs live links, and never uses a moving merge
@@ -103,6 +108,43 @@ if ! git merge-base --is-ancestor "$TARGET" HEAD; then
 		echo "update.sh: refusing to merge on 'main' — run from an integration branch; main only fast-forwards during gated cutover" >&2
 		exit 1
 	fi
+	# OMP-229: the standing guardrail gates every incorporation. The review record
+	# must exist for exactly this candidate, pin the reviewed fork commit, and pass
+	# the full compatibility review before any merge happens. Committing the review
+	# record itself legitimately advances HEAD past the fork pin, so HEAD may
+	# differ from the pin only by changes under docs/upstream/ (guardrail
+	# bookkeeping); any other divergence invalidates the review.
+	REVIEW_DIR="docs/upstream/reviews/$(printf '%s' "$TARGET" | cut -c1-12)"
+	REVIEW_JSON="$REVIEW_DIR/review.json"
+	if [ ! -f "$REVIEW_JSON" ]; then
+		echo "update.sh: no review record at $REVIEW_JSON — run the standing guardrail review first (docs/upstream-guardrail.md)" >&2
+		exit 1
+	fi
+	REVIEW_TARGET="$(sed -n 's/.*"target"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$REVIEW_JSON" | head -n 1)"
+	REVIEW_FORK="$(sed -n 's/.*"fork"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$REVIEW_JSON" | head -n 1)"
+	if [ "$REVIEW_TARGET" != "$TARGET" ]; then
+		echo "update.sh: review record targets '${REVIEW_TARGET:-none}', not $TARGET — refusing to merge" >&2
+		exit 1
+	fi
+	HEAD_COMMIT="$(git rev-parse HEAD)"
+	if [ "$REVIEW_FORK" != "$HEAD_COMMIT" ]; then
+		if [ -z "$REVIEW_FORK" ] || ! git rev-parse --verify --quiet "${REVIEW_FORK}^{commit}" >/dev/null; then
+			echo "update.sh: review record pins unknown fork commit '${REVIEW_FORK:-none}' — re-run the review against the current fork state" >&2
+			exit 1
+		fi
+		DRIFT="$(git diff --name-only "$REVIEW_FORK" HEAD -- | grep -v '^docs/upstream/' || true)"
+		if [ -n "$DRIFT" ]; then
+			echo "update.sh: HEAD $HEAD_COMMIT diverges from the review's fork pin '$REVIEW_FORK' outside docs/upstream/ — re-run the review against the current fork state" >&2
+			printf 'update.sh: diverging path: %s\n' $DRIFT >&2
+			exit 1
+		fi
+	fi
+	# Strict: no pending proofs may ride an incorporation (AC-5). --allow-pending
+	# exists only for manual iteration on an in-flight review, never here.
+	if ! bun scripts/verify-upstream-handoff.ts --record "$REVIEW_JSON"; then
+		echo "update.sh: standing guardrail review failed — resolve the incompatibility report before merging" >&2
+		exit 1
+	fi
 	echo "update.sh: merging $TARGET (--no-ff); a conflict stops here — resolve, commit, re-run"
 	git merge --no-ff "$TARGET"
 	echo "update.sh: merge committed at $(git rev-parse --short HEAD) — re-run to execute the gates"
@@ -120,31 +162,24 @@ run_gate() { # run_gate <label> <command...>
 	"$@"
 }
 
-run_gate 1 bun scripts/verify-upstream-handoff.ts \
-	--base ae2d3d6ea16a47aa5208bd123dcc4cfcc8756472 \
-	--fork 79b037e420943010e03727d7cdb22f05e64507b7 \
-	--target b4e8e856ad40294167679a3f88417c07429fe59b \
-	--sources docs/upstream-18.0.6-fork-sources.tsv \
-	--matrix docs/upstream-18.0.6-fork-matrix.tsv \
-	--changelog docs/upstream-18.0.6-changelog.tsv \
-	--handoff docs/upstream-18.0.6-upgrade.md \
-	--allow-pending
-run_gate 2 bun test session-system/tests packages/work-client/test scripts/verify-upstream-handoff.test.ts
-run_gate 3 ./node_modules/.bin/tsc --noEmit -p session-system
-run_gate 4 bun run check:ts
-run_gate 5 cargo fmt --all -- --check
-run_gate 6 cargo clippy --workspace --exclude brush-core --no-deps -- -D warnings
-run_gate 7 bun run test:ts
-run_gate 8 bun run test:scripts
-run_gate 9 bun run test:py
-run_gate 10 cargo nextest run --workspace --exclude brush-core --status-level=fail --final-status-level=fail
+run_gate 1 bun scripts/verify-upstream-handoff.ts --record docs/upstream/baseline.json
+run_gate 2 bun scripts/upstream-inventory.ts
+run_gate 3 bun test session-system/tests packages/work-client/test scripts/verify-upstream-handoff.test.ts
+run_gate 4 ./node_modules/.bin/tsc --noEmit -p session-system
+run_gate 5 bun run check:ts
+run_gate 6 cargo fmt --all -- --check
+run_gate 7 cargo clippy --workspace --exclude brush-core --no-deps -- -D warnings
+run_gate 8 bun run test:ts
+run_gate 9 bun run test:scripts
+run_gate 10 bun run test:py
+run_gate 11 cargo nextest run --workspace --exclude brush-core --status-level=fail --final-status-level=fail
 
-echo "=== gate 11: OMP_WORK_POSTGRES_INTEGRATION=1 bun run test:session:smoke"
+echo "=== gate 12: OMP_WORK_POSTGRES_INTEGRATION=1 bun run test:session:smoke"
 SMOKE_LOG="$(mktemp)"
 trap 'rm -f "$SMOKE_LOG"' EXIT
 OMP_WORK_POSTGRES_INTEGRATION=1 bun run test:session:smoke | tee "$SMOKE_LOG"
 if ! grep -q 'PASS' "$SMOKE_LOG"; then
-	echo "update.sh: gate 11 did not print PASS" >&2
+	echo "update.sh: gate 12 did not print PASS" >&2
 	exit 1
 fi
 

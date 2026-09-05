@@ -19,7 +19,7 @@
 - Source manifest: `docs/upstream-18.0.6-fork-sources.tsv` (869 records: 815 hunks + 52 binary + 2 meta; frozen from `git diff --unified=0 --no-renames ae2d3d6ea16a..79b037e42094`).
 - Fork matrix: `docs/upstream-18.0.6-fork-matrix.tsv` (one surface per changed path; 378 rows, 50 shared).
 - Changelog ledger: `docs/upstream-18.0.6-changelog.tsv` (129 entries, versions 17.3.3–18.0.6 from pinned-target package changelogs).
-- Verifier: `bun scripts/verify-upstream-handoff.ts --base ae2d3d6ea16a47aa5208bd123dcc4cfcc8756472 --fork 79b037e420943010e03727d7cdb22f05e64507b7 --target b4e8e856ad40294167679a3f88417c07429fe59b --sources docs/upstream-18.0.6-fork-sources.tsv --matrix docs/upstream-18.0.6-fork-matrix.tsv --changelog docs/upstream-18.0.6-changelog.tsv --handoff docs/upstream-18.0.6-upgrade.md` (`--allow-pending` pre-merge only).
+- Verifier: `bun scripts/verify-upstream-handoff.ts --record docs/upstream/baseline.json` (`--allow-pending` pre-merge only).
 
 ## Predicted conflict resolutions (17 paths)
 
