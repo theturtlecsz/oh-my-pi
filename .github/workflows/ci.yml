@@ -337,11 +337,10 @@ jobs:
            run: bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build --config=rustfmt //crates/...
 
    # Provides the native addons every downstream TS job installs. PRs never
-   # build: they fetch the latest release's Linux x64 pair from the
-   # @oh-my-pi/pi-natives-linux-x64 npm leaf instead. The workspace loader
-   # skips its version sentinel for workspace loads, so release addons load
-   # fine under a newer checkout; a PR whose TS tests depend on changed
-   # native behavior fails visibly and the native side lands via main.
+   # build: they fetch the repository-version-matched release's Linux x64 pair
+   # from the @oh-my-pi/pi-natives-linux-x64 npm leaf (matching packages/natives/package.json).
+   # The download step verifies the expected version sentinel and MacOSPowerAssertion contract
+   # before exposing artifacts to downstream test shards.
    # Main (self-hosted rust runner, remote cache) builds all Linux-hosted targets with
    # bazel. Job name says "bazel" for continuity with required checks.
    native_addons:
