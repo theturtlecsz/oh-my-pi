@@ -578,17 +578,39 @@ describe("ci workflow guardrail wiring", () => {
 	const ciPath = join(import.meta.dir, "..", ".github", "workflows", "ci.yml");
 	interface CiWorkflow {
 		on: { push: { paths: string[] }; pull_request: { paths: string[] } };
-		jobs: { check: { steps: Array<{ name?: string }> } };
+		jobs: { check: { steps: Array<{ name?: string; run?: string }> } };
 	}
 	const workflow = Bun.YAML.parse(readFileSync(ciPath, "utf8")) as CiWorkflow;
+	const guardrailStep = workflow.jobs.check.steps.find(
+		s => s.name === "Upstream guardrail (inventory consistency / full review)",
+	);
 
 	test("a baseline-only upstream-update PR triggers CI (docs/upstream/** in the paths filters)", () => {
 		expect(workflow.on.pull_request.paths).toContain("docs/upstream/**");
 		expect(workflow.on.push.paths).toContain("docs/upstream/**");
 	});
+	test("doc-only PRs touching inventoried paths trigger CI (docs/** in the paths filters)", () => {
+		expect(workflow.on.pull_request.paths).toContain("docs/**");
+		expect(workflow.on.push.paths).toContain("docs/**");
+	});
 	test("the required check job carries the guardrail step", () => {
-		const names = workflow.jobs.check.steps.map(s => s.name ?? "");
-		expect(names).toContain("Upstream guardrail (inventory consistency / full review)");
+		expect(guardrailStep).toBeDefined();
+	});
+	test("the guardrail step detects changed review records and runs the strict review per record", () => {
+		const run = guardrailStep?.run ?? "";
+		// Baseline-record branch is kept.
+		expect(run).toContain('if grep -qx "$baseline" <<<"$changed_files"');
+		expect(run).toContain('run_strict_review "$baseline"');
+		// Every changed docs/upstream/reviews/*/review.json is detected in the PR
+		// diff and reviewed strictly as its own record.
+		expect(run).toContain("grep -E '^docs/upstream/reviews/[^/]+/review\\.json$' <<<\"$changed_files\"");
+		expect(run).toContain('run_strict_review "$review_record"');
+		// The per-record review fetches that record's own base/fork/target pins
+		// before invoking the strict verifier on the record itself.
+		expect(run).toContain('fetch_commit "$1" "$(record_pin "$1" base)"');
+		expect(run).toContain('fetch_commit "$1" "$(record_pin "$1" fork)"');
+		expect(run).toContain('fetch_commit "$1" "$(record_pin "$1" target)"');
+		expect(run).toContain('bun scripts/verify-upstream-handoff.ts --record "$1" --report');
 	});
 });
 

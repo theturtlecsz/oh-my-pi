@@ -5,7 +5,7 @@ path	scope	state	head_blob	behavior	classification
 .gitattributes	shared	modified	1a2c75c61837	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes	retained
 .github/actionlint.yaml	shared	modified	ea44d87d978b	fix(ci): route non-PR jobs to self-hosted rust runner and fix postgres integration test paths	retained
 .github/copilot-instructions.md	fork-only	added	f3bd524ff165	docs: record caveman mode rules and session-system merge note	retained
-.github/workflows/ci.yml	shared	modified	bd2191bd11b9	session candidate: OMP-209; ci: add .github/workflows/** to push and pull_request paths; ci: remove trailing comment from ci.yml; ci: trigger push event workflow run via ssh; ci: add native_addons and native-artifacts to work_ledger_postgres job	retained
+.github/workflows/ci.yml	shared	modified	a9543373ca69	session candidate: OMP-209; ci: add .github/workflows/** to push and pull_request paths; ci: remove trailing comment from ci.yml; ci: trigger push event workflow run via ssh; ci: add native_addons and native-artifacts to work_ledger_postgres job	retained
 .github/workflows/upstream-watch.yml	fork-only	added	ae701bba2667	OMP-229 weekly upstream discovery workflow: finds newest stable release, resolves immutable commit, refreshes tracked review issue	retained
 .gitignore	shared	modified	9d4cbea998bc	session candidate: OMP-108; session candidate: OMP-47; session-system v1: canonical home for the Linear/omp session system	retained
 .windsurf/rules/caveman.md	fork-only	added	6d18ef51bc64	docs: record caveman mode rules and session-system merge note	retained
@@ -86,7 +86,7 @@ docs/extensions.md	shared	modified	222564cd9533	session candidate: OMP-108	retai
 docs/upstream-18.0.6-changelog.tsv	fork-only	added	ec9a00c04da9	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-matrix.tsv	fork-only	added	0b52aac14438	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-sources.tsv	fork-only	added	a3afa2e62165	feat(omp-156): pre-merge inventory oracle and safe update driver	retained
-docs/upstream-18.0.6-upgrade.md	fork-only	added	94197c39496f	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; docs(omp-156): record pre-merge conflict-preview re-run (19 paths); feat(omp-156): pre-merge inventory oracle and safe update driver	retained
+docs/upstream-18.0.6-upgrade.md	fork-only	added	1acb6d676304	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; docs(omp-156): record pre-merge conflict-preview re-run (19 paths); feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-guardrail.md	fork-only	added	59f2cd00fad7	OMP-229 standing guardrail procedure: weekly discovery, inventory rule, upstream-update review, guarded updater, baseline advancement	retained
 docs/upstream/baseline.json	fork-only	added	b801fa8f9b70	OMP-229 accepted-upstream-baseline record: pins 18.0.6 review commits, version range, and record files for the standing guardrail	retained
 docs/work-ledger-operations.md	fork-only	added	8aadc1e3405e	session candidate: OMP-108; session candidate: HOME-149; fix(cutover): resolve final audit findings; fix(work-ledger): finalize cutover remediation; feat(work-ledger): implement controlled Linear cutover (HOME-148)	retained
@@ -256,8 +256,8 @@ scripts/upstream-discovery.test.ts	fork-only	added	f52befdf0c98	OMP-229 discover
 scripts/upstream-discovery.ts	fork-only	added	bdb0f5fbe916	OMP-229 weekly discovery: stable-release selection above accepted baseline with annotated-tag peeling to one immutable commit	retained
 scripts/upstream-inventory.test.ts	fork-only	added	555faa1b582d	OMP-229 inventory tests: divergence mapping, staleness/orphan/duplicate detection, merge preservation, subject seeding	retained
 scripts/upstream-inventory.ts	fork-only	added	19c2fa3d8a8c	OMP-229 fork-behavior inventory engine: divergence check against accepted baseline with worktree snapshot and --write refresh	retained
-scripts/verify-upstream-handoff.test.ts	fork-only	added	a22c075991cc	style(omp-156): biome formatting for verifier and re-fitted tests; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
-scripts/verify-upstream-handoff.ts	fork-only	added	a9392ae3d922	style(omp-156): biome formatting for verifier and re-fitted tests; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
+scripts/verify-upstream-handoff.test.ts	fork-only	added	8c5d6cbf9d19	style(omp-156): biome formatting for verifier and re-fitted tests; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
+scripts/verify-upstream-handoff.ts	fork-only	added	8019298b08af	style(omp-156): biome formatting for verifier and re-fitted tests; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 session-system/.gitignore	fork-only	added	0af32ced9be8	fork change (describe)	retained
 session-system/README.md	fork-only	added	2a4dcf02d955	session candidate: OMP-212; session candidate: OMP-168; docs(omp-157): state mapping carve-out rule factually; feat(omp-157): atomic native refresh and live-mapping upgrade fence; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 session-system/agents/AGENTS.md	fork-only	added	5a77fc6607cf	session candidate: HOME-149; session close: HOME-130; HOME-116: commit live session rules — scope refusals, closeout lock, checkpoint contract (+tests)	retained

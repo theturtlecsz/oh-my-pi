@@ -12,9 +12,8 @@
 //   bun scripts/verify-upstream-handoff.ts --record docs/upstream/reviews/<sha12>/review.json [--allow-pending]
 //
 // The record JSON pins base/fork/target commits, the changelog version range, and the
-// four record files (sources/matrix/changelog/handoff). Explicit flags (--base, --fork,
-// --target, --version-min, --version-max, --sources, --matrix, --changelog, --handoff)
-// remain available for ad-hoc runs and tests; --record excludes them.
+// four record files (sources/matrix/changelog/handoff). --record is the only supported
+// invocation; explicit per-flag pins were removed with the OMP-229 generalization.
 //
 // --write-sources: recompute source records from git and (over)write the sources TSV. Run
 // exactly once before merging to freeze the manifest; every later run must verify against it.
