@@ -293,6 +293,10 @@ let throwNextTree = false;
 let switchSessionOnNextTree = false;
 let throwNextDeliverMessage = false;
 let throwNextWorkflowRead = false;
+// OMP-245 revise-structured mode: mutate the revision id after the Nth
+// work-item read to simulate a revision advancing mid-confirm.
+let workItemGets = 0;
+let raceAfterGet = -1;
 globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string }) => {
 	const u = String(url);
 	const method = init?.method ?? "GET";
@@ -391,7 +395,12 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 	if (u.includes("/v1/work-items/")) {
 		const key = decodeURIComponent(u.split("/v1/work-items/")[1] ?? "HOME-1");
 		const it = items.get(key) ?? initialItem;
-		return new Response(JSON.stringify(it), { status: 200 });
+		const body = JSON.stringify(it);
+		// OMP-245 post-gate race: after the armed read count, the revision
+		// advances underneath an already-approved confirm.
+		workItemGets++;
+		if (workItemGets === raceAfterGet) it.revision.revision_id = "rev-race2";
+		return new Response(body, { status: 200 });
 	}
 	if (method === "POST" && u.endsWith("/v1/commands")) {
 		commandPosts++;
@@ -453,14 +462,21 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			);
 		}
 		if (cmdType === "revise_work") {
+			const expectedRevisionId = payload.expected_revision_id as string;
 			const rev = payload.revision as { work_id: string; revision_id: string; title?: string; description?: string; scope?: string; acceptance_criteria?: string[] };
 			const it = items.get(rev.work_id) ?? items.get("HOME-1");
+			if (it && it.revision.revision_id !== expectedRevisionId) {
+				// Mirror the service backstop: stale expected revision → conflict.
+				return new Response(JSON.stringify({ error: { code: "revision_conflict", diagnostics: ["expected revision is not current"] } }), { status: 409 });
+			}
 			if (it) {
 				if (rev.title) it.revision.title = rev.title;
 				if (rev.description !== undefined) it.revision.description = rev.description;
 				if (rev.scope !== undefined) it.revision.scope = rev.scope;
 				if (rev.acceptance_criteria !== undefined) it.revision.acceptance_criteria = rev.acceptance_criteria;
 				it.revision.revision_id = rev.revision_id;
+				// Mirror _revise: a new revision invalidates the current candidate.
+				it.candidate = null;
 			}
 			return new Response(
 				JSON.stringify({
@@ -1768,6 +1784,7 @@ if (mode === "intake") {
 	// OMP-245: structured amendment — scope + acceptance_criteria land, unnamed
 	// fields (title, description) are preserved verbatim.
 	initialItem.revision.description = "KEEP_DESCRIPTION";
+	initialItem.candidate = { candidate_id: "cand-pre", candidate_sha256: "1".repeat(64) };
 	out.noFields = await execute({ action: "revise_work", work: "HOME-1" });
 	out.structured = await confirmRoundTrip(execute, {
 		action: "revise_work",
@@ -1776,9 +1793,12 @@ if (mode === "intake") {
 		criteria: ["AC-1 amended criterion", "AC-2 second criterion"],
 	});
 	out.afterRevision = { ...items.get("HOME-1")?.revision };
+	// AC-4: a structured amendment invalidates the current candidate (mirrors
+	// store.py::_revise setting current_candidate_id NULL).
+	out.candidateAfterRevision = items.get("HOME-1")?.candidate ?? null;
 	// Stale preview: mint a preview, advance the revision underneath it, then
-	// confirm — the confirm must refuse (conflict + fresh preview required),
-	// never silently rebase onto the unreviewed revision.
+	// confirm — the confirm must refuse with a conflict PLUS a fresh preview
+	// bound to the latest revision, never silently rebase.
 	const staleParams = { action: "revise_work", work: "HOME-1", scope: "RACING_SCOPE" };
 	const stalePreview = await execute(staleParams);
 	const staleId = /confirmation_id: (\S+)/.exec(stalePreview)?.[1] ?? "";
@@ -1786,6 +1806,22 @@ if (mode === "intake") {
 	if (racing) racing.revision.revision_id = "rev-racer";
 	out.staleConfirm = await execute({ ...staleParams, confirm: true, confirmation_id: staleId });
 	out.afterStale = { ...items.get("HOME-1")?.revision };
+	// The fresh preview from the conflict is directly usable: confirming with
+	// its id (revision unchanged since) lands the amendment.
+	const freshId = /confirmation_id: (\S+)/.exec(String(out.staleConfirm))?.[1] ?? "";
+	out.freshConfirm = await execute({ ...staleParams, confirm: true, confirmation_id: freshId });
+	out.afterFresh = { ...items.get("HOME-1")?.revision };
+	// Post-gate race: revision advances AFTER the confirm-gate read but before
+	// the service write — the adapter/service conflict maps to the same
+	// conflict + fresh preview contract.
+	const raceParams = { action: "revise_work", work: "HOME-1", scope: "POST_GATE_SCOPE" };
+	const racePreview = await execute(raceParams);
+	const raceId = /confirmation_id: (\S+)/.exec(racePreview)?.[1] ?? "";
+	workItemGets = 0;
+	raceAfterGet = 2; // findIssue (1), gate currentRevisionId (2) — mutate before the adapter read
+	out.raceConfirm = await execute({ ...raceParams, confirm: true, confirmation_id: raceId });
+	raceAfterGet = -1;
+	out.afterRace = { ...items.get("HOME-1")?.revision };
 } else if (mode === "footer") {
 	out.initialCalls = [...statusCalls];
 	await setNow();

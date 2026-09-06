@@ -282,10 +282,52 @@ describe("HOME-122 workflow sequence", () => {
 		// Unnamed fields survive the amendment verbatim.
 		expect(revision.title).toBe("First");
 		expect(revision.description).toBe("KEEP_DESCRIPTION");
-		// Revision advanced between preview and confirm → refuse, never rebase.
-		expect(String(out.staleConfirm)).toContain("payload changed since the preview");
+		// AC-4: the amendment invalidates the current candidate.
+		expect(out.candidateAfterRevision).toBeNull();
+		// Revision advanced between preview and confirm → conflict + fresh
+		// preview bound to the latest revision, never a silent rebase.
+		expect(String(out.staleConfirm)).toContain("CONFLICT — HOME-1 changed since the preview");
+		expect(String(out.staleConfirm)).toContain("CONFIRM REQUIRED");
+		expect(String(out.staleConfirm)).toContain("(revision rev-racer)");
+		expect(String(out.staleConfirm)).toMatch(/confirmation_id: cf-/);
 		const afterStale = record(out.afterStale);
 		expect(afterStale.scope).toBe("NEW_SCOPE_TEXT");
+		// The fresh preview is directly confirmable once reviewed.
+		expect(String(out.freshConfirm)).toContain("HOME-1 revised");
+		expect(record(out.afterFresh).scope).toBe("RACING_SCOPE");
+		// Post-gate race (revision advances after the confirm-gate read, before
+		// the service write) maps to the same conflict + fresh preview contract.
+		expect(String(out.raceConfirm)).toContain("CONFLICT — HOME-1 changed since the preview");
+		expect(String(out.raceConfirm)).toContain("CONFIRM REQUIRED");
+		expect(record(out.afterRace).scope).toBe("RACING_SCOPE");
+	});
+
+	test("plan packet reads amended structured acceptance criteria from the current revision (OMP-245)", () => {
+		const view = {
+			item: {
+				work_id: "id-1",
+				revision: {
+					revision_id: "rev-2",
+					title: "First",
+					description: "amended body",
+					scope: "AMENDED_SCOPE",
+					acceptance_criteria: ["AC-1 amended criterion", "AC-2 second criterion"],
+				},
+				candidate: { candidate_id: "cand-1", candidate_sha256: "0".repeat(64) },
+			},
+			receipts: [
+				{
+					receipt_id: "plan-1",
+					kind: "plan",
+					candidate_id: "cand-1",
+					issued_at: "2026-09-06T00:00:00Z",
+					payload: { body: "## Approach\n- x\n\n## Verification\n- y" },
+					payload_sha256: "0".repeat(64),
+				},
+			],
+		} as unknown as Parameters<typeof buildPlanPacket>[0];
+		const packet = buildPlanPacket(view);
+		expect(packet?.acceptanceCriteria).toEqual(["AC-1 amended criterion", "AC-2 second criterion"]);
 	});
 
 	test("fresh sessions restore the backend focus without a local cache", () => {

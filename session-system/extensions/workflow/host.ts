@@ -67,7 +67,7 @@ import {
 	renderCenterReadout,
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
-import { confirmWrite, resetConfirmations } from "./confirm";
+import { type ConfirmGateParams, confirmWrite, resetConfirmations } from "./confirm";
 import {
 	currentSymbolicRef,
 	defaultExecutionWorkspaceManager,
@@ -101,7 +101,7 @@ import {
 import { registerSessionLedger } from "./session-ledger";
 import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
-import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView } from "@oh-my-pi/pi-work-client";
 
 /** Tool actions — the canonical action set for the `work` tool. */
 export type CanonicalAction =
@@ -3458,29 +3458,57 @@ export function createWorkflowHost(cfg: HostConfig) {
 								return deny("title, description, scope, and/or criteria required");
 							}
 							const issue = await backend.findIssue(params.work);
+							const reviseQuestion = "Model wants to revise this work in place";
+							const reviseDetail = (revisionId: string): string =>
+								`${issue.key} ${issue.title} (revision ${revisionId})${params.title ? `\n→ new title: "${params.title}"` : ""}${params.description ? `\n→ new description:\n${params.description}` : ""}${params.scope !== undefined ? `\n→ new scope:\n${params.scope}` : ""}${wantsCriteria ? `\n→ new acceptance criteria:\n${(params.criteria ?? []).map(c => `- ${c}`).join("\n")}` : ""}`;
 							// OMP-245: bind the preview to the revision actually reviewed —
 							// the reviewed revision id joins the hashed payload, so a revision
-							// change between preview and confirm refuses the confirm and
-							// forces a fresh preview instead of silently rebasing.
+							// change between preview and confirm refuses the confirm and mints
+							// a fresh preview bound to the latest revision — never a silent rebase.
+							const boundParams = (revisionId: string, omitReceipt: boolean): ConfirmGateParams => {
+								const bound: Record<string, unknown> = { ...params, reviewed_revision_id: revisionId };
+								if (omitReceipt) {
+									delete bound.confirm;
+									delete bound.confirmation_id;
+								}
+								return bound as ConfirmGateParams;
+							};
+							const freshConflictPreview = (latestRevisionId: string): string => {
+								const fresh = confirmWrite("revise_work", reviseQuestion, reviseDetail(latestRevisionId), boundParams(latestRevisionId, true));
+								return fresh.approved ? "" : fresh.preview;
+							};
 							const reviewedRevisionId = await backend.currentRevisionId(issue);
-							const boundParams = { ...params, reviewed_revision_id: reviewedRevisionId };
-							const gate = confirmWrite(
-								"revise_work",
-								"Model wants to revise this work in place",
-								`${issue.key} ${issue.title} (revision ${reviewedRevisionId})${params.title ? `\n→ new title: "${params.title}"` : ""}${params.description ? `\n→ new description:\n${params.description}` : ""}${params.scope !== undefined ? `\n→ new scope:\n${params.scope}` : ""}${wantsCriteria ? `\n→ new acceptance criteria:\n${(params.criteria ?? []).map(c => `- ${c}`).join("\n")}` : ""}`,
-								boundParams,
-							);
-							if (!gate.approved) return deny(gate.preview);
-							await backend.reviseWork(
-								issue,
-								{
-									...(params.title ? { title: params.title } : {}),
-									...(params.description ? { description: params.description } : {}),
-									...(params.scope !== undefined ? { scope: params.scope } : {}),
-									...(wantsCriteria ? { acceptance_criteria: params.criteria } : {}),
-								},
-								reviewedRevisionId,
-							);
+							const gate = confirmWrite("revise_work", reviseQuestion, reviseDetail(reviewedRevisionId), boundParams(reviewedRevisionId, false));
+							if (!gate.approved) {
+								if (params.confirm === true && gate.preview.startsWith("REFUSED — payload changed")) {
+									return deny(
+										`CONFLICT — ${issue.key} changed since the preview (now at revision ${reviewedRevisionId}); nothing written. Review the fresh preview below.\n\n${freshConflictPreview(reviewedRevisionId)}`,
+									);
+								}
+								return deny(gate.preview);
+							}
+							try {
+								await backend.reviseWork(
+									issue,
+									{
+										...(params.title ? { title: params.title } : {}),
+										...(params.description ? { description: params.description } : {}),
+										...(params.scope !== undefined ? { scope: params.scope } : {}),
+										...(wantsCriteria ? { acceptance_criteria: params.criteria } : {}),
+									},
+									reviewedRevisionId,
+								);
+							} catch (error) {
+								// Post-gate race: the revision advanced between the confirm-gate
+								// read and the service write — same conflict contract.
+								if (error instanceof WorkError && error.code === "revision_conflict") {
+									const latest = await backend.currentRevisionId(issue);
+									return deny(
+										`CONFLICT — ${issue.key} changed since the preview (now at revision ${latest}); nothing written. Review the fresh preview below.\n\n${freshConflictPreview(latest)}`,
+									);
+								}
+								throw error;
+							}
 							return okText(`${issue.key} revised`);
 						}
 						case "set_now": {
