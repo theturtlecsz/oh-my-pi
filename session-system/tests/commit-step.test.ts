@@ -497,6 +497,14 @@ describe("candidate freeze and push", () => {
 		expect(shortTip.status).toBe("not_pushed");
 		expect(shortTip.detail).toContain("expected lane tip must be a full commit SHA");
 
+		// SHA-256 repositories use 64-char object IDs (work-client commit_sha
+		// contract): the format gate accepts them; the lease still binds.
+		const sha256Tip = "a".repeat(64);
+		const longTip = forcePushCandidate(repo, head, "refs/heads/execution/omp-245", sha256Tip);
+		expect(longTip.status).toBe("not_pushed");
+		expect(longTip.detail).not.toContain("expected lane tip must be a full commit SHA");
+		expect(longTip.detail).toContain(`force-with-lease push over ${sha256Tip} failed`);
+
 		expect(Bun.spawnSync(["git", "rev-parse", "--verify", "--quiet", "refs/heads/main"], { cwd: remote }).exitCode).not.toBe(0);
 		expect(Bun.spawnSync(["git", "rev-parse", "--verify", "--quiet", "refs/heads/execution/omp-245"], { cwd: remote }).exitCode).not.toBe(0);
 	});

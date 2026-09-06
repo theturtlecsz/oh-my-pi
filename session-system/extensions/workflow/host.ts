@@ -4177,7 +4177,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										(laneView.close_attempts ?? [])
 											.filter(a => a.authorization_kind === "execution" && a.execution_grant_id && a.execution_grant_id !== exec.grant.grant_id)
 											.map(a => a.candidate_commit)
-											.filter((c): c is string => typeof c === "string" && /^[0-9a-f]{40}$/.test(c)),
+											.filter((c): c is string => typeof c === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(c)),
 									);
 								} catch {
 									staleTips = undefined;

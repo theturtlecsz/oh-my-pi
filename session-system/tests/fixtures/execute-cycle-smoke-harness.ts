@@ -776,7 +776,8 @@ if (scenario === "dirty") {
 		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
-	out.preclean = await execute({ action: "stop_execution", body: "clearing leftover grant from a prior scenario" });
+	// No stop_execution preclean: prior scenarios leave no active grant, so any
+	// tool error here is unexpected and must fail the run.
 	// Wedge the lane with a foreign sibling commit (off origin/main) that no
 	// grant ever froze, then drop it from local main so the grant baseline
 	// stays origin/main and the fresh candidate is a sibling of the lane tip.

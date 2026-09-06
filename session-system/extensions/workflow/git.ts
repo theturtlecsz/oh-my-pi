@@ -910,7 +910,7 @@ export function forcePushCandidate(root: string, commitSha: string, remoteRef: s
 		if (!remoteRef.startsWith("refs/heads/execution/")) {
 			return { status: "not_pushed", detail: `force-push refused: ${remoteRef} is not an engine-owned execution lane ref` };
 		}
-		if (!/^[0-9a-f]{40}$/.test(expectedTip)) {
+		if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(expectedTip)) {
 			return { status: "not_pushed", detail: "force-push refused: expected lane tip must be a full commit SHA" };
 		}
 		const remote = runGit(root, ["remote", "get-url", "origin"]);
