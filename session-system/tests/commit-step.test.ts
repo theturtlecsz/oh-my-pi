@@ -374,6 +374,27 @@ describe("candidate freeze and push", () => {
 		expect(() => sealedSnapshotCandidate(repo, head, ["nonexistent.txt"])).toThrow("missing sealed path(s): nonexistent.txt");
 		expect(() => sealedSnapshotCandidate(repo, head, [])).toThrow("candidate path set must not be empty");
 	});
+	test("sealedSnapshotCandidate validates against approved tree even when current checkout differs structurally at sealed path", () => {
+		const repo = makeRepo();
+		fs.mkdirSync(path.join(repo, "sub"), { recursive: true });
+		fs.writeFileSync(path.join(repo, "sub", "target.txt"), "approved content\n");
+		git(repo, "add", "--", "sub/target.txt");
+		git(repo, "commit", "-q", "-m", "add sub/target.txt");
+		const approvedSha = git(repo, "rev-parse", "HEAD");
+
+		// Structurally mutate current checkout at the sealed path:
+		// remove sub/target.txt and parent directory sub
+		fs.rmSync(path.join(repo, "sub", "target.txt"));
+		fs.rmdirSync(path.join(repo, "sub"));
+		git(repo, "add", "-A");
+		git(repo, "commit", "-q", "-m", "remove sub directory in later HEAD");
+
+		// sealedSnapshotCandidate should succeed because sub/target.txt is a valid file in approvedSha tree
+		const candidate = sealedSnapshotCandidate(repo, approvedSha, ["sub/target.txt"]);
+		expect(candidate.commitSha).toBe(approvedSha);
+		expect(candidate.paths).toEqual(["sub/target.txt"]);
+		expect(candidate.candidateSha256).toBe(candidateSha256(approvedSha, ["sub/target.txt"], "sealed-snapshot"));
+	});
 
 	test("pushCandidate pushes the exact frozen commit and repeated checks stay idempotent", () => {
 		const repo = makeRepo();
