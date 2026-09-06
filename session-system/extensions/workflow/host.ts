@@ -4109,7 +4109,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 
 							// First turn: freeze, finalize, record evidence, push, begin attempt.
-							const candidateId = detail.planPacket?.candidateId ?? (exec.activeItem.plan_stamp as { candidate_id?: string } | undefined)?.candidate_id;
+							const candidateId = (exec.activeItem.plan_stamp as { candidate_id?: string } | undefined)?.candidate_id ?? detail.planPacket?.candidateId;
 							const plannedCandidateId = candidateId;
 							if (!plannedCandidateId) return deny("planned candidate ID missing from execution item");
 
