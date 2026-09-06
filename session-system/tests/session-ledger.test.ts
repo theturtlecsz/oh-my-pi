@@ -630,6 +630,8 @@ describe("installed shape (work-now.ts through the workflow harness)", () => {
 		const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.ts");
 		const child = Bun.spawnSync([process.execPath, harness, probe, "ledger"], {
 			cwd: probe,
+			// Pin XDG_CONFIG_HOME to the temp HOME: hosted CI images export it globally,
+			// and ompWorkConfigDir() prefers it over $HOME/.config (OMP-254).
 			env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), OMP_WORK_BEARER: "test-token", PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent") },
 		});
 		expect(child.exitCode, child.stderr.toString()).toBe(0);
