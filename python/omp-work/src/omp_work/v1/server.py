@@ -129,10 +129,19 @@ def create_app(
     @app.get("/v1/health/ready")
     def ready() -> dict[str, object]:
         report = collect_health(config, role="omp_work_app")
+        source_stale = code_fingerprint() + migration_set_sha256() != source_snapshot
+        alerts = list(report.alerts)
+        if source_stale:
+            alerts.append(
+                "service_stale: on-disk source or migration set changed since this "
+                "service started; apply pending migrations, then restart the work service"
+            )
         return {
             "live": report.live,
-            "ready": report.ready,
-            "alerts": report.alerts,
+            "ready": report.ready and not source_stale,
+            "alerts": alerts,
+            # The refresh handshake needs the prospective on-disk fingerprint.
+            # Readiness separately states whether this process can serve writes.
             "service_fingerprint": service_runtime_fingerprint(),
         }
 

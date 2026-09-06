@@ -39,6 +39,9 @@ retained offline as static export archives and provenance records.
 
 ## Dev loop
 
+For self-development and promotion boundaries, see
+[Developing OMP without destabilizing active work](../docs/workflow-production-readiness.md).
+
 Edit here → omp loads extensions at startup only → restart omp → prove live
 (drive the exact action; typed evidence receipt on the ledger item). Batch all
 extension edits per restart. If a restart ever fails to load the extension
