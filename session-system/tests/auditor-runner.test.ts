@@ -190,6 +190,23 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(runSubprocessSpy).not.toHaveBeenCalled();
 	});
 
+	test("prepareNativeAuditRunner qualifies a rejected transport probe with the audit model (OMP-251)", async () => {
+		mockDiscovery();
+		vi.spyOn(ai, "completeSimple").mockRejectedValue(new Error("ECONNREFUSED 127.0.0.1:443"));
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess");
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const fakeCtx = {
+			cwd: repoRoot,
+			models: { resolve: (role: string) => (role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined) },
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow(
+			"@audit transport preflight failed for openai/gpt-5.2: ECONNREFUSED 127.0.0.1:443",
+		);
+		expect(runSubprocessSpy).not.toHaveBeenCalled();
+	});
+
 	test("runner returns started:false when cancelled before start", async () => {
 		mockDiscovery();
 		const repoRoot = path.resolve(import.meta.dir, "../..");

@@ -59,7 +59,9 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: A
 		);
 	}
 	// pi-ai surfaces provider failures IN-BAND (stopReason "error"/"aborted" +
-	// errorMessage, content empty) — completeSimple does not throw.
+	// errorMessage, content empty) — completeSimple normally does not throw,
+	// but synchronous dispatch/configuration failures still reject: qualify
+	// those with the audit model too, keeping cancellation errors untouched.
 	const probe = await completeSimple(
 		auditModel,
 		{ messages: [{ role: "user", content: "Transport preflight. Reply with the single word OK.", timestamp: Date.now() }] },
@@ -70,7 +72,12 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: A
 			disableReasoning: true,
 			signal,
 		},
-	);
+	).catch((error: unknown) => {
+		if (signal?.aborted) throw error;
+		throw new Error(
+			`@audit transport preflight failed for ${auditModel.provider}/${auditModel.id}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	});
 	if (probe.stopReason === "error" || probe.stopReason === "aborted") {
 		throw new Error(
 			`@audit transport preflight ${probe.stopReason} for ${auditModel.provider}/${auditModel.id}: ${probe.errorMessage || "provider returned no detail"}`,
