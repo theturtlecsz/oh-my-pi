@@ -453,11 +453,29 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			);
 		}
 		if (cmdType === "revise_work") {
-			const rev = payload.revision as { work_id: string; revision_id: string; title?: string; description?: string };
+			const expectedRevId = payload.expected_revision_id as string | undefined;
+			const rev = payload.revision as {
+				work_id: string;
+				revision_id: string;
+				title?: string;
+				description?: string;
+				scope?: string;
+				acceptance_criteria?: string[];
+			};
 			const it = items.get(rev.work_id) ?? items.get("HOME-1");
 			if (it) {
+				if (expectedRevId && it.revision.revision_id !== expectedRevId) {
+					return new Response(
+						JSON.stringify({
+							error: { code: "revision_conflict", message: `revision conflict: expected ${expectedRevId} but current is ${it.revision.revision_id}` },
+						}),
+						{ status: 409 },
+					);
+				}
 				if (rev.title) it.revision.title = rev.title;
 				if (rev.description !== undefined) it.revision.description = rev.description;
+				if (rev.scope !== undefined) it.revision.scope = rev.scope;
+				if (rev.acceptance_criteria !== undefined) it.revision.acceptance_criteria = rev.acceptance_criteria;
 				it.revision.revision_id = rev.revision_id;
 			}
 			return new Response(
@@ -1762,6 +1780,13 @@ if (mode === "intake") {
 		batch: [{ title: "Long batch child", description: `${"x".repeat(201)} CHILD_SENTINEL` }],
 	});
 	out.revise = await confirmRoundTrip(execute, { action: "revise_work", work: "HOME-1", description });
+	out.reviseStructured = await confirmRoundTrip(execute, {
+		action: "revise_work",
+		work: "HOME-1",
+		scope: "Structured Scope",
+		acceptance_criteria: ["AC-1", "AC-2"],
+	});
+	out.revisedItem = items.get("HOME-1");
 } else if (mode === "footer") {
 	out.initialCalls = [...statusCalls];
 	await setNow();

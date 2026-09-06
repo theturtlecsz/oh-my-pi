@@ -1,6 +1,7 @@
 // OMP-180 execution cycle smoke harness: drives the REAL work-now extension
 // and workflow host against the live loopback WorkService.
 import { vi } from "bun:test";
+import * as ai from "@oh-my-pi/pi-ai";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
@@ -14,7 +15,7 @@ import { dirtyPaths, freezeCandidateCommit } from "../../extensions/workflow/git
 import { createWorkflowHost } from "../../extensions/workflow/host";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
-const scenario = process.argv[3] as "single" | "dirty" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue" | "stale-attempt";
+const scenario = process.argv[3] as "single" | "dirty" | "foreign-lane" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue" | "stale-attempt";
 const ownerProbe = process.argv[2];
 let probe = ownerProbe;
 const workKeyArg = process.argv[4];
@@ -29,6 +30,13 @@ let subprocessCount = 0;
 const NEEDS_FIX_REPORT = "VERDICT: NEEDS_FIX\n\nFINDINGS\n- [major] AC-1 src/smoke_feat.ts:1 evidence: feat is false; impact: broken; minimal fix: set to true\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
 const PASS_REPORT = "VERDICT: PASS\n\nFINDINGS\n(none)\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
 const BLOCKED_REPORT = "VERDICT: BLOCKED\n\nFINDINGS\n- [blocker] AC-1 blocked on external dependency\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
+
+// OMP-251: prepareNativeAuditRunner probes auditor transport via completeSimple
+// before reserving a launch — stub it to success so the smoke needs no network.
+vi.spyOn(ai, "completeSimple").mockResolvedValue({
+	stopReason: "stop",
+	content: [{ type: "text", text: "OK" }],
+} as never);
 
 vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: any) => {
 	subprocessCount++;
@@ -115,7 +123,7 @@ const runner = new ExtensionRunner(
 	loaded.runtime,
 	probe,
 	fakeSessionManager as never,
-	{ getAvailable: () => [fableModel], hasProvider: () => true } as never,
+	{ getAvailable: () => [fableModel], hasProvider: () => true, getApiKey: () => Promise.resolve("key") } as never,
 	undefined,
 	{ getModelRole: (role: string) => (role === "audit" ? "anthropic/claude-fable-5" : undefined), get: () => undefined, getStorage: () => undefined } as never,
 	undefined,
@@ -713,9 +721,11 @@ if (scenario === "dirty") {
 	let planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
 	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
 	fs.writeFileSync(planDiskPath, "## Approach\n1. Write feature\n\n## Verification\n1. Check feature\n");
-	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/smoke_feat.ts"] });
+	// NB: distinct file from earlier scenarios — reusing src/smoke_feat.ts (already
+	// merged to main with feat=true) would make grant B's diff empty and degenerate.
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/stale_feat.ts"] });
 	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
-	fs.writeFileSync(path.join(probe, "src/smoke_feat.ts"), "export const feat = false;\n");
+	fs.writeFileSync(path.join(probe, "src/stale_feat.ts"), "export const staleFeat = false;\n");
 	out.seedReview = await execute({ action: "begin_execution_review", body: "seed: attempt begun, grant abandoned before audit" });
 	// AC-2: the seeded attempt must be audit_ready — seal its audit manifest
 	// directly through the backend, then capture the pre-recovery snapshot
@@ -743,16 +753,54 @@ if (scenario === "dirty") {
 	// Grant B on the same item: the criteria seal advances the revision and
 	// the plan stamp allocates a new candidate, so the stale attempt no
 	// longer matches the item's identity.
+	// Back on the owner checkout's main: /execute binds the shared lane ref
+	// refs/heads/execution/<key>, whose tip is grant A's abandoned candidate —
+	// grant B's freeze push must recover over it (OMP-245).
+	await fakeSessionManager.moveTo(ownerProbe);
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
 	planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
 	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
 	await execute({ action: "seal_execution_criteria", criteria: ["AC-1 deliver smoke feature"] });
 	fs.writeFileSync(planDiskPath, "## Approach\n1. Fix feature\n\n## Verification\n1. Check feature\n");
-	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/smoke_feat.ts"] });
-	fs.writeFileSync(path.join(probe, "src/smoke_feat.ts"), "export const feat = true;\n");
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/stale_feat.ts"] });
+	fs.writeFileSync(path.join(probe, "src/stale_feat.ts"), "export const staleFeat = true;\n");
 	subprocessCount = 1; // next auditor report: PASS
 	out.review = await reviewUntilSettled("feat is true; stale pre-grant attempt superseded in-grant");
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
+	out.uiCalls = uiCalls;
+} else if (scenario === "foreign-lane") {
+	// OMP-245: a lane tip the ledger does NOT know (foreign commit pushed
+	// out-of-band) must keep the fail-closed push refusal — stale-tip recovery
+	// never force-overwrites unknown history.
+	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
+	// No stop_execution preclean: prior scenarios leave no active grant, so any
+	// tool error here is unexpected and must fail the run.
+	// Wedge the lane with a foreign sibling commit (off origin/main) that no
+	// grant ever froze, then drop it from local main so the grant baseline
+	// stays origin/main and the fresh candidate is a sibling of the lane tip.
+	const laneRef = `refs/heads/execution/${(workKeyArg || "OMP-1").toLowerCase()}`;
+	fs.writeFileSync(path.join(probe, "foreign.txt"), "foreign\n");
+	for (const args of [["add", "--", "foreign.txt"], ["commit", "-q", "-m", "foreign lane wedge"], ["push", "-q", "origin", `HEAD:${laneRef}`], ["reset", "-q", "--hard", "origin/main"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
+	const executeCmd = extension.commands.get("execute");
+	if (!executeCmd) throw new Error("execute command missing");
+	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	await execute({ action: "seal_execution_criteria", criteria: ["AC-1 deliver smoke feature"] });
+	const planFile = "local://execute-plan.md";
+	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Write feature\n\n## Verification\n1. Check feature\n");
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/foreign_feat.ts"] });
+	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+	fs.writeFileSync(path.join(probe, "src/foreign_feat.ts"), "export const foreignFeat = true;\n");
+	// subprocessCount stays 0: the freeze push must refuse BEFORE any audit.
+	out.review = await execute({ action: "begin_execution_review", body: "grant freeze over foreign lane tip" });
+	out.stopResult = await execute({ action: "stop_execution", body: "foreign-lane scenario complete" });
 	out.uiCalls = uiCalls;
 } else if (scenario === "freeze-probes") {
 	const mockUi = {

@@ -76,6 +76,7 @@ import {
 	type ExecutionWorkspace,
 	type ExecutionWorkspaceManager,
 	freezeCandidateCommit,
+	forcePushCandidate,
 	headCommit,
 	inProgressGitOp,
 	mergePullRequest,
@@ -101,7 +102,7 @@ import {
 import { registerSessionLedger } from "./session-ledger";
 import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
-import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView } from "@oh-my-pi/pi-work-client";
 
 /** Tool actions — the canonical action set for the `work` tool. */
 export type CanonicalAction =
@@ -511,6 +512,9 @@ interface WorkflowToolParams {
 	work?: string;
 	title?: string;
 	description?: string;
+	scope?: string;
+	acceptance_criteria?: string[];
+	expected_revision_id?: string;
 	project?: string;
 	health?: "onTrack" | "atRisk" | "offTrack";
 	body?: string;
@@ -2859,6 +2863,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 				work: z.string().optional().describe("Work key (e.g. HOME-31) or ledger work id"),
 				title: z.string().optional().describe("Work title (create_work, revise_work)"),
 				description: z.string().optional().describe("Work description markdown (create_work, revise_work)"),
+				scope: z.string().optional().describe("Work scope (create_work, revise_work)"),
+				acceptance_criteria: z.array(z.string()).optional().describe("Work acceptance criteria array (create_work, revise_work)"),
+				expected_revision_id: z.string().optional().describe("Expected current revision ID to prevent stale revisions (revise_work)"),
 				project: z.string().optional().describe("Project name (create_work target, record_health, list_work filter)"),
 				health: z.enum(["onTrack", "atRisk", "offTrack"]).optional().describe("Project health (record_health)"),
 				body: z.string().optional().describe("Receipt body or close reason; record_health is status-only and refuses body"),
@@ -3023,6 +3030,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 									`${params.work} ${i.title}`,
 									`state: ${i.state} · project: ${i.project ?? "none"} · labels: ${i.labels.join(",") || "none"}`,
 									i.description ?? "",
+									`SCOPE: ${i.scope ?? ""}`,
+									"ACCEPTANCE CRITERIA:",
+									...(i.acceptanceCriteria && i.acceptanceCriteria.length > 0
+										? i.acceptanceCriteria.map(c => `- ${c}`)
+										: ["(none)"]),
 									"RECEIPTS:",
 									i.digestPacket,
 									...(i.attemptSnapshot
@@ -3451,19 +3463,89 @@ export function createWorkflowHost(cfg: HostConfig) {
 						}
 						case "revise_work": {
 							if (!params.work) return deny("work key required");
-							if (!params.title && !params.description) return deny("title and/or description required");
+							const criteriaInput = params.criteria ?? params.acceptance_criteria;
+							if (!params.title && !params.description && params.scope === undefined && criteriaInput === undefined) {
+								return deny("title, description, scope, and/or acceptance_criteria required");
+							}
 							const issue = await backend.findIssue(params.work);
+							if (!backend.workClient) {
+								return deny("work client unavailable for revise_work");
+							}
+							let item: WorkItemView;
+							try {
+								item = await backend.workClient.workItem(issue.key);
+							} catch (e) {
+								return deny(`revision lookup failed: could not fetch current revision for ${issue.key} (${String(e)})`);
+							}
+							const currentRevisionId = item.revision?.revision_id;
+							if (!currentRevisionId) {
+								return deny(`revision lookup failed: ${issue.key} has no current revision id`);
+							}
+							const detailLines = [
+								`${issue.key} ${params.title ?? issue.title} (revision ${currentRevisionId})`,
+							];
+							if (params.title) detailLines.push(`→ new title: "${params.title}"`);
+							if (params.description !== undefined) detailLines.push(`→ new description:\n${params.description}`);
+							if (params.scope !== undefined) detailLines.push(`→ new scope: "${params.scope}"`);
+							if (criteriaInput !== undefined) {
+								detailLines.push(`→ new acceptance criteria:\n${criteriaInput.map(c => `- ${c}`).join("\n")}`);
+							}
+
 							const gate = confirmWrite(
 								"revise_work",
 								"Model wants to revise this work in place",
-								`${issue.key} ${issue.title}${params.title ? `\n→ new title: "${params.title}"` : ""}${params.description ? `\n→ new description:\n${params.description}` : ""}`,
+								detailLines.join("\n"),
 								params,
+								{
+									expectedRevisionId: params.expected_revision_id ?? currentRevisionId,
+									currentRevisionId,
+								},
 							);
 							if (!gate.approved) return deny(gate.preview);
-							await backend.reviseWork(issue, {
-								...(params.title ? { title: params.title } : {}),
-								...(params.description ? { description: params.description } : {}),
-							});
+							const boundExpectedRevId = currentRevisionId;
+							try {
+								await backend.reviseWork(issue, {
+									...(params.title ? { title: params.title } : {}),
+									...(params.description !== undefined ? { description: params.description } : {}),
+									...(params.scope !== undefined ? { scope: params.scope } : {}),
+									...(criteriaInput !== undefined ? { criteria: criteriaInput, acceptance_criteria: criteriaInput } : {}),
+									expected_revision_id: boundExpectedRevId,
+								});
+							} catch (error) {
+								if (error instanceof WorkError && error.code === "revision_conflict") {
+									let freshItem: WorkItemView | undefined;
+									try {
+										freshItem = await backend.workClient?.workItem(issue.key);
+									} catch (e) {
+										return deny(`REFUSED — revision conflict: target revision moved since preview was generated, and fetching fresh revision for ${issue.key} failed (${String(e)}).`);
+									}
+									const freshRevisionId = freshItem?.revision?.revision_id;
+									if (!freshRevisionId) {
+										return deny(`REFUSED — revision conflict: target revision moved since preview was generated, but ${issue.key} has no current revision id.`);
+									}
+									const freshDetailLines = [
+										`${issue.key} ${params.title ?? issue.title} (revision ${freshRevisionId})`,
+									];
+									if (params.title) freshDetailLines.push(`→ new title: "${params.title}"`);
+									if (params.description !== undefined) freshDetailLines.push(`→ new description:\n${params.description}`);
+									if (params.scope !== undefined) freshDetailLines.push(`→ new scope: "${params.scope}"`);
+									if (criteriaInput !== undefined) {
+										freshDetailLines.push(`→ new acceptance criteria:\n${criteriaInput.map(c => `- ${c}`).join("\n")}`);
+									}
+									const freshGate = confirmWrite(
+										"revise_work",
+										"Model wants to revise this work in place",
+										freshDetailLines.join("\n"),
+										{ ...params, confirm: undefined, confirmation_id: undefined },
+										{
+											expectedRevisionId: freshRevisionId,
+											currentRevisionId: freshRevisionId,
+										},
+									);
+									return deny(`REFUSED — revision conflict: the item moved to revision ${freshRevisionId} since the preview was generated.\n\n${freshGate.approved ? "" : freshGate.preview}`);
+								}
+								throw error;
+							}
 							return okText(`${issue.key} revised`);
 						}
 						case "set_now": {
@@ -4027,7 +4109,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 
 							// First turn: freeze, finalize, record evidence, push, begin attempt.
-							const candidateId = detail.planPacket?.candidateId ?? (exec.activeItem.plan_stamp as { candidate_id?: string } | undefined)?.candidate_id;
+							const candidateId = (exec.activeItem.plan_stamp as { candidate_id?: string } | undefined)?.candidate_id ?? detail.planPacket?.candidateId;
 							const plannedCandidateId = candidateId;
 							if (!plannedCandidateId) return deny("planned candidate ID missing from execution item");
 
@@ -4073,11 +4155,51 @@ export function createWorkflowHost(cfg: HostConfig) {
 								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
 							});
 
-							const push = await pushCandidate(ctx.cwd, freeze.commitSha, exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline, exec.grant.remote_ref);
+							const grantBaseline = exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline;
+							let recoveredStaleTip: string | undefined;
+							let push = await pushCandidate(ctx.cwd, freeze.commitSha, grantBaseline, exec.grant.remote_ref);
+							if (
+								push.status === "not_pushed"
+								&& push.remoteRef?.startsWith("refs/heads/execution/")
+								&& push.remoteCommit
+								&& push.remoteCommit !== freeze.commitSha
+							) {
+								// OMP-245: a lane tip abandoned by a TERMINAL grant must not wedge
+								// this grant. The ledger is the only proof the tip is engine-owned:
+								// the one-active-grant-per-workspace index makes every other grant
+								// terminal, so a tip matching an execution close-attempt candidate
+								// from a DIFFERENT grant on this item is a dead grant's candidate.
+								// Unknown tips keep the fail-closed deny — no silent overwrite.
+								let staleTips: Set<string> | undefined;
+								try {
+									const laneView = await backend.workClient!.workflow(targetIssue.key);
+									staleTips = new Set(
+										(laneView.close_attempts ?? [])
+											.filter(a => a.authorization_kind === "execution" && a.execution_grant_id && a.execution_grant_id !== exec.grant.grant_id)
+											.map(a => a.candidate_commit)
+											.filter((c): c is string => typeof c === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(c)),
+									);
+								} catch {
+									staleTips = undefined;
+								}
+								if (staleTips?.has(push.remoteCommit)) {
+									const staleTip = push.remoteCommit;
+									const recovered = forcePushCandidate(ctx.cwd, freeze.commitSha, push.remoteRef, staleTip);
+									if (recovered.status === "pushed" || recovered.status === "remote_commit") {
+										ctx.ui.notify(`Recovered execution lane ${push.remoteRef}: forced over stale candidate ${staleTip.slice(0, 12)} abandoned by a terminal grant (OMP-245)`, "warning");
+										// The completion gate binds prior_tip to the grant baseline
+										// (candidate parentage: NEEDS_FIX advances current_git_baseline to
+										// the last candidate), never to the overwritten lane tip; the stale
+										// tip is recorded in the push evidence body instead.
+										push = { ...recovered, priorTip: grantBaseline ?? parentCommit(ctx.cwd, freeze.commitSha) ?? staleTip };
+										recoveredStaleTip = staleTip;
+									}
+								}
+							}
 							if (push.status !== "pushed" && push.status !== "remote_commit" && push.status !== "contained") {
 								return deny(`Remote push failed: ${push.detail ?? "push refused"}`);
 							}
-							const pushEvidence = await backend.appendEvidence(targetIssue, "push", "remote push verified", {
+							const pushEvidence = await backend.appendEvidence(targetIssue, "push", recoveredStaleTip ? `remote push verified (forced over stale terminal-grant lane tip ${recoveredStaleTip})` : "remote push verified", {
 								candidateSha256: finalCandidate.candidate_sha256,
 								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
 								remoteRef: push.remoteRef,
