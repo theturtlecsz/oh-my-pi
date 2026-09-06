@@ -27,6 +27,7 @@ export interface ConfirmationReceipt {
 	transcriptRef: string;
 	used: boolean;
 	isSubagent?: boolean;
+	expectedRevisionId?: string;
 }
 
 export const RECEIPT_TTL_MS = 60 * 60_000;
@@ -89,9 +90,8 @@ function mintPreview(
 	question: string,
 	detail: string,
 	sha: string,
-	options: { isSubagent?: boolean } = {},
-): Confirmation {
-	pruneReceipts();
+	options: { isSubagent?: boolean; expectedRevisionId?: string } = {},
+): { approved: false; preview: string } {
 	const receipt: ConfirmationReceipt = {
 		id: `cf-${randomBytes(6).toString("hex")}`,
 		action,
@@ -102,6 +102,7 @@ function mintPreview(
 		transcriptRef: currentTranscriptRef(),
 		used: false,
 		isSubagent: options.isSubagent ?? false,
+		...(options.expectedRevisionId ? { expectedRevisionId: options.expectedRevisionId } : {}),
 	};
 	pending.set(receipt.id, receipt);
 	return {
@@ -126,7 +127,7 @@ export function confirmWrite(
 	question: string,
 	detail: string,
 	params: ConfirmGateParams,
-	options: { isSubagent?: boolean } = {},
+	options: { isSubagent?: boolean; expectedRevisionId?: string; currentRevisionId?: string } = {},
 ): Confirmation {
 	const sha = payloadSha256(action, params);
 	if (params.confirm === true && typeof params.confirmation_id === "string") {
@@ -147,6 +148,21 @@ export function confirmWrite(
 		if (Date.now() - receipt.presentedAt > RECEIPT_TTL_MS) {
 			pending.delete(receipt.id);
 			return mintPreview(action, question, detail, sha, options);
+		}
+		if (
+			options.currentRevisionId &&
+			receipt.expectedRevisionId &&
+			options.currentRevisionId !== receipt.expectedRevisionId
+		) {
+			pending.delete(receipt.id);
+			const fresh = mintPreview(action, question, detail, sha, {
+				...options,
+				expectedRevisionId: options.currentRevisionId,
+			});
+			return {
+				approved: false,
+				preview: `REFUSED — revision conflict: the item moved from revision ${receipt.expectedRevisionId} to ${options.currentRevisionId} since the preview was generated.\n\n${fresh.preview}`,
+			};
 		}
 		receipt.used = true;
 		return { approved: true };
