@@ -640,60 +640,199 @@ describe("workflow revise_work structured amendment", () => {
 		}
 	});
 
-	test("downstream plan packet uses authoritative structured criteria and candidate invalidation enforces replan", async () => {
-		const { buildPlanPacket } = await import("../extensions/workflow/work");
-		const candidate = {
+	test("end-to-end: revise_work clears candidate, rejects stale revision seal, and requires replan with updated criteria", async () => {
+		const WS = "00000000-0000-7000-8000-000000000000";
+		const OWNER = "00000000-0000-7000-8000-000000000002";
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-pending-e2e-"));
+		let currentCandidate: { candidate_id: string; candidate_sha256: string; commit_sha: string | null; kind: "planned" } | null = {
 			candidate_id: "00000000-0000-7000-8000-000000000030",
-			work_id: "00000000-0000-7000-8000-000000000001",
-			revision_id: "00000000-0000-7000-8000-000000000020",
 			candidate_sha256: "3".repeat(64),
 			commit_sha: null,
-			kind: "planned" as const,
-			allocated_at: "2026-09-06T00:00:00Z",
+			kind: "planned",
 		};
-		const planReceipt = {
-			receipt_id: "00000000-0000-7000-8000-000000000031",
+		let currentRev = {
+			revision_id: "00000000-0000-7000-8000-000000000010",
 			work_id: "00000000-0000-7000-8000-000000000001",
-			revision_id: "00000000-0000-7000-8000-000000000020",
-			candidate_id: "00000000-0000-7000-8000-000000000030",
-			kind: "plan",
-			payload: { body: "plan body", paths: ["src/index.ts"] },
-			payload_sha256: "1".repeat(64),
-			artifact_sha256: null,
-			issuer: "test",
-			issued_at: "2026-09-06T00:00:00Z",
-			candidate_sha256: "3".repeat(64),
-			independent: false,
-		} as unknown as import("@oh-my-pi/pi-work-client").EvidenceReceipt;
-
-		// View with active planned candidate and structured criteria
-		const activeView = {
-			item: {
+			revision_number: 1,
+			title: "Initial Item",
+			description: "Initial description",
+			scope: "initial/scope",
+			acceptance_criteria: ["Initial AC 1"],
+			content_sha256: "1".repeat(64),
+			created_by: "test",
+			created_at: new Date().toISOString(),
+		};
+		const planReceipts: EvidenceReceipt[] = [
+			{
+				receipt_id: "00000000-0000-7000-8000-000000000031",
 				work_id: "00000000-0000-7000-8000-000000000001",
-				revision: {
-					revision_id: "00000000-0000-7000-8000-000000000020",
-					acceptance_criteria: ["Structured AC-1", "Structured AC-2"],
-					description: "## Acceptance criteria\n- [ ] Stale description checkbox",
-				},
-				candidate,
+				revision_id: currentRev.revision_id,
+				candidate_id: "00000000-0000-7000-8000-000000000030",
+				kind: "plan",
+				payload: { body: "plan body", paths: ["src/index.ts"] },
+				payload_sha256: "1".repeat(64),
+				artifact_sha256: null,
+				issuer: "test",
+				issued_at: new Date().toISOString(),
+				candidate_sha256: "3".repeat(64),
+				independent: false,
 			},
-			receipts: [planReceipt],
-		} as unknown as import("@oh-my-pi/pi-work-client").WorkflowView;
+		];
 
-		const packet = buildPlanPacket(activeView);
-		expect(packet).toBeDefined();
-		expect(packet!.acceptanceCriteria).toEqual(["Structured AC-1", "Structured AC-2"]);
+		const mockFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
+			const u = String(url);
+			if (u.includes("/v1/work-items/OMP-1/workflow")) {
+				return new Response(JSON.stringify({
+					item: {
+						work_id: currentRev.work_id,
+						workspace_id: WS,
+						alias: { work_id: currentRev.work_id, key: "OMP-1", primary: true, origin: "local" },
+						state: "IN_PROGRESS",
+						revision: currentRev,
+						candidate: currentCandidate,
+						project_id: null,
+						archived: false,
+					},
+					relations: [],
+					receipts: planReceipts,
+					close_attempts: [],
+					audit_manifest: null,
+					auditor_launches: [],
+					close_attempt_events: [],
+					checkpoint_deliveries: [],
+					project: null,
+				}), { status: 200 });
+			}
+			if (u.includes("/v1/work-items/OMP-1")) {
+				return new Response(JSON.stringify({
+					work_id: currentRev.work_id,
+					workspace_id: WS,
+					alias: { work_id: currentRev.work_id, key: "OMP-1", primary: true, origin: "local" },
+					state: "IN_PROGRESS",
+					revision: currentRev,
+					candidate: currentCandidate,
+					project_id: null,
+					archived: false,
+				}), { status: 200 });
+			}
+			if (u.includes("/execution")) {
+				return new Response(JSON.stringify({
+					grant: { grant_id: "00000000-0000-7000-8000-000000000099", state: "active", grant_version: 2 },
+					items: [{ item_id: "00000000-0000-7000-8000-000000000091", work_id: currentRev.work_id, phase: "planning" }],
+					activeItem: { item_id: "00000000-0000-7000-8000-000000000091", work_id: currentRev.work_id, phase: "planning" },
+				}), { status: 200 });
+			}
+			if (u.includes("/tree")) {
+				return new Response(JSON.stringify({ workspace_id: WS, items: [], relations: [], projects: [] }), { status: 200 });
+			}
+			if (u.includes("/v1/commands")) {
+				const body = JSON.parse(String(init?.body)) as { command: { type: string; payload: Record<string, unknown> } };
+				if (body.command.type === "revise_work") {
+					const payload = body.command.payload as { work_id: string; expected_revision_id: string; revision: typeof currentRev };
+					if (payload.expected_revision_id !== currentRev.revision_id) {
+						return new Response(JSON.stringify({ error: { code: "revision_conflict", diagnostics: ["revision mismatch"] } }), { status: 409 });
+					}
+					currentRev = { ...payload.revision };
+					// Store semantics: current_candidate_id set to NULL on revision
+					currentCandidate = null;
+					return new Response(JSON.stringify({
+						receipt: { state: "applied", operation_id: crypto.randomUUID() },
+						result: { type: "revise_work", revision_id: currentRev.revision_id, changed: true },
+					}), { status: 200 });
+				}
+				if (body.command.type === "seal_execution_criteria") {
+					const payload = body.command.payload as { expected_revision_id: string };
+					if (payload.expected_revision_id !== currentRev.revision_id) {
+						return new Response(JSON.stringify({ error: { code: "revision_conflict", diagnostics: ["stale revision"] } }), { status: 409 });
+					}
+					return new Response(JSON.stringify({
+						receipt: { state: "applied", operation_id: crypto.randomUUID() },
+						result: {
+							type: "seal_execution_criteria",
+							grant: { grant_id: "00000000-0000-7000-8000-000000000099", state: "active", grant_version: 2 },
+							item: { item_id: "00000000-0000-7000-8000-000000000091", work_id: currentRev.work_id, phase: "planning" },
+							revision: { acceptance_criteria: currentRev.acceptance_criteria },
+						},
+					}), { status: 200 });
+				}
+				if (body.command.type === "append_evidence") {
+					return new Response(JSON.stringify({
+						receipt: { state: "applied", operation_id: crypto.randomUUID() },
+						result: null,
+					}), { status: 200 });
+				}
+			}
+			return new Response("not found", { status: 404 });
+		};
 
-		// When revise_work invalidates the candidate (current_candidate_id becomes null in store):
-		const invalidatedView = {
-			item: {
-				...activeView.item,
-				candidate: null,
-			},
-			receipts: [planReceipt],
-		} as unknown as import("@oh-my-pi/pi-work-client").WorkflowView;
+		try {
+			const backend = createWorkBackend(
+				{ baseUrl: "http://127.0.0.1:9999", workspaceId: WS, ownerId: OWNER },
+				() => "mock-token",
+				mockFetch as unknown as typeof fetch,
+				tempDir,
+			);
+			const nowRef = { id: currentRev.work_id, key: "OMP-1", title: currentRev.title };
 
-		const noPacket = buildPlanPacket(invalidatedView);
-		expect(noPacket).toBeUndefined();
+			// 1. Initial view has candidate and initial criteria
+			const initialDetail = await backend.issueDetail("OMP-1");
+			expect(initialDetail.planPacket).toBeDefined();
+			expect(initialDetail.planPacket!.acceptanceCriteria).toEqual(["Initial AC 1"]);
+
+			// 2. Revise work with new structured criteria and scope
+			await backend.reviseWork(nowRef, {
+				scope: "amended/scope",
+				acceptance_criteria: ["Amended AC 1", "Amended AC 2"],
+				expected_revision_id: "00000000-0000-7000-8000-000000000010",
+			});
+			expect(currentRev.revision_number).toBe(2);
+			expect(currentRev.scope).toBe("amended/scope");
+			expect(currentRev.acceptance_criteria).toEqual(["Amended AC 1", "Amended AC 2"]);
+			expect(currentCandidate).toBeNull();
+
+			// 3. Post-revision: candidate is invalidated, so planPacket is undefined (requires replan)
+			const postRevDetail = await backend.issueDetail("OMP-1");
+			expect(postRevDetail.planPacket).toBeUndefined();
+			expect(postRevDetail.scope).toBe("amended/scope");
+			expect(postRevDetail.acceptanceCriteria).toEqual(["Amended AC 1", "Amended AC 2"]);
+
+			// 4. Stale seal against old revision R1 fails with revision_conflict
+			await expect(
+				backend.sealExecutionCriteria({
+					grantId: "00000000-0000-7000-8000-000000000099",
+					expectedGrantVersion: 1,
+					workId: currentRev.work_id,
+					expectedRevisionId: "00000000-0000-7000-8000-000000000010",
+					criteria: ["Stale criteria"],
+					descriptionSha256: "0".repeat(64),
+					judgeSha256: "0".repeat(64),
+				}),
+			).rejects.toThrow("revision_conflict");
+
+			// 5. Fresh seal against new revision R2 succeeds
+			const sealRes = await backend.sealExecutionCriteria({
+				grantId: "00000000-0000-7000-8000-000000000099",
+				expectedGrantVersion: 1,
+				workId: currentRev.work_id,
+				expectedRevisionId: currentRev.revision_id,
+				criteria: ["Amended AC 1", "Amended AC 2"],
+				descriptionSha256: "0".repeat(64),
+				judgeSha256: "0".repeat(64),
+			});
+			expect(sealRes.sealedCriteria).toEqual(["Amended AC 1", "Amended AC 2"]);
+
+			// 6. Replan mints new planned candidate bound to R2
+			const stampResult = await backend.stampPlan(nowRef, {
+				title: "Replan Title",
+				body: "## Approach\n- replan\n## Verification\n- verify",
+				planFilePath: "local://plan.md",
+				hash: "4".repeat(64),
+				approach: ["replan"],
+				verification: ["verify"],
+			});
+			expect(stampResult.plannedCandidateId).toBeDefined();
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 });

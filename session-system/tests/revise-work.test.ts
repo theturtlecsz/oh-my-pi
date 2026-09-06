@@ -367,4 +367,224 @@ describe("revise_work structured amendments and preview binding", () => {
 			"AC-2 structured criterion 2",
 		]);
 	});
+	test("get_work renders SCOPE and ACCEPTANCE CRITERIA when present on item", async () => {
+		const itemWithScopeAndCriteria: WorkItemView = {
+			work_id: "00000000-0000-7000-8000-000000000010",
+			workspace_id: "00000000-0000-7000-8000-000000000001",
+			alias: { work_id: "00000000-0000-7000-8000-000000000010", key: "OMP-10", primary: true, origin: "local" },
+			state: "BACKLOG",
+			revision: {
+				revision_id: "00000000-0000-7000-8000-000000000012",
+				work_id: "00000000-0000-7000-8000-000000000010",
+				revision_number: 2,
+				title: "Readback Target",
+				description: "Readback description text",
+				scope: "packages/scoped-area",
+				acceptance_criteria: ["AC-1 first criteria item", "AC-2 second criteria item"],
+				content_sha256: "0".repeat(64),
+				created_by: "system",
+				created_at: new Date().toISOString(),
+			},
+			candidate: null,
+			project_id: null,
+			archived: false,
+		};
+
+		const mockWorkflowView: WorkflowView = {
+			item: itemWithScopeAndCriteria,
+			relations: [],
+			receipts: [],
+			close_attempts: [],
+			audit_manifest: null,
+			auditor_launches: [],
+			close_attempt_events: [],
+			checkpoint_deliveries: [],
+			project: null,
+		};
+
+		const mockFetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes("/v1/work-items/OMP-10/workflow")) {
+				return new Response(JSON.stringify(mockWorkflowView), { status: 200 });
+			}
+			if (url.includes("/v1/work-items/OMP-10")) {
+				return new Response(JSON.stringify(itemWithScopeAndCriteria), { status: 200 });
+			}
+			if (url.includes("/tree")) {
+				return new Response(JSON.stringify({ workspace_id: "00000000-0000-7000-8000-000000000001", items: [itemWithScopeAndCriteria], relations: [], projects: [] }), { status: 200 });
+			}
+			return new Response("not found", { status: 404 });
+		};
+
+		const pendingDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-pending-getwork-test-"));
+		const backend = createWorkBackend({
+			baseUrl: "http://127.0.0.1:54322",
+			workspaceId: "00000000-0000-7000-8000-000000000001",
+			ownerId: "00000000-0000-7000-8000-000000000002",
+		}, () => "test-token", mockFetch, pendingDir);
+
+		let registeredTool: { execute: (id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: () => void, ctx: Record<string, unknown>) => Promise<{ content: { type: string; text: string }[] }> } | null = null;
+		const fakeExtensionApi = {
+			zod: z,
+			registerTool(tool: typeof registeredTool) {
+				registeredTool = tool;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+		};
+
+		const initHost = createWorkflowHost({
+			backend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+		});
+		initHost(fakeExtensionApi as unknown as ExtensionAPI);
+
+		const result = await registeredTool!.execute("get-1", {
+			action: "get_work",
+			work: "OMP-10",
+		}, new AbortController().signal, () => {}, { taskDepth: 0 });
+
+		const text = result.content[0].text;
+		expect(text).toContain("OMP-10 Readback Target");
+		expect(text).toContain("Readback description text");
+		expect(text).toContain("SCOPE: packages/scoped-area");
+		expect(text).toContain("ACCEPTANCE CRITERIA:");
+		expect(text).toContain("- AC-1 first criteria item");
+		expect(text).toContain("- AC-2 second criteria item");
+
+		fs.rmSync(pendingDir, { recursive: true, force: true });
+	});
+	test("host revise_work handles backend CAS conflict by refetching and returning fresh preview, or failing closed if refetch fails", async () => {
+		resetConfirmations({ resetShared: true });
+		let currentRevisionId = "00000000-0000-7000-8000-000000000010";
+		let shouldThrowCasConflict = false;
+		let refetchShouldFail = false;
+
+		const testItem = (): WorkItemView => ({
+			work_id: "00000000-0000-7000-8000-000000000001",
+			workspace_id: "00000000-0000-7000-8000-000000000000",
+			alias: { work_id: "00000000-0000-7000-8000-000000000001", key: "OMP-100", primary: true, origin: "local" },
+			state: "BACKLOG",
+			revision: {
+				revision_id: currentRevisionId,
+				work_id: "00000000-0000-7000-8000-000000000001",
+				revision_number: 1,
+				title: "Original Title",
+				description: "Original Description",
+				scope: "Original Scope",
+				acceptance_criteria: ["Criterion 1"],
+				content_sha256: "0".repeat(64),
+				created_by: "system",
+				created_at: new Date().toISOString(),
+			},
+			candidate: null,
+			project_id: null,
+			archived: false,
+		});
+
+		const mockBackend = {
+			markerFile: ".work-project",
+			cacheFile: "work-now.json",
+			evidenceKinds: ["plan", "verification", "closeout"],
+			queueNoun: "TRIAGE",
+			scopeFix: "fix",
+			bookendTitle: "title",
+			findIssue: async () => ({ id: "00000000-0000-7000-8000-000000000001", key: "OMP-100", title: "Original Title" }),
+			workClient: {
+				workItem: async () => {
+					if (refetchShouldFail) {
+						throw new Error("network partition during refetch");
+					}
+					return testItem();
+				},
+			},
+			reviseWork: async (_issue: unknown, fields: { expected_revision_id?: string }) => {
+				if (shouldThrowCasConflict) {
+					throw new WorkError("revision_conflict", 409, ["backend revision mismatch"]);
+				}
+			},
+		};
+
+		let registeredTool: { execute: (id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: () => void, ctx: Record<string, unknown>) => Promise<{ content: { type: string; text: string }[] }> } | null = null;
+		const fakeExtensionApi = {
+			zod: z,
+			registerTool(tool: typeof registeredTool) {
+				registeredTool = tool;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+		};
+
+		const initHost = createWorkflowHost({
+			backend: mockBackend as unknown as Parameters<typeof createWorkflowHost>[0]["backend"],
+			teamNoun: "the ledger",
+			entryType: "work-now",
+		});
+		initHost(fakeExtensionApi as unknown as ExtensionAPI);
+
+		// 1. Get initial preview
+		const p1 = await registeredTool!.execute("call-1", {
+			action: "revise_work",
+			work: "OMP-100",
+			scope: "New Scope",
+		}, new AbortController().signal, () => {}, { taskDepth: 0 });
+		const m1 = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(p1.content[0].text);
+		expect(m1).not.toBeNull();
+		const confId1 = m1![1];
+
+		// 2. Simulate backend CAS conflict with successful refetch: item moved to rev-20
+		shouldThrowCasConflict = true;
+		currentRevisionId = "00000000-0000-7000-8000-000000000020";
+		const c1 = await registeredTool!.execute("call-2", {
+			action: "revise_work",
+			work: "OMP-100",
+			scope: "New Scope",
+			confirm: true,
+			confirmation_id: confId1,
+		}, new AbortController().signal, () => {}, { taskDepth: 0 });
+		expect(c1.content[0].text).toContain("REFUSED — revision conflict");
+		expect(c1.content[0].text).toContain("00000000-0000-7000-8000-000000000020");
+		expect(c1.content[0].text).toContain("CONFIRM REQUIRED — nothing written.");
+
+		const m2 = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(c1.content[0].text);
+		expect(m2).not.toBeNull();
+		const confId2 = m2![1];
+
+		// 3. Confirming fresh preview succeeds when CAS conflict resolves
+		shouldThrowCasConflict = false;
+		const c2 = await registeredTool!.execute("call-3", {
+			action: "revise_work",
+			work: "OMP-100",
+			scope: "New Scope",
+			confirm: true,
+			confirmation_id: confId2,
+		}, new AbortController().signal, () => {}, { taskDepth: 0 });
+		expect(c2.content[0].text).toBe("OMP-100 revised");
+
+		// 4. Simulate backend CAS conflict where refetch fails: fails closed without preview
+		const p3 = await registeredTool!.execute("call-4", {
+			action: "revise_work",
+			work: "OMP-100",
+			scope: "Another Scope",
+		}, new AbortController().signal, () => {}, { taskDepth: 0 });
+		const m3 = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(p3.content[0].text);
+		const confId3 = m3![1];
+
+		shouldThrowCasConflict = true;
+		refetchShouldFail = true;
+		const failCloseResult = await registeredTool!.execute("call-5", {
+			action: "revise_work",
+			work: "OMP-100",
+			scope: "Another Scope",
+			confirm: true,
+			confirmation_id: confId3,
+		}, new AbortController().signal, () => {}, { taskDepth: 0 });
+		expect(failCloseResult.content[0].text).toContain("network partition during refetch");
+		expect(failCloseResult.content[0].text).not.toContain("CONFIRM REQUIRED");
+	});
 });

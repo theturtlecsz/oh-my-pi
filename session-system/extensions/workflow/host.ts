@@ -3030,6 +3030,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 									`${params.work} ${i.title}`,
 									`state: ${i.state} · project: ${i.project ?? "none"} · labels: ${i.labels.join(",") || "none"}`,
 									i.description ?? "",
+									...(i.scope ? [`SCOPE: ${i.scope}`] : []),
+									...(i.acceptanceCriteria && i.acceptanceCriteria.length > 0
+										? ["ACCEPTANCE CRITERIA:", ...i.acceptanceCriteria.map(c => `- ${c}`)]
+										: []),
 									"RECEIPTS:",
 									i.digestPacket,
 									...(i.attemptSnapshot
@@ -3498,13 +3502,50 @@ export function createWorkflowHost(cfg: HostConfig) {
 							);
 							if (!gate.approved) return deny(gate.preview);
 							const boundExpectedRevId = currentRevisionId;
-							await backend.reviseWork(issue, {
-								...(params.title ? { title: params.title } : {}),
-								...(params.description !== undefined ? { description: params.description } : {}),
-								...(params.scope !== undefined ? { scope: params.scope } : {}),
-								...(criteriaInput !== undefined ? { criteria: criteriaInput, acceptance_criteria: criteriaInput } : {}),
-								expected_revision_id: boundExpectedRevId,
-							});
+							try {
+								await backend.reviseWork(issue, {
+									...(params.title ? { title: params.title } : {}),
+									...(params.description !== undefined ? { description: params.description } : {}),
+									...(params.scope !== undefined ? { scope: params.scope } : {}),
+									...(criteriaInput !== undefined ? { criteria: criteriaInput, acceptance_criteria: criteriaInput } : {}),
+									expected_revision_id: boundExpectedRevId,
+								});
+							} catch (error) {
+								const errMsg = String(error);
+								if (errMsg.includes("revision_conflict")) {
+									let freshItem: WorkItemView | undefined;
+									try {
+										freshItem = await backend.workClient?.workItem(issue.key);
+									} catch (e) {
+										return deny(`REFUSED — revision conflict: target revision moved since preview was generated, and fetching fresh revision for ${issue.key} failed (${String(e)}).`);
+									}
+									const freshRevisionId = freshItem?.revision?.revision_id;
+									if (!freshRevisionId) {
+										return deny(`REFUSED — revision conflict: target revision moved since preview was generated, but ${issue.key} has no current revision id.`);
+									}
+									const freshDetailLines = [
+										`${issue.key} ${params.title ?? issue.title} (revision ${freshRevisionId})`,
+									];
+									if (params.title) freshDetailLines.push(`→ new title: "${params.title}"`);
+									if (params.description !== undefined) freshDetailLines.push(`→ new description:\n${params.description}`);
+									if (params.scope !== undefined) freshDetailLines.push(`→ new scope: "${params.scope}"`);
+									if (criteriaInput !== undefined) {
+										freshDetailLines.push(`→ new acceptance criteria:\n${criteriaInput.map(c => `- ${c}`).join("\n")}`);
+									}
+									const freshGate = confirmWrite(
+										"revise_work",
+										"Model wants to revise this work in place",
+										freshDetailLines.join("\n"),
+										{ ...params, confirm: undefined, confirmation_id: undefined },
+										{
+											expectedRevisionId: freshRevisionId,
+											currentRevisionId: freshRevisionId,
+										},
+									);
+									return deny(`REFUSED — revision conflict: the item moved to revision ${freshRevisionId} since the preview was generated.\n\n${freshGate.approved ? "" : freshGate.preview}`);
+								}
+								throw error;
+							}
 							return okText(`${issue.key} revised`);
 						}
 						case "set_now": {
