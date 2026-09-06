@@ -3054,7 +3054,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 							let runner: NativeAuditRunner;
 							try {
-								runner = await prepareNativeAuditRunner(ctx);
+								runner = await prepareNativeAuditRunner(ctx, _signal);
 							} catch (error) {
 								return deny(`REFUSED — auditor runner preparation failed: ${error instanceof Error ? error.message : String(error)}`);
 							}
@@ -3793,7 +3793,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										return deny(`Seal audit manifest refused: ${sealOutcome.event.renderedText}`);
 									}
 								}
-								const runner = await prepareNativeAuditRunner(ctx);
+								const runner = await prepareNativeAuditRunner(ctx, _signal);
 								const sealedTask = await backend.sealedAuditTask(targetIssue.key);
 								if (!sealedTask) return deny("sealed audit task missing");
 								const resv = await backend.reserveAuditorLaunch(targetIssue.key, sealedTask.taskSha256, _id);
@@ -3801,10 +3801,28 @@ export function createWorkflowHost(cfg: HostConfig) {
 									return deny(`Reserve launch refused: ${resv.event.renderedText}`);
 								}
 								const auditRun = await runner(sealedTask.taskBody, attemptId, _signal);
-								const settle = await backend.settleAuditorLaunch(targetIssue.key, resv.launchId, {
-									payload: auditRun.payload,
-									failed: !auditRun.started || Boolean(auditRun.error && !auditRun.payload),
-								});
+								if (!auditRun.started) {
+									// OMP-251: the auditor never dispatched a model request —
+									// cancel the reservation (cancelled launches do not count
+									// against the 3-launch audit budget) instead of settling a
+									// budget-burning transport_failed launch.
+									try {
+										const cancelOutcome = await backend.cancelAuditorLaunch(targetIssue.key, resv.launchId);
+										if (cancelOutcome.event?.requiresDelivery) {
+											queueCheckpointDelivery(pi, backend, cancelOutcome.event, notice => {
+												pendingNotices.push(`[${TOOL_NAME}] cancel checkpoint delivery failed (${notice})`);
+											});
+										}
+									} catch {
+										// cancel failed — the stranded-launch resume path recovers it
+									}
+									return deny(`Auditor launch failed before start: ${auditRun.error ?? "runner cancelled before dispatch"}`);
+								}
+								const settle = await backend.settleAuditorLaunch(
+									targetIssue.key,
+									resv.launchId,
+									auditRun.payload && auditRun.payload.trim().length > 0 ? { payload: auditRun.payload } : { failed: true },
+								);
 								if (settle.verdict === "NEEDS_FIX" || settle.verdict === "BLOCKED") {
 									// Remediation is not delivery-gated: queue the settlement
 									// checkpoint and hand findings back in the same response.
