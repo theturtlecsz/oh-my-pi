@@ -448,7 +448,7 @@ export function sealedSnapshotCandidate(
 	if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commitSha)) {
 		throw new Error(`commit_sha must be a full lowercase hex object id (40 or 64 chars): ${commitSha}`);
 	}
-	const check = validateExecutionPaths(paths, root);
+	const check = validateExecutionPaths(paths);
 	if (!check.valid) {
 		throw new Error(`invalid sealed path in candidate: ${check.error}`);
 	}
