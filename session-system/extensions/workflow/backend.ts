@@ -540,7 +540,16 @@ export interface WorkflowBackend {
 		verification: string;
 	}): Promise<NowRef>;
 	queueIssue(issue: NowRef, question?: string): Promise<void>;
-	reviseWork(issue: NowRef, fields: { title?: string; description?: string }): Promise<void>;
+	/** OMP-245: current revision id for amendment preview binding. */
+	currentRevisionId(issue: NowRef): Promise<string>;
+	/** OMP-245: structured amendment — unnamed fields are preserved from the
+	 *  previous revision; expectedRevisionId (the revision the preview showed)
+	 *  must still be current or the adapter throws a revision conflict. */
+	reviseWork(
+		issue: NowRef,
+		fields: { title?: string; description?: string; scope?: string; acceptance_criteria?: string[] },
+		expectedRevisionId?: string,
+	): Promise<void>;
 	recordHealth(project: string, health: "onTrack" | "atRisk" | "offTrack"): Promise<void>;
 
 	/** null = clear to close; string = the exact refusal the owner sees. */

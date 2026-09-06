@@ -11,7 +11,7 @@ import { createWorkBackend } from "../../extensions/workflow/work";
 import { riderBatchPath } from "../../extensions/workflow/rider-batch";
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-final-reuse", "summary-begin-refused", "summary-refusal-durable", "summary-rider-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger-reads", "ledger-reads-subagent", "closeout-pending-recovery", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
+const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-final-reuse", "summary-begin-refused", "summary-refusal-durable", "summary-rider-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger-reads", "ledger-reads-subagent", "closeout-pending-recovery", "ledger", "descriptions", "revise-structured", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -453,11 +453,13 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 			);
 		}
 		if (cmdType === "revise_work") {
-			const rev = payload.revision as { work_id: string; revision_id: string; title?: string; description?: string };
+			const rev = payload.revision as { work_id: string; revision_id: string; title?: string; description?: string; scope?: string; acceptance_criteria?: string[] };
 			const it = items.get(rev.work_id) ?? items.get("HOME-1");
 			if (it) {
 				if (rev.title) it.revision.title = rev.title;
 				if (rev.description !== undefined) it.revision.description = rev.description;
+				if (rev.scope !== undefined) it.revision.scope = rev.scope;
+				if (rev.acceptance_criteria !== undefined) it.revision.acceptance_criteria = rev.acceptance_criteria;
 				it.revision.revision_id = rev.revision_id;
 			}
 			return new Response(
@@ -1762,6 +1764,28 @@ if (mode === "intake") {
 		batch: [{ title: "Long batch child", description: `${"x".repeat(201)} CHILD_SENTINEL` }],
 	});
 	out.revise = await confirmRoundTrip(execute, { action: "revise_work", work: "HOME-1", description });
+} else if (mode === "revise-structured") {
+	// OMP-245: structured amendment — scope + acceptance_criteria land, unnamed
+	// fields (title, description) are preserved verbatim.
+	initialItem.revision.description = "KEEP_DESCRIPTION";
+	out.noFields = await execute({ action: "revise_work", work: "HOME-1" });
+	out.structured = await confirmRoundTrip(execute, {
+		action: "revise_work",
+		work: "HOME-1",
+		scope: "NEW_SCOPE_TEXT",
+		criteria: ["AC-1 amended criterion", "AC-2 second criterion"],
+	});
+	out.afterRevision = { ...items.get("HOME-1")?.revision };
+	// Stale preview: mint a preview, advance the revision underneath it, then
+	// confirm — the confirm must refuse (conflict + fresh preview required),
+	// never silently rebase onto the unreviewed revision.
+	const staleParams = { action: "revise_work", work: "HOME-1", scope: "RACING_SCOPE" };
+	const stalePreview = await execute(staleParams);
+	const staleId = /confirmation_id: (\S+)/.exec(stalePreview)?.[1] ?? "";
+	const racing = items.get("HOME-1");
+	if (racing) racing.revision.revision_id = "rev-racer";
+	out.staleConfirm = await execute({ ...staleParams, confirm: true, confirmation_id: staleId });
+	out.afterStale = { ...items.get("HOME-1")?.revision };
 } else if (mode === "footer") {
 	out.initialCalls = [...statusCalls];
 	await setNow();

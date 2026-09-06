@@ -511,6 +511,7 @@ interface WorkflowToolParams {
 	work?: string;
 	title?: string;
 	description?: string;
+	scope?: string;
 	project?: string;
 	health?: "onTrack" | "atRisk" | "offTrack";
 	body?: string;
@@ -2859,6 +2860,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				work: z.string().optional().describe("Work key (e.g. HOME-31) or ledger work id"),
 				title: z.string().optional().describe("Work title (create_work, revise_work)"),
 				description: z.string().optional().describe("Work description markdown (create_work, revise_work)"),
+				scope: z.string().optional().describe("Structured scope text (revise_work) — replaces the revision's scope field"),
 				project: z.string().optional().describe("Project name (create_work target, record_health, list_work filter)"),
 				health: z.enum(["onTrack", "atRisk", "offTrack"]).optional().describe("Project health (record_health)"),
 				body: z.string().optional().describe("Receipt body or close reason; record_health is status-only and refuses body"),
@@ -2877,7 +2879,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					.describe("create_issue: publish these child issues under the parent (title/description) with native parent links and blocks relations, behind ONE preview — one confirm writes the whole set"),
 				confirm: z.boolean().optional().describe("Two-phase write continuation: pass true only with the preview's confirmation_id, following the action policy in this tool description"),
 				confirmation_id: z.string().optional().describe("The receipt id from this transcript's preview — binds the confirm to the exact shown payload"),
-				criteria: z.array(z.string()).optional().describe("Acceptance criteria strings (seal_execution_criteria)"),
+				criteria: z.array(z.string()).optional().describe("Acceptance criteria strings (seal_execution_criteria; revise_work replaces the revision's structured acceptance_criteria)"),
 				plan_file: z.string().optional().describe("Local plan file URI or path (stamp_execution_plan)"),
 				paths: z.array(z.string()).optional().describe("Literal repository-relative target file paths (stamp_execution_plan)"),
 			}),
@@ -3451,19 +3453,34 @@ export function createWorkflowHost(cfg: HostConfig) {
 						}
 						case "revise_work": {
 							if (!params.work) return deny("work key required");
-							if (!params.title && !params.description) return deny("title and/or description required");
+							const wantsCriteria = params.criteria !== undefined;
+							if (!params.title && !params.description && params.scope === undefined && !wantsCriteria) {
+								return deny("title, description, scope, and/or criteria required");
+							}
 							const issue = await backend.findIssue(params.work);
+							// OMP-245: bind the preview to the revision actually reviewed —
+							// the reviewed revision id joins the hashed payload, so a revision
+							// change between preview and confirm refuses the confirm and
+							// forces a fresh preview instead of silently rebasing.
+							const reviewedRevisionId = await backend.currentRevisionId(issue);
+							const boundParams = { ...params, reviewed_revision_id: reviewedRevisionId };
 							const gate = confirmWrite(
 								"revise_work",
 								"Model wants to revise this work in place",
-								`${issue.key} ${issue.title}${params.title ? `\n→ new title: "${params.title}"` : ""}${params.description ? `\n→ new description:\n${params.description}` : ""}`,
-								params,
+								`${issue.key} ${issue.title} (revision ${reviewedRevisionId})${params.title ? `\n→ new title: "${params.title}"` : ""}${params.description ? `\n→ new description:\n${params.description}` : ""}${params.scope !== undefined ? `\n→ new scope:\n${params.scope}` : ""}${wantsCriteria ? `\n→ new acceptance criteria:\n${(params.criteria ?? []).map(c => `- ${c}`).join("\n")}` : ""}`,
+								boundParams,
 							);
 							if (!gate.approved) return deny(gate.preview);
-							await backend.reviseWork(issue, {
-								...(params.title ? { title: params.title } : {}),
-								...(params.description ? { description: params.description } : {}),
-							});
+							await backend.reviseWork(
+								issue,
+								{
+									...(params.title ? { title: params.title } : {}),
+									...(params.description ? { description: params.description } : {}),
+									...(params.scope !== undefined ? { scope: params.scope } : {}),
+									...(wantsCriteria ? { acceptance_criteria: params.criteria } : {}),
+								},
+								reviewedRevisionId,
+							);
 							return okText(`${issue.key} revised`);
 						}
 						case "set_now": {

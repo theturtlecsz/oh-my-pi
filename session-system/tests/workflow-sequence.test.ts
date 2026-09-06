@@ -11,7 +11,7 @@ const harness = path.join(import.meta.dir, "fixtures/workflow-sequence-harness.t
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
 
-function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-final-reuse" | "summary-begin-refused" | "summary-refusal-durable" | "summary-rider-refusal-durable" | "stop-continuation-states" | "atomic-child" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "now-canceled" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "ledger-reads" | "ledger-reads-subagent" | "closeout-pending-recovery" | "descriptions" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
+function run(mode: "intake" | "plan" | "plan-now-change" | "summary" | "summary-subagent" | "summary-reauth" | "summary-push-fail" | "summary-stale-final" | "summary-final-reuse" | "summary-begin-refused" | "summary-refusal-durable" | "summary-rider-refusal-durable" | "stop-continuation-states" | "atomic-child" | "done" | "done-cancel" | "done-cancel-decline" | "footer" | "audit" | "restore" | "now-canceled" | "center" | "center-scoped" | "center-stale" | "triage-questions" | "ledger-reads" | "ledger-reads-subagent" | "closeout-pending-recovery" | "descriptions" | "revise-structured" | "omp140-audit-states" | "omp140-restart-flow" | "omp140-failed-checkpoint" | "omp140-terminal-guidance"): Record<string, unknown> {
 	const root = path.join(tempRoot, mode);
 	const home = path.join(root, "home");
 	const probe = path.join(root, "repo");
@@ -267,6 +267,25 @@ describe("HOME-122 workflow sequence", () => {
 		expect(record(out.batch).confirmed).toContain("HOME-2 + 1 child(ren)");
 		expect(record(out.revise).preview).toContain("PREVIEW_SENTINEL");
 		expect(record(out.revise).confirmed).toContain("HOME-1 revised");
+	});
+
+	test("revise_work amends structured scope and criteria, preserves unnamed fields, and refuses stale previews (OMP-245)", () => {
+		const out = run("revise-structured");
+		expect(String(out.noFields)).toContain("title, description, scope, and/or criteria required");
+		expect(record(out.structured).preview).toContain("NEW_SCOPE_TEXT");
+		expect(record(out.structured).preview).toContain("AC-1 amended criterion");
+		expect(record(out.structured).preview).toContain("(revision rev-1)");
+		expect(record(out.structured).confirmed).toContain("HOME-1 revised");
+		const revision = record(out.afterRevision);
+		expect(revision.scope).toBe("NEW_SCOPE_TEXT");
+		expect(revision.acceptance_criteria).toEqual(["AC-1 amended criterion", "AC-2 second criterion"]);
+		// Unnamed fields survive the amendment verbatim.
+		expect(revision.title).toBe("First");
+		expect(revision.description).toBe("KEEP_DESCRIPTION");
+		// Revision advanced between preview and confirm → refuse, never rebase.
+		expect(String(out.staleConfirm)).toContain("payload changed since the preview");
+		const afterStale = record(out.afterStale);
+		expect(afterStale.scope).toBe("NEW_SCOPE_TEXT");
 	});
 
 	test("fresh sessions restore the backend focus without a local cache", () => {
