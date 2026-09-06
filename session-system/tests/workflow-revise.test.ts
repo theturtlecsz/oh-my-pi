@@ -193,7 +193,7 @@ describe("workflow revise_work structured amendment", () => {
 		const previewText = previewRes.content[0].text;
 		expect(previewText).toContain("CONFIRM REQUIRED");
 		expect(previewText).toContain("OMP-100 Original Title");
-		expect(previewText).toContain("[bound revision: 00000000-0000-7000-8000-000000000010]");
+		expect(previewText).toContain("(revision 00000000-0000-7000-8000-000000000010)");
 		expect(previewText).toContain('→ new scope: "Updated Scope"');
 		expect(previewText).toContain("→ new acceptance criteria:\n- New AC 1\n- New AC 2");
 
@@ -322,8 +322,8 @@ describe("workflow revise_work structured amendment", () => {
 			fakeCtx,
 		);
 		const conflictText = confirmRes.content[0].text;
-		expect(conflictText).toContain("revision_conflict: target revision moved since preview was generated");
-		expect(conflictText).toContain("[bound revision: 00000000-0000-7000-8000-000000000020]");
+		expect(conflictText).toContain("REFUSED — revision conflict");
+		expect(conflictText).toContain("(revision 00000000-0000-7000-8000-000000000020)");
 		expect(conflictText).toContain("CONFIRM REQUIRED");
 
 		const matchConflict = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(conflictText);
@@ -451,8 +451,8 @@ describe("workflow revise_work structured amendment", () => {
 			fakeCtx,
 		);
 		const conflictText = confirmRes.content[0].text;
-		expect(conflictText).toContain("revision_conflict: target revision moved since preview was generated");
-		expect(conflictText).toContain("[bound revision: 00000000-0000-7000-8000-000000000020]");
+		expect(conflictText).toContain("REFUSED — revision conflict");
+		expect(conflictText).toContain("(revision 00000000-0000-7000-8000-000000000020)");
 
 		const matchConflict = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(conflictText);
 		expect(matchConflict).not.toBeNull();
@@ -612,7 +612,7 @@ describe("workflow revise_work structured amendment", () => {
 			};
 
 			// Case 1: Only amend scope — title, description, acceptance_criteria must be preserved
-			await backend.reviseWork(nowRef, { scope: "New Scope Only" });
+			await backend.reviseWork(nowRef, { scope: "New Scope Only", expected_revision_id: originalItem.revision.revision_id });
 			expect(lastPayload).toBeDefined();
 			expect(lastPayload!.revision.scope).toBe("New Scope Only");
 			expect(lastPayload!.revision.title).toBe("Original Title");
@@ -621,7 +621,7 @@ describe("workflow revise_work structured amendment", () => {
 			expect(lastPayload!.revision.revision_number).toBe(2);
 
 			// Case 2: Only amend acceptance_criteria — title, description, scope must be preserved
-			await backend.reviseWork(nowRef, { acceptance_criteria: ["Updated Criterion A"] });
+			await backend.reviseWork(nowRef, { acceptance_criteria: ["Updated Criterion A"], expected_revision_id: originalItem.revision.revision_id });
 			expect(lastPayload).toBeDefined();
 			expect(lastPayload!.revision.acceptance_criteria).toEqual(["Updated Criterion A"]);
 			expect(lastPayload!.revision.title).toBe("Original Title");

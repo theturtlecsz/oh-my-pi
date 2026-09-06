@@ -3458,80 +3458,53 @@ export function createWorkflowHost(cfg: HostConfig) {
 						}
 						case "revise_work": {
 							if (!params.work) return deny("work key required");
-							if (!params.title && !params.description && params.scope === undefined && params.acceptance_criteria === undefined) {
+							const criteriaInput = params.criteria ?? params.acceptance_criteria;
+							if (!params.title && !params.description && params.scope === undefined && criteriaInput === undefined) {
 								return deny("title, description, scope, and/or acceptance_criteria required");
 							}
 							const issue = await backend.findIssue(params.work);
-							const item = await backend.workClient?.workItem(issue.key);
-							const currentRevision = item?.revision;
-							const boundRevFromPreview = params.confirmation_id ? previewRevisionBinding.get(params.confirmation_id) : undefined;
-							const boundExpectedRevId = boundRevFromPreview ?? params.expected_revision_id ?? currentRevision?.revision_id;
-
-							let detailText = `${issue.key} ${params.title ?? issue.title}`;
-							if (boundExpectedRevId) {
-								detailText += `\n[bound revision: ${boundExpectedRevId}]`;
+							if (!backend.workClient) {
+								return deny("work client unavailable for revise_work");
 							}
-							if (params.title) detailText += `\n→ new title: "${params.title}"`;
-							if (params.description) detailText += `\n→ new description:\n${params.description}`;
-							if (params.scope !== undefined) detailText += `\n→ new scope: "${params.scope}"`;
-							if (params.acceptance_criteria !== undefined) {
-								detailText += `\n→ new acceptance criteria:\n${params.acceptance_criteria.map(c => `- ${c}`).join("\n")}`;
+							let item: WorkItemView;
+							try {
+								item = await backend.workClient.workItem(issue.key);
+							} catch (e) {
+								return deny(`revision lookup failed: could not fetch current revision for ${issue.key} (${String(e)})`);
+							}
+							const currentRevisionId = item.revision?.revision_id;
+							if (!currentRevisionId) {
+								return deny(`revision lookup failed: ${issue.key} has no current revision id`);
+							}
+							const detailLines = [
+								`${issue.key} ${params.title ?? issue.title} (revision ${currentRevisionId})`,
+							];
+							if (params.title) detailLines.push(`→ new title: "${params.title}"`);
+							if (params.description !== undefined) detailLines.push(`→ new description:\n${params.description}`);
+							if (params.scope !== undefined) detailLines.push(`→ new scope: "${params.scope}"`);
+							if (criteriaInput !== undefined) {
+								detailLines.push(`→ new acceptance criteria:\n${criteriaInput.map(c => `- ${c}`).join("\n")}`);
 							}
 
 							const gate = confirmWrite(
 								"revise_work",
 								"Model wants to revise this work in place",
-								detailText,
+								detailLines.join("\n"),
 								params,
+								{
+									expectedRevisionId: params.expected_revision_id ?? currentRevisionId,
+									currentRevisionId,
+								},
 							);
-							if (!gate.approved) {
-								const match = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(gate.preview);
-								if (match && boundExpectedRevId) {
-									previewRevisionBinding.set(match[1], boundExpectedRevId);
-								}
-								return deny(gate.preview);
-							}
-							if (params.confirmation_id) {
-								previewRevisionBinding.delete(params.confirmation_id);
-							}
-
-							try {
-								await backend.reviseWork(issue, {
-									...(params.title ? { title: params.title } : {}),
-									...(params.description ? { description: params.description } : {}),
-									...(params.scope !== undefined ? { scope: params.scope } : {}),
-									...(params.acceptance_criteria !== undefined ? { acceptance_criteria: params.acceptance_criteria } : {}),
-									...(boundExpectedRevId ? { expected_revision_id: boundExpectedRevId } : {}),
-								});
-							} catch (error) {
-								const errMsg = String(error);
-								if (errMsg.includes("revision_conflict")) {
-									const freshItem = await backend.workClient?.workItem(issue.key);
-									const freshRev = freshItem?.revision;
-									let freshDetail = `${issue.key} ${params.title ?? issue.title}`;
-									if (freshRev?.revision_id) {
-										freshDetail += `\n[bound revision: ${freshRev.revision_id}]`;
-									}
-									if (params.title) freshDetail += `\n→ new title: "${params.title}"`;
-									if (params.description) freshDetail += `\n→ new description:\n${params.description}`;
-									if (params.scope !== undefined) freshDetail += `\n→ new scope: "${params.scope}"`;
-									if (params.acceptance_criteria !== undefined) {
-										freshDetail += `\n→ new acceptance criteria:\n${params.acceptance_criteria.map(c => `- ${c}`).join("\n")}`;
-									}
-									const freshGate = confirmWrite(
-										"revise_work",
-										"Model wants to revise this work in place (fresh preview after revision conflict)",
-										freshDetail,
-										{ ...params, confirm: undefined, confirmation_id: undefined },
-									);
-									const matchFresh = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(freshGate.preview);
-									if (matchFresh && freshRev?.revision_id) {
-										previewRevisionBinding.set(matchFresh[1], freshRev.revision_id);
-									}
-									return deny(`revision_conflict: target revision moved since preview was generated.\n\n${freshGate.preview}`);
-								}
-								throw error;
-							}
+							if (!gate.approved) return deny(gate.preview);
+							const boundExpectedRevId = currentRevisionId;
+							await backend.reviseWork(issue, {
+								...(params.title ? { title: params.title } : {}),
+								...(params.description !== undefined ? { description: params.description } : {}),
+								...(params.scope !== undefined ? { scope: params.scope } : {}),
+								...(criteriaInput !== undefined ? { criteria: criteriaInput, acceptance_criteria: criteriaInput } : {}),
+								expected_revision_id: boundExpectedRevId,
+							});
 							return okText(`${issue.key} revised`);
 						}
 						case "set_now": {

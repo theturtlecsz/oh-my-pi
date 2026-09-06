@@ -173,6 +173,8 @@ export interface IssueDetail {
 	project?: string;
 	labels: string[];
 	description?: string;
+	scope?: string;
+	acceptanceCriteria?: string[];
 	blockedBy: string[];
 	blocks: string[];
 	related: string[];

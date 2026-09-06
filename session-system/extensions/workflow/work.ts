@@ -657,6 +657,8 @@ export function createWorkBackend(
 				...(view.project ? { project: view.project.name } : {}),
 				labels: [],
 				...(view.item.revision.description ? { description: view.item.revision.description } : {}),
+				...(view.item.revision.scope ? { scope: view.item.revision.scope } : {}),
+				...(view.item.revision.acceptance_criteria?.length ? { acceptanceCriteria: view.item.revision.acceptance_criteria } : {}),
 				blockedBy: rel("blocks", "target"),
 				blocks: rel("blocks", "source"),
 				related: rel("related", "source"),
@@ -1181,7 +1183,7 @@ export function createWorkBackend(
 				const item = await client.workItem(issue.key);
 				const updatedDesc = setOwnerQuestion(item.revision.description, question);
 				if (updatedDesc !== item.revision.description) {
-					await backend.reviseWork(issue, { description: updatedDesc });
+					await backend.reviseWork(issue, { description: updatedDesc, expected_revision_id: item.revision.revision_id });
 				}
 			}
 			await run("set_work_state", { work_id: issue.id, state: "TRIAGE" });
@@ -1193,19 +1195,23 @@ export function createWorkBackend(
 				title?: string;
 				description?: string;
 				scope?: string;
+				criteria?: string[];
 				acceptance_criteria?: string[];
 				expected_revision_id?: string;
 			},
 		): Promise<void> {
 			const item = await client.workItem(issue.key);
 			const previous = item.revision;
-			if (fields.expected_revision_id && fields.expected_revision_id !== previous.revision_id) {
-				throw new WorkError("revision_conflict", 409, [`expected revision ${fields.expected_revision_id} but current revision is ${previous.revision_id}`]);
+			if (!fields.expected_revision_id) {
+				throw new WorkError("invalid_request", 400, ["expected_revision_id required for revise_work"]);
+			}
+			if (fields.expected_revision_id !== previous.revision_id) {
+				throw new WorkError("revision_conflict", 409, [`expected revision ${fields.expected_revision_id}, but current is ${previous.revision_id}`]);
 			}
 			const title = (fields.title ?? previous.title).trim();
 			const description = fields.description ?? previous.description;
 			const scope = fields.scope !== undefined ? fields.scope.trim() : previous.scope;
-			const acceptance_criteria = fields.acceptance_criteria ?? previous.acceptance_criteria;
+			const acceptance_criteria = fields.acceptance_criteria ?? fields.criteria ?? previous.acceptance_criteria;
 			const contentSha = payloadHash({ title, description, scope, acceptance_criteria });
 			const revision = {
 				revision_id: stableId("revision", item.work_id, previous.revision_id, contentSha),
@@ -1219,7 +1225,7 @@ export function createWorkBackend(
 				created_by: ISSUER,
 				created_at: new Date().toISOString(),
 			};
-			await run("revise_work", { work_id: item.work_id, expected_revision_id: previous.revision_id, revision });
+			await run("revise_work", { work_id: item.work_id, expected_revision_id: fields.expected_revision_id, revision });
 		},
 
 		async recordHealth(project: string, health: ProjectHealth): Promise<void> {
