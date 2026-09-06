@@ -172,16 +172,38 @@ describe("revise_work structured amendments and preview binding", () => {
 		expect(rev2.acceptance_criteria).toEqual(["AC-1 updated", "AC-3 added"]);
 
 		// 3. Stale expected_revision_id throws WorkError revision_conflict
-		expect(backend.reviseWork(nowRef, {
-			expected_revision_id: "00000000-0000-7000-8000-000000000000",
-			scope: "packages/failed-scope",
-		})).rejects.toThrow(WorkError);
+		await expect(
+			backend.reviseWork(nowRef, {
+				expected_revision_id: "00000000-0000-7000-8000-000000000000",
+				scope: "packages/failed-scope",
+			}),
+		).rejects.toThrow(WorkError);
+		try {
+			await backend.reviseWork(nowRef, {
+				expected_revision_id: "00000000-0000-7000-8000-000000000000",
+				scope: "packages/failed-scope",
+			});
+			expect.unreachable("expected revision_conflict WorkError");
+		} catch (err) {
+			expect(err).toBeInstanceOf(WorkError);
+			expect((err as WorkError).code).toBe("revision_conflict");
+		}
 
 		// 4. Missing expected_revision_id throws WorkError invalid_request
-		expect(backend.reviseWork(nowRef, {
-			scope: "packages/failed-scope",
-		})).rejects.toThrow(WorkError);
-
+		await expect(
+			backend.reviseWork(nowRef, {
+				scope: "packages/failed-scope",
+			}),
+		).rejects.toThrow(WorkError);
+		try {
+			await backend.reviseWork(nowRef, {
+				scope: "packages/failed-scope",
+			});
+			expect.unreachable("expected invalid_request WorkError");
+		} catch (err) {
+			expect(err).toBeInstanceOf(WorkError);
+			expect((err as WorkError).code).toBe("invalid_request");
+		}
 		fs.rmSync(pendingDir, { recursive: true, force: true });
 	});
 
