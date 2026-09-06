@@ -267,6 +267,13 @@ describe("HOME-122 workflow sequence", () => {
 		expect(record(out.batch).confirmed).toContain("HOME-2 + 1 child(ren)");
 		expect(record(out.revise).preview).toContain("PREVIEW_SENTINEL");
 		expect(record(out.revise).confirmed).toContain("HOME-1 revised");
+		expect(record(out.reviseStructured).preview).toContain("Structured Scope");
+		expect(record(out.reviseStructured).preview).toContain("AC-1");
+		expect(record(out.reviseStructured).confirmed).toContain("HOME-1 revised");
+		const revised = record(out.revisedItem);
+		const revision = record(revised.revision);
+		expect(revision.scope).toBe("Structured Scope");
+		expect(revision.acceptance_criteria).toEqual(["AC-1", "AC-2"]);
 	});
 
 	test("fresh sessions restore the backend focus without a local cache", () => {

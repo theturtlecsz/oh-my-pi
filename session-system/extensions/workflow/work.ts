@@ -1187,20 +1187,34 @@ export function createWorkBackend(
 			await run("set_work_state", { work_id: issue.id, state: "TRIAGE" });
 		},
 
-		async reviseWork(issue: NowRef, fields: { title?: string; description?: string }): Promise<void> {
+		async reviseWork(
+			issue: NowRef,
+			fields: {
+				title?: string;
+				description?: string;
+				scope?: string;
+				acceptance_criteria?: string[];
+				expected_revision_id?: string;
+			},
+		): Promise<void> {
 			const item = await client.workItem(issue.key);
 			const previous = item.revision;
+			if (fields.expected_revision_id && fields.expected_revision_id !== previous.revision_id) {
+				throw new WorkError("revision_conflict", 409, [`expected revision ${fields.expected_revision_id} but current revision is ${previous.revision_id}`]);
+			}
 			const title = (fields.title ?? previous.title).trim();
 			const description = fields.description ?? previous.description;
-			const contentSha = payloadHash({ title, description, scope: previous.scope, acceptance_criteria: previous.acceptance_criteria });
+			const scope = fields.scope !== undefined ? fields.scope.trim() : previous.scope;
+			const acceptance_criteria = fields.acceptance_criteria ?? previous.acceptance_criteria;
+			const contentSha = payloadHash({ title, description, scope, acceptance_criteria });
 			const revision = {
 				revision_id: stableId("revision", item.work_id, previous.revision_id, contentSha),
 				work_id: item.work_id,
 				revision_number: previous.revision_number + 1,
 				title,
 				description,
-				scope: previous.scope,
-				acceptance_criteria: previous.acceptance_criteria,
+				scope,
+				acceptance_criteria,
 				content_sha256: contentSha,
 				created_by: ISSUER,
 				created_at: new Date().toISOString(),
