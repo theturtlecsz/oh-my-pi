@@ -46,20 +46,25 @@ Changes:
    compact separators, raw UTF-8) and `paths` is the candidate commit's complete
    file list as reported by `git diff-tree --no-commit-id --name-only -r <commit>`
    read with `-z` and decoded as strict UTF-8 (a freeze that meets a non-UTF-8
-   path name refuses the candidate). Paths are hashed exactly as stored — no
+   path name refuses the candidate). Absent `path_basis` defaults to legacy
+   commit-diff and omits the field from the canonical JSON payload;
+   `"sealed-snapshot"` defines `paths` as the plan-sealed path list validated
+   against the approved tree and includes `"path_basis": "sealed-snapshot"`. Paths
+   are hashed exactly as stored — no
    Unicode normalization, because a Git tree may legally contain both NFC and NFD
    spellings of the same displayed name as distinct entries, and normalizing would
    map two different candidate path sets to one hash. The path list must be
    non-empty, duplicate-free, free of control characters, and free of `./`, `//`,
    `\`, and trailing `/`; it is sorted by UTF-8 byte order before hashing. The
    algorithm is implemented once per runtime: `omp_work.v1.canonical.candidate_sha256`
-   (service/importer side) and `session-system/extensions/workflow/git.ts`
+   (service/importer side) and `packages/work-client/src/index.ts`
    `candidateSha256` (owner extension side). Golden vectors in
    `contracts/v1/candidate-hash.json` pin both implementations; the vectors cover
    unsorted input, duplicate rejection (negative), a decomposed-Unicode path stored
    verbatim (any NFC-normalizing implementation hashes differently and fails the
-   vector), and an astral-plane path whose UTF-8 byte order differs from UTF-16
-   code-unit order (a naive JavaScript `.sort()` fails the vector). The store does
+   vector), an astral-plane path whose UTF-8 byte order differs from UTF-16
+   code-unit order (a naive JavaScript `.sort()` fails the vector), and an
+   unsorted sealed-snapshot basis vector (`sealed-snapshot-unsorted`). The store does
    not recompute the hash — it has no repository — but completion, finalization,
    receipt binding, and the smoke probe all compare the exact stored value, so an
    implementation drift is caught by the fixture tests and the end-to-end smoke.

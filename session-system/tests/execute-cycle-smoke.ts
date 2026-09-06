@@ -2741,15 +2741,15 @@ if (args[0] === "api") {
 
 	const zeroPathOut = runHarness("zero-path-queue", itemZeroPath.key);
 	assert.ok(
-		(zeroPathOut.uiCalls as string[]).some(c => c.includes("binding grant baseline HEAD")),
-		"grant-baseline bind notice surfaced on zero-path freeze",
+		String(zeroPathOut.review).includes("empty sealed path set cannot bind already-delivered candidate") ||
+		(zeroPathOut.uiCalls as string[]).some(c => c.includes("empty sealed path set cannot bind already-delivered candidate")),
+		"empty-seal refusal surfaced on zero-path freeze",
 	);
 	const zeroPathExec = zeroPathOut.finalExecution as { items?: { phase?: string }[]; activeItem?: { position?: number } } | undefined;
-	assert.equal(zeroPathExec?.items?.[0]?.phase, "completed", "zero-path item phase is completed");
-	assert.equal(zeroPathExec?.activeItem?.position, 1, "queue advanced to next item after zero-path completion");
+	assert.notEqual(zeroPathExec?.items?.[0]?.phase, "completed", "zero-path item phase is not completed");
+	assert.notEqual(zeroPathExec?.activeItem?.position, 1, "queue did not advance after zero-path refusal");
 	const zeroPathView = (await (await fetch(`${baseUrl}/v1/work-items/${itemZeroPath.key}/workflow`, { headers })).json()) as { item: { state: string } };
-	assert.equal(zeroPathView.item.state, "DONE", "zero-path item closed DONE service-side");
-
+	assert.notEqual(zeroPathView.item.state, "DONE", "zero-path item is not closed DONE service-side");
 	// Test Scenario: OMP-195 stale pre-grant close attempt superseded in-grant
 	const staleRes = await (await fetch(`${baseUrl}/v1/commands`, {
 		method: "POST",

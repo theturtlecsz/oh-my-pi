@@ -637,6 +637,7 @@ if (scenario === "dirty") {
 	// OMP-188/OMP-189: the sealed path is already committed and pushed at the
 	// grant baseline; with the host passing expectedBaseline, the cycle binds
 	// the baseline commit and completes autonomously.
+	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
 		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
@@ -661,6 +662,7 @@ if (scenario === "dirty") {
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
 } else if (scenario === "zero-path-queue") {
+	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
 		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
@@ -679,10 +681,17 @@ if (scenario === "dirty") {
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
 } else if (scenario === "already-unmet") {
-	// OMP-189 AC-2: an empty sealed diff with UNMET criteria binds the
+	// OMP-189 / OMP-222: an existing-but-incomplete sealed file binds the
 	// baseline, reaches the audit, and ends NEEDS_FIX with no completion —
 	// the audit gate is the arbiter, never bypassed.
+	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
+	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+	fs.writeFileSync(path.join(probe, "src/incomplete_feature.ts"), "export const incomplete = true;\n");
+	for (const args of [["add", "--", "src/incomplete_feature.ts"], ["commit", "-q", "-m", "commit incomplete feature"], ["push", "-q", "origin", "main"]]) {
 		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
 	}
@@ -694,7 +703,7 @@ if (scenario === "dirty") {
 	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
 	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
 	fs.writeFileSync(planDiskPath, "## Approach\n1. Claim the feature exists\n\n## Verification\n1. The audit catches the gap\n");
-	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/never_written.ts"] });
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/incomplete_feature.ts"] });
 	// subprocessCount stays 0: the first auditor report is NEEDS_FIX.
 	out.review = await reviewUntilSettled("claims unverified at baseline");
 	out.execAfterReview = JSON.parse(await execute({ action: "get_execution" }));
@@ -704,6 +713,7 @@ if (scenario === "dirty") {
 	// OMP-195: a live pre-grant close attempt bound to an old candidate and
 	// revision must not wedge the grant in a candidate_drift refusal — the
 	// review path supersedes it in-grant and completes autonomously.
+	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
 		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
@@ -772,6 +782,7 @@ if (scenario === "dirty") {
 	// OMP-245: a lane tip the ledger does NOT know (foreign commit pushed
 	// out-of-band) must keep the fail-closed push refusal — stale-tip recovery
 	// never force-overwrites unknown history.
+	await fakeSessionManager.moveTo(ownerProbe);
 	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
 		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
 		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);

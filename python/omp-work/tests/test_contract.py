@@ -785,7 +785,6 @@ def test_batch_payload_validates_refs_and_relations() -> None:
     )
     assert payload.items[0].state == "BACKLOG"
 
-
 def test_candidate_hash_matches_golden_vectors() -> None:
     from omp_work.v1.canonical import CANDIDATE_HASH_ALGORITHM, candidate_sha256
 
@@ -797,8 +796,9 @@ def test_candidate_hash_matches_golden_vectors() -> None:
     assert fixture["algorithm"] == CANDIDATE_HASH_ALGORITHM
     for vector in fixture["vectors"]:
         # Sorting and validation live inside the helper: input order and stored bytes are pinned.
+        basis = vector.get("path_basis", "commit-diff")
         assert (
-            candidate_sha256(vector["commit_sha"], vector["paths"])
+            candidate_sha256(vector["commit_sha"], vector["paths"], path_basis=basis)
             == vector["candidate_sha256"]
         ), vector["name"]
         assert (
@@ -820,7 +820,10 @@ def test_candidate_hash_rejects_noncanonical_inputs() -> None:
         candidate_sha256(
             "abc123", ["a.ts"]
         )  # abbreviated object ids never bind a candidate
-
+    with pytest.raises(ValueError, match="unknown candidate path_basis"):
+        candidate_sha256(
+            "0123456789abcdef0123456789abcdef01234567", ["a.ts"], path_basis="unknown"  # type: ignore[arg-type]
+        )
 
 def test_client_config_lands_on_the_shared_ts_client_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

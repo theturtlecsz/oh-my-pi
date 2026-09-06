@@ -488,7 +488,7 @@ export function renderExecutionTerminalBanner(
 	];
 }
 
-function sectionItems(content: string, heading: "Approach" | "Verification"): string[] {
+function sectionItems(content: string, heading: "Approach" | "Verification" | "Paths"): string[] {
 	const lines = content.split("\n");
 	const start = lines.findIndex(line => line.trim() === `## ${heading}`);
 	if (start < 0) return [];
@@ -1238,16 +1238,32 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 	// ---- plan stamping ----
 
-	function preparePlanStamp(plan: { planFilePath: string; planContent: string; title: string }): { hash: string; body: string } | { reason: string } {
+	function preparePlanStamp(
+		plan: { planFilePath: string; planContent: string; title: string },
+		cwd?: string,
+	): { hash: string; body: string; paths?: string[] } | { reason: string } {
 		const approach = sectionItems(plan.planContent, "Approach");
 		const verification = sectionItems(plan.planContent, "Verification");
 		if (approach.length === 0 || verification.length === 0) {
 			return { reason: "Plan approval requires non-empty ## Approach and ## Verification lists." };
 		}
+		const rawPaths = sectionItems(plan.planContent, "Paths");
+		let paths: string[] | undefined;
+		if (rawPaths.length > 0) {
+			const check = validateExecutionPaths(rawPaths, cwd);
+			if (!check.valid) {
+				return { reason: `Plan path validation failed: ${check.error}` };
+			}
+			paths = check.normalized;
+		}
 		// OMP-155: the receipt body IS the exact approved plan — the sha-sealed
 		// local:// file dies with its authoring session; the ledger copy is the
 		// durable source the stored SHA-256 recovers against.
-		return { hash: Bun.SHA256.hash(plan.planContent, "hex"), body: plan.planContent };
+		return {
+			hash: Bun.SHA256.hash(plan.planContent, "hex"),
+			body: plan.planContent,
+			...(paths ? { paths } : {}),
+		};
 	}
 
 	// ---- in-card digest engine (owner ruling R4: auto per highlighted issue) ----
@@ -2164,7 +2180,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if (!target) {
 				return { cancel: true, reason: "Run /intake first, or choose an issue with /now." };
 			}
-			const stamp = preparePlanStamp(event);
+			const stamp = preparePlanStamp(event, ctx.cwd);
 			if ("reason" in stamp) return { cancel: true, reason: stamp.reason };
 			try {
 				const res = await backend.stampPlan(target, {
@@ -2891,6 +2907,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			// Signature contract is (toolCallId, params, signal, onUpdate, ctx) — the
 			// pre-2026-08-10 4-param version received onUpdate as `ctx` (HOME-30).
 			async execute(_id, params: WorkflowToolParams, _signal, _onUpdate, ctx) {
+				const cwd = contextCwd(ctx);
 				const action = params.action as CanonicalAction;
 				// Per-call op attribution: ONE finalizer for success AND failure —
 				// any newly delivered op ids are bound to this toolResult's details
@@ -3599,8 +3616,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const prevPlanStamp = exec.activeItem.plan_stamp as { paths?: string[] } | undefined;
 							if (prevPlanStamp && (exec.activeItem.close_attempts_started ?? 0) === 0) {
 								const prevSealed = new Set(Array.isArray(prevPlanStamp?.paths) ? prevPlanStamp.paths : []);
-								const dirt = dirtyPaths(ctx.cwd);
-								const touchedPaths = executionRecoveryTouchedPaths(ctx.cwd, dirt);
+								const dirt = dirtyPaths(cwd);
+								const touchedPaths = executionRecoveryTouchedPaths(cwd, dirt);
 								if (touchedPaths === null) {
 									return deny("Scope correction refused: unable to inspect complete touched path set.");
 								}
@@ -3625,8 +3642,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 										lastPlanError = err;
 									}
 								}
-								candidates.push(join(dirname(ctx.cwd), params.plan_file.slice("local://".length)));
-								candidates.push(join(ctx.cwd, params.plan_file.slice("local://".length)));
+								candidates.push(join(dirname(cwd), params.plan_file.slice("local://".length)));
+								candidates.push(join(cwd, params.plan_file.slice("local://".length)));
 								for (const candidate of [...new Set(candidates)]) {
 									try {
 										planContent = readFileSync(candidate, "utf-8");
@@ -3637,7 +3654,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 									}
 								}
 							} else {
-								planPath = isAbsolute(params.plan_file) ? params.plan_file : join(ctx.cwd, params.plan_file);
+								planPath = isAbsolute(params.plan_file) ? params.plan_file : join(cwd, params.plan_file);
 								try {
 									planContent = readFileSync(planPath, "utf-8");
 								} catch (err) {
@@ -3653,8 +3670,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (approach.length === 0 || verification.length === 0) {
 								return deny("Plan requires non-empty ## Approach and ## Verification lists.");
 							}
-							const expandedPaths = expandExecutionPlanClosure(params.paths, ctx.cwd);
-							const pathCheck = validateExecutionPaths(expandedPaths, ctx.cwd);
+							const expandedPaths = expandExecutionPlanClosure(params.paths, cwd);
+							const pathCheck = validateExecutionPaths(expandedPaths, cwd);
 							if (!pathCheck.valid) {
 								return deny(`Plan path validation failed: ${pathCheck.error}`);
 							}
@@ -3701,7 +3718,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const planStampData = exec.activeItem.plan_stamp as { candidate_id?: string; paths?: string[] } | undefined;
 							const sealedPaths: string[] = Array.isArray(planStampData?.paths) ? planStampData.paths : [];
 							const sealedSet = new Set(sealedPaths);
-							const dirt = dirtyPaths(ctx.cwd);
+							const dirt = dirtyPaths(cwd);
 							const hasMigrationDirt = dirt.some(p => p.startsWith("python/omp-work/src/omp_work/operations/migrations/"));
 							if (hasMigrationDirt) {
 								return deny("service refresh refused: migrations directory contains changes");
@@ -3953,20 +3970,20 @@ export function createWorkflowHost(cfg: HostConfig) {
 								const currentExec = await backend.getExecution(params.work);
 								if (!currentExec || !currentExec.activeItem) return deny("execution grant missing after settlement");
 								const remoteRef = currentExec.grant.remote_ref;
-								const defaultBranch = resolveDefaultBranch(ctx.cwd);
-								let mergeCheck = verifyMergeConfirmation(ctx.cwd, candidateCommit, remoteRef, defaultBranch);
+								const defaultBranch = resolveDefaultBranch(cwd);
+								let mergeCheck = verifyMergeConfirmation(cwd, candidateCommit, remoteRef, defaultBranch);
 								if (!mergeCheck.confirmed && mergeCheck.detail?.includes("expected MERGED")) {
 									// OMP-220: engine-driven delivery merge — the single sanctioned
 									// PR merge action; branch protection enforces required checks
 									// server-side. Bind the merge itself to the audited head so a
 									// branch update after the precheck cannot merge other code.
 									const deliveryBranch = remoteRef.startsWith("refs/heads/") ? remoteRef.slice("refs/heads/".length) : remoteRef;
-									const merged = mergePullRequest(ctx.cwd, deliveryBranch, candidateCommit);
+									const merged = mergePullRequest(cwd, deliveryBranch, candidateCommit);
 									ctx.ui.notify(
 										merged.ok ? `delivery PR merged by engine: ${deliveryBranch}` : `engine PR merge failed: ${merged.detail}`,
 										merged.ok ? "info" : "warning",
 									);
-									if (merged.ok) mergeCheck = verifyMergeConfirmation(ctx.cwd, candidateCommit, remoteRef, defaultBranch);
+									if (merged.ok) mergeCheck = verifyMergeConfirmation(cwd, candidateCommit, remoteRef, defaultBranch);
 								}
 								if (!mergeCheck.confirmed) {
 									return deny(`Work item completion pending merge confirmation: ${mergeCheck.detail}. Pushing to ${remoteRef} alone does not mark the item delivered.`);
@@ -3981,7 +3998,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								});
 								const nextPending = completed.items.find(i => i.phase === "pending");
 								if (nextPending) {
-									const dirt = dirtyPaths(ctx.cwd);
+									const dirt = dirtyPaths(cwd);
 									if (dirt.length > 0) {
 										const updated = await backend.setExecutionState({
 											grantId: completed.grant.grant_id,
@@ -4009,7 +4026,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										footer(ctx);
 										return deny(`execution_worktree_not_clean on queue advance: clean worktree required.\n${notice.fullNotice}`);
 									}
-									const head = headCommit(ctx.cwd);
+									const head = headCommit(cwd);
 									if (!head) {
 										const updated = await backend.setExecutionState({
 											grantId: completed.grant.grant_id,
@@ -4050,7 +4067,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										expectedProjectId: nextPending.project_id ?? undefined,
 										expectedBlockerIds: nextPending.active_blocker_ids ?? [],
 									});
-									const headAfter = headCommit(ctx.cwd);
+									const headAfter = headCommit(cwd);
 									if (headAfter !== head) return deny("Git baseline moved during queue activation handshake");
 									const nextIssue = await backend.findIssue(nextPending.work_id);
 									if (nextIssue) {
@@ -4118,7 +4135,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							// If the execution mutates files in python/omp-work, compute prospective contract digest.
 							// If unapproved in approval.json, atomically pause the grant and refuse freeze/push/audit.
 							if (sealedPaths.some(p => p.startsWith("python/omp-work/"))) {
-								const contractCheck = checkProspectiveContract(ctx.cwd);
+								const contractCheck = checkProspectiveContract(cwd);
 								if (!contractCheck.approved) {
 									await backend.setExecutionState({
 										grantId: exec.grant.grant_id,
@@ -4134,7 +4151,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 							const freeze = await freezeCandidateCommit(
 								ctx.ui,
-								ctx.cwd,
+								cwd,
 								targetIssue.key,
 								plannedCandidateId,
 								[],
@@ -4157,7 +4174,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 							const grantBaseline = exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline;
 							let recoveredStaleTip: string | undefined;
-							let push = await pushCandidate(ctx.cwd, freeze.commitSha, grantBaseline, exec.grant.remote_ref);
+							let push = await pushCandidate(cwd, freeze.commitSha, grantBaseline, exec.grant.remote_ref);
 							if (
 								push.status === "not_pushed"
 								&& push.remoteRef?.startsWith("refs/heads/execution/")
@@ -4184,14 +4201,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 								}
 								if (staleTips?.has(push.remoteCommit)) {
 									const staleTip = push.remoteCommit;
-									const recovered = forcePushCandidate(ctx.cwd, freeze.commitSha, push.remoteRef, staleTip);
+									const recovered = forcePushCandidate(cwd, freeze.commitSha, push.remoteRef, staleTip);
 									if (recovered.status === "pushed" || recovered.status === "remote_commit") {
 										ctx.ui.notify(`Recovered execution lane ${push.remoteRef}: forced over stale candidate ${staleTip.slice(0, 12)} abandoned by a terminal grant (OMP-245)`, "warning");
 										// The completion gate binds prior_tip to the grant baseline
 										// (candidate parentage: NEEDS_FIX advances current_git_baseline to
 										// the last candidate), never to the overwritten lane tip; the stale
 										// tip is recorded in the push evidence body instead.
-										push = { ...recovered, priorTip: grantBaseline ?? parentCommit(ctx.cwd, freeze.commitSha) ?? staleTip };
+										push = { ...recovered, priorTip: grantBaseline ?? parentCommit(cwd, freeze.commitSha) ?? staleTip };
 										recoveredStaleTip = staleTip;
 									}
 								}
@@ -4214,8 +4231,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 								sessionId: exec.grant.authorization_hash,
 								startedAt: exec.grant.created_at,
 								startCommit: exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline,
-								repository: isAbsolute(exec.grant.repository) ? exec.grant.repository : ctx.cwd,
-								diffSha256: rangeDiffSha256(ctx.cwd, exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline, freeze.commitSha) ?? "",
+								repository: isAbsolute(exec.grant.repository) ? exec.grant.repository : cwd,
+								diffSha256: rangeDiffSha256(cwd, exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline, freeze.commitSha) ?? "",
 								dirtyPaths: [],
 								authorization_kind: "execution",
 								execution_grant_id: exec.grant.grant_id,

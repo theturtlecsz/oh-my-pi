@@ -16,8 +16,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
-import { candidateSha256 } from "@oh-my-pi/pi-work-client";
-import { candidateDrift, cleanupExecutionWorkspace, dirtyPaths, ensureExecutionWorkspace, ensureUpToDateWithDefault, findSecrets, freezeCandidateCommit, type GhPrRunner, forcePushCandidate, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runBiomeCheck, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
+import { type CandidatePathBasis, candidateSha256 } from "@oh-my-pi/pi-work-client";
+import { candidateDrift, cleanupExecutionWorkspace, dirtyPaths, ensureExecutionWorkspace, ensureUpToDateWithDefault, findSecrets, freezeCandidateCommit, type GhPrRunner, forcePushCandidate, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runBiomeCheck, sealedSnapshotCandidate, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -66,6 +66,21 @@ describe("candidate freeze and push", () => {
 	test("parsePorcelain keeps rename new path, drops original", () => {
 		const z = "M  a.txt\0?? b.txt\0R  new.txt\0old.txt\0";
 		expect(parsePorcelain(z)).toEqual(["a.txt", "b.txt", "new.txt"]);
+	});
+	test("candidateSha256 matches golden vectors in candidate-hash.json", () => {
+		const fixturePath = path.join(import.meta.dir, "../../python/omp-work/src/omp_work/contracts/v1/candidate-hash.json");
+		const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+		expect(fixture.algorithm).toBe("work.omp.dev/v1/candidate-sha256");
+		for (const vector of fixture.vectors) {
+			const basis: CandidatePathBasis = vector.path_basis ?? "commit-diff";
+			expect(candidateSha256(vector.commit_sha, vector.paths, basis)).toBe(vector.candidate_sha256);
+			expect(candidateSha256(vector.commit_sha, vector.paths_sorted, basis)).toBe(vector.candidate_sha256);
+		}
+		expect(() => candidateSha256("0123456789abcdef0123456789abcdef01234567", ["a.ts"], "unknown" as never)).toThrow("unknown candidate path basis");
+		expect(() => candidateSha256("0123456789abcdef0123456789abcdef01234567", [])).toThrow("candidate path set must not be empty");
+		expect(() => candidateSha256("0123456789abcdef0123456789abcdef01234567", ["a.ts", "a.ts"])).toThrow("duplicate candidate path");
+		expect(() => candidateSha256("0123456789abcdef0123456789abcdef01234567", ["dir/"])).toThrow("not a canonical repo-relative file path");
+		expect(() => candidateSha256("abc123", ["a.ts"])).toThrow("commit_sha must be a full lowercase hex object id");
 	});
 
 	test("parentCommit anchors the full implementation range", () => {
@@ -283,6 +298,81 @@ describe("candidate freeze and push", () => {
 		expect(git(repo, "rev-list", "--count", "HEAD")).toBe("1");
 		expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
 		expect(ui.notices.some(n => n.startsWith("warning: freeze declined"))).toBe(true);
+	});
+
+	test("legacy manual merge-tip adoption without sealed snapshot paths refuses", async () => {
+		const repo = makeRepo();
+		git(repo, "checkout", "-q", "-b", "feature");
+		fs.writeFileSync(path.join(repo, "feature.txt"), "feature content\n");
+		git(repo, "add", "--", "feature.txt");
+		git(repo, "commit", "-q", "-m", "feature commit");
+		git(repo, "checkout", "-q", "main");
+		git(repo, "merge", "-q", "--no-ff", "feature", "-m", "merge feature");
+		const ui = makeUi(true);
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1");
+		expect("refused" in frozen && frozen.refused).toBe("failed");
+		if ("refused" in frozen) {
+			expect(frozen.reason).toContain("candidate path set must not be empty");
+		}
+	});
+
+	test("manual merge-tip adoption with approved snapshot binds merge commit and sealed paths", async () => {
+		const repo = makeRepo();
+		git(repo, "checkout", "-q", "-b", "feature");
+		fs.writeFileSync(path.join(repo, "feature.txt"), "feature content\n");
+		git(repo, "add", "--", "feature.txt");
+		git(repo, "commit", "-q", "-m", "feature commit");
+		git(repo, "checkout", "-q", "main");
+		git(repo, "merge", "-q", "--no-ff", "feature", "-m", "merge feature");
+		const mergeCommit = git(repo, "rev-parse", "HEAD");
+
+		const ui = makeUi(true);
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1", [], {
+			approvedSnapshot: { commitSha: mergeCommit, paths: ["feature.txt"] },
+		});
+		if ("refused" in frozen) throw new Error(`expected freeze, got refusal: ${frozen.reason}`);
+		expect(frozen.commitSha).toBe(mergeCommit);
+		expect(frozen.paths).toEqual(["feature.txt"]);
+		expect(frozen.candidateSha256).toBe(candidateSha256(mergeCommit, ["feature.txt"], "sealed-snapshot"));
+		expect(ui.confirms[0].title).toContain(`Use approved snapshot ${mergeCommit.slice(0, 12)} as the candidate for HOME-1?`);
+		expect(ui.confirms[0].body).toContain("feature.txt");
+		expect(ui.notices.some(n => n.includes("using approved snapshot"))).toBe(true);
+		expect(git(repo, "rev-parse", "HEAD")).toBe(mergeCommit);
+	});
+
+	test("manual merge-tip adoption preserves approved commit when HEAD later advances (later-HEAD independence)", async () => {
+		const repo = makeRepo();
+		git(repo, "checkout", "-q", "-b", "feature");
+		fs.writeFileSync(path.join(repo, "feature.txt"), "feature content\n");
+		git(repo, "add", "--", "feature.txt");
+		git(repo, "commit", "-q", "-m", "feature commit");
+		git(repo, "checkout", "-q", "main");
+		git(repo, "merge", "-q", "--no-ff", "feature", "-m", "merge feature");
+		const mergeCommit = git(repo, "rev-parse", "HEAD");
+
+		// Advance HEAD with unrelated commit
+		fs.writeFileSync(path.join(repo, "unrelated.txt"), "unrelated work\n");
+		git(repo, "add", "--", "unrelated.txt");
+		git(repo, "commit", "-q", "-m", "unrelated work");
+		const laterHead = git(repo, "rev-parse", "HEAD");
+		expect(laterHead).not.toBe(mergeCommit);
+
+		const ui = makeUi(true);
+		const frozen = await freezeCandidateCommit(ui, repo, "HOME-1", "candidate-1", [], {
+			approvedSnapshot: { commitSha: mergeCommit, paths: ["feature.txt"] },
+		});
+		if ("refused" in frozen) throw new Error(`expected freeze, got refusal: ${frozen.reason}`);
+		expect(frozen.commitSha).toBe(mergeCommit);
+		expect(frozen.paths).toEqual(["feature.txt"]);
+		expect(frozen.candidateSha256).toBe(candidateSha256(mergeCommit, ["feature.txt"], "sealed-snapshot"));
+		expect(git(repo, "rev-parse", "HEAD")).toBe(laterHead);
+	});
+
+	test("sealedSnapshotCandidate refuses missing tree paths (fail closed)", () => {
+		const repo = makeRepo();
+		const head = git(repo, "rev-parse", "HEAD");
+		expect(() => sealedSnapshotCandidate(repo, head, ["nonexistent.txt"])).toThrow("missing sealed path(s): nonexistent.txt");
+		expect(() => sealedSnapshotCandidate(repo, head, [])).toThrow("candidate path set must not be empty");
 	});
 
 	test("pushCandidate pushes the exact frozen commit and repeated checks stay idempotent", () => {
@@ -577,7 +667,7 @@ describe("execution freeze (OMP-188)", () => {
 		expect(res.normalized).toEqual([]);
 	});
 
-	test("binds baseline HEAD when sealed paths are empty and HEAD equals the grant baseline", async () => {
+	test("refuses when sealed paths are empty even if HEAD equals the grant baseline (empty seal refusal)", async () => {
 		const repo = makeRepo();
 		const head = git(repo, "rev-parse", "HEAD");
 		const ui = makeUi(true);
@@ -586,12 +676,9 @@ describe("execution freeze (OMP-188)", () => {
 			sealedPaths: [],
 			expectedBaseline: head,
 		});
-		if ("refused" in outcome) throw new Error(`expected baseline bind, got refusal: ${outcome.reason}`);
-		expect(outcome.commitSha).toBe(head);
-		expect(outcome.paths).toEqual(["seed.txt"]);
-		expect(outcome.candidateSha256).toBe(candidateSha256(head, ["seed.txt"]));
+		expect("refused" in outcome && outcome.refused).toBe("failed");
+		expect("refused" in outcome ? outcome.reason : "").toContain("empty sealed path set cannot bind already-delivered candidate");
 		expect(git(repo, "rev-parse", "HEAD")).toBe(head);
-		expect(ui.notices.some(n => n.includes("binding grant baseline HEAD"))).toBe(true);
 	});
 
 	test("refuses when sealed paths are empty and working tree is dirty (names unsealed path)", async () => {
@@ -621,7 +708,7 @@ describe("execution freeze (OMP-188)", () => {
 		if ("refused" in outcome) throw new Error(`expected baseline bind, got refusal: ${outcome.reason}`);
 		expect(outcome.commitSha).toBe(head);
 		expect(outcome.paths).toEqual(["seed.txt"]);
-		expect(outcome.candidateSha256).toBe(candidateSha256(head, ["seed.txt"]));
+		expect(outcome.candidateSha256).toBe(candidateSha256(head, ["seed.txt"], "sealed-snapshot"));
 		expect(git(repo, "rev-parse", "HEAD")).toBe(head); // no new commit
 		expect(ui.notices.some(n => n.includes("binding grant baseline HEAD"))).toBe(true);
 	});
