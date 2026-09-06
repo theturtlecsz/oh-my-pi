@@ -28,7 +28,7 @@ Bun.spawnSync(["git", "init", "-q"], { cwd: probe });
 test("only approval arms execution and only typed handoff settles it", () => {
 	const child = Bun.spawnSync([process.execPath, harness, probe], {
 		cwd: probe,
-		env: { ...process.env, HOME: home, OMP_WORK_BEARER: "test-token", PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent") },
+		env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), OMP_WORK_BEARER: "test-token", PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent") },
 	});
 	expect(child.exitCode, child.stderr.toString()).toBe(0);
 	const out = JSON.parse(child.stdout.toString()) as Record<string, string | number>;
