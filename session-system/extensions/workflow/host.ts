@@ -101,7 +101,7 @@ import {
 import { registerSessionLedger } from "./session-ledger";
 import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
-import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView } from "@oh-my-pi/pi-work-client";
 
 /** Tool actions — the canonical action set for the `work` tool. */
 export type CanonicalAction =
@@ -3030,10 +3030,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 									`${params.work} ${i.title}`,
 									`state: ${i.state} · project: ${i.project ?? "none"} · labels: ${i.labels.join(",") || "none"}`,
 									i.description ?? "",
-									...(i.scope ? [`SCOPE: ${i.scope}`] : []),
+									`SCOPE: ${i.scope ?? ""}`,
+									"ACCEPTANCE CRITERIA:",
 									...(i.acceptanceCriteria && i.acceptanceCriteria.length > 0
-										? ["ACCEPTANCE CRITERIA:", ...i.acceptanceCriteria.map(c => `- ${c}`)]
-										: []),
+										? i.acceptanceCriteria.map(c => `- ${c}`)
+										: ["(none)"]),
 									"RECEIPTS:",
 									i.digestPacket,
 									...(i.attemptSnapshot
@@ -3511,8 +3512,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 									expected_revision_id: boundExpectedRevId,
 								});
 							} catch (error) {
-								const errMsg = String(error);
-								if (errMsg.includes("revision_conflict")) {
+								if (error instanceof WorkError && error.code === "revision_conflict") {
 									let freshItem: WorkItemView | undefined;
 									try {
 										freshItem = await backend.workClient?.workItem(issue.key);

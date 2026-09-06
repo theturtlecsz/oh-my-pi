@@ -457,19 +457,109 @@ describe("revise_work structured amendments and preview binding", () => {
 
 		fs.rmSync(pendingDir, { recursive: true, force: true });
 	});
+	test("get_work renders explicit empty SCOPE and ACCEPTANCE CRITERIA (none) when cleared", async () => {
+		const itemWithEmptyFields: WorkItemView = {
+			work_id: "00000000-0000-7000-8000-000000000010",
+			workspace_id: "00000000-0000-7000-8000-000000000001",
+			alias: { work_id: "00000000-0000-7000-8000-000000000010", key: "OMP-11", primary: true, origin: "local" },
+			state: "BACKLOG",
+			revision: {
+				revision_id: "00000000-0000-7000-8000-000000000013",
+				work_id: "00000000-0000-7000-8000-000000000010",
+				revision_number: 3,
+				title: "Cleared Target",
+				description: "Cleared description text",
+				scope: "",
+				acceptance_criteria: [],
+				content_sha256: "0".repeat(64),
+				created_by: "system",
+				created_at: new Date().toISOString(),
+			},
+			candidate: null,
+			project_id: null,
+			archived: false,
+		};
+
+		const mockWorkflowView: WorkflowView = {
+			item: itemWithEmptyFields,
+			relations: [],
+			receipts: [],
+			close_attempts: [],
+			audit_manifest: null,
+			auditor_launches: [],
+			close_attempt_events: [],
+			checkpoint_deliveries: [],
+			project: null,
+		};
+
+		const mockFetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes("/v1/work-items/OMP-11/workflow")) {
+				return new Response(JSON.stringify(mockWorkflowView), { status: 200 });
+			}
+			if (url.includes("/v1/work-items/OMP-11")) {
+				return new Response(JSON.stringify(itemWithEmptyFields), { status: 200 });
+			}
+			if (url.includes("/tree")) {
+				return new Response(JSON.stringify({ workspace_id: "00000000-0000-7000-8000-000000000001", items: [itemWithEmptyFields], relations: [], projects: [] }), { status: 200 });
+			}
+			return new Response("not found", { status: 404 });
+		};
+
+		const pendingDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-pending-cleared-test-"));
+		const backend = createWorkBackend({
+			baseUrl: "http://127.0.0.1:54322",
+			workspaceId: "00000000-0000-7000-8000-000000000001",
+			ownerId: "00000000-0000-7000-8000-000000000002",
+		}, () => "test-token", mockFetch, pendingDir);
+
+		let registeredTool: { execute: (id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: () => void, ctx: Record<string, unknown>) => Promise<{ content: { type: string; text: string }[] }> } | null = null;
+		const fakeExtensionApi = {
+			zod: z,
+			registerTool(tool: typeof registeredTool) {
+				registeredTool = tool;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+		};
+
+		const initHost = createWorkflowHost({
+			backend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+		});
+		initHost(fakeExtensionApi as unknown as ExtensionAPI);
+
+		const result = await registeredTool!.execute("get-empty", {
+			action: "get_work",
+			work: "OMP-11",
+		}, new AbortController().signal, () => {}, { taskDepth: 0 });
+
+		const text = result.content[0].text;
+		expect(text).toContain("OMP-11 Cleared Target");
+		expect(text).toContain("SCOPE: ");
+		expect(text).toContain("ACCEPTANCE CRITERIA:\n(none)");
+
+		fs.rmSync(pendingDir, { recursive: true, force: true });
+	});
+
 	test("host revise_work handles backend CAS conflict by refetching and returning fresh preview, or failing closed if refetch fails", async () => {
 		resetConfirmations({ resetShared: true });
 		let currentRevisionId = "00000000-0000-7000-8000-000000000010";
 		let shouldThrowCasConflict = false;
-		let refetchShouldFail = false;
+		let shouldThrowNonConflict = false;
+		let refetchFails = false;
+		let inReviseWork = false;
 
-		const testItem = (): WorkItemView => ({
+		const testItem = (revId: string): WorkItemView => ({
 			work_id: "00000000-0000-7000-8000-000000000001",
 			workspace_id: "00000000-0000-7000-8000-000000000000",
 			alias: { work_id: "00000000-0000-7000-8000-000000000001", key: "OMP-100", primary: true, origin: "local" },
 			state: "BACKLOG",
 			revision: {
-				revision_id: currentRevisionId,
+				revision_id: revId,
 				work_id: "00000000-0000-7000-8000-000000000001",
 				revision_number: 1,
 				title: "Original Title",
@@ -495,15 +585,22 @@ describe("revise_work structured amendments and preview binding", () => {
 			findIssue: async () => ({ id: "00000000-0000-7000-8000-000000000001", key: "OMP-100", title: "Original Title" }),
 			workClient: {
 				workItem: async () => {
-					if (refetchShouldFail) {
-						throw new Error("network partition during refetch");
+					if (inReviseWork && refetchFails) {
+						throw new Error("refetch network failure");
 					}
-					return testItem();
+					if (inReviseWork) {
+						return testItem("00000000-0000-7000-8000-000000000020");
+					}
+					return testItem(currentRevisionId);
 				},
 			},
-			reviseWork: async (_issue: unknown, fields: { expected_revision_id?: string }) => {
+			reviseWork: async (_issue: unknown, _fields: { expected_revision_id?: string }) => {
+				inReviseWork = true;
+				if (shouldThrowNonConflict) {
+					throw new WorkError("invalid_request", 400, ["diagnostic mentions revision_conflict"]);
+				}
 				if (shouldThrowCasConflict) {
-					throw new WorkError("revision_conflict", 409, ["backend revision mismatch"]);
+					throw new WorkError("revision_conflict", 409, ["backend CAS mismatch"]);
 				}
 			},
 		};
@@ -527,7 +624,9 @@ describe("revise_work structured amendments and preview binding", () => {
 		});
 		initHost(fakeExtensionApi as unknown as ExtensionAPI);
 
-		// 1. Get initial preview
+		// 1. Get initial preview bound to rev-10
+		inReviseWork = false;
+		currentRevisionId = "00000000-0000-7000-8000-000000000010";
 		const p1 = await registeredTool!.execute("call-1", {
 			action: "revise_work",
 			work: "OMP-100",
@@ -537,9 +636,10 @@ describe("revise_work structured amendments and preview binding", () => {
 		expect(m1).not.toBeNull();
 		const confId1 = m1![1];
 
-		// 2. Simulate backend CAS conflict with successful refetch: item moved to rev-20
+		// 2. Pre-confirm lookup sees rev-10 (passes confirmWrite), then reviseWork throws CAS conflict,
+		// and catch block refetch succeeds with rev-20 -> returns fresh preview bound to rev-20
 		shouldThrowCasConflict = true;
-		currentRevisionId = "00000000-0000-7000-8000-000000000020";
+		inReviseWork = false;
 		const c1 = await registeredTool!.execute("call-2", {
 			action: "revise_work",
 			work: "OMP-100",
@@ -557,6 +657,8 @@ describe("revise_work structured amendments and preview binding", () => {
 
 		// 3. Confirming fresh preview succeeds when CAS conflict resolves
 		shouldThrowCasConflict = false;
+		inReviseWork = false;
+		currentRevisionId = "00000000-0000-7000-8000-000000000020";
 		const c2 = await registeredTool!.execute("call-3", {
 			action: "revise_work",
 			work: "OMP-100",
@@ -566,7 +668,8 @@ describe("revise_work structured amendments and preview binding", () => {
 		}, new AbortController().signal, () => {}, { taskDepth: 0 });
 		expect(c2.content[0].text).toBe("OMP-100 revised");
 
-		// 4. Simulate backend CAS conflict where refetch fails: fails closed without preview
+		// 4. Pre-confirm lookup sees rev-20, then reviseWork throws CAS conflict and refetch fails -> fails closed
+		inReviseWork = false;
 		const p3 = await registeredTool!.execute("call-4", {
 			action: "revise_work",
 			work: "OMP-100",
@@ -576,7 +679,8 @@ describe("revise_work structured amendments and preview binding", () => {
 		const confId3 = m3![1];
 
 		shouldThrowCasConflict = true;
-		refetchShouldFail = true;
+		refetchFails = true;
+		inReviseWork = false;
 		const failCloseResult = await registeredTool!.execute("call-5", {
 			action: "revise_work",
 			work: "OMP-100",
@@ -584,7 +688,31 @@ describe("revise_work structured amendments and preview binding", () => {
 			confirm: true,
 			confirmation_id: confId3,
 		}, new AbortController().signal, () => {}, { taskDepth: 0 });
-		expect(failCloseResult.content[0].text).toContain("network partition during refetch");
+		expect(failCloseResult.content[0].text).toContain("REFUSED — revision conflict");
+		expect(failCloseResult.content[0].text).toContain("refetch network failure");
 		expect(failCloseResult.content[0].text).not.toContain("CONFIRM REQUIRED");
+
+		// 5. Non-conflict WorkError passes through without minting replacement preview
+		inReviseWork = false;
+		shouldThrowCasConflict = false;
+		shouldThrowNonConflict = true;
+		refetchFails = false;
+		const p4 = await registeredTool!.execute("call-6", {
+			action: "revise_work",
+			work: "OMP-100",
+			title: "Non Conflict Test",
+		}, new AbortController().signal, () => {}, { taskDepth: 0 });
+		const m4 = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(p4.content[0].text);
+		const confId4 = m4![1];
+
+		const nonConflictResult = await registeredTool!.execute("call-7", {
+			action: "revise_work",
+			work: "OMP-100",
+			title: "Non Conflict Test",
+			confirm: true,
+			confirmation_id: confId4,
+		}, new AbortController().signal, () => {}, { taskDepth: 0 });
+		expect(nonConflictResult.content[0].text).toContain("invalid_request");
+		expect(nonConflictResult.content[0].text).not.toContain("CONFIRM REQUIRED");
 	});
 });
