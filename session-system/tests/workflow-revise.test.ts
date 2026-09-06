@@ -42,7 +42,11 @@ function temporaryCacheFile(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-revise-cache-"));
 	return path.join(dir, "cache.json");
 }
-
+/**
+ * OMP-245: Structured scope and acceptance criteria amendments through revise_work.
+ * Verifies two-phase write previews, conflict handling, unamended field preservation,
+ * downstream candidate invalidation, and extension schema exposure.
+ */
 describe("workflow revise_work structured amendment", () => {
 	test("work-now extension schema exposes scope, acceptance_criteria, and expected_revision_id (AC-6)", async () => {
 		const repoRoot = path.resolve(import.meta.dir, "../..");
