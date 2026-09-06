@@ -8,7 +8,7 @@ import { buildPlanPacket, createWorkBackend } from "../extensions/workflow/work"
 import { createWorkflowHost } from "../extensions/workflow/host";
 import { WorkError } from "@oh-my-pi/pi-work-client";
 import { z } from "zod";
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { loadExtensions, type ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 describe("revise_work structured amendments and preview binding", () => {
 	test("confirmWrite binds expectedRevisionId and approves when revision matches", () => {
@@ -736,5 +736,43 @@ describe("revise_work structured amendments and preview binding", () => {
 		}, new AbortController().signal, () => {}, { taskDepth: 0 });
 		expect(nonConflictResult.content[0].text).toContain("invalid_request");
 		expect(nonConflictResult.content[0].text).not.toContain("CONFIRM REQUIRED");
+	});
+
+	test("work-now extension loaded via loadExtensions registers work tool with structured scope and acceptance_criteria schemas", async () => {
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const extPath = path.join(repoRoot, "session-system/extensions/work-now.ts");
+		const tempConfig = fs.mkdtempSync(path.join(os.tmpdir(), "work-ext-revise-load-"));
+		const oldXdg = process.env.XDG_CONFIG_HOME;
+		process.env.XDG_CONFIG_HOME = tempConfig;
+		try {
+			const workDir = path.join(tempConfig, "omp-work");
+			fs.mkdirSync(workDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(workDir, "client.json"),
+				JSON.stringify({
+					base_url: "http://127.0.0.1:54322",
+					workspace_id: "00000000-0000-7000-8000-000000000001",
+					owner_id: "00000000-0000-7000-8000-000000000002",
+				}),
+			);
+			const result = await loadExtensions([extPath], repoRoot);
+			expect(result.errors).toEqual([]);
+			expect(result.extensions).toHaveLength(1);
+			const ext = result.extensions[0]!;
+			expect(ext.tools.has("work")).toBe(true);
+			const tool = ext.tools.get("work")!;
+			const parsed = tool.definition.parameters.safeParse({
+				action: "revise_work",
+				work: "OMP-1",
+				scope: "packages/core",
+				acceptance_criteria: ["AC-1 updated"],
+				expected_revision_id: "00000000-0000-7000-8000-000000000001",
+			});
+			expect(parsed.success).toBe(true);
+		} finally {
+			if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = oldXdg;
+			fs.rmSync(tempConfig, { recursive: true, force: true });
+		}
 	});
 });
