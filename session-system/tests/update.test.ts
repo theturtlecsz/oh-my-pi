@@ -271,29 +271,35 @@ describe("forbidden behavior", () => {
 });
 
 describe("live-mapping fence (OMP-157)", () => {
-	// The mapper prints "ready" only after mmap succeeds, then sleeps until the
+	// The mapper prints "ready <procfs-pid>" only after mmap succeeds, then sleeps until the
 	// test terminates it — awaiting that line awaits the real mapping event.
 	// With a "shield" argument it also sets PR_SET_DUMPABLE=0, making its maps
 	// kernel-unreadable to the fence (the owner-accepted carve-out class).
-	const MAPPER_SCRIPT = `import ctypes, mmap, sys, time
+	const MAPPER_SCRIPT = `import ctypes, mmap, os, sys, time
 f = open(sys.argv[1], "r+b")
 m = mmap.mmap(f.fileno(), 0)
+procfs_pid = os.path.basename(os.path.realpath("/proc/self"))
 if len(sys.argv) > 2 and sys.argv[2] == "shield":
     ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)
-print("ready", flush=True)
+print("ready " + procfs_pid, flush=True)
 time.sleep(600)
 `;
 
-	async function awaitReady(stdout: ReadableStream<Uint8Array>): Promise<void> {
+	async function awaitReady(stdout: ReadableStream<Uint8Array>): Promise<string> {
 		const reader = stdout.getReader();
 		const decoder = new TextDecoder();
 		let seen = "";
-		while (!seen.includes("ready")) {
+		while (!seen.includes("\n")) {
 			const { done, value } = await reader.read();
 			if (done) throw new Error(`mapper exited before signaling ready: ${JSON.stringify(seen)}`);
 			seen += decoder.decode(value, { stream: true });
 		}
 		reader.releaseLock();
+		// /proc can expose an outer PID namespace; Bun's child PID then differs
+		// from the PID that update.sh enumerates. Preserve exact mapper identity.
+		const match = /^ready ([1-9]\d*)\n/.exec(seen);
+		if (!match) throw new Error(`invalid mapper readiness response: ${JSON.stringify(seen)}`);
+		return match[1];
 	}
 
 	test.skipIf(process.platform !== "linux")(
@@ -316,11 +322,11 @@ time.sleep(600)
 				stderr: "ignore",
 			});
 			try {
-				await awaitReady(mapper.stdout);
+				const mapperProcfsPid = await awaitReady(mapper.stdout);
 				const refused = fx.runUpdate(fx.upstreamSha);
 				expect(refused.exitCode).toBe(1);
 				expect(refused.stderr).toContain(
-					`update.sh: refusing to mutate ${root} — live process ${mapper.pid} maps code from this checkout: python3 ${mapperPy} ${mappedReal}`,
+					`update.sh: refusing to mutate ${root} — live process ${mapperProcfsPid} maps code from this checkout: python3 ${mapperPy} ${mappedReal}`,
 				);
 				expect(refused.stderr).toContain(
 					"update.sh: run the upgrade from a session already on the stable build, then retry",
@@ -359,14 +365,14 @@ time.sleep(600)
 				stderr: "ignore",
 			});
 			try {
-				await awaitReady(mapper.stdout);
+				const mapperProcfsPid = await awaitReady(mapper.stdout);
 				// The shielded mapping is invisible by kernel policy: the fence
 				// warns, skips, and the full gate path runs — the accepted blind spot.
 				const result = fx.runUpdate(fx.upstreamSha);
 				expect(result.exitCode, result.stderr).toBe(0);
 				expect(result.stdout).toContain("all gates passed");
 				expect(result.stderr).toContain(
-					`update.sh: warning: skipping kernel-shielded same-owner process ${mapper.pid} — mappings not inspectable`,
+					`update.sh: warning: skipping kernel-shielded same-owner process ${mapperProcfsPid} — mappings not inspectable`,
 				);
 				const lines = fx.logLines();
 				expect(lines[0]).toBe("bun install --frozen-lockfile");

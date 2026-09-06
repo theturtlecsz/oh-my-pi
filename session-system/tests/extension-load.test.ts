@@ -41,4 +41,42 @@ describe("work-now extension vs current omp source", () => {
 			fs.rmSync(tempConfig, { recursive: true, force: true });
 		}
 	});
+
+	test("stays dormant with no errors when client.json is missing", async () => {
+		const tempConfig = fs.mkdtempSync(path.join(os.tmpdir(), "work-ext-dormant-"));
+		const oldXdg = process.env.XDG_CONFIG_HOME;
+		process.env.XDG_CONFIG_HOME = tempConfig;
+		try {
+			const result = await loadExtensions([extPath], repoRoot);
+			expect(result.errors).toEqual([]);
+			expect(result.extensions).toHaveLength(1);
+			expect(result.extensions[0]!.tools.has("work")).toBe(false);
+		} finally {
+			if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = oldXdg;
+			fs.rmSync(tempConfig, { recursive: true, force: true });
+		}
+	});
+
+	test("stays dormant with no errors when client.json is malformed", async () => {
+		const tempConfig = fs.mkdtempSync(path.join(os.tmpdir(), "work-ext-malformed-"));
+		const oldXdg = process.env.XDG_CONFIG_HOME;
+		process.env.XDG_CONFIG_HOME = tempConfig;
+		try {
+			const workDir = path.join(tempConfig, "omp-work");
+			fs.mkdirSync(workDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(workDir, "client.json"),
+				JSON.stringify({ base_url: "http://127.0.0.1:54322", workspace_id: "not-a-uuid", owner_id: "also-not-a-uuid" }),
+			);
+			const result = await loadExtensions([extPath], repoRoot);
+			expect(result.errors).toEqual([]);
+			expect(result.extensions).toHaveLength(1);
+			expect(result.extensions[0]!.tools.has("work")).toBe(false);
+		} finally {
+			if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = oldXdg;
+			fs.rmSync(tempConfig, { recursive: true, force: true });
+		}
+	});
 });

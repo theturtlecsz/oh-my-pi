@@ -95,6 +95,7 @@ const fastWorkspacePackages = [
 	"packages/snapcompact",
 	"packages/agent",
 	"packages/mnemopi",
+	"packages/work-client",
 ];
 
 // These suites cover the native package, TUI/browser-ish behavior, local servers,
@@ -209,6 +210,18 @@ function workspaceTestCommand(pkg: string, parallel: number, options: { extraArg
 		cwd: pkg,
 		command: ["bun", "test", ...extraArgs],
 		parallel,
+	};
+}
+
+// Workflow lifecycle tests use process-wide spies and real local Git fixtures.
+// Keep them serial and select only Bun test files; PostgreSQL/model smoke scripts
+// remain explicit commands in their supported integration jobs.
+function sessionSystemTestCommand(): TestCommand {
+	return {
+		label: "session-system/tests",
+		cwd: ".",
+		command: ["bun", "test", ...onlyFailuresArgs, "session-system/tests"],
+		parallel: 1,
 	};
 }
 
@@ -329,7 +342,7 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		case "workspace":
 			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
 		case "native":
-			return nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4));
+			return [...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4)), sessionSystemTestCommand()];
 		case "coding-agent-singleton":
 			return await codingAgentTestCommands("singleton");
 		case "coding-agent-ui":
@@ -360,6 +373,7 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			return [
 				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
 				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
+				sessionSystemTestCommand(),
 				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
 				...(await commandsForMode("coding-agent-heavy")),
 			];

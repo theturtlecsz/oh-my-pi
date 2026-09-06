@@ -561,6 +561,13 @@ export async function freezeCandidateCommit(
 						return refuse("failed", `execution freeze refused: binary file staged (${p})`, "error");
 					}
 				} catch (err) {
+					if (isEnoent(err)) {
+						// Deletions add no bytes to scan. Confirm the missing path is
+						// tracked and deleted; a vanished addition or dangling symlink
+						// must still fail closed. The staged diff is scanned below.
+						const deleted = runGit(root, ["--literal-pathspecs", "ls-files", "--deleted", "-z", "--", p]);
+						if (deleted.ok && deleted.raw === `${p}\0`) continue;
+					}
 					return refuse("failed", `execution freeze refused: unreadable file for credential scan (${p}): ${String(err)}`, "error");
 				}
 			}
@@ -808,9 +815,14 @@ export function requiredStatusCheckCount(root: string, defaultBranch?: string): 
 /** OMP-220: engine-driven delivery merge — the single sanctioned PR merge
  *  action (merge commit preserves the audited candidate SHA in ancestry;
  *  squash/rebase would rewrite it and break the completion gate). Branch
- *  protection still enforces required checks server-side. */
-export function mergePullRequest(root: string, branchName: string): { ok: boolean; detail: string } {
-	const r = spawnSync("gh", ["pr", "merge", branchName, "--merge"], { cwd: root, encoding: "utf8", timeout: 60_000 });
+ *  protection still enforces required checks server-side. Bind the merge
+ *  mutation itself to the audited head: a precheck cannot prevent a branch
+ *  update between verification and the server accepting the merge. */
+export function mergePullRequest(root: string, branchName: string, expectedHeadSha: string): { ok: boolean; detail: string } {
+	if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(expectedHeadSha)) {
+		return { ok: false, detail: "merge refused: expected audited head must be a full commit SHA" };
+	}
+	const r = spawnSync("gh", ["pr", "merge", branchName, "--merge", "--match-head-commit", expectedHeadSha], { cwd: root, encoding: "utf8", timeout: 60_000 });
 	const detail = `${r.stdout ?? ""}\n${r.stderr ?? (r.error ? r.error.message : "")}`.trim().split("\n")[0] || "gh pr merge";
 	return { ok: r.status === 0 && !r.error, detail };
 }

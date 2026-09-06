@@ -5,6 +5,7 @@
  * with no model-transport copy/paste, no agent loop recreation, and no
  * prompt-enforced budget prose.
  */
+import { completeSimple } from "@oh-my-pi/pi-ai";
 import { getAgentDir, Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -27,9 +28,12 @@ export type NativeAuditRunner = (
  * Fails before a ledger launch reservation unless all preconditions exist:
  * 1. Discovers the installed `auditor` agent definition.
  * 2. Resolves the `@audit` role through `ctx.models`.
- * 3. Loads effective settings for `ctx.cwd` / `getAgentDir()`.
+ * 3. Verifies provider credentials and live transport for the audit model
+ *    (OMP-251) — a minimal probe completion must not error, so transport
+ *    failures surface here instead of burning a reserved launch.
+ * 4. Loads effective settings for `ctx.cwd` / `getAgentDir()`.
  */
-export async function prepareNativeAuditRunner(ctx: ExtensionContext): Promise<NativeAuditRunner> {
+export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: AbortSignal): Promise<NativeAuditRunner> {
 	const discovery = await discoverAgents(ctx.cwd);
 	const agent = getAgent(discovery.agents, "auditor");
 	if (!agent) {
@@ -42,6 +46,42 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext): Promise<N
 	const auditModel = ctx.models.resolve("@audit");
 	if (!auditModel) {
 		throw new Error("Could not resolve @audit role — fix modelRoles.audit and retry");
+	}
+
+	// OMP-251: auditor transport preflight. Launch reservations are budgeted
+	// (3 per attempt); prove credentials + endpoint connectivity BEFORE the
+	// caller reserves one, so auth/network outages deny instead of burning
+	// the audit budget with transport_failed settlements.
+	const auditApiKey = await ctx.modelRegistry.getApiKey(auditModel, undefined, { signal });
+	if (auditApiKey === undefined) {
+		throw new Error(
+			`No provider credentials configured for @audit model ${auditModel.provider}/${auditModel.id} — authenticate the provider and retry`,
+		);
+	}
+	// pi-ai surfaces provider failures IN-BAND (stopReason "error"/"aborted" +
+	// errorMessage, content empty) — completeSimple normally does not throw,
+	// but synchronous dispatch/configuration failures still reject: qualify
+	// those with the audit model too, keeping cancellation errors untouched.
+	const probe = await completeSimple(
+		auditModel,
+		{ messages: [{ role: "user", content: "Transport preflight. Reply with the single word OK.", timestamp: Date.now() }] },
+		{
+			apiKey: auditApiKey,
+			maxTokens: 256,
+			temperature: 0,
+			disableReasoning: true,
+			signal,
+		},
+	).catch((error: unknown) => {
+		if (signal?.aborted) throw error;
+		throw new Error(
+			`@audit transport preflight failed for ${auditModel.provider}/${auditModel.id}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	});
+	if (probe.stopReason === "error" || probe.stopReason === "aborted") {
+		throw new Error(
+			`@audit transport preflight ${probe.stopReason} for ${auditModel.provider}/${auditModel.id}: ${probe.errorMessage || "provider returned no detail"}`,
+		);
 	}
 
 	const settings = await Settings.loadReadOnly({

@@ -2,11 +2,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
 import { WORK_CONTRACT_SHA256, type WorkClient } from "@oh-my-pi/pi-work-client";
-import { afterEach, describe, expect, test, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { z } from "zod";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type Model, AssistantMessageEventStream } from "@oh-my-pi/pi-ai";
+import * as ai from "@oh-my-pi/pi-ai";
 import { AgentSession, SessionManager, Settings, type ExtensionAPI, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
@@ -34,6 +35,39 @@ import {
 	renderSummaryResumeDigest,
 	resolveAnchorKey,
 } from "../extensions/workflow/host";
+
+// Host tests provide installed-agent discovery and isolated caches explicitly so
+// they do not depend on an existing OMP installation in the developer home.
+const fixtureCaches: string[] = [];
+function temporaryCacheFile(): string {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-auditor-cache-"));
+	fixtureCaches.push(dir);
+	return path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(dir, "cache.json"));
+}
+beforeEach(() => {
+	vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
+		agents: [{
+			name: "auditor",
+			description: "Auditor agent",
+			systemPrompt: "Audit prompt",
+			model: ["@audit"],
+			output: { properties: { report: { type: "string" } } },
+			source: "bundled",
+		}],
+		projectAgentsDir: null,
+	});
+	// OMP-251: prepareNativeAuditRunner now runs a live transport probe via
+	// completeSimple before any launch reservation — default it to success so
+	// existing preparation/host flows stay green without network access.
+	vi.spyOn(ai, "completeSimple").mockResolvedValue({
+		stopReason: "stop",
+		content: [{ type: "text", text: "OK" }],
+	} as never);
+});
+afterEach(() => {
+	vi.restoreAllMocks();
+	for (const dir of fixtureCaches.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 const identityExecutionWorkspaceManager = {
 	primaryRoot: async (cwd: string) => cwd,
@@ -117,6 +151,60 @@ describe("native auditor runner (OMP-168)", () => {
 		} as unknown as ExtensionContext;
 		const runner = await prepareNativeAuditRunner(fakeCtx);
 		expect(typeof runner).toBe("function");
+	});
+
+	test("prepareNativeAuditRunner fails before any probe when @audit credentials are missing (OMP-251)", async () => {
+		mockDiscovery();
+		const completeSpy = vi.spyOn(ai, "completeSimple");
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess");
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const fakeCtx = {
+			cwd: repoRoot,
+			models: { resolve: (role: string) => (role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined) },
+			modelRegistry: { getApiKey: () => Promise.resolve(undefined) },
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow("No provider credentials configured for @audit model openai/gpt-5.2");
+		expect(completeSpy).not.toHaveBeenCalled();
+		expect(runSubprocessSpy).not.toHaveBeenCalled();
+	});
+
+	test("prepareNativeAuditRunner fails when the transport probe reports an in-band provider error (OMP-251)", async () => {
+		mockDiscovery();
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "error",
+			errorMessage: "401 unauthorized",
+			content: [],
+		} as never);
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess");
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const fakeCtx = {
+			cwd: repoRoot,
+			models: { resolve: (role: string) => (role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined) },
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow(
+			"@audit transport preflight error for openai/gpt-5.2: 401 unauthorized",
+		);
+		expect(runSubprocessSpy).not.toHaveBeenCalled();
+	});
+
+	test("prepareNativeAuditRunner qualifies a rejected transport probe with the audit model (OMP-251)", async () => {
+		mockDiscovery();
+		vi.spyOn(ai, "completeSimple").mockRejectedValue(new Error("ECONNREFUSED 127.0.0.1:443"));
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess");
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const fakeCtx = {
+			cwd: repoRoot,
+			models: { resolve: (role: string) => (role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined) },
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow(
+			"@audit transport preflight failed for openai/gpt-5.2: ECONNREFUSED 127.0.0.1:443",
+		);
+		expect(runSubprocessSpy).not.toHaveBeenCalled();
 	});
 
 	test("runner returns started:false when cancelled before start", async () => {
@@ -334,6 +422,7 @@ describe("native auditor runner (OMP-168)", () => {
 	test("grant state guard denies remediation on stopped or canceled grants (OMP-186)", async () => {
 		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			zod: z,
 			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
 				if (spec.name === "work") registeredExecute = spec.execute;
@@ -349,7 +438,7 @@ describe("native auditor runner (OMP-168)", () => {
 		let getExecutionCallCount = 0;
 		let mockJudge = "judge-sha";
 		const mockBackend = {
-			cacheFile: "work-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
@@ -464,6 +553,7 @@ describe("native auditor runner (OMP-168)", () => {
 		const appendedRecords: Array<{ customType: string; data?: OutboxData }> = [];
 		let branchEntries: Array<{ type: "custom"; customType: string; data: OutboxData }> = [];
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
 			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
@@ -1196,6 +1286,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 	test("stop_execution tool action returns full closing notice with cause, tally, and next command", async () => {
 		let registeredExecute: ((id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }>) | undefined;
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			registerTool: (def: { execute: (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }> }) => {
 				registeredExecute = def.execute;
 			},
@@ -1213,7 +1304,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		]);
 
 		const mockBackend = {
-			cacheFile: "work-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
@@ -1257,6 +1348,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 	test("stamp_execution_plan in executing phase refuses unsealed dirty paths and allows clean re-planning", async () => {
 		let registeredExecute: ((id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }>) | undefined;
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			registerTool: (def: { execute: (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }> }) => {
 				registeredExecute = def.execute;
 			},
@@ -1280,7 +1372,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 
 		let stampedPaths: string[] = [];
 		const mockBackend = {
-			cacheFile: "work-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
@@ -1444,6 +1536,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const statuses: Record<string, string> = {};
 		const notifications: string[] = [];
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
 			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
@@ -1467,7 +1560,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		], "candidate_drift gate defect filed as OMP-195");
 
 		const mockBackend = {
-			cacheFile: "work-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
@@ -1541,6 +1634,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<void>>>();
 		const statuses: Record<string, string> = {};
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
 			registerCommand: () => {},
@@ -1557,7 +1651,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		} as unknown as ExtensionAPI;
 
 		const mockBackend = {
-			cacheFile: "work-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
@@ -1608,6 +1702,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const notifications: string[] = [];
 		const appended: string[] = [];
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
 			registerCommand: () => {},
@@ -1769,6 +1864,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const messages: Array<{ customType?: string; content?: string }> = [];
 		const notifications: string[] = [];
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
 			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
@@ -1796,7 +1892,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		exec.activeItem!.current_git_baseline = head;
 
 		const mockBackend = {
-			cacheFile: "work-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
@@ -1861,6 +1957,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const notifications: string[] = [];
 		const statuses: Record<string, string> = {};
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
 			registerCommand: () => {},
@@ -1890,7 +1987,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		exec.activeItem!.current_git_baseline = head;
 
 		const mockBackend = {
-			cacheFile: "work-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
@@ -2008,6 +2105,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		const repo = makeTempRepo();
 		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			zod: z,
 			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
 				if (spec.name === "work") registeredExecute = spec.execute;
@@ -2221,10 +2319,215 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		}
 	});
 
+	test("autonomous review cancels the reserved launch instead of settling when the auditor never starts (OMP-251)", async () => {
+		const repo = makeTempRepo();
+		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			zod: z,
+			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
+				if (spec.name === "work") registeredExecute = spec.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			appendEntry: () => {},
+		} as unknown as ExtensionAPI;
+
+		// Modify sealed python file in real git repo
+		fs.writeFileSync(path.join(repo.dir, "python/omp-work/src/omp_work/v1/store.py"), "# modified source\n");
+
+		const callLog: string[] = [];
+		const exec: ExecutionSnapshot = {
+			grant: {
+				grant_id: "grant-251",
+				workspace_id: "ws-1",
+				owner_id: "owner-1",
+				repository: repo.dir,
+				remote_ref: "refs/heads/main",
+				state: "active",
+				mode: "single",
+				grant_version: 3,
+				max_continuations: 8,
+				max_close_attempts: 5,
+				max_no_progress: 3,
+				continuations_scheduled: 0,
+				authorization_hash: "auth-hash",
+				judge_sha256: "old-judge-sha-00000000000000000000000000000000000000000000000000000000",
+				created_at: new Date().toISOString(),
+				expires_at: new Date(Date.now() + 86400000).toISOString(),
+			},
+			items: [
+				{
+					item_id: "item-251",
+					workspace_id: "ws-1",
+					grant_id: "grant-251",
+					work_id: "uuid-251",
+					position: 0,
+					phase: "executing",
+					claimed_revision_id: "rev-1",
+					original_request: "test request",
+					original_request_sha256: "0".repeat(64),
+					criteria_sha256: "0".repeat(64),
+					plan_stamp_sha256: "0".repeat(64),
+					plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-251" },
+					close_attempts_started: 0,
+					consecutive_no_progress: 0,
+					initial_git_baseline: repo.headSha,
+					current_git_baseline: repo.headSha,
+				},
+			],
+			activeItem: {
+				item_id: "item-251",
+				workspace_id: "ws-1",
+				grant_id: "grant-251",
+				work_id: "uuid-251",
+				position: 0,
+				phase: "executing",
+				claimed_revision_id: "rev-1",
+				original_request: "test request",
+				original_request_sha256: "0".repeat(64),
+				criteria_sha256: "0".repeat(64),
+				plan_stamp_sha256: "0".repeat(64),
+				plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-251" },
+				close_attempts_started: 0,
+				consecutive_no_progress: 0,
+				initial_git_baseline: repo.headSha,
+				current_git_baseline: repo.headSha,
+			},
+		};
+
+		const mockBackend = {
+			cacheFile: repo.cacheFile,
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-251", key: "OMP-251", title: "Test 251", project: "The Bookends" }),
+			issueDetail: async () => ({ key: "OMP-251", attemptSnapshot: undefined }),
+			getExecution: async () => exec,
+			setExecutionState: async (input: { grantId: string; expectedGrantVersion: number; targetState: string; reason?: string | null; judgeSha256: string }) => {
+				callLog.push(`setExecutionState:${input.reason}`);
+				exec.grant.grant_version++;
+				exec.grant.judge_sha256 = input.judgeSha256;
+				return exec;
+			},
+			finalizeExecutionCandidate: async () => {
+				callLog.push("finalizeExecutionCandidate");
+				return { candidate_id: "cand-251", candidate_sha256: "cand-sha", commit_sha: "1".repeat(40) };
+			},
+			appendEvidence: async (_issue: unknown, kind: string) => {
+				callLog.push(`appendEvidence:${kind}`);
+				return { receipt_id: "receipt-251" };
+			},
+			beginCloseAttempt: async () => {
+				callLog.push("beginCloseAttempt");
+				return { status: "applied", attemptId: "att-251", event: { requiresDelivery: false } };
+			},
+			sealAuditManifest: async () => {
+				callLog.push("sealAuditManifest");
+				return { status: "applied" };
+			},
+			sealedAuditTask: async () => ({ taskSha256: "task-sha", taskBody: "task body" }),
+			reserveAuditorLaunch: async () => {
+				callLog.push("reserveAuditorLaunch");
+				return { status: "reserved", launchId: "launch-251" };
+			},
+			cancelAuditorLaunch: async (_key: string, launchId: string) => {
+				callLog.push(`cancelAuditorLaunch:${launchId}`);
+				return { status: "applied", event: { requiresDelivery: false, renderedText: "launch cancelled" } };
+			},
+			settleAuditorLaunch: async () => {
+				callLog.push("settleAuditorLaunch");
+				return { verdict: "PASS", event: { renderedText: "PASS" } };
+			},
+			recordCloseoutReview: async () => {
+				callLog.push("recordCloseoutReview");
+				return { status: "applied" };
+			},
+			completeExecutionItem: async () => {
+				callLog.push("completeExecutionItem");
+				return exec;
+			},
+			workClient: {
+				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "prospective-fp-251", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workflow: async () => ({ receipts: [], auditor_launches: [], item: null, close_attempts: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		const restartMock = vi.fn(async () => {
+			callLog.push("restartWorkService");
+		});
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+			restartWorkService: restartMock,
+		})(fakePi);
+
+		expect(registeredExecute).toBeDefined();
+
+		mockDiscovery();
+		// The auditor subprocess never dispatches a model request (requests: 0).
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0,
+			id: "att-251",
+			agent: "auditor",
+			agentSource: "bundled",
+			task: "task",
+			exitCode: 1,
+			output: "",
+			stderr: "",
+			truncated: false,
+			durationMs: 10,
+			tokens: 0,
+			requests: 0,
+			error: "transport dispatch failed",
+		} as executorModule.SingleResult);
+
+		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/execution/omp-251", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
+		vi.spyOn(gitModule, "verifyMergeConfirmation").mockReturnValue({ confirmed: true, detail: "PR merged and origin/main contains candidate" });
+		vi.spyOn(gitModule, "rangeDiffSha256").mockReturnValue("diff-sha-251");
+
+		const fakeCtx = {
+			cwd: repo.dir,
+			taskDepth: 0,
+			sessionManager: { getBranch: () => [] },
+			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			ui: {
+				notify: () => {},
+				theme: { fg: (_c: string, t: string) => t },
+				setStatus: () => {},
+			},
+		} as unknown as ExtensionContext;
+
+		try {
+			const res = await registeredExecute!("call-1", {
+				action: "begin_execution_review",
+				work: "OMP-251",
+				body: "pytest passed: 53 passed",
+			}, new AbortController().signal, () => {}, fakeCtx);
+
+			expect(res.content[0]?.text).toContain("Auditor launch failed before start: transport dispatch failed");
+			expect(callLog).toContain("reserveAuditorLaunch");
+			expect(callLog).toContain("cancelAuditorLaunch:launch-251");
+			expect(callLog).not.toContain("settleAuditorLaunch");
+			expect(callLog).not.toContain("completeExecutionItem");
+		} finally {
+			repo.cleanup();
+		}
+	});
+
 	test("service refresh refusal cases perform zero freeze, push, or audit calls", async () => {
 		const repo = makeTempRepo();
 		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			zod: z,
 			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
 				if (spec.name === "work") registeredExecute = spec.execute;
@@ -2487,6 +2790,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		const sentMessages: Array<{ customType?: string; content?: string }> = [];
 		const appendedEntries: string[] = [];
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			zod: z,
 			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
 				if (spec.name === "work") registeredExecute = spec.execute;
@@ -2734,6 +3038,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 	test("binds dedicated execution branch ref when starting on default branch main", async () => {
 		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			zod: z,
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
@@ -2749,7 +3054,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 
 		let capturedRemoteRef: string | undefined;
 		const mockBackend = {
-			cacheFile: "test-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			workspaceId: "ws-1",
@@ -2824,6 +3129,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
 		let registeredExecuteTool: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: (update: unknown) => void, ctx: ExtensionContext) => Promise<{ content: Array<{ type: "text"; text: string }> }>) | undefined;
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			zod: z,
 			registerTool: (def: { name: string; execute: typeof registeredExecuteTool }) => {
 				if (def.name === "work") registeredExecuteTool = def.execute;
@@ -2903,7 +3209,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 		};
 
 		const mockBackend = {
-			cacheFile: "test-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			workspaceId: "ws-1",
@@ -3056,6 +3362,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 	test("refuses admission when HEAD is behind the origin default tip", async () => {
 		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			zod: z,
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
@@ -3070,7 +3377,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 		} as unknown as ExtensionAPI;
 		let beginCalled = false;
 		const mockBackend = {
-			cacheFile: "test-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			workspaceId: "ws-1",
@@ -3126,6 +3433,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 	test("refuses admission when branch protection has zero required status checks", async () => {
 		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
 		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			zod: z,
 			registerTool: () => {},
 			registerMessageRenderer: () => {},
@@ -3140,7 +3448,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 		} as unknown as ExtensionAPI;
 		let beginCalled = false;
 		const mockBackend = {
-			cacheFile: "test-cache.json",
+			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			workspaceId: "ws-1",

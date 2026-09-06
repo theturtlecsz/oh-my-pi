@@ -390,7 +390,7 @@ jobs:
               name: native-addons
               path: bazel-bin/natives-*/*.node
               if-no-files-found: error
-              retention-days: 1
+              retention-days: 7
 
    test_workspace:
       name: Test TS workspace fast
@@ -552,8 +552,9 @@ jobs:
          needs.test_coding_agent_runtime.result == 'success' &&
          needs.test_coding_agent_native.result == 'success' &&
          needs.test_smoke.result == 'success' && needs.check.result == 'success' &&
+         needs.work_ledger_postgres.result == 'success' &&
          needs.install_methods.result == 'success' }}
-      needs: [release_metadata, check, rust_validate, native_addons, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods]
+      needs: [release_metadata, check, rust_validate, native_addons, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods, work_ledger_postgres]
       runs-on: ubuntu-22.04
       steps:
          - uses: actions/checkout@v4
@@ -751,7 +752,7 @@ jobs:
               name: native-addons-${{ matrix.target_id }}
               path: packages/natives/native/pi_natives.${{ matrix.target_id }}*.node
               if-no-files-found: error
-              retention-days: 1
+              retention-days: 7
          - name: Upload release binary artifact
            uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
            with:
@@ -1036,6 +1037,8 @@ jobs:
                 sudo apt-get install -y postgresql-18 postgresql-client-18
               fi
               echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+         - name: Run Work Ledger unit tests
+           run: uv run --project python/omp-work --extra dev pytest python/omp-work/tests
          - name: Run PostgreSQL integration
            run: bun run test:py:work-ledger:integration
          - name: Run session candidate smoke

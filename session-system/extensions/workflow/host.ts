@@ -2016,7 +2016,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 				const exec = await backend.getExecution();
 				if (exec && exec.grant.state === "active") {
 					ctx.abort();
-					const tcb = await computeAuditTcb(ctx, backend.workClient!);
+					// Pausing must remain available when development breaks the auditor.
+					// The existing grant identity authorizes this halt; resume revalidates the judge.
 					await backend.setExecutionState({
 						grantId: exec.grant.grant_id,
 						expectedGrantVersion: exec.grant.grant_version,
@@ -2645,13 +2646,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 						ctx.ui.notify("No execution grant found to cancel", "error");
 						return;
 					}
-					const tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
 					const updated = await backend.setExecutionState({
 						grantId: exec.grant.grant_id,
 						expectedGrantVersion: exec.grant.grant_version,
 						targetState: "canceled",
 						reason: "owner_cancel",
-						judgeSha256: tcb.judgeSha256,
+						judgeSha256: exec.grant.judge_sha256,
 					});
 					const postExec: ExecutionSnapshot = {
 						grant: updated.grant,
@@ -3054,7 +3054,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 							let runner: NativeAuditRunner;
 							try {
-								runner = await prepareNativeAuditRunner(ctx);
+								runner = await prepareNativeAuditRunner(ctx, _signal);
 							} catch (error) {
 								return deny(`REFUSED — auditor runner preparation failed: ${error instanceof Error ? error.message : String(error)}`);
 							}
@@ -3793,7 +3793,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										return deny(`Seal audit manifest refused: ${sealOutcome.event.renderedText}`);
 									}
 								}
-								const runner = await prepareNativeAuditRunner(ctx);
+								const runner = await prepareNativeAuditRunner(ctx, _signal);
 								const sealedTask = await backend.sealedAuditTask(targetIssue.key);
 								if (!sealedTask) return deny("sealed audit task missing");
 								const resv = await backend.reserveAuditorLaunch(targetIssue.key, sealedTask.taskSha256, _id);
@@ -3801,10 +3801,28 @@ export function createWorkflowHost(cfg: HostConfig) {
 									return deny(`Reserve launch refused: ${resv.event.renderedText}`);
 								}
 								const auditRun = await runner(sealedTask.taskBody, attemptId, _signal);
-								const settle = await backend.settleAuditorLaunch(targetIssue.key, resv.launchId, {
-									payload: auditRun.payload,
-									failed: !auditRun.started || Boolean(auditRun.error && !auditRun.payload),
-								});
+								if (!auditRun.started) {
+									// OMP-251: the auditor never dispatched a model request —
+									// cancel the reservation (cancelled launches do not count
+									// against the 3-launch audit budget) instead of settling a
+									// budget-burning transport_failed launch.
+									try {
+										const cancelOutcome = await backend.cancelAuditorLaunch(targetIssue.key, resv.launchId);
+										if (cancelOutcome.event?.requiresDelivery) {
+											queueCheckpointDelivery(pi, backend, cancelOutcome.event, notice => {
+												pendingNotices.push(`[${TOOL_NAME}] cancel checkpoint delivery failed (${notice})`);
+											});
+										}
+									} catch {
+										// cancel failed — the stranded-launch resume path recovers it
+									}
+									return deny(`Auditor launch failed before start: ${auditRun.error ?? "runner cancelled before dispatch"}`);
+								}
+								const settle = await backend.settleAuditorLaunch(
+									targetIssue.key,
+									resv.launchId,
+									auditRun.payload && auditRun.payload.trim().length > 0 ? { payload: auditRun.payload } : { failed: true },
+								);
 								if (settle.verdict === "NEEDS_FIX" || settle.verdict === "BLOCKED") {
 									// Remediation is not delivery-gated: queue the settlement
 									// checkpoint and hand findings back in the same response.
@@ -3858,10 +3876,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 								if (!mergeCheck.confirmed && mergeCheck.detail?.includes("expected MERGED")) {
 									// OMP-220: engine-driven delivery merge — the single sanctioned
 									// PR merge action; branch protection enforces required checks
-									// server-side, and the head-OID binding above guarantees only
-									// the audited candidate can be merged this way.
+									// server-side. Bind the merge itself to the audited head so a
+									// branch update after the precheck cannot merge other code.
 									const deliveryBranch = remoteRef.startsWith("refs/heads/") ? remoteRef.slice("refs/heads/".length) : remoteRef;
-									const merged = mergePullRequest(ctx.cwd, deliveryBranch);
+									const merged = mergePullRequest(ctx.cwd, deliveryBranch, candidateCommit);
 									ctx.ui.notify(
 										merged.ok ? `delivery PR merged by engine: ${deliveryBranch}` : `engine PR merge failed: ${merged.detail}`,
 										merged.ok ? "info" : "warning",
@@ -4097,14 +4115,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 						case "stop_execution": {
 							const exec = await backend.getExecution(params.work);
 							if (!exec) return deny("no active execution grant found");
-							const tcb = await computeAuditTcb(ctx, backend.workClient!);
 							const reason = params.body ?? "model_stopped";
 							const updated = await backend.setExecutionState({
 								grantId: exec.grant.grant_id,
 								expectedGrantVersion: exec.grant.grant_version,
 								targetState: "stopped",
 								reason,
-								judgeSha256: tcb.judgeSha256,
+								judgeSha256: exec.grant.judge_sha256,
 							});
 							const postExec: ExecutionSnapshot = {
 								grant: updated.grant,
