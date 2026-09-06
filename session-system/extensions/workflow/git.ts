@@ -410,27 +410,79 @@ export interface FreezeUi {
 	notify(msg: string, level?: "info" | "warning" | "error"): void;
 }
 
+/** Strict NUL-separated path decoder with fatal UTF-8 decoding. */
+function decodeNulPaths(bytes: Uint8Array, contextLabel: string): string[] {
+	const decoder = new TextDecoder("utf-8", { fatal: true });
+	const paths: string[] = [];
+	let start = 0;
+	for (let i = 0; i <= bytes.length; i++) {
+		if (i !== bytes.length && bytes[i] !== 0) continue;
+		if (i > start) {
+			try {
+				paths.push(decoder.decode(bytes.subarray(start, i)));
+			} catch {
+				throw new Error(`candidate refused — non-UTF-8 path name in ${contextLabel}`);
+			}
+		}
+		start = i + 1;
+	}
+	return paths;
+}
+
 /** The commit's complete file list, exactly as stored. -z gives raw unquoted
  *  bytes; each path is decoded with a fatal UTF-8 decoder — a non-UTF-8 path
  *  name refuses the candidate (decision 0004 item 6). */
 function committedPaths(root: string, commitSha: string): string[] {
 	const out = runGitRaw(root, ["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-z", commitSha]);
 	if (!out.ok) throw new Error(`git diff-tree failed: ${out.err.split("\n")[0]}`);
-	const decoder = new TextDecoder("utf-8", { fatal: true });
-	const paths: string[] = [];
-	let start = 0;
-	for (let i = 0; i <= out.stdout.length; i++) {
-		if (i !== out.stdout.length && out.stdout[i] !== 0) continue;
-		if (i > start) {
-			try {
-				paths.push(decoder.decode(out.stdout.subarray(start, i)));
-			} catch {
-				throw new Error(`candidate refused — non-UTF-8 path name in commit ${commitSha.slice(0, 12)}`);
-			}
-		}
-		start = i + 1;
+	return decodeNulPaths(out.stdout, `commit ${commitSha.slice(0, 12)}`);
+}
+
+/** OMP-222: bind an approved commit SHA to plan-sealed paths, validating that
+ *  every sealed path exists as an exact file in that commit's tree. */
+export function sealedSnapshotCandidate(
+	root: string,
+	commitSha: string,
+	paths: readonly string[],
+): CandidateFreeze {
+	if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commitSha)) {
+		throw new Error(`commit_sha must be a full lowercase hex object id (40 or 64 chars): ${commitSha}`);
 	}
-	return paths;
+	const check = validateExecutionPaths(paths, root);
+	if (!check.valid) {
+		throw new Error(`invalid sealed path in candidate: ${check.error}`);
+	}
+	if (check.normalized.length === 0) {
+		throw new Error("candidate path set must not be empty");
+	}
+	const out = runGitRaw(root, [
+		"--literal-pathspecs",
+		"ls-tree",
+		"-r",
+		"-z",
+		"--name-only",
+		"--full-tree",
+		commitSha,
+		"--",
+		...check.normalized,
+	]);
+	if (!out.ok) {
+		throw new Error(`git ls-tree failed for commit ${commitSha.slice(0, 12)}: ${out.err.split("\n")[0]}`);
+	}
+	const treePaths = decodeNulPaths(out.stdout, `commit ${commitSha.slice(0, 12)}`);
+	const treeSet = new Set(treePaths);
+	const missing = check.normalized.filter(p => !treeSet.has(p));
+	if (missing.length > 0) {
+		throw new Error(
+			`approved commit ${commitSha.slice(0, 12)} is missing sealed path(s): ${missing.join(", ")}`,
+		);
+	}
+	return {
+		root,
+		paths: check.normalized,
+		commitSha,
+		candidateSha256: candidateSha256(commitSha, check.normalized, "sealed-snapshot"),
+	};
 }
 
 /** Complete path list for owner confirmation — every path, control characters
@@ -483,7 +535,13 @@ export async function freezeCandidateCommit(
 	key: string,
 	candidateId: string,
 	preExistingDirtyPaths: readonly string[] = [],
-	options: { mode?: "manual" | "execution"; sealedPaths?: readonly string[]; expectedBaseline?: string; biomeRunner?: BiomeRunner } = {},
+	options: {
+		mode?: "manual" | "execution";
+		sealedPaths?: readonly string[];
+		expectedBaseline?: string;
+		approvedSnapshot?: { commitSha: string; paths: readonly string[] };
+		biomeRunner?: BiomeRunner;
+	} = {},
 ): Promise<FreezeOutcome> {
 	const refuse = (refused: FreezeRefusal["refused"], reason: string, level: "info" | "warning" | "error" = "warning"): FreezeRefusal => {
 		ui.notify(reason, level);
@@ -538,14 +596,16 @@ export async function freezeCandidateCommit(
 					const paths = committedPaths(root, headSha);
 					return { root, paths, commitSha: headSha, candidateSha256: candidateSha256(headSha, paths) };
 				}
-				// OMP-188: already-delivered baseline. Adoption is legal ONLY when
+				// OMP-188 / OMP-222: already-delivered baseline. Adoption is legal ONLY when
 				// the caller proves the grant baseline and clean HEAD still equals
 				// it — a clean foreign commit is never adopted as a candidate.
 				// Callers that pass no expectedBaseline stay fail-closed.
 				if (options.expectedBaseline && headSha === options.expectedBaseline) {
+					if (!options.sealedPaths || options.sealedPaths.length === 0) {
+						return refuse("failed", "execution freeze refused: empty sealed path set cannot bind already-delivered candidate", "error");
+					}
 					ui.notify(`execution freeze: sealed paths are unchanged — binding grant baseline HEAD ${headSha.slice(0, 12)} as the candidate (already-delivered path; the audit decides completion)`, "info");
-					const paths = committedPaths(root, headSha);
-					return { root, paths, commitSha: headSha, candidateSha256: candidateSha256(headSha, paths) };
+					return sealedSnapshotCandidate(root, headSha, options.sealedPaths);
 				}
 				return refuse(
 					"failed",
@@ -654,6 +714,19 @@ export async function freezeCandidateCommit(
 				ui.notify(`reusing the existing candidate commit ${headSha.slice(0, 12)} for ${key}`, "info");
 				return { root, paths, commitSha: headSha, candidateSha256: candidateSha256(headSha, paths) };
 			}
+			if (options.approvedSnapshot && options.approvedSnapshot.paths.length > 0) {
+				const approvedSha = options.approvedSnapshot.commitSha;
+				const details = [
+					`approved snapshot: ${approvedSha.slice(0, 12)}`,
+					`current HEAD: ${headSha ? headSha.slice(0, 12) : "none"} ${headLines[0] ?? ""}`,
+					leftAlone ? `${leftAlone} — these dirty paths will NOT be part of the candidate` : "",
+					`sealed paths:\n${listPaths(options.approvedSnapshot.paths)}`,
+				].filter(Boolean).join("\n\n");
+				const yes = await ui.confirm(`Use approved snapshot ${approvedSha.slice(0, 12)} as the candidate for ${key}?`, details);
+				if (!yes) return refuse("declined", `freeze declined — approved snapshot not adopted as the ${key} candidate; /summary stays blocked`);
+				ui.notify(`using approved snapshot ${approvedSha.slice(0, 12)} as the candidate for ${key}`, "info");
+				return sealedSnapshotCandidate(root, approvedSha, options.approvedSnapshot.paths);
+			}
 			if (!headSha) return refuse("nothing", `nothing to freeze${leftAlone ? ` — ${leftAlone}` : ""}`, "info");
 			const paths = committedPaths(root, headSha);
 			const details = [
@@ -720,7 +793,8 @@ export async function freezeCandidateCommit(
 		const paths = committedPaths(root, commitSha);
 		return { root, paths, commitSha, candidateSha256: candidateSha256(commitSha, paths) };
 	} catch (e) {
-		return refuse("failed", `candidate freeze failed: ${String(e)}`, "error");
+		const msg = e instanceof Error ? e.message : String(e);
+		return refuse("failed", `candidate freeze failed: ${msg}`, "error");
 	}
 }
 

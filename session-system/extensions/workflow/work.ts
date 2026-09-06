@@ -11,7 +11,6 @@ import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import {
 	type Candidate,
-	candidateSha256,
 	type CloseAttempt,
 	type CloseAttemptEvent,
 	type Command,
@@ -288,6 +287,9 @@ export function buildPlanPacket(view: WorkflowView): PlanPacket | undefined {
 			Array.isArray(plan.payload.base_dirty_paths) && plan.payload.base_dirty_paths.every(path => typeof path === "string")
 				? [...plan.payload.base_dirty_paths]
 				: undefined,
+		...(Array.isArray(plan.payload.paths) && plan.payload.paths.every(path => typeof path === "string")
+			? { paths: [...plan.payload.paths] }
+			: {}),
 	};
 	if (bytes > PLAN_PACKET_MAX_BYTES) {
 		return { ...base, acceptanceCriteria: [], capped: { bytes, max: PLAN_PACKET_MAX_BYTES } };
@@ -1042,6 +1044,7 @@ export function createWorkBackend(
 				verification: stamp.verification,
 				...(stamp.baseCommit ? { base_commit: stamp.baseCommit } : {}),
 				...(stamp.baseDirtyPaths ? { base_dirty_paths: stamp.baseDirtyPaths } : {}),
+				...(stamp.paths ? { paths: stamp.paths } : {}),
 			};
 			const planReceipt: EvidenceReceipt = {
 				receipt_id: stableId("receipt", candidateId, "plan", payloadHash(payload)),
@@ -1369,16 +1372,24 @@ export function createWorkBackend(
 			if (!plannedPacket?.baseCommit || plannedPacket.baseDirtyPaths === undefined) {
 				return { ok: false, reason: "The approved plan predates audit-range binding. Re-enter /plan to restamp it before /summary." };
 			}
-			const freeze = await freezeCandidateCommit(hooks.ui, hooks.cwd, now.key, current.candidate_id, plannedPacket.baseDirtyPaths);
+			const freeze = await freezeCandidateCommit(
+				hooks.ui,
+				hooks.cwd,
+				now.key,
+				current.candidate_id,
+				plannedPacket.baseDirtyPaths,
+				plannedPacket.paths && plannedPacket.paths.length > 0
+					? { approvedSnapshot: { commitSha: plannedPacket.baseCommit, paths: plannedPacket.paths } }
+					: {},
+			);
 			if ("refused" in freeze) return { ok: false, reason: freeze.reason };
 			const candidateId = stableId("final-candidate", item.work_id, item.revision.revision_id, current.candidate_id, freeze.commitSha);
-			const frozenSha = candidateSha256(freeze.commitSha, freeze.paths);
 			const finalized = await run("finalize_candidate", {
 				work_id: item.work_id,
 				revision_id: item.revision.revision_id,
 				planned_candidate_id: current.candidate_id,
 				candidate_id: candidateId,
-				candidate_sha256: frozenSha,
+				candidate_sha256: freeze.candidateSha256,
 				commit_sha: freeze.commitSha,
 			});
 			const push = await pushAndRecordCandidate(now, freeze.commitSha, hooks);

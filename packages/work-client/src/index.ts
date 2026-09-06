@@ -32,11 +32,20 @@ export function payloadHash(value: unknown): string {
 	return sha256Hex(canonicalJson(value));
 }
 
+export type CandidatePathBasis = "commit-diff" | "sealed-snapshot";
+
 /** Canonical candidate hash, pinned by decision 0004 + contracts/v1/candidate-hash.json.
  *  Mirrors canonical.py candidate_sha256 exactly: byte-order path sort, and refusal of
  *  empty sets, duplicates, `./`, trailing slash, backslash, `//`, and control chars.
  *  Non-UTF-8 path names must be refused BEFORE this runs (git.ts committedPaths). */
-export function candidateSha256(commitSha: string, paths: string[]): string {
+export function candidateSha256(
+	commitSha: string,
+	paths: string[],
+	pathBasis: CandidatePathBasis = "commit-diff",
+): string {
+	if (pathBasis !== "commit-diff" && pathBasis !== "sealed-snapshot") {
+		throw new Error(`unknown candidate path basis: ${String(pathBasis)}`);
+	}
 	if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commitSha))
 		throw new Error("commit_sha must be a full lowercase hex object id (40 or 64 chars)");
 	const utf8 = new TextEncoder();
@@ -58,7 +67,15 @@ export function candidateSha256(commitSha: string, paths: string[]): string {
 		if (path === previous) throw new Error(`duplicate candidate path: ${path}`);
 		previous = path;
 	}
-	return payloadHash({ algorithm: "work.omp.dev/v1/candidate-sha256", commit_sha: commitSha, paths: ordered });
+	const payload: Record<string, unknown> = {
+		algorithm: "work.omp.dev/v1/candidate-sha256",
+		commit_sha: commitSha,
+		paths: ordered,
+	};
+	if (pathBasis === "sealed-snapshot") {
+		payload.path_basis = "sealed-snapshot";
+	}
+	return payloadHash(payload);
 }
 
 // ---- receipts + shared entities ----

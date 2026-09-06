@@ -37,6 +37,20 @@
         "ü/naïve.ts"
       ],
       "candidate_sha256": "bad7f1a173064a31aa46b3bd0206e95eac016a57c0764e3b382873649cc33962"
+    },
+    {
+      "name": "sealed-snapshot-unsorted",
+      "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "path_basis": "sealed-snapshot",
+      "paths": [
+        "src/b.ts",
+        "src/a.ts"
+      ],
+      "paths_sorted": [
+        "src/a.ts",
+        "src/b.ts"
+      ],
+      "candidate_sha256": "b58d8a7f82fc9814a9533bb841d2fc0f98b8af6a8efba96897a9560248389d4c"
     }
   ]
 }

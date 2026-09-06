@@ -131,6 +131,8 @@ export interface PlanPacket {
 	acceptanceCriteria: string[];
 	/** Present ⇒ body + criteria exceeded the ceiling and were withheld. */
 	capped?: { bytes: number; max: number };
+	/** Structured sealed paths parsed from plan ## Paths; absent when omitted. */
+	paths?: string[];
 }
 
 export interface BackendIssue {
@@ -397,6 +399,8 @@ export interface PlanStamp {
 	baseCommit?: string;
 	/** Dirty paths present at plan approval. */
 	baseDirtyPaths?: string[];
+	/** Structured plan paths parsed from ## Paths. */
+	paths?: string[];
 }
 export interface BatchEntry {
 	title: string;

@@ -7,11 +7,11 @@ import { ExtensionRunner, getAgentDir, loadExtensions, type ExtensionContext } f
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { confirmRoundTrip } from "./two-phase";
 import { currentTranscriptRef } from "../../extensions/workflow/transcript";
-import { createWorkBackend } from "../../extensions/workflow/work";
+import { buildPlanPacket, createWorkBackend } from "../../extensions/workflow/work";
 import { riderBatchPath } from "../../extensions/workflow/rider-batch";
 const probe = process.argv[2];
 const mode = process.argv[3];
-const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-final-reuse", "summary-begin-refused", "summary-refusal-durable", "summary-rider-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger-reads", "ledger-reads-subagent", "closeout-pending-recovery", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
+const MODES = ["intake", "plan", "plan-now-change", "summary", "summary-subagent", "summary-reauth", "summary-push-fail", "summary-stale-final", "summary-final-reuse", "summary-sealed-snapshot", "summary-begin-refused", "summary-refusal-durable", "summary-rider-refusal-durable", "stop-continuation-states", "atomic-child", "done", "done-cancel", "done-cancel-decline", "footer", "audit", "restore", "now-canceled", "center", "center-scoped", "center-stale", "triage-questions", "ledger-reads", "ledger-reads-subagent", "closeout-pending-recovery", "ledger", "descriptions", "omp140-audit-states", "omp140-restart-flow", "omp140-failed-checkpoint", "omp140-terminal-guidance"];
 if (!probe || !mode || !MODES.includes(mode)) throw new Error(`usage: harness <probe-repo> ${MODES.join("|")}`);
 // OMP-25 scoped centering: the marker must exist before the extension loads.
 if (mode === "center-scoped") fs.writeFileSync(path.join(probe, ".work-project"), "The Bookends\n");
@@ -535,7 +535,7 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 				candidate_id: finalCandId,
 				work_id: it.work_id,
 				revision_id: it.revision.revision_id,
-				candidate_sha256: "0".repeat(64),
+				candidate_sha256: (payload.candidate_sha256 as string) ?? "0".repeat(64),
 				commit_sha: commitSha,
 				kind: "final" as const,
 				allocated_at: new Date().toISOString(),
@@ -982,7 +982,7 @@ async function setNow(): Promise<void> {
 // OMP-155: content the old summary rebuild dropped — a nested bullet, an
 // extra section, and a multibyte character — must survive in the receipt.
 const planA =
-	"# Work\n\n## Approach\n1. Change the shared path\n   - nested detail the summary dropped\n\n## Verification\n1. Run the focused check\n\n## Assumptions & contingencies\n- café rollback stays reversible\n";
+	"# Work\n\n## Approach\n1. Change the shared path\n   - nested detail the summary dropped\n\n## Verification\n1. Run the focused check\n\n## Paths\n- init.txt\n\n## Assumptions & contingencies\n- café rollback stays reversible\n";
 const planB = `${planA}2. Run the smoke path\n`;
 async function approve(content: string): Promise<{ cancel: boolean; reason?: string }> {
 	const result = await runner.emit({
@@ -1259,6 +1259,12 @@ if (mode === "intake") {
 	out.commentsAfterFirst = comments.length;
 	out.submittedPlan = planA;
 	out.firstReceiptBody = ((receipts.find(r => r.kind === "plan") as Record<string, unknown> | undefined)?.payload as Record<string, unknown> | undefined)?.body ?? null;
+	out.firstReceiptPaths = ((receipts.find(r => r.kind === "plan") as Record<string, unknown> | undefined)?.payload as Record<string, unknown> | undefined)?.paths ?? null;
+	const firstView = {
+		item: items.get("HOME-1") ?? initialItem,
+		receipts: receipts.map(r => r as unknown as EvidenceReceipt),
+	} as unknown as WorkflowView;
+	out.firstPacketPaths = buildPlanPacket(firstView)?.paths ?? null;
 	out.firstGetWork = await execute({ action: "get_work", work: "HOME-1" });
 	out.invalid = await approve("# Missing required sections\n");
 	out.commentsAfterInvalid = comments.length;
@@ -1980,6 +1986,46 @@ if (mode === "intake") {
 	const data = (lastWorkNow?.data ?? {}) as Record<string, unknown>;
 	const carrier = (data.carrier ?? {}) as Record<string, unknown>;
 	out.carrierCandidateId = carrier.candidateId ?? null;
+} else if (mode === "summary-sealed-snapshot") {
+	await setNow();
+	// Create feature branch with feature.txt, merge into main with --no-ff
+	Bun.spawnSync(["git", "checkout", "-q", "-b", "feature"], { cwd: probe });
+	fs.writeFileSync(path.join(probe, "feature.txt"), "feature content\n");
+	Bun.spawnSync(["git", "add", "feature.txt"], { cwd: probe });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "feature commit"], { cwd: probe });
+	Bun.spawnSync(["git", "checkout", "-q", "main"], { cwd: probe });
+	Bun.spawnSync(["git", "merge", "-q", "--no-ff", "feature", "-m", "merge feature"], { cwd: probe });
+	const approvedMerge = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+
+	// Approve plan with ## Paths\n- feature.txt
+	const planMerge =
+		"# Work\n\n## Approach\n1. Use approved merge\n\n## Verification\n1. Run the check\n\n## Paths\n- feature.txt\n";
+	await approve(planMerge);
+
+	// Advance and push HEAD with a descendant commit unrelated to this work
+	fs.writeFileSync(path.join(probe, "unrelated.txt"), "unrelated work\n");
+	Bun.spawnSync(["git", "add", "unrelated.txt"], { cwd: probe });
+	Bun.spawnSync(["git", "commit", "-q", "-m", "unrelated descendant"], { cwd: probe });
+	Bun.spawnSync(["git", "push", "-q", "origin", "main"], { cwd: probe });
+	const laterHead = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	const remoteTipBefore = Bun.spawnSync(["git", "ls-remote", "origin", "refs/heads/main"], { cwd: probe }).stdout.toString().trim().split(/\s+/)[0];
+
+	// Run /summary
+	await enterSummary();
+
+	const finalItem = items.get("HOME-1") ?? initialItem;
+	const finalCandidate = finalItem.candidate;
+	const confirms = uiCalls.filter(c => c.startsWith("confirm:"));
+	const remoteTipAfter = Bun.spawnSync(["git", "ls-remote", "origin", "refs/heads/main"], { cwd: probe }).stdout.toString().trim().split(/\s+/)[0];
+
+	out.approvedMerge = approvedMerge;
+	out.laterHead = laterHead;
+	out.remoteTipBefore = remoteTipBefore;
+	out.remoteTipAfter = remoteTipAfter;
+	out.finalCandidateCommit = finalCandidate?.commit_sha ?? null;
+	out.finalCandidateSha256 = finalCandidate?.candidate_sha256 ?? null;
+	out.headAfterSummary = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	out.confirms = confirms;
 } else if (mode === "done-cancel" || mode === "done-cancel-decline") {
 	await setNow();
 	await approve(planA);
