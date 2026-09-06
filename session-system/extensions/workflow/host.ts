@@ -3465,7 +3465,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const item = await backend.workClient?.workItem(issue.key);
 							const currentRevision = item?.revision;
 							const boundRevFromPreview = params.confirmation_id ? previewRevisionBinding.get(params.confirmation_id) : undefined;
-							const boundExpectedRevId = params.expected_revision_id ?? boundRevFromPreview ?? currentRevision?.revision_id;
+							const boundExpectedRevId = boundRevFromPreview ?? params.expected_revision_id ?? currentRevision?.revision_id;
 
 							let detailText = `${issue.key} ${params.title ?? issue.title}`;
 							if (boundExpectedRevId) {
@@ -3506,7 +3506,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 							} catch (error) {
 								const errMsg = String(error);
 								if (errMsg.includes("revision_conflict")) {
-									resetConfirmations();
 									const freshItem = await backend.workClient?.workItem(issue.key);
 									const freshRev = freshItem?.revision;
 									let freshDetail = `${issue.key} ${params.title ?? issue.title}`;
@@ -3523,7 +3522,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										"revise_work",
 										"Model wants to revise this work in place (fresh preview after revision conflict)",
 										freshDetail,
-										{ ...params, confirm: undefined, confirmation_id: undefined, expected_revision_id: freshRev?.revision_id },
+										{ ...params, confirm: undefined, confirmation_id: undefined },
 									);
 									const matchFresh = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(freshGate.preview);
 									if (matchFresh && freshRev?.revision_id) {

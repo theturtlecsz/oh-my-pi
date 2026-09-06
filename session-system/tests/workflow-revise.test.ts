@@ -4,11 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { z } from "zod";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { WorkError, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { WorkError, type EvidenceReceipt, type WorkItemView, type WorkflowView } from "@oh-my-pi/pi-work-client";
 import type { WorkflowBackend } from "../extensions/workflow/backend";
 import { resetConfirmations } from "../extensions/workflow/confirm";
 import { createWorkflowHost } from "../extensions/workflow/host";
-import { createWorkBackend } from "../extensions/workflow/work";
+import { buildPlanPacket, createWorkBackend } from "../extensions/workflow/work";
 
 interface RegisteredToolSpec {
 	name: string;
@@ -325,8 +325,216 @@ describe("workflow revise_work structured amendment", () => {
 		expect(conflictText).toContain("revision_conflict: target revision moved since preview was generated");
 		expect(conflictText).toContain("[bound revision: 00000000-0000-7000-8000-000000000020]");
 		expect(conflictText).toContain("CONFIRM REQUIRED");
+
+		const matchConflict = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(conflictText);
+		expect(matchConflict).not.toBeNull();
+		const replacementConfirmationId = matchConflict![1];
+
+		// Phase 3: Caller repeats the exact original parameters with confirm:true and the replacement confirmation_id
+		const confirmRes2 = await registeredTool!.execute(
+			"call-3",
+			{
+				...previewParams,
+				confirm: true,
+				confirmation_id: replacementConfirmationId,
+			},
+			undefined,
+			undefined,
+			fakeCtx,
+		);
+		expect(confirmRes2.content[0].text).toBe("OMP-100 revised");
+		expect(mockBackend.reviseWork).toHaveBeenCalledWith(
+			expect.objectContaining({ key: "OMP-100" }),
+			expect.objectContaining({
+				title: "New Title",
+				expected_revision_id: "00000000-0000-7000-8000-000000000020",
+			}),
+		);
 	});
 
+	test("revise_work handles stale preview conflict when expected_revision_id was explicitly supplied in initial params", async () => {
+		resetConfirmations({ resetShared: true });
+		let registeredTool: RegisteredToolSpec | undefined;
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			zod: z,
+			registerTool: (spec: RegisteredToolSpec) => {
+				if (spec.name === "work") registeredTool = spec;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+		} as unknown as ExtensionAPI;
+
+		let currentRevId = "00000000-0000-7000-8000-000000000010";
+		const mockWorkItem = {
+			work_id: "00000000-0000-7000-8000-000000000001",
+			workspace_id: "00000000-0000-7000-8000-000000000000",
+			state: "BACKLOG",
+			project_id: null,
+			archived: false,
+			current_candidate_id: null,
+			alias: {
+				work_id: "00000000-0000-7000-8000-000000000001",
+				key: "OMP-100",
+				primary: true,
+				origin: "local" as const,
+			},
+			revision: {
+				get revision_id() {
+					return currentRevId;
+				},
+				work_id: "00000000-0000-7000-8000-000000000001",
+				revision_number: 1,
+				title: "Original Title",
+				description: "Original Description",
+				scope: "Original Scope",
+				acceptance_criteria: ["Criterion 1"],
+				content_sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+				created_by: "test",
+				created_at: new Date().toISOString(),
+			},
+		} as unknown as WorkItemView;
+		const mockWorkClient = {
+			workItem: vi.fn().mockImplementation(async () => mockWorkItem),
+		};
+		const mockBackend = {
+			cacheFile: temporaryCacheFile(),
+			queueNoun: "decision queue",
+			markerFile: ".work-project",
+			reviewKind: "review",
+			findIssue: vi.fn().mockResolvedValue({ id: mockWorkItem.work_id, key: "OMP-100", title: "Original Title" }),
+			reviseWork: vi.fn().mockImplementation(async (_issue: unknown, fields: { expected_revision_id?: string }) => {
+				if (fields.expected_revision_id && fields.expected_revision_id !== currentRevId) {
+					throw new WorkError("revision_conflict", 409, ["revision conflict"]);
+				}
+			}),
+			workClient: mockWorkClient,
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const fakeCtx = { taskDepth: 0 } as unknown as ExtensionContext;
+
+		// Phase 1: Caller explicitly supplies expected_revision_id R1 in initial parameters
+		const previewParams = {
+			action: "revise_work",
+			work: "OMP-100",
+			title: "New Title",
+			expected_revision_id: "00000000-0000-7000-8000-000000000010",
+		};
+		const previewRes = await registeredTool!.execute("call-1", previewParams, undefined, undefined, fakeCtx);
+		const previewText = previewRes.content[0].text;
+		const match = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(previewText);
+		const confirmationId = match![1];
+
+		// Revision moves to R2 in background
+		currentRevId = "00000000-0000-7000-8000-000000000020";
+
+		// Phase 2: Confirm call fails with revision_conflict and returns replacement preview
+		const confirmRes = await registeredTool!.execute(
+			"call-2",
+			{
+				...previewParams,
+				confirm: true,
+				confirmation_id: confirmationId,
+			},
+			undefined,
+			undefined,
+			fakeCtx,
+		);
+		const conflictText = confirmRes.content[0].text;
+		expect(conflictText).toContain("revision_conflict: target revision moved since preview was generated");
+		expect(conflictText).toContain("[bound revision: 00000000-0000-7000-8000-000000000020]");
+
+		const matchConflict = /confirmation_id:\s*(cf-[a-f0-9]+)/.exec(conflictText);
+		expect(matchConflict).not.toBeNull();
+		const replacementConfirmationId = matchConflict![1];
+
+		// Phase 3: Caller repeats the original parameters (which still had expected_revision_id: R1) with the replacement confirmation_id
+		const confirmRes2 = await registeredTool!.execute(
+			"call-3",
+			{
+				...previewParams,
+				confirm: true,
+				confirmation_id: replacementConfirmationId,
+			},
+			undefined,
+			undefined,
+			fakeCtx,
+		);
+		expect(confirmRes2.content[0].text).toBe("OMP-100 revised");
+		expect(mockBackend.reviseWork).toHaveBeenCalledWith(
+			expect.objectContaining({ key: "OMP-100" }),
+			expect.objectContaining({
+				title: "New Title",
+				expected_revision_id: "00000000-0000-7000-8000-000000000020",
+			}),
+		);
+	});
+
+	test("downstream plan packet uses authoritative structured criteria and candidate invalidation enforces replan", () => {
+		const candidate = {
+			candidate_id: "00000000-0000-7000-8000-000000000030",
+			work_id: "00000000-0000-7000-8000-000000000001",
+			revision_id: "00000000-0000-7000-8000-000000000020",
+			candidate_sha256: "3".repeat(64),
+			commit_sha: null,
+			kind: "planned" as const,
+			allocated_at: "2026-09-06T00:00:00Z",
+		};
+		const planReceipt: EvidenceReceipt = {
+			receipt_id: "00000000-0000-7000-8000-000000000031",
+			work_id: "00000000-0000-7000-8000-000000000001",
+			revision_id: "00000000-0000-7000-8000-000000000020",
+			candidate_id: "00000000-0000-7000-8000-000000000030",
+			kind: "plan",
+			payload: { body: "plan body", paths: ["src/index.ts"] },
+			payload_sha256: "1".repeat(64),
+			artifact_sha256: null,
+			issuer: "test",
+			issued_at: "2026-09-06T00:00:00Z",
+			candidate_sha256: "3".repeat(64),
+			independent: false,
+		};
+
+		// View with active planned candidate and structured criteria
+		const activeView = {
+			item: {
+				work_id: "00000000-0000-7000-8000-000000000001",
+				revision: {
+					revision_id: "00000000-0000-7000-8000-000000000020",
+					acceptance_criteria: ["Structured AC-1", "Structured AC-2"],
+					description: "## Acceptance criteria\n- [ ] Stale description checkbox",
+				},
+				candidate,
+			},
+			receipts: [planReceipt],
+		} as unknown as WorkflowView;
+
+		const packet = buildPlanPacket(activeView);
+		expect(packet).toBeDefined();
+		expect(packet!.acceptanceCriteria).toEqual(["Structured AC-1", "Structured AC-2"]);
+
+		// When revise_work invalidates the candidate (current_candidate_id becomes null in store):
+		const invalidatedView = {
+			item: {
+				...activeView.item,
+				candidate: null,
+			},
+			receipts: [planReceipt],
+		} as unknown as WorkflowView;
+
+		const noPacket = buildPlanPacket(invalidatedView);
+		expect(noPacket).toBeUndefined();
+	});
 	test("createWorkBackend.reviseWork preserves unamended fields and updates scope and criteria", async () => {
 		const WS = "00000000-0000-7000-8000-000000000000";
 		const OWNER = "00000000-0000-7000-8000-000000000002";
@@ -430,5 +638,62 @@ describe("workflow revise_work structured amendment", () => {
 		} finally {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
+	});
+
+	test("downstream plan packet uses authoritative structured criteria and candidate invalidation enforces replan", async () => {
+		const { buildPlanPacket } = await import("../extensions/workflow/work");
+		const candidate = {
+			candidate_id: "00000000-0000-7000-8000-000000000030",
+			work_id: "00000000-0000-7000-8000-000000000001",
+			revision_id: "00000000-0000-7000-8000-000000000020",
+			candidate_sha256: "3".repeat(64),
+			commit_sha: null,
+			kind: "planned" as const,
+			allocated_at: "2026-09-06T00:00:00Z",
+		};
+		const planReceipt = {
+			receipt_id: "00000000-0000-7000-8000-000000000031",
+			work_id: "00000000-0000-7000-8000-000000000001",
+			revision_id: "00000000-0000-7000-8000-000000000020",
+			candidate_id: "00000000-0000-7000-8000-000000000030",
+			kind: "plan",
+			payload: { body: "plan body", paths: ["src/index.ts"] },
+			payload_sha256: "1".repeat(64),
+			artifact_sha256: null,
+			issuer: "test",
+			issued_at: "2026-09-06T00:00:00Z",
+			candidate_sha256: "3".repeat(64),
+			independent: false,
+		} as unknown as import("@oh-my-pi/pi-work-client").EvidenceReceipt;
+
+		// View with active planned candidate and structured criteria
+		const activeView = {
+			item: {
+				work_id: "00000000-0000-7000-8000-000000000001",
+				revision: {
+					revision_id: "00000000-0000-7000-8000-000000000020",
+					acceptance_criteria: ["Structured AC-1", "Structured AC-2"],
+					description: "## Acceptance criteria\n- [ ] Stale description checkbox",
+				},
+				candidate,
+			},
+			receipts: [planReceipt],
+		} as unknown as import("@oh-my-pi/pi-work-client").WorkflowView;
+
+		const packet = buildPlanPacket(activeView);
+		expect(packet).toBeDefined();
+		expect(packet!.acceptanceCriteria).toEqual(["Structured AC-1", "Structured AC-2"]);
+
+		// When revise_work invalidates the candidate (current_candidate_id becomes null in store):
+		const invalidatedView = {
+			item: {
+				...activeView.item,
+				candidate: null,
+			},
+			receipts: [planReceipt],
+		} as unknown as import("@oh-my-pi/pi-work-client").WorkflowView;
+
+		const noPacket = buildPlanPacket(invalidatedView);
+		expect(noPacket).toBeUndefined();
 	});
 });
