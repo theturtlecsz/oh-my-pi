@@ -76,6 +76,7 @@ import {
 	type ExecutionWorkspace,
 	type ExecutionWorkspaceManager,
 	freezeCandidateCommit,
+	forcePushCandidate,
 	headCommit,
 	inProgressGitOp,
 	mergePullRequest,
@@ -4154,11 +4155,51 @@ export function createWorkflowHost(cfg: HostConfig) {
 								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
 							});
 
-							const push = await pushCandidate(ctx.cwd, freeze.commitSha, exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline, exec.grant.remote_ref);
+							const grantBaseline = exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline;
+							let recoveredStaleTip: string | undefined;
+							let push = await pushCandidate(ctx.cwd, freeze.commitSha, grantBaseline, exec.grant.remote_ref);
+							if (
+								push.status === "not_pushed"
+								&& push.remoteRef?.startsWith("refs/heads/execution/")
+								&& push.remoteCommit
+								&& push.remoteCommit !== freeze.commitSha
+							) {
+								// OMP-245: a lane tip abandoned by a TERMINAL grant must not wedge
+								// this grant. The ledger is the only proof the tip is engine-owned:
+								// the one-active-grant-per-workspace index makes every other grant
+								// terminal, so a tip matching an execution close-attempt candidate
+								// from a DIFFERENT grant on this item is a dead grant's candidate.
+								// Unknown tips keep the fail-closed deny — no silent overwrite.
+								let staleTips: Set<string> | undefined;
+								try {
+									const laneView = await backend.workClient!.workflow(targetIssue.key);
+									staleTips = new Set(
+										(laneView.close_attempts ?? [])
+											.filter(a => a.authorization_kind === "execution" && a.execution_grant_id && a.execution_grant_id !== exec.grant.grant_id)
+											.map(a => a.candidate_commit)
+											.filter((c): c is string => typeof c === "string" && /^[0-9a-f]{40}$/.test(c)),
+									);
+								} catch {
+									staleTips = undefined;
+								}
+								if (staleTips?.has(push.remoteCommit)) {
+									const staleTip = push.remoteCommit;
+									const recovered = forcePushCandidate(ctx.cwd, freeze.commitSha, push.remoteRef, staleTip);
+									if (recovered.status === "pushed" || recovered.status === "remote_commit") {
+										ctx.ui.notify(`Recovered execution lane ${push.remoteRef}: forced over stale candidate ${staleTip.slice(0, 12)} abandoned by a terminal grant (OMP-245)`, "warning");
+										// The completion gate binds prior_tip to the grant baseline
+										// (candidate parentage: NEEDS_FIX advances current_git_baseline to
+										// the last candidate), never to the overwritten lane tip; the stale
+										// tip is recorded in the push evidence body instead.
+										push = { ...recovered, priorTip: grantBaseline ?? parentCommit(ctx.cwd, freeze.commitSha) ?? staleTip };
+										recoveredStaleTip = staleTip;
+									}
+								}
+							}
 							if (push.status !== "pushed" && push.status !== "remote_commit" && push.status !== "contained") {
 								return deny(`Remote push failed: ${push.detail ?? "push refused"}`);
 							}
-							const pushEvidence = await backend.appendEvidence(targetIssue, "push", "remote push verified", {
+							const pushEvidence = await backend.appendEvidence(targetIssue, "push", recoveredStaleTip ? `remote push verified (forced over stale terminal-grant lane tip ${recoveredStaleTip})` : "remote push verified", {
 								candidateSha256: finalCandidate.candidate_sha256,
 								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
 								remoteRef: push.remoteRef,

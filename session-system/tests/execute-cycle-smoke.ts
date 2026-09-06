@@ -2793,6 +2793,12 @@ if (args[0] === "api") {
 	);
 	assert.ok(!String(staleOut.review).includes("candidate_drift"), "no candidate_drift refusal surfaced in-grant");
 	assert.ok(!String(staleOut.review).includes("rerun /summary"), "no manual-lane /summary instruction surfaced in-grant");
+	// OMP-245: grant B's freeze push hit grant A's abandoned lane tip (sibling
+	// history off the same baseline) and recovered with a leased force-push.
+	assert.ok(
+		(staleOut.uiCalls as string[]).some(c => c.includes("Recovered execution lane")),
+		`grant B freeze push recovers over grant A's abandoned lane tip; uiCalls: ${JSON.stringify(staleOut.uiCalls)}`,
+	);
 	// harness JSON output — narrow one-off read of the grant projection
 	const staleExec = staleOut.finalExecution as { items?: { phase?: string }[] } | undefined;
 	assert.equal(staleExec?.items?.[0]?.phase, "completed", "stale-attempt item phase is completed");
@@ -2803,7 +2809,52 @@ if (args[0] === "api") {
 		"the audit_ready stale attempt (old candidate binding) is superseded, not resumed",
 	);
 
-	console.log("execute-cycle-smoke: PASS (managed-worktree owner isolation & completion cleanup, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety, zero-path baseline completion & queue advance, stale pre-grant attempt supersede)");
+	// Test Scenario: OMP-245 foreign lane tip keeps the fail-closed refusal —
+	// stale-tip recovery fires only for ledger-proven terminal-grant candidates.
+	const foreignRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			operation_id: crypto.randomUUID(),
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			command: {
+				type: "create_work_batch",
+				payload: {
+					items: [
+						{
+							client_ref: "smoke-item-foreign-lane",
+							title: "Smoke Foreign Lane Feature",
+							description: "Feature whose lane ref is wedged by an unknown commit",
+							scope: "smoke",
+							acceptance_criteria: [],
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
+					],
+				},
+			},
+		}),
+	})).json();
+	assert.equal(foreignRes.receipt.state, "applied");
+	const itemForeign = foreignRes.result.items[0];
+
+	const foreignOut = runHarness("foreign-lane", itemForeign.key);
+	assert.ok(
+		String(foreignOut.review).includes("Remote push failed"),
+		`foreign lane tip refuses the freeze push; got: ${foreignOut.review}`,
+	);
+	assert.ok(
+		!(foreignOut.uiCalls as string[]).some(c => c.includes("Recovered execution lane")),
+		"no stale-tip recovery over a lane tip the ledger does not know",
+	);
+	assert.ok(String(foreignOut.stopResult).includes("stopped"), `foreign-lane grant stops cleanly; got: ${foreignOut.stopResult}`);
+	const foreignView = (await (await fetch(`${baseUrl}/v1/work-items/${itemForeign.key}/workflow`, { headers })).json()) as { item: { state: string } };
+	assert.notEqual(foreignView.item.state, "DONE", "foreign-lane item never completes");
+
+	console.log("execute-cycle-smoke: PASS (managed-worktree owner isolation & completion cleanup, single execution cycle with NEEDS_FIX remediation, queue mode, four tamper scenarios, negative & positive remote push verification, contract change pause gate, startup recovery & drift probes, already-delivered baseline completion, empty-diff audit-gate safety, zero-path baseline completion & queue advance, stale pre-grant attempt supersede, stale execution-lane tip recovery, foreign lane tip refusal)");
 } finally {
 	cleanup();
 }

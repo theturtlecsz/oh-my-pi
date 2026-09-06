@@ -17,7 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { candidateSha256 } from "@oh-my-pi/pi-work-client";
-import { candidateDrift, cleanupExecutionWorkspace, dirtyPaths, ensureExecutionWorkspace, ensureUpToDateWithDefault, findSecrets, freezeCandidateCommit, type GhPrRunner, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runBiomeCheck, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
+import { candidateDrift, cleanupExecutionWorkspace, dirtyPaths, ensureExecutionWorkspace, ensureUpToDateWithDefault, findSecrets, freezeCandidateCommit, type GhPrRunner, forcePushCandidate, parentCommit, parsePorcelain, pushCandidate, rangeDiffSha256, resolveDefaultBranch, runBiomeCheck, validateExecutionPaths, verifyMergeConfirmation } from "../extensions/workflow/git";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-commit-step-"));
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
@@ -425,6 +425,80 @@ describe("candidate freeze and push", () => {
 			remoteCommit: later,
 		});
 		expect(outcome.detail).toContain(`containment: ${later} contains ${frozen}`);
+	});
+
+	test("forcePushCandidate overwrites a stale sibling lane tip with the lease bound to it (OMP-245)", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		const laneRef = "refs/heads/execution/omp-245";
+		const baseline = git(repo, "rev-parse", "HEAD");
+		// Terminal grant's abandoned candidate: sibling off the same baseline.
+		fs.writeFileSync(path.join(repo, "stale.txt"), "stale candidate\n");
+		git(repo, "add", "--", "stale.txt");
+		git(repo, "commit", "-q", "-m", "stale candidate");
+		const staleTip = git(repo, "rev-parse", "HEAD");
+		git(repo, "push", "-q", "origin", `HEAD:${laneRef}`);
+		git(repo, "reset", "-q", "--hard", baseline);
+		// Fresh grant's candidate: sibling history — a plain push would be non-fast-forward.
+		fs.writeFileSync(path.join(repo, "fresh.txt"), "fresh candidate\n");
+		git(repo, "add", "--", "fresh.txt");
+		git(repo, "commit", "-q", "-m", "fresh candidate");
+		const fresh = git(repo, "rev-parse", "HEAD");
+		expect(Bun.spawnSync(["git", "merge-base", "--is-ancestor", staleTip, fresh], { cwd: repo }).exitCode).not.toBe(0);
+
+		const outcome = forcePushCandidate(repo, fresh, laneRef, staleTip);
+
+		expect(outcome).toMatchObject({ status: "pushed", remoteRef: laneRef, remoteCommit: fresh, priorTip: staleTip });
+		expect(outcome.detail).toContain(`forced over stale lane tip ${staleTip}`);
+		expect(git(remote, "rev-parse", laneRef)).toBe(fresh);
+	});
+
+	test("forcePushCandidate refuses when the lane tip moved after observation — remote untouched (OMP-245)", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		const laneRef = "refs/heads/execution/omp-245";
+		const observedTip = git(repo, "rev-parse", "HEAD");
+		git(repo, "push", "-q", "origin", `HEAD:${laneRef}`);
+		// Tip moved between observation and push: the lease must refuse, not clobber.
+		fs.writeFileSync(path.join(repo, "moved.txt"), "moved\n");
+		git(repo, "add", "--", "moved.txt");
+		git(repo, "commit", "-q", "-m", "moved tip");
+		const movedTip = git(repo, "rev-parse", "HEAD");
+		git(repo, "push", "-q", "origin", `HEAD:${laneRef}`);
+		// Fresh candidate distinct from the moved tip (sibling off the original tip).
+		git(repo, "reset", "-q", "--hard", observedTip);
+		fs.writeFileSync(path.join(repo, "fresh.txt"), "fresh candidate\n");
+		git(repo, "add", "--", "fresh.txt");
+		git(repo, "commit", "-q", "-m", "fresh candidate");
+		const fresh = git(repo, "rev-parse", "HEAD");
+
+		const outcome = forcePushCandidate(repo, fresh, laneRef, observedTip);
+
+		expect(outcome.status).toBe("not_pushed");
+		expect(git(remote, "rev-parse", laneRef)).toBe(movedTip);
+	});
+
+	test("forcePushCandidate refuses non-execution refs and malformed expected tips (OMP-245)", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		const head = git(repo, "rev-parse", "HEAD");
+
+		const mainRef = forcePushCandidate(repo, head, "refs/heads/main", head);
+		expect(mainRef.status).toBe("not_pushed");
+		expect(mainRef.detail).toContain("not an engine-owned execution lane ref");
+
+		const shortTip = forcePushCandidate(repo, head, "refs/heads/execution/omp-245", head.slice(0, 12));
+		expect(shortTip.status).toBe("not_pushed");
+		expect(shortTip.detail).toContain("expected lane tip must be a full commit SHA");
+
+		expect(Bun.spawnSync(["git", "rev-parse", "--verify", "--quiet", "refs/heads/main"], { cwd: remote }).exitCode).not.toBe(0);
+		expect(Bun.spawnSync(["git", "rev-parse", "--verify", "--quiet", "refs/heads/execution/omp-245"], { cwd: remote }).exitCode).not.toBe(0);
 	});
 });
 

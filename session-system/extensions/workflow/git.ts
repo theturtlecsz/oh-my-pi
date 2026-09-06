@@ -899,6 +899,47 @@ export function pushCandidate(root: string, commitSha: string, expectedBaseline?
 	}
 }
 
+/** OMP-245: stale execution-lane recovery. Lane refs (refs/heads/execution/<key>)
+ *  are engine-owned, but the caller MUST prove from the ledger that expectedTip
+ *  is a terminal grant's abandoned candidate before using this — the
+ *  force-with-lease binds the overwrite to that exact tip, so a tip that moved
+ *  between observation and push refuses instead of clobbering. Non-execution
+ *  refs and malformed tips refuse outright. NEVER throws. */
+export function forcePushCandidate(root: string, commitSha: string, remoteRef: string, expectedTip: string): PushOutcome {
+	try {
+		if (!remoteRef.startsWith("refs/heads/execution/")) {
+			return { status: "not_pushed", detail: `force-push refused: ${remoteRef} is not an engine-owned execution lane ref` };
+		}
+		if (!/^[0-9a-f]{40}$/.test(expectedTip)) {
+			return { status: "not_pushed", detail: "force-push refused: expected lane tip must be a full commit SHA" };
+		}
+		const remote = runGit(root, ["remote", "get-url", "origin"]);
+		if (!remote.ok || !remote.out) return { status: "not_pushed", detail: "no origin remote" };
+		const push = runGit(root, ["push", `--force-with-lease=${remoteRef}:${expectedTip}`, "origin", `${commitSha}:${remoteRef}`], 30_000);
+		const ls = runGit(root, ["ls-remote", "origin", remoteRef], 30_000);
+		const remoteCommit = ls.ok && ls.out ? ls.out.split(/\s+/)[0] : undefined;
+		if (remoteCommit === commitSha) {
+			return {
+				status: "pushed",
+				remoteUrl: remote.out,
+				remoteRef,
+				remoteCommit,
+				priorTip: expectedTip,
+				detail: `forced over stale lane tip ${expectedTip} (force-with-lease)`,
+			};
+		}
+		return {
+			status: "not_pushed",
+			remoteUrl: remote.out,
+			remoteRef,
+			remoteCommit,
+			detail: `force-with-lease push over ${expectedTip} failed — remote ${remoteRef} is ${remoteCommit ?? "absent"}, not ${commitSha}${push.ok ? "" : ` (${push.err.split("\n")[0]})`}`,
+		};
+	} catch (e) {
+		return { status: "not_pushed", detail: String(e) };
+	}
+}
+
 export interface MergeConfirmationOutcome {
 	confirmed: boolean;
 	detail?: string;
