@@ -10,28 +10,46 @@ share=$xdg_data/omp/work-ledger
 pgdata=$state/postgres
 pgport=${OMP_WORK_POSTGRES_PORT:-54321}
 httpport=${OMP_WORK_HTTP_PORT:-54322}
+service_python=$root/python/omp-work/.venv/bin/python
+unit_dir=$HOME/.config/systemd/user
+render_only=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --postgres-data) pgdata=${2:?--postgres-data needs a path}; shift 2 ;;
     --postgres-port) pgport=${2:?--postgres-port needs a port}; shift 2 ;;
     --http-port) httpport=${2:?--http-port needs a port}; shift 2 ;;
+    --python) service_python=${2:?--python needs an installed executable}; shift 2 ;;
+    --unit-dir) unit_dir=${2:?--unit-dir needs an output directory}; shift 2 ;;
+    --render-only) render_only=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$pgdata" in /*) ;; *) echo '--postgres-data must be absolute' >&2; exit 2 ;; esac
+case "$service_python" in /*) ;; *) echo '--python must be absolute' >&2; exit 2 ;; esac
+case "$unit_dir" in /*) ;; *) echo '--unit-dir must be absolute' >&2; exit 2 ;; esac
 case "$pgport:$httpport" in *[!0-9:]*) echo 'ports must be numeric' >&2; exit 2 ;; esac
-for path in "$config" "$pgdata" "$state" "$share/wal"; do install -d -m 700 "$path"; done
-for bin in initdb postgres pg_ctl; do command -v "$bin" >/dev/null || { echo "missing native PostgreSQL binary: $bin" >&2; exit 1; }
-done
-[ "$(postgres --version | grep -oE '[0-9]+' | head -1)" = "18" ] || { echo 'native PostgreSQL 18 required' >&2; exit 1; }
-python3 - "$root" "$config" "$state" "$share" "$pgdata" "$pgport" "$httpport" "$xdg_config" "$xdg_state" "$xdg_data" <<'PY'
+if [ "$render_only" -eq 0 ]; then
+  for path in "$config" "$pgdata" "$state" "$share/wal"; do install -d -m 700 "$path"; done
+  for bin in initdb postgres pg_ctl; do command -v "$bin" >/dev/null || { echo "missing native PostgreSQL binary: $bin" >&2; exit 1; }
+  done
+  [ "$(postgres --version | grep -oE '[0-9]+' | head -1)" = "18" ] || { echo 'native PostgreSQL 18 required' >&2; exit 1; }
+fi
+python3 - "$service_python" "$unit_dir" "$config" "$state" "$share" "$pgdata" "$pgport" "$httpport" "$xdg_config" "$xdg_state" "$xdg_data" <<'PY'
 from pathlib import Path
 import sys
-root, config, state, share, pgdata, pgport, httpport, xdg_config, xdg_state, xdg_data = sys.argv[1:]
-environment = f'''Environment="XDG_CONFIG_HOME={xdg_config}"
-Environment="XDG_STATE_HOME={xdg_state}"
-Environment="XDG_DATA_HOME={xdg_data}"
+service_python, unit_dir, config, state, share, pgdata, pgport, httpport, xdg_config, xdg_state, xdg_data = sys.argv[1:]
+if any("\n" in value or "\r" in value for value in sys.argv[1:]):
+    raise SystemExit("unit paths must not contain line breaks")
+
+def quoted(value: str) -> str:
+    return '"' + value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+python_command = quoted(service_python)
+environment = f'''Environment={quoted('XDG_CONFIG_HOME=' + xdg_config)}
+Environment={quoted('XDG_STATE_HOME=' + xdg_state)}
+Environment={quoted('XDG_DATA_HOME=' + xdg_data)}
 Environment="OMP_WORK_POSTGRES_PORT={pgport}"
+Environment="PYTHONDONTWRITEBYTECODE=1"
 '''
 units = {
     "omp-work-postgres.service": f'''[Unit]
@@ -55,8 +73,8 @@ After=omp-work-postgres.service
 [Service]
 Type=simple
 {environment}
-ExecStartPre={root}/python/omp-work/.venv/bin/python -m omp_work ops migrate
-ExecStart={root}/python/omp-work/.venv/bin/python -m omp_work serve --port {httpport} --capabilities-dir {config}/capabilities
+ExecStartPre={python_command} -I -B -m omp_work ops migrate
+ExecStart={python_command} -I -B -m omp_work serve --port {httpport} --capabilities-dir {quoted(config + '/capabilities')}
 Restart=on-failure
 
 [Install]
@@ -65,17 +83,17 @@ WantedBy=default.target
     "omp-work-backup.service": f'''[Service]
 Type=oneshot
 {environment}
-ExecStart={root}/python/omp-work/.venv/bin/omp-work ops backup create
+ExecStart={python_command} -I -B -m omp_work ops backup create
 ''',
     "omp-work-wal.service": f'''[Service]
 Type=oneshot
 {environment}
-ExecStart={root}/python/omp-work/.venv/bin/omp-work ops backup wal
+ExecStart={python_command} -I -B -m omp_work ops backup wal
 ''',
     "omp-work-restore-drill.service": f'''[Service]
 Type=oneshot
 {environment}
-ExecStart={root}/python/omp-work/.venv/bin/omp-work ops restore drill --source latest --reason monthly
+ExecStart={python_command} -I -B -m omp_work ops restore drill --source latest --reason monthly
 ''',
     "omp-work-backup.timer": '''[Timer]
 OnCalendar=daily
@@ -97,7 +115,7 @@ Persistent=true
 WantedBy=timers.target
 ''',
 }
-out = Path.home() / ".config/systemd/user"
+out = Path(unit_dir)
 out.mkdir(parents=True, exist_ok=True)
 for name, content in units.items():
     (out / name).write_text(content)

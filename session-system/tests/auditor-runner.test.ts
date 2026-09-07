@@ -2102,7 +2102,10 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		vi.restoreAllMocks();
 	});
 
-	test("service refresh happy path in temp git repo executes rebind -> restart -> readiness -> PASS audit -> completion", async () => {
+	test.each([
+		{ label: "legacy candidate refresh rebinds and restarts before audit and completion", allowRefresh: true },
+		{ label: "pinned runtime reviews candidate Python edits without restarting service or rebinding grant", allowRefresh: false },
+	])("$label", async ({ allowRefresh }) => {
 		const repo = makeTempRepo();
 		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
 		const fakePi = {
@@ -2279,6 +2282,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			entryType: "work-now",
 			acceptEntry: () => true,
 			restartWorkService: restartMock,
+			allowCandidateServiceRefresh: allowRefresh,
 		})(fakePi);
 
 		expect(registeredExecute).toBeDefined();
@@ -2316,6 +2320,10 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			},
 		} as unknown as ExtensionContext;
 
+		if (!allowRefresh) {
+			exec.grant.judge_sha256 = (await computeAuditTcb(fakeCtx, mockBackend.workClient!)).judgeSha256;
+		}
+		const admittedJudge = exec.grant.judge_sha256;
 		try {
 			const res = await registeredExecute!("call-1", {
 				action: "begin_execution_review",
@@ -2324,8 +2332,14 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			}, new AbortController().signal, () => {}, fakeCtx);
 
 			expect(res.content[0]?.text).toContain("Execution grant completed");
-			expect(callLog).toContain("setExecutionState:service_refresh");
-			expect(callLog).toContain("restartWorkService");
+			if (allowRefresh) {
+				expect(callLog).toContain("setExecutionState:service_refresh");
+				expect(callLog).toContain("restartWorkService");
+			} else {
+				expect(callLog).not.toContain("setExecutionState:service_refresh");
+				expect(restartMock).not.toHaveBeenCalled();
+				expect(exec.grant.judge_sha256).toBe(admittedJudge);
+			}
 			expect(callLog).toContain("healthReady");
 			expect(callLog).toContain("finalizeExecutionCandidate");
 			expect(callLog).toContain("beginCloseAttempt");
@@ -2339,8 +2353,10 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			const attemptIdx = callLog.indexOf("beginCloseAttempt");
 			const completeIdx = callLog.indexOf("completeExecutionItem");
 
-			expect(rebindIdx).toBeLessThan(restartIdx);
-			expect(restartIdx).toBeLessThan(healthIdx);
+			if (allowRefresh) {
+				expect(rebindIdx).toBeLessThan(restartIdx);
+				expect(restartIdx).toBeLessThan(healthIdx);
+			}
 			expect(healthIdx).toBeLessThan(freezeIdx);
 			expect(freezeIdx).toBeLessThan(attemptIdx);
 			expect(attemptIdx).toBeLessThan(completeIdx);

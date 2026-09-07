@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
+import { getDiscoveryCwd } from "../config/discovery-root";
 import { expandAtImports } from "../discovery/at-imports";
 import activeRepoWatchdogTemplate from "../prompts/advisor/active-repo-watchdog.md" with { type: "text" };
 import contextFilesTemplate from "../prompts/advisor/context-files.md" with { type: "text" };
@@ -55,12 +56,13 @@ export async function collectConfigCandidates(
 	agentDir: string | undefined,
 	filenames: string[],
 ): Promise<ConfigCandidate[]> {
+	cwd = getDiscoveryCwd(cwd);
 	const home = os.homedir();
 	const resolvedAgentDir = agentDir ?? getAgentDir();
 	const userPaths = new Set<string>();
 	let repoRoot: string | null = null;
 	try {
-		repoRoot = await repo.root(cwd);
+		repoRoot = process.env.OMP_DISCOVERY_CWD ? cwd : await repo.root(cwd);
 	} catch (err) {
 		logger.debug("Failed to resolve git root for config discovery", { err: String(err) });
 	}

@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import shlex
 import stat
 import subprocess
 import tempfile
@@ -63,3 +64,65 @@ def test_installer_generates_service_units_with_migration_preflight():
         pre_idx = content.index("ExecStartPre=")
         start_idx = content.index("ExecStart=")
         assert pre_idx < start_idx, "ExecStartPre must precede ExecStart"
+
+
+def test_render_only_targets_installed_python_without_creating_live_state(tmp_path):
+    install_script = (
+        Path(__file__).resolve().parents[3] / "infra/work-ledger/install.sh"
+    )
+    installed_python = tmp_path / "release with % sign" / "python"
+    installed_python.parent.mkdir()
+    installed_python.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    installed_python.chmod(0o755)
+    units = tmp_path / "review-units"
+    config = tmp_path / "unmodified-config"
+    state = tmp_path / "unmodified-state"
+    data = tmp_path / "unmodified-data"
+    result = subprocess.run(
+        [
+            "bash",
+            str(install_script),
+            "--render-only",
+            "--python",
+            str(installed_python),
+            "--unit-dir",
+            str(units),
+            "--http-port",
+            "55432",
+        ],
+        env={
+            **os.environ,
+            "XDG_CONFIG_HOME": str(config),
+            "XDG_STATE_HOME": str(state),
+            "XDG_DATA_HOME": str(data),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not config.exists()
+    assert not state.exists()
+    assert not data.exists()
+    for name, expected in (
+        ("omp-work-service.service", ["serve", "--port", "55432"]),
+        ("omp-work-backup.service", ["ops", "backup", "create"]),
+        ("omp-work-wal.service", ["ops", "backup", "wal"]),
+        ("omp-work-restore-drill.service", ["ops", "restore", "drill"]),
+    ):
+        command = next(
+            line.removeprefix("ExecStart=")
+            for line in (units / name).read_text().splitlines()
+            if line.startswith("ExecStart=")
+        )
+        # Decode the systemd quoting/specifier subset emitted for executable paths.
+        probe = subprocess.run(
+            shlex.split(command.replace("%%", "%")), capture_output=True, text=True
+        )
+        assert probe.returncode == 0, probe.stderr
+        assert probe.stdout.splitlines()[:7] == [
+            "-I",
+            "-B",
+            "-m",
+            "omp_work",
+            *expected,
+        ]

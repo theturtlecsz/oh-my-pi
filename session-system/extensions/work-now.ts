@@ -32,6 +32,7 @@ export default function workNow(pi: ExtensionAPI) {
 	const cfg = config;
 	createWorkflowHost({
 		backend: createWorkBackend(cfg, () => loadBearer(cfg)),
+		allowCandidateServiceRefresh: !process.env.OMP_RUNTIME_RELEASE,
 		teamNoun: "the ledger",
 		entryType: "work-now",
 		acceptEntry: data => data.backend === "work",

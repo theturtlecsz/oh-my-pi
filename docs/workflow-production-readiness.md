@@ -12,7 +12,11 @@ the cause of every failure in an installed session without that session's logs.
 
 ## Operating arrangement
 
-Use a tested, pinned installation to supervise a separate development worktree.
+Develop stabilization changes with an independently installed coding tool or
+editor. First qualify ordinary OMP operation; OMP developing OMP is a later
+regression scenario, not a prerequisite for repairing the product.
+
+Use a tested, pinned installation with a separate development worktree.
 Keep the CLI, session-system extensions, auditor definition/transport, native
 addon, and WorkService on one qualified release. A stable CLI alone is
 insufficient if its extension symlinks or service still point into the directory
@@ -73,15 +77,16 @@ bun test scripts/ci-test-ts.test.ts
 uv run --project python/omp-work --extra dev pytest python/omp-work/tests
 bun run test:py:work-ledger:integration
 bun run test:session:smoke
-OMP_WORK_POSTGRES_INTEGRATION=1 bun run session-system/tests/execute-cycle-smoke.ts
+bun run test:session:execute
 ```
 
 The integration commands require the supported PostgreSQL 18 environment and
 native dependencies. Skipped integration cases do not qualify a release. The
 execution smoke uses controlled fixtures; it does not establish live provider or
 GitHub behavior. CI currently requires the PostgreSQL integration and candidate
-smoke; the separate execution-cycle smoke above still needs qualification and
-explicit CI inclusion. Run the CLI installation smoke and a bounded real canary
+smoke and the execution-cycle recovery smoke. The latter still substitutes
+session management and auditor transport; it does not prove installed process
+recovery. Run the CLI installation smoke and a bounded real canary
 on the exact release before promotion.
 
 Next engineering priorities, in order:
@@ -104,3 +109,7 @@ changes; deterministic code binds authorization, state transitions, evidence,
 and delivery to exact identities. Reliability work should make legitimate
 progress and recovery dependable while preserving those boundaries. Another
 agent framework would not remove these obligations.
+
+The first source-installation staging and qualification procedure is documented
+in [Installation isolation](installation-isolation.md). It does not activate a
+release, migrate the live ledger, or mark ledger acceptance satisfied.

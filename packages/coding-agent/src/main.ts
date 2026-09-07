@@ -31,7 +31,7 @@ import { buildInitialMessage } from "./cli/initial-message";
 import { selectSession } from "./cli/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { getLatestRelease } from "./cli/update-cli";
-import { findConfigFile } from "./config";
+import { findConfigFile, getDiscoveryCwd } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import {
 	DEFAULT_PREWALK_TARGET,
@@ -1383,8 +1383,14 @@ export async function runRootCommand(
 		const home = os.homedir();
 		const pluginPreloadPromise =
 			parsedArgs.pluginDirs && parsedArgs.pluginDirs.length > 0
-				? logger.time("injectPluginDirRoots", injectPluginDirRoots, home, parsedArgs.pluginDirs, getProjectDir())
-				: logger.time("preloadPluginRoots", preloadPluginRoots, home, getProjectDir());
+				? logger.time(
+						"injectPluginDirRoots",
+						injectPluginDirRoots,
+						home,
+						parsedArgs.pluginDirs,
+						getDiscoveryCwd(getProjectDir()),
+					)
+				: logger.time("preloadPluginRoots", preloadPluginRoots, home, getDiscoveryCwd(getProjectDir()));
 		// Mark the promise as handled so a synchronous failure does not surface as an unhandled-rejection
 		// warning before we reach the await site below.
 		pluginPreloadPromise.catch(() => {});

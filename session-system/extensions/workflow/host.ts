@@ -168,6 +168,8 @@ export interface HostConfig {
 	preflightWorkService?: () => Promise<void>;
 	/** Optional work service restart callback for test isolation. */
 	restartWorkService?: () => Promise<void>;
+	/** Pinned installations activate services separately; candidate edits cannot rebind a live grant. */
+	allowCandidateServiceRefresh?: boolean;
 	/** Optional managed-worktree override for deterministic test isolation. */
 	executionWorkspaceManager?: ExecutionWorkspaceManager;
 }
@@ -3771,13 +3773,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const sealedSet = new Set(sealedPaths);
 							const dirt = dirtyPaths(cwd);
 							const hasMigrationDirt = dirt.some(p => p.startsWith("python/omp-work/src/omp_work/operations/migrations/"));
-							if (hasMigrationDirt) {
+							if (hasMigrationDirt && cfg.allowCandidateServiceRefresh !== false) {
 								return deny("service refresh refused: migrations directory contains changes");
 							}
 
 							const hasPythonRuntime = dirt.some(p => p.startsWith("python/omp-work/src/omp_work/") && p.endsWith(".py") && sealedSet.has(p));
 
-							if (hasPythonRuntime) {
+							if (hasPythonRuntime && cfg.allowCandidateServiceRefresh !== false) {
 								const hasUnsealedDirt = dirt.some(p => !sealedSet.has(p));
 								if (hasUnsealedDirt) {
 									return deny("service refresh refused: unsealed dirty paths in worktree");

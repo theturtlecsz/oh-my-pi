@@ -10,6 +10,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { jtdToTypeScript } from "../tools/jtd-to-typescript";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
+import { getDiscoveryCwd } from "./discovery-root";
 
 /**
  * Represents a prompt template loaded from a markdown file
@@ -163,7 +164,7 @@ export interface LoadPromptTemplatesOptions {
  * 2. Project: cwd/.omp/prompts/
  */
 export async function loadPromptTemplates(options: LoadPromptTemplatesOptions = {}): Promise<PromptTemplate[]> {
-	const resolvedCwd = options.cwd ?? getProjectDir();
+	const resolvedCwd = getDiscoveryCwd(options.cwd ?? getProjectDir());
 	const resolvedAgentDir = options.agentDir ?? getPromptsDir();
 
 	const templates: PromptTemplate[] = [];

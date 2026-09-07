@@ -17,6 +17,7 @@ import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "../
 import type { Skill, SkillFrontmatter } from "../capability/skill";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
 import { resolveClaudePaths } from "../config/claude-paths";
+import { getDiscoveryCwd } from "../config/discovery-root";
 import type { MCPRequestIdFormat } from "../mcp/types";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../thinking";
 import { normalizeToolNames } from "../tools/builtin-names";
@@ -834,6 +835,7 @@ export function parseClaudePluginsRegistry(content: string): ClaudePluginsRegist
  * uninstall, list, upgrade, discovery, and doctor. Deterministic for a given `cwd`.
  */
 export async function resolveActiveProjectRegistryPath(cwd: string): Promise<string | null> {
+	cwd = getDiscoveryCwd(cwd);
 	// Pass 1: walk up looking for an existing .omp/ directory (nearest wins).
 	// Stop before os.homedir() — ~/.omp/ is the user-level config dir, not a project root.
 	const homeDir = os.homedir();
@@ -847,6 +849,7 @@ export async function resolveActiveProjectRegistryPath(cwd: string): Promise<str
 		} catch {
 			// not found at this level — continue up
 		}
+		if (process.env.OMP_DISCOVERY_CWD) break;
 		const parent = path.dirname(dir);
 		if (parent === dir) break; // filesystem root
 		dir = parent;
@@ -861,6 +864,7 @@ export async function resolveActiveProjectRegistryPath(cwd: string): Promise<str
 		} catch {
 			// not found at this level — continue up
 		}
+		if (process.env.OMP_DISCOVERY_CWD) break;
 		const parent = path.dirname(dir);
 		if (parent === dir) break; // filesystem root
 		dir = parent;
@@ -881,6 +885,7 @@ export async function resolveActiveProjectRegistryPath(cwd: string): Promise<str
  * never alias as the project registry.
  */
 export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<string | undefined> {
+	cwd = getDiscoveryCwd(cwd);
 	const resolved = await resolveActiveProjectRegistryPath(cwd);
 	if (resolved) return resolved;
 	// Home directory must not be treated as a project root: the fallback path would alias

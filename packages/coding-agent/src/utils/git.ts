@@ -2350,6 +2350,14 @@ export const stash = {
 // API: clone, restore, clean
 // ════════════════════════════════════════════════════════════════════════════
 
+/** Export an exact commit to a tar file without copying working-tree files or Git configuration. */
+export async function archive(cwd: string, commitSha: string, outputPath: string): Promise<void> {
+	if (!/^[0-9a-f]{40,64}$/.test(commitSha)) throw new Error("Archive requires a full commit SHA");
+	await runEffect(cwd, ["archive", "--format=tar", `--output=${path.resolve(outputPath)}`, commitSha], {
+		readOnly: true,
+	});
+}
+
 export async function clone(url: string, targetDir: string, options: CloneOptions = {}): Promise<void> {
 	ensureAvailable();
 	const absoluteTarget = path.resolve(targetDir);

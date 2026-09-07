@@ -1105,3 +1105,25 @@ jobs:
            run: bun run test:py:work-ledger:integration
          - name: Run session candidate smoke
            run: bun run test:session:smoke
+         - name: Run execution-cycle recovery smoke
+           run: bun run test:session:execute
+         - name: Stage isolated installed runtime
+           run: |
+              # uv's editable development install regenerates these tracked packaging
+              # records. Restore only generated metadata before archiving the exact HEAD.
+              git restore --source=HEAD -- python/omp-work/src/omp_work.egg-info/PKG-INFO python/omp-work/src/omp_work.egg-info/SOURCES.txt
+              bun session-system/runtime/stage.ts \
+                --source "$GITHUB_WORKSPACE" \
+                --destination "$RUNNER_TEMP/omp-installed-runtime" \
+                --bun "$(command -v bun)" --bun-version "$(bun --version)" \
+                --uv "$(command -v uv)" --python "$(command -v python3)" \
+                --native "$GITHUB_WORKSPACE/packages/natives/native/pi_natives.linux-x64-baseline.node" \
+                --native "$GITHUB_WORKSPACE/packages/natives/native/pi_natives.linux-x64-modern.node"
+         - name: Qualify installed CLI and WorkService isolation
+           run: |
+              manifest_sha=$(sha256sum "$RUNNER_TEMP/omp-installed-runtime/manifest.json")
+              OMP_INSTALLED_RELEASE="$RUNNER_TEMP/omp-installed-runtime" \
+              OMP_INSTALLED_MANIFEST_SHA256="${manifest_sha%% *}" \
+              uv run --project python/omp-work --extra dev pytest \
+                python/omp-work/tests/test_installed_runtime_isolation.py \
+                --junitxml="$RUNNER_TEMP/omp-installed-runtime-tests.xml"
