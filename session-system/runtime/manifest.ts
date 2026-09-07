@@ -18,6 +18,9 @@ export interface InstalledPythonIdentity {
 	serviceVersion: string;
 	serviceModule: string;
 	contractVersion: string;
+	contractSha256: string;
+	migrationSetSha256: string;
+	serviceFingerprint: string;
 	editable: boolean;
 	distributions: { name: string; version: string }[];
 }
@@ -116,6 +119,9 @@ export async function verifyRelease(
 		typeof manifest.python.executable !== "string" ||
 		!path.isAbsolute(manifest.python.executable) ||
 		manifest.python.editable !== false ||
+		![manifest.python.contractSha256, manifest.python.migrationSetSha256, manifest.python.serviceFingerprint].every(
+			value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value),
+		) ||
 		typeof manifest.python.serviceModule !== "string" ||
 		!isContained(path.join(root, "python"), manifest.python.serviceModule) ||
 		!Array.isArray(manifest.files) ||

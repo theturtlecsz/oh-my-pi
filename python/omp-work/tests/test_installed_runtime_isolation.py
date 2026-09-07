@@ -361,6 +361,14 @@ def test_candidate_edits_and_inherited_config_do_not_change_installed_processes(
         )
         with _process(service_command, candidate, env, service_log) as service:
             before = _health(base_url, service, service_log)
+            assert (
+                before["service_fingerprint"] == python_identity["serviceFingerprint"]
+            )
+            manifest = json.loads((release.root / "manifest.json").read_text())
+            assert (
+                before["service_fingerprint"]
+                == manifest["python"]["serviceFingerprint"]
+            )
             with _process(command, candidate, env, cli_log) as cli:
                 rpc = RpcProcess(cli, cli_log)
                 prior_state = _assert_work_routes(rpc)

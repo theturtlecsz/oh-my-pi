@@ -252,7 +252,7 @@ python/omp-work/tests/pg_native.py	fork-only	added	ffa7d539ed74	session candidat
 python/omp-work/tests/test_contract.py	fork-only	added	589f5c83548f	session candidate: OMP-180; session candidate: OMP-147; session candidate: OMP-108; session candidate: OMP-99; session candidate: OMP-67	retained
 python/omp-work/tests/test_cutover.py	fork-only	added	a972604b3e52	session candidate: OMP-180; session candidate: OMP-108; session candidate: HOME-149; feat(work-ledger): implement controlled Linear cutover (HOME-148); feat(work-ledger): cutover authority, OAuth exporter credential, atomic activation (HOME-148)	retained
 python/omp-work/tests/test_install_script.py	fork-only	added	3e29530ed298	session candidate: OMP-180; session candidate: OMP-108	retained
-python/omp-work/tests/test_installed_runtime_isolation.py	fork-only	added	7e61b7a7d950	OMP-249 installed CLI/noneditable service isolation with disposable PostgreSQL and corrupted-artifact refusal	retained
+python/omp-work/tests/test_installed_runtime_isolation.py	fork-only	added	8f24d32d99e8	OMP-249 installed CLI/noneditable service isolation with disposable PostgreSQL and corrupted-artifact refusal	retained
 python/omp-work/tests/test_linear_import.py	fork-only	added	ef1577266c06	session candidate: OMP-180; session candidate: HOME-149; feat(work-ledger): cutover authority, OAuth exporter credential, atomic activation (HOME-148); feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147); feat(work-ledger): PostgreSQL Work Ledger with Linear export and import (HOME-143, HOME-144, HOME-145, HOME-146)	retained
 python/omp-work/tests/test_postgres_operations.py	fork-only	added	6b7208f2338b	ci: repair red main baseline (OMP-217); session candidate: OMP-182; session candidate: OMP-180; session candidate: OMP-140; session candidate: OMP-89	retained
 python/omp-work/tests/test_service_readiness.py	fork-only	added	fd031006006a	session candidate: OMP-251	retained
@@ -314,9 +314,9 @@ session-system/prompts/archive/PROMPT-session-system-v2.md	fork-only	added	99833
 session-system/prompts/archive/PROMPT-session-verdict-drain.md	fork-only	added	025a4a84e236	fork change (describe)	retained
 session-system/refresh-natives.sh	fork-only	added	7fb123020f61	feat(omp-157): atomic native refresh and live-mapping upgrade fence; feat(session-system): native refresh gate in update loop (stale drop-in alarm)	retained
 session-system/rules/work-plan.md	fork-only	added	451860819c8d	docs(omp-157): state mapping carve-out rule factually; feat(omp-157): atomic native refresh and live-mapping upgrade fence; session candidate: OMP-140; session candidate: OMP-23; session candidate: HOME-149	retained
-session-system/runtime/manifest.ts	fork-only	added	6815f0363b5d	OMP-249 installed-byte, symlink, shared-inode, interpreter, and manifest verification	retained
+session-system/runtime/manifest.ts	fork-only	added	8880950e5b5e	OMP-249 installed-byte, symlink, shared-inode, interpreter, and manifest verification	retained
 session-system/runtime/omp.sh	fork-only	added	9eb32fcb4ba5	OMP-249 pinned launcher excludes ambient Bun and dotenv configuration before startup	retained
-session-system/runtime/python-identity.py	fork-only	added	8fdf1788e41f	OMP-249 noneditable installed-service and interpreter identity probe	retained
+session-system/runtime/python-identity.py	fork-only	added	bb034518d148	OMP-249 noneditable installed-service and interpreter identity probe	retained
 session-system/runtime/run.ts	fork-only	added	d39d26579bfd	OMP-249 exact installation launch with separate state/config and explicit service port	retained
 session-system/runtime/stage.ts	fork-only	added	3c2c71fb57a0	OMP-249 clean commit source-installation staging; no activation or live service mutation	retained
 session-system/runtime/tsconfig.json	fork-only	added	d233f9e9e03b	OMP-249 runtime staging and launcher typecheck coverage	retained
@@ -430,7 +430,7 @@ session-system/tests/pending-ops.test.ts	fork-only	added	f1775ecde6f7	session ca
 session-system/tests/refresh-natives.test.ts	fork-only	added	3bee56a31e48	feat(omp-157): atomic native refresh and live-mapping upgrade fence	retained
 session-system/tests/revise-work.test.ts	fork-only	added	d7c0367a938d	session candidate: OMP-245	retained
 session-system/tests/rider-batch.test.ts	fork-only	added	28203aa59300	session candidate: OMP-106; session candidate: OMP-89	retained
-session-system/tests/runtime-stage.test.ts	fork-only	added	8dcba5b88fd5	OMP-249 failed-stage isolation and installed-artifact tamper/link/inode regression coverage	retained
+session-system/tests/runtime-stage.test.ts	fork-only	added	9cc651df0b49	OMP-249 failed-stage isolation and installed-artifact tamper/link/inode regression coverage	retained
 session-system/tests/same-session-sections.test.ts	fork-only	added	d00f7c054b35	session candidate: OMP-127	retained
 session-system/tests/scope-enforcement.test.ts	fork-only	added	089acdb39619	session candidate: OMP-172; session candidate: HOME-149; HOME-116: commit live session rules — scope refusals, closeout lock, checkpoint contract (+tests)	retained
 session-system/tests/session-ledger.test.ts	fork-only	added	dfb6d9976a70	session candidate: OMP-172; session candidate: OMP-108; session candidate: OMP-107; session candidate: OMP-69	retained
