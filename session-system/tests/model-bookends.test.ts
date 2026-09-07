@@ -213,6 +213,22 @@ describe("/execute phase/model routing (OMP-241)", () => {
 		}
 	});
 
+	test("genuinely complex work during executing phase retains SOL (@plan / @slow)", async () => {
+		const setCalls: Array<{ provider: string; id: string }> = [];
+		const fakePi = {
+			setModel: async (m: { provider: string; id: string }) => {
+				setCalls.push({ provider: m.provider, id: m.id });
+				return true;
+			},
+		} as never;
+		const ctx = makeModelContext({ "@plan": solModel, "@task": geminiModel });
+
+		const res = await syncExecutionPhaseModel("executing", ctx, fakePi, { complex: true });
+		expect(res.ok).toBe(true);
+		expect(res.role).toBe("@plan");
+		expect(setCalls).toEqual([{ provider: "openai-codex", id: "gpt-5.6-sol" }]);
+	});
+
 	test("falls back to @slow for planning and @smol/@default for executing when primary role is absent", async () => {
 		const setCalls: Array<{ provider: string; id: string }> = [];
 		const fakePi = {
@@ -512,6 +528,125 @@ describe("/execute phase/model routing (OMP-241)", () => {
 			fs.rmSync(testDir, { recursive: true, force: true });
 		}
 	});
+	test("/execute --complex flag retains SOL (@plan) into execution phase", async () => {
+		const setModelCalls: Array<{ provider: string; id: string }> = [];
+		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		let registeredExecute: ((id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }>) | undefined;
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			registerTool: (def: { execute: (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }> }) => {
+				registeredExecute = def.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				registeredCommands.set(name, def.handler);
+			},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			appendEntry: () => {},
+			setModel: async (m: { provider: string; id: string }) => {
+				setModelCalls.push({ provider: m.provider, id: m.id });
+				return true;
+			},
+			getSessionId: () => "sess-complex-1",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const exec = {
+			grant: { grant_id: "grant-complex-1", state: "active", grant_version: 1 },
+			items: [{ position: 0, work_id: "OMP-241", phase: "planning", close_attempts_started: 0 }],
+			activeItem: { position: 0, work_id: "OMP-241", phase: "planning", close_attempts_started: 0 },
+		};
+
+		const mockBackend = {
+			cacheFile: "cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-241", key: "OMP-241", title: "Test", project: "OMP" }),
+			beginExecution: async () => exec,
+			getExecution: async () => exec,
+			getFocusVersion: async () => 1,
+			stampExecutionPlan: async () => exec,
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workItem: async () => ({ work_id: "uuid-241", revision: { revision_id: "rev-1", description: "test request" } }),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "model-routing-complex-test-"));
+		Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: testDir });
+		Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: testDir });
+		Bun.spawnSync(["git", "config", "user.email", "test@example.com"], { cwd: testDir });
+		Bun.spawnSync(["git", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: testDir });
+		const realHead = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: testDir }).stdout.toString().trim();
+		fs.mkdirSync(path.join(testDir, "src"), { recursive: true });
+		const planPath = path.join(testDir, "plan.md");
+		fs.writeFileSync(planPath, "## Approach\n1. Do complex thing\n\n## Verification\n1. Test complex thing\n");
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+			executionWorkspaceManager: {
+				ensure: async (_c, _k, grantId) => ({ path: testDir, grantId, isWorktree: false, primaryRoot: testDir }),
+				primaryRoot: async () => testDir,
+				clean: async () => ({ cleaned: true, detail: "cleaned" }),
+			},
+		})(fakePi);
+
+		const headSpy = spyOn(gitModule, "headCommit").mockReturnValue(realHead);
+		const refSpy = spyOn(gitModule, "currentSymbolicRef").mockReturnValue("refs/heads/main");
+		const upToDateSpy = spyOn(gitModule, "ensureUpToDateWithDefault").mockReturnValue({ ok: true, detail: "up to date" });
+		const checksSpy = spyOn(gitModule, "requiredStatusCheckCount").mockReturnValue({ ok: true, count: 12, detail: "12 required checks" });
+		const gitOpSpy = spyOn(gitModule, "inProgressGitOp").mockReturnValue(false);
+		const dirtySpy = spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+
+		try {
+			const fakeCtx = {
+				cwd: testDir,
+				taskDepth: 0,
+				ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+				models: {
+					resolve: (role: string) => (role === "@plan" ? solModel : role === "@task" ? geminiModel : undefined),
+					list: () => [solModel, geminiModel],
+					current: () => undefined,
+					family: () => "test-family",
+				},
+			} as unknown as ExtensionContext;
+
+			const execCmd = registeredCommands.get("execute");
+			expect(execCmd).toBeDefined();
+			await execCmd!("OMP-241 --complex", fakeCtx);
+			// Initial start selected SOL (@plan)
+			expect(setModelCalls.length).toBeGreaterThan(0);
+			expect(setModelCalls.every(c => c.id === "gpt-5.6-sol")).toBe(true);
+
+			// Stamping plan with --complex retains SOL (@plan) into executing phase
+			setModelCalls.length = 0;
+			await registeredExecute!(
+				"call-stamp-complex",
+				{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/index.ts"] },
+				new AbortController().signal,
+				undefined,
+				fakeCtx,
+			);
+			expect(setModelCalls).toEqual([{ provider: "openai-codex", id: "gpt-5.6-sol" }]);
+		} finally {
+			headSpy.mockRestore();
+			refSpy.mockRestore();
+			upToDateSpy.mockRestore();
+			checksSpy.mockRestore();
+			gitOpSpy.mockRestore();
+			dirtySpy.mockRestore();
+			fs.rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
 
 	test("host tool actions trigger model synchronization at phase boundaries", async () => {
 		const setModelCalls: Array<{ provider: string; id: string }> = [];

@@ -197,7 +197,7 @@ interface HostNowState {
 	/** OMP-199: service-only judge refresh tracker. */
 	serviceRefresh?: { grantId: string; judgeSha256: string };
 	/** Managed execution workspace; cleanup is armed only after grant completion. */
-	executionWorkspace?: ExecutionWorkspace & { key: string; cleanupReady?: boolean };
+	executionWorkspace?: ExecutionWorkspace & { key: string; cleanupReady?: boolean; complex?: boolean };
 }
 
 const TREE_GLYPH: Record<TreeItem["bucket"], string> = { done: "✔", working: "▶", stuck: "✖", onyou: "✋", next: "○" };
@@ -502,6 +502,10 @@ function sectionItems(content: string, heading: "Approach" | "Verification" | "P
 	return items;
 }
 
+export interface PhaseModelSyncOptions {
+	complex?: boolean;
+}
+
 export interface PhaseModelSyncResult {
 	ok: boolean;
 	model?: unknown;
@@ -512,21 +516,22 @@ export interface PhaseModelSyncResult {
 
 /**
  * OMP-241: sync the active session model to the execution grant phase (fail-closed).
- * Planning and complex work (criteria_pending, planning, remediating)
- * select SOL (@plan role, fallback @slow), while routine implementation
- * and verification (executing, reviewing) select Gemini 3.7 Flash (@task,
- * fallback @smol, @default).
+ * Planning and complex work (criteria_pending, planning, remediating, or explicit
+ * complex escalation) select SOL (@plan role, fallback @slow), while routine
+ * implementation and verification (executing, reviewing) select Gemini 3.7 Flash
+ * (@task, fallback @smol, @default).
  */
 export async function syncExecutionPhaseModel(
 	phase: string | undefined,
 	ctx?: ExtensionContext,
 	pi?: ExtensionAPI,
+	options?: PhaseModelSyncOptions,
 ): Promise<PhaseModelSyncResult> {
 	if (!phase || !ctx || !pi || typeof pi.setModel !== "function" || !ctx.models) {
 		return { ok: true };
 	}
-	const isPlanPhase = ["criteria_pending", "planning", "remediating"].includes(phase);
-	const targetRoles = isPlanPhase
+	const isPlanOrComplex = ["criteria_pending", "planning", "remediating"].includes(phase) || Boolean(options?.complex);
+	const targetRoles = isPlanOrComplex
 		? ["@plan", "@slow"]
 		: ["@task", "@smol", "@default"];
 	let model: { provider: string; id: string; name?: string } | undefined;
@@ -540,7 +545,7 @@ export async function syncExecutionPhaseModel(
 		}
 	}
 	if (!model) {
-		const primaryRole = isPlanPhase ? "@plan" : "@task";
+		const primaryRole = isPlanOrComplex ? "@plan" : "@task";
 		return {
 			ok: false,
 			error: "no_model",
@@ -1702,7 +1707,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 			}
 
 			if (ctx && current.activeItem?.phase) {
-				const modelSync = await syncExecutionPhaseModel(current.activeItem.phase, ctx, pi);
+				const complex = Boolean(state.executionWorkspace?.complex);
+				const modelSync = await syncExecutionPhaseModel(current.activeItem.phase, ctx, pi, { complex });
 				if (!modelSync.ok) {
 					ctx.ui?.notify?.(`Execution continuation suppressed: ${modelSync.reason}`, "error");
 					return false;
@@ -2662,7 +2668,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		pi.registerCommand("execute", {
 			description: "One-command autonomous delivery cycle: /execute <key> [--queue] | status [key] | resume <key> | cancel <key>",
 			getArgumentCompletions: prefix => {
-				const opts = ["--queue", "status", "resume", "cancel"];
+				const opts = ["--queue", "--complex", "status", "resume", "cancel"];
 				return opts.filter(o => o.startsWith(prefix.trim())).map(o => ({ value: o, label: o }));
 			},
 			handler: async (args, ctx) => {
@@ -2815,6 +2821,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				}
 
 				const isQueue = parts.includes("--queue");
+				const isComplex = parts.includes("--complex");
 				const rawKey = parts.find(p => !p.startsWith("--")) ?? currentNowRef()?.key;
 				if (!rawKey) {
 					ctx.ui.notify("Usage: /execute <key> [--queue] | status | resume | cancel", "warning");
@@ -2893,7 +2900,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					return;
 				}
 				const primaryRoot = await executionWorkspaceManager.primaryRoot(sourceCwd);
-				const modelSync = await syncExecutionPhaseModel("criteria_pending", ctx, pi);
+				const modelSync = await syncExecutionPhaseModel("criteria_pending", ctx, pi, { complex: isComplex });
 				if (!modelSync.ok) {
 					ctx.ui.notify(`Cannot begin execution: ${modelSync.reason}`, "error");
 					return;
@@ -2966,7 +2973,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				}
 
 				state.terminalExecution = undefined;
-				state.executionWorkspace = { ...workspace, key: issue.key };
+				state.executionWorkspace = { ...workspace, key: issue.key, complex: isComplex };
 				state.identifier = issue.key;
 				state.issueId = issue.id;
 				state.title = issue.title;
@@ -3717,7 +3724,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 							// (the derived proposal is discarded); derived criteria bind only
 							// when the item has none.
 							if (!params.criteria || !params.criteria.length) return deny("criteria array required");
-							const modelSync = await syncExecutionPhaseModel("planning", ctx, pi);
+							const complex = Boolean(state.executionWorkspace?.complex);
+							const modelSync = await syncExecutionPhaseModel("planning", ctx, pi, { complex });
 							if (!modelSync.ok) {
 								return deny(`seal_execution_criteria refused: ${modelSync.reason}`);
 							}
@@ -3809,7 +3817,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const candidateId = randomUUID();
 							const planSha = Bun.SHA256.hash(planContent, "hex");
 							const candSha = sha256Hex(canonicalJson({ planSha, candidateId }));
-							const modelSync = await syncExecutionPhaseModel("executing", ctx, pi);
+							const complex = Boolean(state.executionWorkspace?.complex);
+							const modelSync = await syncExecutionPhaseModel("executing", ctx, pi, { complex });
 							if (!modelSync.ok) {
 								return deny(`stamp_execution_plan refused: ${modelSync.reason}`);
 							}
@@ -4081,7 +4090,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 										footer(ctx);
 										return deny(`Audit verdict: ${settle.verdict}.\n${notice.fullNotice}\n\nFindings:\n${settle.event?.renderedText ?? ""}`);
 									}
-									const modelSync = await syncExecutionPhaseModel("remediating", ctx, pi);
+									const complex = Boolean(state.executionWorkspace?.complex);
+									const modelSync = await syncExecutionPhaseModel("remediating", ctx, pi, { complex });
 									if (!modelSync.ok) {
 										return deny(`Audit verdict: ${settle.verdict}, but remediation model switch refused: ${modelSync.reason}.\n\nFindings:\n${settle.event?.renderedText ?? ""}`);
 									}
@@ -4223,7 +4233,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 										await saveCache();
 										footer(ctx);
 									}
-									await syncExecutionPhaseModel("criteria_pending", ctx, pi);
+									const complex = Boolean(state.executionWorkspace?.complex);
+									const modelSync = await syncExecutionPhaseModel("criteria_pending", ctx, pi, { complex });
+									if (!modelSync.ok) {
+										return deny(`Item ${activeWorkId} completed and passed audit, but queue advance model switch refused: ${modelSync.reason}`);
+									}
 									return okText(`Item ${activeWorkId} completed and passed audit! Advanced to next queue item ${nextIssue?.key ?? nextPending.work_id} (phase: criteria_pending).`);
 								}
 								localClear(ctx, true);
@@ -4379,7 +4393,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								sessionId: exec.grant.authorization_hash,
 								startedAt: exec.grant.created_at,
 								startCommit: exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline,
-								repository: exec.grant.repository,
+								repository: cwd,
 								diffSha256: rangeDiffSha256(cwd, exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline, freeze.commitSha) ?? "",
 								dirtyPaths: [],
 								authorization_kind: "execution",
