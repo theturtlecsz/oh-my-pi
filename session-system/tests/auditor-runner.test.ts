@@ -64,6 +64,57 @@ beforeEach(() => {
 		content: [{ type: "text", text: "OK" }],
 	} as never);
 });
+
+const makeSnapshot = (
+	state: "stopped" | "canceled" | "active" | "paused" | "completed",
+	mode: "single" | "queue" = "queue",
+	items: Array<{ position: number; work_id: string; phase: ExecutionItemPhase; completed_at?: string }> = [
+		{ position: 0, work_id: "OMP-176", phase: "executing" },
+		{ position: 1, work_id: "OMP-180", phase: "pending" },
+		{ position: 2, work_id: "OMP-181", phase: "pending" },
+	],
+	terminal_reason: string | null = null,
+): ExecutionSnapshot => {
+	const mappedItems = items.map(it => ({
+		item_id: `item-${it.position}`,
+		workspace_id: "ws-1",
+		grant_id: "ad5c45a7-1234-5678-9abc-def012345678",
+		work_id: it.work_id,
+		position: it.position,
+		phase: it.phase,
+		claimed_revision_id: "rev-1",
+		initial_git_baseline: "commit-0",
+		original_request: "req",
+		original_request_sha256: "req-sha",
+		close_attempts_started: 0,
+		consecutive_no_progress: 0,
+		completed_at: it.completed_at,
+		...it,
+	}));
+	return {
+		grant: {
+			grant_id: "ad5c45a7-1234-5678-9abc-def012345678",
+			workspace_id: "ws-1",
+			owner_id: "owner-1",
+			repository: "oh-my-pi",
+			remote_ref: "refs/heads/main",
+			state,
+			mode,
+			grant_version: 1,
+			max_continuations: 8,
+			max_close_attempts: 5,
+			max_no_progress: 3,
+			continuations_scheduled: 0,
+			terminal_reason,
+			authorization_hash: "auth-hash",
+			judge_sha256: "judge-sha",
+			created_at: new Date().toISOString(),
+			expires_at: new Date().toISOString(),
+		},
+		items: mappedItems,
+		activeItem: mappedItems.find(it => it.phase === "executing") ?? null,
+	};
+};
 afterEach(() => {
 	vi.restoreAllMocks();
 	for (const dir of fixtureCaches.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -1124,56 +1175,6 @@ describe("audit judge TCB sealing (OMP-180)", () => {
 });
 
 describe("terminal execution grant closing notices and banners (OMP-196)", () => {
-	const makeSnapshot = (
-		state: "stopped" | "canceled" | "active" | "paused" | "completed",
-		mode: "single" | "queue" = "queue",
-		items: Array<{ position: number; work_id: string; phase: ExecutionItemPhase; completed_at?: string }> = [
-			{ position: 0, work_id: "OMP-176", phase: "executing" },
-			{ position: 1, work_id: "OMP-180", phase: "pending" },
-			{ position: 2, work_id: "OMP-181", phase: "pending" },
-		],
-		terminal_reason: string | null = null,
-	): ExecutionSnapshot => {
-		const mappedItems = items.map(it => ({
-			item_id: `item-${it.position}`,
-			workspace_id: "ws-1",
-			grant_id: "ad5c45a7-1234-5678-9abc-def012345678",
-			work_id: it.work_id,
-			position: it.position,
-			phase: it.phase,
-			claimed_revision_id: "rev-1",
-			initial_git_baseline: "commit-0",
-			original_request: "req",
-			original_request_sha256: "req-sha",
-			close_attempts_started: 0,
-			consecutive_no_progress: 0,
-			completed_at: it.completed_at,
-			...it,
-		}));
-		return {
-			grant: {
-				grant_id: "ad5c45a7-1234-5678-9abc-def012345678",
-				workspace_id: "ws-1",
-				owner_id: "owner-1",
-				repository: "oh-my-pi",
-				remote_ref: "refs/heads/main",
-				state,
-				mode,
-				grant_version: 1,
-				max_continuations: 8,
-				max_close_attempts: 5,
-				max_no_progress: 3,
-				continuations_scheduled: 0,
-				terminal_reason,
-				authorization_hash: "auth-hash",
-				judge_sha256: "judge-sha",
-				created_at: new Date().toISOString(),
-				expires_at: new Date().toISOString(),
-			},
-			items: mappedItems,
-			activeItem: mappedItems.find(it => it.phase === "executing") ?? null,
-		};
-	};
 
 	test("closing notice on defect stop with blocking fix key (queue mode)", () => {
 		const exec = makeSnapshot("stopped", "queue", [
@@ -2235,7 +2236,36 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 					callLog.push("healthReady");
 					return { ready: true, contract_sha256: "contract-sha", service_fingerprint: "prospective-fp-199", judge_manifest: { judge_sha256: "judge-sha" } };
 				},
-				workflow: async () => ({ receipts: [], auditor_launches: [], item: null, close_attempts: [] }),
+				workflow: async () => ({
+					receipts: [
+						{ receipt_id: "verif-199", kind: "verification", payload_sha256: "0".repeat(64), artifact_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199" },
+						{ receipt_id: "audit-199", kind: "audit", verdict: "PASS", independent: true, issuer: "work-service/auditor-settle", payload: { manifest_id: "man-199", launch_id: "launch-199" }, payload_sha256: "0".repeat(64), artifact_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199" },
+						{ receipt_id: "receipt-199", kind: "push", payload: { repository: "theturtlecsz/oh-my-pi", remote_url: "https://github.com/theturtlecsz/oh-my-pi.git" }, payload_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199", remote_ref: "refs/heads/execution/omp-199", remote_commit: "1".repeat(40) },
+					],
+					auditor_launches: [
+						{ launch_id: "launch-199", tool_call_id: "call-1", task_sha256: "0".repeat(64), manifest_id: "man-199", attempt_id: "att-199" },
+					],
+					audit_manifest: {
+						manifest_id: "man-199",
+						manifest_version: 1,
+						verification_receipt_id: "verif-199",
+						task_sha256: "0".repeat(64),
+						attempt_id: "att-199",
+					},
+					item: {
+						work_id: "uuid-199",
+						revision: { revision_id: "rev-199" },
+						candidate: {
+							candidate_id: "cand-199",
+							candidate_sha256: "cand-sha",
+							commit_sha: "1".repeat(40),
+							kind: "final",
+						},
+					},
+					close_attempts: [
+						{ attempt_id: "att-199", candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199", judge_sha256: exec.grant.judge_sha256 },
+					],
+				}),
 			},
 		} as unknown as WorkflowBackend;
 
@@ -2965,7 +2995,36 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			},
 			workClient: {
 				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "prospective-fp-199", judge_manifest: { judge_sha256: "judge-sha" } }),
-				workflow: async () => ({ receipts: [], auditor_launches: [], item: null, close_attempts: [] }),
+				workflow: async () => ({
+					receipts: [
+						{ receipt_id: "verif-199", kind: "verification", payload_sha256: "0".repeat(64), artifact_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199" },
+						{ receipt_id: "audit-199", kind: "audit", verdict: "PASS", independent: true, issuer: "work-service/auditor-settle", payload: { manifest_id: "man-199", launch_id: "launch-199" }, payload_sha256: "0".repeat(64), artifact_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199" },
+						{ receipt_id: "receipt-199", kind: "push", payload: { repository: "theturtlecsz/oh-my-pi", remote_url: "https://github.com/theturtlecsz/oh-my-pi.git" }, payload_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199", remote_ref: "refs/heads/execution/omp-199", remote_commit: "1".repeat(40) },
+					],
+					auditor_launches: [
+						{ launch_id: "launch-199", tool_call_id: "call-1", task_sha256: "0".repeat(64), manifest_id: "man-199", attempt_id: "att-199" },
+					],
+					audit_manifest: {
+						manifest_id: "man-199",
+						manifest_version: 1,
+						verification_receipt_id: "verif-199",
+						task_sha256: "0".repeat(64),
+						attempt_id: "att-199",
+					},
+					item: {
+						work_id: "uuid-199",
+						revision: { revision_id: "rev-199" },
+						candidate: {
+							candidate_id: "cand-199",
+							candidate_sha256: "cand-sha",
+							commit_sha: "1".repeat(40),
+							kind: "final",
+						},
+					},
+					close_attempts: [
+						{ attempt_id: "att-199", candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199", judge_sha256: exec.grant.judge_sha256 },
+					],
+				}),
 			},
 		} as unknown as WorkflowBackend;
 		let restartCount = 0;
@@ -3252,7 +3311,36 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 						description: "desc",
 					},
 				}),
-				workflow: async () => ({ receipts: [], auditor_launches: [], item: null, close_attempts: [] }),
+				workflow: async () => ({
+					receipts: [
+						{ receipt_id: "verif-1", kind: "verification", payload_sha256: "0".repeat(64), artifact_sha256: "0".repeat(64), candidate_id: "cand-master", revision_id: "rev-master", work_id: "uuid-master" },
+						{ receipt_id: "audit-1", kind: "audit", verdict: "PASS", independent: true, issuer: "work-service/auditor-settle", payload: { manifest_id: "man-1", launch_id: "launch-master" }, payload_sha256: "0".repeat(64), artifact_sha256: "0".repeat(64), candidate_id: "cand-master", revision_id: "rev-master", work_id: "uuid-master" },
+						{ receipt_id: "receipt-master", kind: "push", payload: { repository: "theturtlecsz/oh-my-pi", remote_url: "https://github.com/theturtlecsz/oh-my-pi.git" }, payload_sha256: "0".repeat(64), candidate_id: "cand-master", revision_id: "rev-master", work_id: "uuid-master", remote_ref: "refs/heads/execution/omp-212", remote_commit: "2".repeat(40) },
+					],
+					auditor_launches: [
+						{ launch_id: "launch-master", tool_call_id: "call-1", task_sha256: "0".repeat(64), manifest_id: "man-1", attempt_id: "att-master" },
+					],
+					audit_manifest: {
+						manifest_id: "man-1",
+						manifest_version: 1,
+						verification_receipt_id: "verif-1",
+						task_sha256: "0".repeat(64),
+						attempt_id: "att-master",
+					},
+					item: {
+						work_id: "uuid-master",
+						revision: { revision_id: "rev-master" },
+						candidate: {
+							candidate_id: "cand-master",
+							candidate_sha256: "cand-sha",
+							commit_sha: "2".repeat(40),
+							kind: "final",
+						},
+					},
+					close_attempts: [
+						{ attempt_id: "att-master", candidate_id: "cand-master", revision_id: "rev-master", work_id: "uuid-master", judge_sha256: mockExec.grant.judge_sha256 },
+					],
+				}),
 			},
 		} as unknown as WorkflowBackend;
 
@@ -3496,5 +3584,268 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			upToDateSpy.mockRestore();
 			checksSpy.mockRestore();
 		}
+	});
+});
+
+describe("dead execution context and terminal work suppression (OMP-247)", () => {
+	test("execute admission immediately refuses terminal or archived target", async () => {
+		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: (cmd: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				registeredCommands.set(cmd, def.handler);
+			},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			appendEntry: () => {},
+			getSessionId: () => "sess-1",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		let beginCalled = false;
+		const headSpy = vi.spyOn(gitModule, "headCommit");
+		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths");
+		const inProgSpy = vi.spyOn(gitModule, "inProgressGitOp");
+		const mockBackend = {
+			cacheFile: temporaryCacheFile(),
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			workspaceId: "ws-1",
+			findIssue: async () => ({
+				id: "uuid-247",
+				key: "OMP-247",
+				title: "Test 247",
+				project: "The Bookends",
+				state: "DONE",
+			}),
+			beginExecution: async () => {
+				beginCalled = true;
+				throw new Error("must not begin");
+			},
+			workClient: {
+				healthReady: async () => ({
+					ready: true,
+					contract_sha256: "contract-sha",
+					service_fingerprint: "fp",
+					judge_manifest: { judge_sha256: "judge-sha" },
+				}),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+		const handler = registeredCommands.get("execute");
+		expect(handler).toBeDefined();
+
+		const notifications: string[] = [];
+		try {
+			const fakeCtx = {
+				cwd: "/tmp/non-git-repo",
+				taskDepth: 0,
+				ui: {
+					notify: (msg: string) => notifications.push(msg),
+					theme: { fg: (_c: string, t: string) => t },
+					setStatus: () => {},
+				},
+			} as unknown as ExtensionContext;
+
+			await handler!("OMP-247", fakeCtx);
+			expect(beginCalled).toBe(false);
+			expect(headSpy).not.toHaveBeenCalled();
+			expect(dirtySpy).not.toHaveBeenCalled();
+			expect(inProgSpy).not.toHaveBeenCalled();
+			expect(notifications.some(n => n.includes("closed work can't be NOW"))).toBe(true);
+		} finally {
+			headSpy.mockRestore();
+			dirtySpy.mockRestore();
+			inProgSpy.mockRestore();
+		}
+	});
+
+	test("session_start with dead execution grant cleans stale state", async () => {
+		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<unknown>>>();
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: (event: string, handler: (e: unknown, ctx: ExtensionContext) => Promise<unknown>) => {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			sendMessage: () => {},
+			appendEntry: () => {},
+			getSessionId: () => "sess-1",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dead-grant-repo-"));
+		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "dead-grant-cache-"));
+		spawnSync("git", ["init", "-b", "main"], { cwd });
+		fs.writeFileSync(path.join(cwd, "seed.txt"), "seed\n");
+		spawnSync("git", ["add", "."], { cwd });
+		spawnSync("git", ["commit", "-m", "seed"], { cwd });
+
+		const cacheRelPath = path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(cacheDir, "cache.json"));
+		const cacheFullPath = path.join(os.homedir(), ".omp", "agent", cacheRelPath);
+		fs.mkdirSync(path.dirname(cacheFullPath), { recursive: true });
+		fs.writeFileSync(
+			cacheFullPath,
+			JSON.stringify({
+				issueId: "uuid-247",
+				identifier: "OMP-247",
+				executingIssue: { id: "uuid-247", key: "OMP-247", title: "Test 247" },
+				executionWorkspace: { grantId: "grant-1", key: "OMP-247", directory: cwd, branch: "execution/omp-247" },
+				obligationHandoff: { armed: true },
+			}),
+		);
+
+		const mockBackend = {
+			cacheFile: cacheRelPath,
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			findIssue: async () => ({ id: "uuid-247", key: "OMP-247", title: "Test 247", project: "The Bookends", state: "DONE" }),
+			getExecution: async () => null,
+			currentNow: async () => ({ id: "uuid-247", key: "OMP-247", title: "Test 247" }),
+			projectScopeExists: async () => true,
+			workClient: {
+				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const sessionManager = SessionManager.inMemory(cwd);
+		const fakeCtx = {
+			cwd,
+			taskDepth: 0,
+			sessionManager,
+			ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+		} as unknown as ExtensionContext;
+
+		const startHandlers = handlers.get("session_start") ?? [];
+		for (const h of startHandlers) {
+			await h({}, fakeCtx);
+		}
+
+		const savedCache = JSON.parse(fs.readFileSync(cacheFullPath, "utf8")) as Record<string, unknown>;
+		expect(savedCache.executingIssue).toBeUndefined();
+		expect(savedCache.executionWorkspace).toBeUndefined();
+		expect(savedCache.obligationHandoff).toBeUndefined();
+	});
+
+	test("session_stop with dead execution grant or terminal work emits no continuation", async () => {
+		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<unknown>>>();
+		const sentMessages: unknown[] = [];
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: (event: string, handler: (e: unknown, ctx: ExtensionContext) => Promise<unknown>) => {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			sendMessage: (msg: unknown) => {
+				sentMessages.push(msg);
+			},
+			appendEntry: () => {},
+			getSessionId: () => "sess-1",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dead-stop-repo-"));
+		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "dead-stop-cache-"));
+		spawnSync("git", ["init", "-b", "main"], { cwd });
+		fs.writeFileSync(path.join(cwd, "seed.txt"), "seed\n");
+		spawnSync("git", ["add", "."], { cwd });
+		spawnSync("git", ["commit", "-m", "seed"], { cwd });
+
+		const cacheRelPath = path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(cacheDir, "cache.json"));
+		const cacheFullPath = path.join(os.homedir(), ".omp", "agent", cacheRelPath);
+		fs.mkdirSync(path.dirname(cacheFullPath), { recursive: true });
+		fs.writeFileSync(
+			cacheFullPath,
+			JSON.stringify({
+				issueId: "uuid-247",
+				identifier: "OMP-247",
+				executingIssue: { id: "uuid-247", key: "OMP-247", title: "Test 247" },
+				executionWorkspace: { grantId: "grant-1", key: "OMP-247", directory: cwd, branch: "execution/omp-247" },
+				obligationHandoff: { armed: true },
+			}),
+		);
+
+		let activeGrant: ExecutionSnapshot | null = makeSnapshot("active", "single", [{ position: 0, work_id: "uuid-247", phase: "executing" }]);
+		activeGrant.grant.grant_id = "grant-1";
+
+		const mockBackend = {
+			cacheFile: cacheRelPath,
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			findIssue: async () => ({ id: "uuid-247", key: "OMP-247", title: "Test 247", project: "The Bookends", state: "DONE" }),
+			getExecution: async () => activeGrant,
+			currentNow: async () => ({ id: "uuid-247", key: "OMP-247", title: "Test 247" }),
+			projectScopeExists: async () => true,
+			workClient: {
+				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const sessionManager = SessionManager.inMemory(cwd);
+		const fakeCtx = {
+			cwd,
+			taskDepth: 0,
+			sessionManager,
+			ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+		} as unknown as ExtensionContext;
+
+		// 1. session_start runs while grant is active
+		const startHandlers = handlers.get("session_start") ?? [];
+		for (const h of startHandlers) {
+			await h({}, fakeCtx);
+		}
+
+		// 2. Before session_stop, grant becomes dead / work becomes terminal
+		activeGrant = null;
+
+		const stopHandlers = handlers.get("session_stop") ?? [];
+		expect(stopHandlers.length).toBeGreaterThan(0);
+
+		let stopResult: unknown;
+		for (const h of stopHandlers) {
+			const res = await h({ stop_hook_active: false }, fakeCtx);
+			if (res !== undefined) stopResult = res;
+		}
+
+		expect(stopResult).toBeUndefined();
+		expect(sentMessages.length).toBe(0);
+
+		const savedCache = JSON.parse(fs.readFileSync(cacheFullPath, "utf8")) as Record<string, unknown>;
+		expect(savedCache.executingIssue).toBeUndefined();
+		expect(savedCache.executionWorkspace).toBeUndefined();
+		expect(savedCache.obligationHandoff).toBeUndefined();
 	});
 });

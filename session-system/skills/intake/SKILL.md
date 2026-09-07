@@ -70,7 +70,7 @@ Owner decides from INSIDE the dialog, never prose above it. Check all six before
 
 Live-state claims: probe when WRITTEN, not when acted on.
 
-7. Live-state acceptance criteria: cheap probe BEFORE owner approval; at checklist seal, audit assumed capabilities against the live tree — misses become chartered items.
+7. Post-merge live activation: any criterion that can only be observed after candidate merge plus install/restart/reload must be published as a blocked activation child; the delivery item owns repository changes, pre-merge tests/audit, and merge, while the activation child owns deploy/restart and live probes and is blocked by delivery through a native blocks edge. /execute delivery criteria must never require the currently running process to expose candidate code.
 13. Landscape-changing answer → sweep prior rulings for premise collisions; re-decide; reversals = REVISED, never invisible.
 17. No custom "Other" option — built-in captures typed text, hand-rolled nothing.
 18. Environmental findings: date-stamped "re-probe at execution"; specs settle decisions, not environment.
@@ -100,6 +100,7 @@ No side effects before lint passes. Check all:
 - `create_work.description` byte-for-byte from the artifact; post-lint edits → re-save, re-lint.
 - Deliverables lacking native blocking edges → own single-issue blueprints.
 - Live-state criteria probed (result recorded) or hedged "unverified — probe at build" — hedging ONLY for genuinely expensive probes (owner/device/money/long-setup); cheap probes run now.
+- Post-merge live probes: a blueprint with criteria that can only be observed after candidate merge plus install/restart/reload is invalid as one delivery item unless it publishes the linked delivery→activation batch; cheap pre-publication capability probes and ordinary runtime tests stay in the delivery item when they can run from the candidate worktree.
 - Every Deferred item tagged.
 - Every criterion noun defined in Entities & Rules (or section absent).
 - Target surface probed via `tree`; else phase-1 `create_work` preview (writes nothing) = existence probe.

@@ -329,7 +329,7 @@ if (args[0] === "api") {
 	});
 	const execAttemptRepos = execAttemptRepoRes.stdout.toString().trim().split("\n").filter(Boolean);
 	assert.ok(execAttemptRepos.length >= 1, "execution close attempts recorded");
-	for (const attemptRepo of execAttemptRepos) assert.equal(attemptRepo, singleOut.workspacePath, "execution close attempt repository is the managed worktree");
+	for (const attemptRepo of execAttemptRepos) assert.equal(attemptRepo, "repo", "execution close attempt repository is the canonical grant repository");
 	// Prompt-shaped seal (no work param, mismatched derived proposal) must seal
 	// the stored criteria verbatim and surface them to the session.
 	assert.ok(
@@ -921,6 +921,57 @@ if (args[0] === "api") {
 		}),
 	})).json();
 
+	const makeEvidence3 = (pushReceiptId: string, remoteRef: string | null = "refs/heads/main", remoteCommit: string | null = headCommit, pushPayloadSha = "0".repeat(64)) => ({
+		runner: {
+			issuer: "work-service/auditor-settle" as const,
+			launch_id: launch3Id,
+			tool_call_id: "tool_launch_3",
+			task_sha256: sealManifest3.result.manifest.task_sha256,
+			judge_sha256: judgeManifestSha,
+		},
+		subject: {
+			work_id: item3.work_id,
+			revision_id: rev3Id,
+			candidate_id: finalCand3Id,
+			candidate_sha256: finalTreeSha3,
+			candidate_commit: headCommit,
+		},
+		check: {
+			definition: "sealed_audit_manifest" as const,
+			version: 3 as const,
+			manifest_id: sealManifest3.result.manifest.manifest_id,
+			task_sha256: sealManifest3.result.manifest.task_sha256,
+		},
+		result: "PASS" as const,
+		artifacts: [
+			{
+				receipt_id: verifReceipt3Id,
+				kind: "verification" as const,
+				payload_sha256: new Bun.CryptoHasher("sha256").update(JSON.stringify({ body: "verification passed" })).digest("hex"),
+				artifact_sha256: null,
+			},
+			{
+				receipt_id: settle3.result.receipt.receipt_id,
+				kind: "audit" as const,
+				payload_sha256: settle3.result.receipt.payload_sha256,
+				artifact_sha256: settle3.result.receipt.artifact_sha256,
+			},
+			{
+				receipt_id: pushReceiptId,
+				kind: "push" as const,
+				payload_sha256: pushPayloadSha,
+				artifact_sha256: null,
+			},
+		],
+		delivery: {
+			repository: "repo",
+			remote_url: remote,
+			remote_ref: remoteRef ?? "refs/heads/main",
+			candidate_commit: headCommit,
+			remote_commit: remoteCommit ?? headCommit,
+		},
+	});
+
 	// 5a. Attempting to complete with unbound push receipt fails specifically with completion_blocked
 	const badCompleteA = await (await fetch(`${baseUrl}/v1/commands`, {
 		method: "POST",
@@ -938,7 +989,7 @@ if (args[0] === "api") {
 					expected_grant_version: 3,
 					work_id: item3.work_id,
 					attempt_id: attempt3Id,
-					push_receipt_id: unboundPushReceiptId,
+					evidence: makeEvidence3(unboundPushReceiptId, null, null),
 					judge_sha256: judgeManifestSha,
 				},
 			},
@@ -996,7 +1047,7 @@ if (args[0] === "api") {
 					expected_grant_version: 3,
 					work_id: item3.work_id,
 					attempt_id: attempt3Id,
-					push_receipt_id: mismatchedPushReceiptId,
+					evidence: makeEvidence3(mismatchedPushReceiptId, "refs/heads/main", "0".repeat(40), new Bun.CryptoHasher("sha256").update(JSON.stringify({ body: "mismatched remote commit push" })).digest("hex")),
 					judge_sha256: judgeManifestSha,
 				},
 			},
@@ -1088,7 +1139,7 @@ if (args[0] === "api") {
 					expected_grant_version: 3,
 					work_id: item3.work_id,
 					attempt_id: attempt3Id,
-					push_receipt_id: validPushReceiptId,
+					evidence: makeEvidence3(validPushReceiptId, "refs/heads/main", headCommit, sha256Hex(canonicalJson(validPushPayload))),
 					judge_sha256: judgeManifestSha,
 				},
 			},
@@ -1927,6 +1978,63 @@ if (args[0] === "api") {
 			},
 		}),
 	})).json();
+	// 7. Positive probe: pushCandidate pushes to release/omp-180-smoke and verifies remote
+	const pushOutcome = pushCandidate(probe, headCommit, headCommit);
+	assert.equal(pushOutcome.status === "pushed" || pushOutcome.status === "remote_commit", true, "pushCandidate succeeds on non-main branch");
+	assert.equal(pushOutcome.remoteRef, "refs/heads/release/omp-180-smoke", "pushCandidate targeted release branch");
+	const lsRemote = Bun.spawnSync(["git", "ls-remote", "origin", "refs/heads/release/omp-180-smoke"], { cwd: probe });
+	assert.ok(lsRemote.stdout.toString().includes(headCommit), "remote origin holds commit at release branch ref");
+
+	const makeEvidenceNonMain = (pushReceiptId: string, remoteRef: string | null = "refs/heads/release/omp-180-smoke", pushPayloadSha = "0".repeat(64)) => ({
+		runner: {
+			issuer: "work-service/auditor-settle" as const,
+			launch_id: launchNonMain.result.launch.launch_id,
+			tool_call_id: "launch-non-main-1",
+			task_sha256: manifestNonMain.result.manifest.task_sha256,
+			judge_sha256: nonMainJudgeSha,
+		},
+		subject: {
+			work_id: nonMainCase.item.work_id,
+			revision_id: revNonMainId,
+			candidate_id: finalCandNonMainId,
+			candidate_sha256: finalTreeShaNonMain,
+			candidate_commit: headCommit,
+		},
+		check: {
+			definition: "sealed_audit_manifest" as const,
+			version: 3 as const,
+			manifest_id: manifestNonMain.result.manifest.manifest_id,
+			task_sha256: manifestNonMain.result.manifest.task_sha256,
+		},
+		result: "PASS" as const,
+		artifacts: [
+			{
+				receipt_id: verifReceiptNonMainId,
+				kind: "verification" as const,
+				payload_sha256: sha256Hex(JSON.stringify({ body: "branch verification passed" })),
+				artifact_sha256: null,
+			},
+			{
+				receipt_id: settleNonMain.result.receipt.receipt_id,
+				kind: "audit" as const,
+				payload_sha256: settleNonMain.result.receipt.payload_sha256,
+				artifact_sha256: settleNonMain.result.receipt.artifact_sha256,
+			},
+			{
+				receipt_id: pushReceiptId,
+				kind: "push" as const,
+				payload_sha256: pushPayloadSha,
+				artifact_sha256: null,
+			},
+		],
+		delivery: {
+			repository: "repo",
+			remote_url: pushOutcome.remoteUrl ?? remote,
+			remote_ref: remoteRef ?? "refs/heads/release/omp-180-smoke",
+			candidate_commit: headCommit,
+			remote_commit: headCommit,
+		},
+	});
 
 	const badNonMainComplete = await (await fetch(`${baseUrl}/v1/commands`, {
 		method: "POST",
@@ -1944,7 +2052,7 @@ if (args[0] === "api") {
 					expected_grant_version: 3,
 					work_id: nonMainCase.item.work_id,
 					attempt_id: attemptNonMainId,
-					push_receipt_id: wrongPushId,
+					evidence: makeEvidenceNonMain(wrongPushId, "refs/heads/wrong", sha256Hex(canonicalJson(wrongPushPayload))),
 					judge_sha256: nonMainJudgeSha,
 				},
 			},
@@ -1952,14 +2060,6 @@ if (args[0] === "api") {
 	})).json();
 	assert.equal(badNonMainComplete.error?.code, "completion_blocked", "wrong branch push receipt blocked");
 	assert.ok(badNonMainComplete.error?.diagnostics?.[0]?.includes("push receipt remote_ref mismatch"), "diagnostics cite remote_ref mismatch");
-
-	// 7. Positive probe: pushCandidate pushes to release/omp-180-smoke and verifies remote
-	const pushOutcome = pushCandidate(probe, headCommit, headCommit);
-	assert.equal(pushOutcome.status === "pushed" || pushOutcome.status === "remote_commit", true, "pushCandidate succeeds on non-main branch");
-	assert.equal(pushOutcome.remoteRef, "refs/heads/release/omp-180-smoke", "pushCandidate targeted release branch");
-	const lsRemote = Bun.spawnSync(["git", "ls-remote", "origin", "refs/heads/release/omp-180-smoke"], { cwd: probe });
-	assert.ok(lsRemote.stdout.toString().includes(headCommit), "remote origin holds commit at release branch ref");
-
 	const correctPushId = crypto.randomUUID();
 	const correctPushPayload = {
 		repository: "repo",
@@ -2018,7 +2118,7 @@ if (args[0] === "api") {
 					expected_grant_version: 3,
 					work_id: nonMainCase.item.work_id,
 					attempt_id: attemptNonMainId,
-					push_receipt_id: correctPushId,
+					evidence: makeEvidenceNonMain(correctPushId, pushOutcome.remoteRef, sha256Hex(canonicalJson(correctPushPayload))),
 					judge_sha256: nonMainJudgeSha,
 				},
 			},
@@ -2688,7 +2788,9 @@ if (args[0] === "api") {
 	assert.equal(alreadyExec?.items?.[0]?.phase, "completed", "already-delivered item phase is completed");
 	const alreadyView = (await (await fetch(`${baseUrl}/v1/work-items/${itemAlready.key}/workflow`, { headers })).json()) as { item: { state: string } };
 	assert.equal(alreadyView.item.state, "DONE", "already-delivered item closed DONE service-side");
-
+	const alreadyFocus = (await (await fetch(`${baseUrl}/v1/workspaces/${WORKSPACE}/focus/${OWNER}`, { headers })).json()) as { work_id: string | null };
+	assert.equal(alreadyFocus.work_id, null, "focus slot is cleared on already-delivered completion");
+	assert.ok(!String(alreadyOut.alreadyMyNow).includes("working now"), "my_now contains no working now item after already-delivered completion");
 	const unmetOut = runHarness("already-unmet", itemUnmet.key);
 	assert.ok(String(unmetOut.review).includes("NEEDS_FIX"), `already-unmet audit yields NEEDS_FIX; got: ${unmetOut.review}`);
 	// harness JSON output — narrow one-off read of the grant projection
@@ -2698,6 +2800,49 @@ if (args[0] === "api") {
 	const unmetView = (await (await fetch(`${baseUrl}/v1/work-items/${itemUnmet.key}/workflow`, { headers })).json()) as { item: { state: string } };
 	assert.notEqual(unmetView.item.state, "DONE", "unmet item is not closed by an empty diff");
 
+	// Test Scenario: OMP-247 zero-change remediation candidate reuse & completion
+	const zeroChangeRes = await (await fetch(`${baseUrl}/v1/commands`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			api_version: "work.omp.dev/v1",
+			workspace_id: WORKSPACE,
+			operation_id: crypto.randomUUID(),
+			request_id: crypto.randomUUID(),
+			correlation_id: crypto.randomUUID(),
+			command: {
+				type: "create_work_batch",
+				payload: {
+					items: [
+						{
+							client_ref: "smoke-item-zero-change",
+							title: "Smoke Zero Change Remediation Feature",
+							description: "Feature to test zero-change NEEDS_FIX remediation and candidate reuse",
+							scope: "smoke",
+							acceptance_criteria: [],
+							state: "BACKLOG",
+							project_id: PROJECT,
+						},
+					],
+				},
+			},
+		}),
+	})).json();
+	assert.equal(zeroChangeRes.receipt.state, "applied");
+	const itemZeroChange = zeroChangeRes.result.items[0];
+
+	const zeroChangeOut = runHarness("zero-change-remediation", itemZeroChange.key);
+	assert.equal(zeroChangeOut.injectedFailureRefused, true, "injected first-turn evidence failure is refused");
+	assert.ok(String(zeroChangeOut.review1).includes("NEEDS_FIX"), `turn 1 yields NEEDS_FIX; got: ${zeroChangeOut.review1}`);
+	assert.equal(zeroChangeOut.restampOk, true, "re-stamping plan without file changes from remediating phase is legal");
+	assert.ok(
+		String(zeroChangeOut.review2).includes("Execution grant completed") || String(zeroChangeOut.review2).includes("delivered and closed"),
+		`turn 2 completes autonomously after zero-change re-stamp; got: ${zeroChangeOut.review2}`,
+	);
+	assert.equal(zeroChangeOut.commitUnchanged, true, "candidate commit hash is unchanged across zero-change remediation");
+	const zeroChangeView = (await (await fetch(`${baseUrl}/v1/work-items/${itemZeroChange.key}/workflow`, { headers })).json()) as { item: { state: string } };
+	assert.equal(zeroChangeView.item.state, "DONE", "zero-change item is closed DONE service-side");
+	assert.ok(!String(zeroChangeOut.zeroChangeMyNow).includes("working now"), "my_now contains no working now item after zero-change completion");
 	// Test Scenario: OMP-194 zero-path already-delivered baseline completion & queue advance
 	const zeroPathRes = await (await fetch(`${baseUrl}/v1/commands`, {
 		method: "POST",

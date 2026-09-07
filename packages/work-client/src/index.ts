@@ -316,10 +316,58 @@ export type CompletionInput = {
 	receipts: EvidenceReceipt[];
 	closeout_requested: boolean;
 };
+export type CompletionRunnerIdentity = {
+	issuer: "work-service/auditor-settle";
+	launch_id: UUID;
+	tool_call_id: string;
+	task_sha256: string;
+	judge_sha256?: string | null;
+};
+
+export type CompletionSubject = {
+	work_id: UUID;
+	revision_id: UUID;
+	candidate_id: UUID;
+	candidate_sha256: string;
+	candidate_commit: string;
+};
+
+export type CompletionCheckDefinition = {
+	definition: "sealed_audit_manifest";
+	version: 1 | 2 | 3;
+	manifest_id: UUID;
+	task_sha256: string;
+};
+
+export type CompletionArtifactReference = {
+	receipt_id: UUID;
+	kind: "verification" | "audit" | "push";
+	payload_sha256: string;
+	artifact_sha256?: string | null;
+};
+
+export type CompletionDeliveryBinding = {
+	repository: string;
+	remote_url: string;
+	remote_ref: string;
+	candidate_commit: string;
+	remote_commit: string;
+};
+
+export type CompletionEvidence = {
+	runner: CompletionRunnerIdentity;
+	subject: CompletionSubject;
+	check: CompletionCheckDefinition;
+	result: "PASS";
+	artifacts: CompletionArtifactReference[];
+	delivery: CompletionDeliveryBinding;
+};
+
 export type CompleteWorkPayload = {
 	input: CompletionInput;
 	attempt_id: UUID;
 	done_authorization_ref: string;
+	evidence: CompletionEvidence;
 	satisfied_work_ids?: UUID[];
 	cancellations?: CancellationProof[];
 };
@@ -514,7 +562,7 @@ export type CompleteExecutionItemPayload = {
 	expected_grant_version: number;
 	work_id: UUID;
 	attempt_id: UUID;
-	push_receipt_id: UUID;
+	evidence: CompletionEvidence;
 	judge_sha256: string;
 };
 

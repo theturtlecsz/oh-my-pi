@@ -1217,12 +1217,16 @@ describe("merge confirmation gating (OMP-212)", () => {
 		// Push candidate to execution branch AND merge to main on remote
 		git(repo, "push", "-q", "origin", `HEAD:refs/heads/execution/omp-212`);
 		git(repo, "push", "-q", "origin", `HEAD:refs/heads/main`);
+		// Advance remote main so tip tree differs from candidate tree, exercising the PR arm
+		fs.writeFileSync(path.join(repo, "other.txt"), "other\n");
+		git(repo, "add", "--", "other.txt");
+		git(repo, "commit", "-q", "-m", "advance main");
+		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
 
 		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", mockGhPassing(candidateSha));
 		expect(outcome.confirmed).toBe(true);
 		expect(outcome.detail).toContain(`PR merged with 1 required check(s) passing and origin/main contains candidate ${candidateSha}`);
 	});
-
 	test("confirms completion when PR is merged to master and origin/master contains candidate commit", () => {
 		const repo = makeRepo("master");
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
@@ -1235,10 +1239,13 @@ describe("merge confirmation gating (OMP-212)", () => {
 		git(repo, "commit", "-q", "-m", "feat master");
 		const candidateSha = git(repo, "rev-parse", "HEAD");
 
-		// Push candidate to execution branch AND merge to master on remote
 		git(repo, "push", "-q", "origin", `HEAD:refs/heads/execution/omp-212`);
 		git(repo, "push", "-q", "origin", `HEAD:refs/heads/master`);
-
+		// Advance remote master so tip tree differs from candidate tree, exercising the PR arm
+		fs.writeFileSync(path.join(repo, "other-master.txt"), "other\n");
+		git(repo, "add", "--", "other-master.txt");
+		git(repo, "commit", "-q", "-m", "advance master");
+		git(repo, "push", "-q", "origin", "HEAD:refs/heads/master");
 		const mockGhMaster: GhPrRunner = (_root: string, _query: string) => ({
 			ok: true,
 			out: {
@@ -1343,6 +1350,81 @@ describe("merge confirmation gating (OMP-212)", () => {
 		expect(outcome.confirmed).toBe(false);
 		expect(outcome.detail).toContain("merge-conflicted");
 		expect(outcome.detail).toContain("re-freeze from the updated main tip");
+	});
+
+	// OMP-247: already-delivered candidate into origin default branch
+	test("already-delivered candidate with ancestry and identical tree succeeds without invoking GhPrRunner", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		fs.writeFileSync(path.join(repo, "feat.txt"), "feat\n");
+		git(repo, "add", "--", "feat.txt");
+		git(repo, "commit", "-q", "-m", "delivered candidate");
+		const candidateSha = git(repo, "rev-parse", "HEAD");
+		// Push candidate directly to origin/main as if already delivered
+		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
+
+		const refusingGh: GhPrRunner = () => {
+			throw new Error("GhPrRunner should not be called when candidate is already delivered with identical tree");
+		};
+		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-247", "refs/heads/main", refusingGh);
+		expect(outcome.confirmed).toBe(true);
+		expect(outcome.detail).toContain("already delivered into origin/main");
+		expect(outcome.detail).toContain("merge-base --is-ancestor");
+		expect(outcome.detail).toContain("rev-parse ^{tree}");
+	});
+
+	test("ancestor with different tip tree falls through to PR check and refuses on stale head OID", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+		fs.writeFileSync(path.join(repo, "feat.txt"), "feat\n");
+		git(repo, "add", "--", "feat.txt");
+		git(repo, "commit", "-q", "-m", "candidate commit");
+		const candidateSha = git(repo, "rev-parse", "HEAD");
+		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
+
+		// Now remote main advances with a new commit altering the tree
+		fs.writeFileSync(path.join(repo, "next.txt"), "next\n");
+		git(repo, "add", "--", "next.txt");
+		git(repo, "commit", "-q", "-m", "subsequent commit on main");
+		const nextSha = git(repo, "rev-parse", "HEAD");
+		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
+
+		// PR head is stale (points to nextSha instead of candidateSha)
+		const stalePrGh = mockGhPassing(nextSha);
+		const outcome = verifyMergeConfirmation(repo, candidateSha, "refs/heads/execution/omp-212", "refs/heads/main", stalePrGh);
+		expect(outcome.confirmed).toBe(false);
+		expect(outcome.detail).toContain("is not the audited candidate");
+	});
+
+	test("identical tree without ancestry does not bypass PR check", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);
+		Bun.spawnSync(["git", "init", "--bare", "-q", remote]);
+		git(repo, "remote", "add", "origin", remote);
+
+		// Create a root commit on origin/main
+		fs.writeFileSync(path.join(repo, "f.txt"), "f\n");
+		git(repo, "add", "--", "f.txt");
+		git(repo, "commit", "-q", "-m", "origin main root");
+		git(repo, "push", "-q", "origin", "HEAD:refs/heads/main");
+
+		// Create a disconnected root with the exact same tree
+		git(repo, "checkout", "--orphan", "disconnected");
+		git(repo, "commit", "-q", "-m", "orphan identical tree");
+		const orphanSha = git(repo, "rev-parse", "HEAD");
+
+		let ghCalled = false;
+		const spyGh: GhPrRunner = (r, q) => {
+			ghCalled = true;
+			return { ok: false, err: "no PR" };
+		};
+		const outcome = verifyMergeConfirmation(repo, orphanSha, "refs/heads/execution/omp-247", "refs/heads/main", spyGh);
+		expect(ghCalled).toBe(true);
+		expect(outcome.confirmed).toBe(false);
 	});
 });
 

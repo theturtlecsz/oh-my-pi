@@ -34,8 +34,12 @@ from .models import (
     LIVE_CLOSE_ATTEMPT_STATES,
     MAX_ACCEPTED_REPORTS,
     MAX_AUDITOR_LAUNCHES,
+    AuditManifest,
+    AuditorLaunch,
     Candidate,
+    CloseAttempt,
     CommandEnvelope,
+    CompletionEvidence,
     CompletionInput,
     CreateWorkBatchPayload,
     EvidenceKind,
@@ -49,6 +53,7 @@ from .models import (
 from .semantics import (
     completion_blockers,
     normalize_auditor_report,
+    validate_completion_evidence,
     validate_cutover_manifest,
     would_create_cycle,
 )
@@ -979,6 +984,54 @@ class PostgresWorkStore:
         item = cur.fetchone()
         if not item or item["current_revision_id"] != receipt.revision_id:
             raise WorkStoreError("stale_evidence", ("revision mismatch", str(item.get("current_revision_id") if item else None), str(receipt.revision_id)))
+        if receipt.kind.value == "audit":
+            # OMP-47: audit receipts are minted ONLY by the settle transaction —
+            # an external audit append is a forgery path, not a compatibility one.
+            raise WorkStoreError(
+                "invalid_request",
+                ("audit receipts are minted by settle_auditor_launch only",),
+            )
+        if receipt.kind.value == "closeout":
+            raise WorkStoreError(
+                "invalid_request",
+                (
+                    "generic append_evidence rejects closeout reviews; use record_closeout_review under work.close",
+                ),
+            )
+
+        cur.execute(
+            f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND receipt_id=%s",
+            (envelope.workspace_id, receipt.receipt_id),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            matches = (
+                existing["work_id"] == receipt.work_id
+                and existing["revision_id"] == receipt.revision_id
+                and existing["candidate_id"] == receipt.candidate_id
+                and existing["kind"] == receipt.kind.value
+                and existing["payload_sha256"] == receipt.payload_sha256
+                and existing["artifact_sha256"] == receipt.artifact_sha256
+                and existing["issuer"] == receipt.issuer
+                and existing["candidate_sha256"] == receipt.candidate_sha256
+                and existing["candidate_commit"] == receipt.candidate_commit
+                and existing["verdict"] == receipt.verdict
+                and existing["independent"] == receipt.independent
+                and existing["remote_ref"] == receipt.remote_ref
+                and existing["remote_commit"] == receipt.remote_commit
+            )
+            if matches:
+                return {
+                    "type": "append_evidence",
+                    "receipt": EvidenceReceipt.model_validate(dict(existing)).model_dump(
+                        mode="json"
+                    ),
+                }
+            raise WorkStoreError(
+                "idempotency_conflict",
+                ("receipt_id already exists with different claim fields",),
+            )
+
         event = None
         if receipt.kind.value == "plan":
             if not receipt.candidate_sha256:
@@ -1026,13 +1079,6 @@ class PostgresWorkStore:
                 "UPDATE omp_work.work_items SET current_candidate_id=%s WHERE work_id=%s",
                 (receipt.candidate_id, receipt.work_id),
             )
-        elif receipt.kind.value == "audit":
-            # OMP-47: audit receipts are minted ONLY by the settle transaction —
-            # an external audit append is a forgery path, not a compatibility one.
-            raise WorkStoreError(
-                "invalid_request",
-                ("audit receipts are minted by settle_auditor_launch only",),
-            )
         elif receipt.kind.value == "same_session_found_fixed":
             # OMP-52: the child receipt binds a parent attempt's candidate; the
             # child itself has no candidate. Full eligibility runs at complete_work.
@@ -1078,13 +1124,6 @@ class PostgresWorkStore:
                 )
             ):
                 raise WorkStoreError("stale_evidence", ("candidate verification sha/commit mismatch", str(receipt.candidate_sha256), str(candidate.get("candidate_sha256") if candidate else None), str(receipt.candidate_commit), str(candidate.get("commit_sha") if candidate else None)))
-        if receipt.kind.value == "closeout":
-            raise WorkStoreError(
-                "invalid_request",
-                (
-                    "generic append_evidence rejects closeout reviews; use record_closeout_review under work.close",
-                ),
-            )
         cur.execute(
             "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (
@@ -3034,6 +3073,83 @@ class PostgresWorkStore:
             "event": event,
         }
 
+    def _load_and_validate_completion_evidence(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        evidence: CompletionEvidence,
+        *,
+        expected_work_id: UUID,
+        expected_revision_id: UUID,
+        expected_candidate: Candidate,
+        attempt: CloseAttempt,
+        expected_repository: str | None = None,
+        expected_remote_ref: str | None = None,
+    ) -> tuple[CompletionBlocker, ...]:
+        cur.execute(
+            "SELECT manifest_id,work_id,attempt_id,manifest_version,plan_receipt_id,verification_receipt_id,candidate_id,candidate_sha256,candidate_commit,task_body,task_sha256,section_hashes,created_at FROM omp_work.audit_manifests WHERE workspace_id=%s AND manifest_id=%s",
+            (workspace_id, evidence.check.manifest_id),
+        )
+        manifest_row = cur.fetchone()
+        manifest = (
+            AuditManifest.model_validate(_row_json(dict(manifest_row)))
+            if manifest_row
+            else None
+        )
+
+        cur.execute(
+            "SELECT launch_id,attempt_id,manifest_id,launch_number,task_sha256,tool_call_id,reserved_at FROM omp_work.auditor_launches WHERE workspace_id=%s AND launch_id=%s",
+            (workspace_id, evidence.runner.launch_id),
+        )
+        launch_row = cur.fetchone()
+        launch = (
+            AuditorLaunch.model_validate(_row_json(dict(launch_row)))
+            if launch_row
+            else None
+        )
+
+        verif_id = next(
+            (a.receipt_id for a in evidence.artifacts if a.kind == "verification"),
+            None,
+        )
+        audit_id = next(
+            (a.receipt_id for a in evidence.artifacts if a.kind == "audit"), None
+        )
+        push_id = next(
+            (a.receipt_id for a in evidence.artifacts if a.kind == "push"), None
+        )
+
+        def _fetch_receipt(rid: UUID | None) -> EvidenceReceipt | None:
+            if rid is None:
+                return None
+            cur.execute(
+                f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND receipt_id=%s",
+                (workspace_id, rid),
+            )
+            r = cur.fetchone()
+            if r is None:
+                return None
+            return EvidenceReceipt.model_validate(dict(r))
+
+        verif_receipt = _fetch_receipt(verif_id)
+        audit_receipt = _fetch_receipt(audit_id)
+        push_receipt = _fetch_receipt(push_id)
+
+        return validate_completion_evidence(
+            evidence,
+            expected_work_id=expected_work_id,
+            expected_revision_id=expected_revision_id,
+            expected_candidate=expected_candidate,
+            attempt=attempt,
+            manifest=manifest,
+            launch=launch,
+            verification_receipt=verif_receipt,
+            audit_receipt=audit_receipt,
+            push_receipt=push_receipt,
+            expected_repository=expected_repository,
+            expected_remote_ref=expected_remote_ref,
+        )
+
     def _complete_work(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -3197,6 +3313,23 @@ class PostgresWorkStore:
         pending = self._pending_delivery_count(
             cur, envelope.workspace_id, submitted.work_id
         )
+        evidence_blockers = self._load_and_validate_completion_evidence(
+            cur,
+            envelope.workspace_id,
+            payload.evidence,
+            expected_work_id=submitted.work_id,
+            expected_revision_id=item["current_revision_id"],
+            expected_candidate=candidate,
+            attempt=attempt_model,
+        )
+        if evidence_blockers:
+            return refused(
+                "completion_blocked",
+                "; ".join(
+                    f"{blocker.code}: {blocker.detail}" for blocker in evidence_blockers
+                ),
+                ("resolve the blockers, then /done again",),
+            )
         blockers = completion_blockers(
             persisted, attempt=attempt_model, pending_delivery_count=pending
         )
@@ -4680,68 +4813,52 @@ class PostgresWorkStore:
                 raise WorkStoreError("completion_blocked", (f"rider {rider_work_id}: no longer open on the sealed revision",))
 
         # Check push receipt
-        cur.execute(
-            f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND receipt_id=%s",
-            (envelope.workspace_id, payload.push_receipt_id),
+        candidate = Candidate.model_validate(cand_row)
+        attempt_model = CloseAttempt.model_validate(_row_json(dict(attempt)))
+        evidence_blockers = self._load_and_validate_completion_evidence(
+            cur,
+            envelope.workspace_id,
+            payload.evidence,
+            expected_work_id=payload.work_id,
+            expected_revision_id=attempt["revision_id"],
+            expected_candidate=candidate,
+            attempt=attempt_model,
+            expected_repository=grant["repository"],
+            expected_remote_ref=grant["remote_ref"],
         )
-        push = cur.fetchone()
-        if (
-            push is None
-            or push["kind"] != "push"
-            or push["work_id"] != payload.work_id
-            or push["candidate_id"] != attempt["candidate_id"]
-            or not push.get("remote_ref")
-            or not push.get("remote_commit")
-            or push.get("candidate_commit") != attempt["candidate_commit"]
-        ):
+        if evidence_blockers:
             raise WorkStoreError(
                 "completion_blocked",
-                (
-                    "push receipt missing, unpushed, or does not bind candidate commit",
-                ),
+                ("; ".join(f"{b.code}: {b.detail}" for b in evidence_blockers),),
             )
 
-        push_payload = push.get("payload")
-        if isinstance(push_payload, str):
-            try:
-                push_payload = json.loads(push_payload)
-            except Exception as error:
-                raise WorkStoreError("completion_blocked", ("push receipt payload is malformed",)) from error
-        if not isinstance(push_payload, dict):
-            raise WorkStoreError("completion_blocked", ("push receipt payload must be an object",))
-        expected_repo = grant["repository"]
-        if not push_payload.get("repository") or push_payload["repository"] != expected_repo:
-            raise WorkStoreError("completion_blocked", ("push receipt repository mismatch",))
-
-        expected_remote_ref = grant["remote_ref"]
-        if (
-            not push.get("remote_ref")
-            or push["remote_ref"] != expected_remote_ref
-            or not push_payload.get("remote_ref")
-            or push_payload["remote_ref"] != expected_remote_ref
-        ):
-            raise WorkStoreError("completion_blocked", ("push receipt remote_ref mismatch",))
-        if attempt.get("remote_ref") and push["remote_ref"] != attempt["remote_ref"]:
-            raise WorkStoreError("completion_blocked", ("push receipt remote_ref mismatch",))
         expected_baseline = (
             grant_item.get("current_git_baseline")
             or grant_item.get("initial_git_baseline")
         )
-        if not push_payload.get("prior_tip") or push_payload["prior_tip"] != expected_baseline:
-            raise WorkStoreError("completion_blocked", ("push receipt prior_tip mismatch",))
-        if not push_payload.get("candidate_commit") or push_payload["candidate_commit"] != attempt["candidate_commit"]:
-            raise WorkStoreError("completion_blocked", ("push receipt candidate_commit mismatch",))
+        push_ref = next(a for a in payload.evidence.artifacts if a.kind == "push")
+        audit_ref = next(a for a in payload.evidence.artifacts if a.kind == "audit")
+        push_receipt_id = push_ref.receipt_id
+        audit_receipt_id = audit_ref.receipt_id
 
-        if not push_payload.get("result_tip") or push_payload["result_tip"] != push.get("remote_commit"):
-            raise WorkStoreError("completion_blocked", ("push receipt result_tip mismatch",))
-        # Check PASS audit receipt
         cur.execute(
-            f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND work_id=%s AND candidate_id=%s AND kind='audit' AND verdict='PASS' ORDER BY issued_at DESC LIMIT 1",
-            (envelope.workspace_id, payload.work_id, attempt["candidate_id"]),
+            f"SELECT payload FROM omp_evidence.receipts WHERE workspace_id=%s AND receipt_id=%s",
+            (envelope.workspace_id, push_receipt_id),
         )
-        audit = cur.fetchone()
-        if audit is None:
-            raise WorkStoreError("completion_blocked", ("PASS audit receipt missing",))
+        push_row = cur.fetchone()
+        push_payload = push_row["payload"] if push_row else {}
+        if isinstance(push_payload, str):
+            try:
+                push_payload = json.loads(push_payload)
+            except Exception:
+                push_payload = {}
+        if (
+            not isinstance(push_payload, dict)
+            or push_payload.get("prior_tip") != expected_baseline
+        ):
+            raise WorkStoreError(
+                "completion_blocked", ("push receipt prior_tip mismatch",)
+            )
 
         # Mint closeout receipt
         closeout_receipt_id = uuid4()
@@ -4749,8 +4866,8 @@ class PostgresWorkStore:
         closeout_payload = {
             "grant_id": str(payload.grant_id),
             "attempt_id": str(payload.attempt_id),
-            "push_receipt_id": str(payload.push_receipt_id),
-            "audit_receipt_id": str(audit["receipt_id"]),
+            "push_receipt_id": str(push_receipt_id),
+            "audit_receipt_id": str(audit_receipt_id),
         }
         cur.execute(
             "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit) VALUES(%s,%s,%s,%s,%s,'closeout',%s,%s,NULL,%s,%s,%s,%s,NULL,false,NULL,NULL)",
@@ -4768,7 +4885,6 @@ class PostgresWorkStore:
                 attempt["candidate_commit"],
             ),
         )
-
         # Transition attempt through legal states: audited -> closeout_requested -> completed
         if attempt["state"] == "audited":
             attempt = self._transition_attempt(
@@ -4787,7 +4903,6 @@ class PostgresWorkStore:
         cand_row = cur.fetchone()
         if cand_row is None:
             raise WorkStoreError("completion_blocked", ("candidate row missing",))
-        from .models import Candidate, CloseAttempt, CompletionInput
         candidate = Candidate.model_validate(cand_row)
 
         cur.execute(
@@ -4796,7 +4911,6 @@ class PostgresWorkStore:
         )
         receipts = tuple(EvidenceReceipt.model_validate(r) for r in cur.fetchall())
 
-        from .semantics import completion_blockers
         persisted = CompletionInput(
             work_id=payload.work_id,
             current_revision_id=attempt["revision_id"],
@@ -4832,7 +4946,7 @@ class PostgresWorkStore:
             f"UPDATE omp_work.execution_grant_items SET phase='completed', completed_at=%s, push_receipt_id=%s, closeout_receipt_id=%s WHERE workspace_id=%s AND item_id=%s RETURNING {_GRANT_ITEM_FIELDS}",
             (
                 now,
-                payload.push_receipt_id,
+                push_receipt_id,
                 closeout_receipt_id,
                 envelope.workspace_id,
                 grant_item["item_id"],

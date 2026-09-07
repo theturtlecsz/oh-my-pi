@@ -209,3 +209,149 @@ test("tree maps a redacted fetch exception to unavailable", async () => {
 	expect(diagnostics.length).toBeGreaterThan(0);
 	expect(diagnostics.join("\n")).not.toContain(secret);
 });
+
+test("complete_work and complete_execution_item send CompletionEvidence and omit push_receipt_id", async () => {
+	const bodies: Array<Record<string, unknown>> = [];
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (_input, init) => {
+			const parsed = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			bodies.push(parsed);
+			return new Response(
+				JSON.stringify({
+					receipt: RECEIPT,
+					result: {
+						type: (parsed.command as { type: string }).type,
+						grant: { grant_id: "00000000-0000-0000-0000-000000000001", state: "completed" },
+						item: { work_id: "00000000-0000-0000-0000-000000000002", phase: "completed" },
+						work_id: "00000000-0000-0000-0000-000000000002",
+						state: "DONE",
+						row_version: 1,
+					},
+				}),
+				{ status: 200 },
+			);
+		},
+	);
+
+	const evidence = {
+		runner: {
+			issuer: "work-service/auditor-settle" as const,
+			launch_id: "00000000-0000-0000-0000-000000000011",
+			tool_call_id: "tc-1",
+			task_sha256: "0".repeat(64),
+			judge_sha256: null,
+		},
+		subject: {
+			work_id: "00000000-0000-0000-0000-000000000002",
+			revision_id: "00000000-0000-0000-0000-000000000003",
+			candidate_id: "00000000-0000-0000-0000-000000000004",
+			candidate_sha256: "1".repeat(64),
+			candidate_commit: "2".repeat(40),
+		},
+		check: {
+			definition: "sealed_audit_manifest" as const,
+			version: 1 as const,
+			manifest_id: "00000000-0000-0000-0000-000000000012",
+			task_sha256: "0".repeat(64),
+		},
+		result: "PASS" as const,
+		artifacts: [
+			{
+				receipt_id: "00000000-0000-0000-0000-000000000021",
+				kind: "verification" as const,
+				payload_sha256: "3".repeat(64),
+				artifact_sha256: "4".repeat(64),
+			},
+			{
+				receipt_id: "00000000-0000-0000-0000-000000000022",
+				kind: "audit" as const,
+				payload_sha256: "5".repeat(64),
+				artifact_sha256: "6".repeat(64),
+			},
+			{
+				receipt_id: "00000000-0000-0000-0000-000000000023",
+				kind: "push" as const,
+				payload_sha256: "7".repeat(64),
+				artifact_sha256: null,
+			},
+		],
+		delivery: {
+			repository: "theturtlecsz/oh-my-pi",
+			remote_url: "https://github.com/theturtlecsz/oh-my-pi.git",
+			remote_ref: "refs/heads/main",
+			candidate_commit: "2".repeat(40),
+			remote_commit: "2".repeat(40),
+		},
+	};
+
+	await client.execute({
+		...ENV,
+		command: {
+			type: "complete_work",
+			payload: {
+				input: {
+					work_id: "00000000-0000-0000-0000-000000000002",
+					current_revision_id: "00000000-0000-0000-0000-000000000003",
+					candidate: {
+						candidate_id: "00000000-0000-0000-0000-000000000004",
+						work_id: "00000000-0000-0000-0000-000000000002",
+						revision_id: "00000000-0000-0000-0000-000000000003",
+						candidate_sha256: "1".repeat(64),
+						commit_sha: "2".repeat(40),
+						kind: "final",
+						allocated_at: "2026-08-15T00:00:00Z",
+					},
+					receipts: [],
+					closeout_requested: true,
+				},
+				attempt_id: "00000000-0000-0000-0000-000000000010",
+				done_authorization_ref: "done:ref",
+				evidence,
+			},
+		},
+	});
+
+	await client.execute({
+		...ENV,
+		command: {
+			type: "complete_execution_item",
+			payload: {
+				grant_id: "00000000-0000-0000-0000-000000000001",
+				expected_grant_version: 1,
+				work_id: "00000000-0000-0000-0000-000000000002",
+				attempt_id: "00000000-0000-0000-0000-000000000010",
+				evidence,
+				judge_sha256: "8".repeat(64),
+			},
+		},
+	});
+	const cmd0 = bodies[0]?.command;
+	expect(cmd0 && typeof cmd0 === "object" && "payload" in cmd0).toBe(true);
+	if (
+		cmd0 &&
+		typeof cmd0 === "object" &&
+		"payload" in cmd0 &&
+		typeof cmd0.payload === "object" &&
+		cmd0.payload !== null
+	) {
+		const payload = cmd0.payload as Record<string, unknown>;
+		expect(payload.evidence).toEqual(evidence);
+	}
+
+	const cmd1 = bodies[1]?.command;
+	expect(cmd1 && typeof cmd1 === "object" && "payload" in cmd1).toBe(true);
+	if (
+		cmd1 &&
+		typeof cmd1 === "object" &&
+		"payload" in cmd1 &&
+		typeof cmd1.payload === "object" &&
+		cmd1.payload !== null
+	) {
+		const payload = cmd1.payload as Record<string, unknown>;
+		expect(payload.evidence).toEqual(evidence);
+		expect("push_receipt_id" in payload).toBe(false);
+	}
+});

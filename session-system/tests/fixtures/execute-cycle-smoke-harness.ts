@@ -15,7 +15,7 @@ import { dirtyPaths, freezeCandidateCommit } from "../../extensions/workflow/git
 import { createWorkflowHost } from "../../extensions/workflow/host";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
-const scenario = process.argv[3] as "single" | "dirty" | "foreign-lane" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue" | "stale-attempt";
+const scenario = process.argv[3] as "single" | "dirty" | "foreign-lane" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue" | "stale-attempt" | "zero-change-remediation";
 const ownerProbe = process.argv[2];
 let probe = ownerProbe;
 const workKeyArg = process.argv[4];
@@ -660,6 +660,57 @@ if (scenario === "dirty") {
 	subprocessCount = 1; // next auditor report: PASS
 	out.review = await reviewUntilSettled("verified at baseline: src/already_delivered.ts committed and correct; no changes required");
 	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
+	out.alreadyMyNow = await execute({ action: "my_now" });
+	out.uiCalls = uiCalls;
+} else if (scenario === "zero-change-remediation") {
+	await fakeSessionManager.moveTo(ownerProbe);
+	for (const args of [["fetch", "-q", "origin"], ["reset", "-q", "--hard", "origin/main"], ["clean", "-qfd", "--", "src/"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
+	fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+	fs.writeFileSync(path.join(probe, "src/zero_change.ts"), "export const val = 1;\n");
+	for (const args of [["add", "--", "src/zero_change.ts"], ["commit", "-q", "-m", "init zero change"], ["push", "-q", "origin", "main"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
+	const executeCmd = extension.commands.get("execute");
+	if (!executeCmd) throw new Error("execute command missing");
+	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	await execute({ action: "seal_execution_criteria", criteria: ["AC-1: zero-change feature"] });
+	const planFile = "local://execute-plan.md";
+	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
+	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
+	fs.writeFileSync(planDiskPath, "## Approach\n1. Modify nothing\n\n## Verification\n1. Prove nothing changed\n");
+	await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/zero_change.ts"] });
+
+	// Injected first-turn evidence failure: invalid verification append before review
+	const badEvidence = await execute({
+		action: "append_evidence",
+		work: workKeyArg || "OMP-1",
+		kind: "verification",
+		body: "unauthorized verification",
+	});
+	out.injectedFailureRefused =
+		String(badEvidence).includes("refused") ||
+		String(badEvidence).includes("REFUSED") ||
+		String(badEvidence).includes("summary");
+	subprocessCount = 0; // next subprocess returns NEEDS_FIX
+	const review1 = await reviewUntilSettled("turn 1 audit review");
+	out.review1 = review1;
+	const commitBeforeRestamp = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+
+	// Turn 2: Re-stamp plan without file changes from remediating phase
+	const restampRes = await execute({ action: "stamp_execution_plan", plan_file: planFile, paths: ["src/zero_change.ts"] });
+	out.restampOk = !String(restampRes).includes("error") && !String(restampRes).includes("refused");
+	subprocessCount = 1; // next subprocess returns PASS
+	const review2 = await reviewUntilSettled("turn 2 review after re-stamp");
+	out.review2 = review2;
+	const commitAfterReview = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: probe }).stdout.toString().trim();
+	out.commitUnchanged = commitBeforeRestamp === commitAfterReview;
+
+	out.finalExecution = JSON.parse(await execute({ action: "get_execution" }));
+	out.zeroChangeMyNow = await execute({ action: "my_now" });
 	out.uiCalls = uiCalls;
 } else if (scenario === "zero-path-queue") {
 	await fakeSessionManager.moveTo(ownerProbe);
