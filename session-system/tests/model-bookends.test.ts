@@ -2,9 +2,17 @@
 // OMP-168 removed model-transported audit gates: audits run natively through
 // work run_audit, so /summary, before_agent_start, auditor task calls, and
 // task results receive zero interception from this extension.
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, test } from "bun:test";
-import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
+import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
+import * as auditorRunnerModule from "../extensions/workflow/auditor-runner";
+import * as gitModule from "../extensions/workflow/git";
+import { describe, expect, spyOn, test } from "bun:test";
+import { type ExtensionAPI, type ExtensionContext, ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
+import { z } from "zod";
+import type { WorkflowBackend } from "../extensions/workflow/backend";
+import { createWorkflowHost, syncExecutionPhaseModel } from "../extensions/workflow/host";
 
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const extPath = path.join(repoRoot, "session-system/extensions/model-bookends.ts");
@@ -149,5 +157,505 @@ describe("intake doctrine contract (OMP-247)", () => {
 		expect(content).toContain("delivery item owns repository changes, pre-merge tests/audit, and merge, while the activation child owns deploy/restart and live probes and is blocked by delivery through a native blocks edge");
 		expect(content).toContain("/execute delivery criteria must never require the currently running process to expose candidate code");
 		expect(content).toContain("Post-merge live probes: a blueprint with criteria that can only be observed after candidate merge plus install/restart/reload is invalid as one delivery item unless it publishes the linked delivery→activation batch");
+	});
+});
+
+describe("/execute phase/model routing (OMP-241)", () => {
+	const solModel = { id: "gpt-5.6-sol", provider: "openai-codex", name: "GPT 5.6 SOL", api: "openai-responses" };
+	const geminiModel = { id: "gemini-3.7-flash", provider: "google-antigravity", name: "Gemini 3.7 Flash", api: "google-gemini" };
+
+	function makeModelContext(roles: Record<string, typeof solModel | typeof geminiModel>) {
+		return {
+			models: {
+				resolve: (role: string) => roles[role],
+				list: () => Object.values(roles),
+				current: () => undefined,
+				family: () => "test-family",
+			},
+		} as never;
+	}
+
+	test("planning, criteria, and remediation phases route to SOL (@plan / @slow)", async () => {
+		const setCalls: Array<{ provider: string; id: string }> = [];
+		const fakePi = {
+			setModel: async (m: { provider: string; id: string }) => {
+				setCalls.push({ provider: m.provider, id: m.id });
+				return true;
+			},
+		} as never;
+		const ctx = makeModelContext({ "@plan": solModel, "@task": geminiModel });
+
+		for (const phase of ["criteria_pending", "planning", "remediating"]) {
+			setCalls.length = 0;
+			const res = await syncExecutionPhaseModel(phase, ctx, fakePi);
+			expect(res.ok).toBe(true);
+			expect(res.role).toBe("@plan");
+			expect(setCalls).toEqual([{ provider: "openai-codex", id: "gpt-5.6-sol" }]);
+		}
+	});
+
+	test("executing and reviewing phases route to Gemini 3.7 Flash (@task / @smol)", async () => {
+		const setCalls: Array<{ provider: string; id: string }> = [];
+		const fakePi = {
+			setModel: async (m: { provider: string; id: string }) => {
+				setCalls.push({ provider: m.provider, id: m.id });
+				return true;
+			},
+		} as never;
+		const ctx = makeModelContext({ "@plan": solModel, "@task": geminiModel });
+
+		for (const phase of ["executing", "reviewing"]) {
+			setCalls.length = 0;
+			const res = await syncExecutionPhaseModel(phase, ctx, fakePi);
+			expect(res.ok).toBe(true);
+			expect(res.role).toBe("@task");
+			expect(setCalls).toEqual([{ provider: "google-antigravity", id: "gemini-3.7-flash" }]);
+		}
+	});
+
+	test("falls back to @slow for planning and @smol/@default for executing when primary role is absent", async () => {
+		const setCalls: Array<{ provider: string; id: string }> = [];
+		const fakePi = {
+			setModel: async (m: { provider: string; id: string }) => {
+				setCalls.push({ provider: m.provider, id: m.id });
+				return true;
+			},
+		} as never;
+		const ctx = makeModelContext({ "@slow": solModel, "@smol": geminiModel });
+
+		const planRes = await syncExecutionPhaseModel("planning", ctx, fakePi);
+		expect(planRes.role).toBe("@slow");
+		expect(setCalls).toEqual([{ provider: "openai-codex", id: "gpt-5.6-sol" }]);
+
+		setCalls.length = 0;
+		const execRes = await syncExecutionPhaseModel("executing", ctx, fakePi);
+		expect(execRes.role).toBe("@smol");
+		expect(setCalls).toEqual([{ provider: "google-antigravity", id: "gemini-3.7-flash" }]);
+	});
+	test("unresolved model role fails closed with no_model error", async () => {
+		const fakePi = {
+			setModel: async () => true,
+		} as never;
+		const emptyCtx = makeModelContext({});
+
+		const planRes = await syncExecutionPhaseModel("planning", emptyCtx, fakePi);
+		expect(planRes.ok).toBe(false);
+		expect(planRes.error).toBe("no_model");
+		expect(planRes.reason).toContain("could not resolve model for @plan");
+
+		const execRes = await syncExecutionPhaseModel("executing", emptyCtx, fakePi);
+		expect(execRes.ok).toBe(false);
+		expect(execRes.error).toBe("no_model");
+		expect(execRes.reason).toContain("could not resolve model for @task");
+	});
+
+	test("setModel failure (missing credentials) fails closed with no_credential error", async () => {
+		const fakePi = {
+			setModel: async () => false,
+		} as never;
+		const ctx = makeModelContext({ "@plan": solModel, "@task": geminiModel });
+
+		const planRes = await syncExecutionPhaseModel("planning", ctx, fakePi);
+		expect(planRes.ok).toBe(false);
+		expect(planRes.error).toBe("no_credential");
+		expect(planRes.reason).toContain("no credential for openai-codex/gpt-5.6-sol");
+
+		const execRes = await syncExecutionPhaseModel("executing", ctx, fakePi);
+		expect(execRes.ok).toBe(false);
+		expect(execRes.error).toBe("no_credential");
+		expect(execRes.reason).toContain("no credential for google-antigravity/gemini-3.7-flash");
+	});
+
+	test("stamp_execution_plan refuses fail-closed without advancing when model switch fails", async () => {
+		let registeredExecute: ((id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }>) | undefined;
+		let stampCalled = false;
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			registerTool: (def: { execute: (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }> }) => {
+				registeredExecute = def.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			setModel: async () => false, // credentials fail
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const exec = {
+			grant: { grant_id: "grant-1", state: "active", grant_version: 1 },
+			items: [{ position: 0, work_id: "OMP-241", phase: "planning", close_attempts_started: 0 }],
+			activeItem: { position: 0, work_id: "OMP-241", phase: "planning", close_attempts_started: 0 },
+		};
+
+		const mockBackend = {
+			cacheFile: "cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-241", key: "OMP-241", title: "Test", project: "OMP" }),
+			getExecution: async () => exec,
+			stampExecutionPlan: async () => {
+				stampCalled = true;
+				return exec;
+			},
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "model-routing-test-"));
+		fs.mkdirSync(path.join(testDir, "src"), { recursive: true });
+		const planPath = path.join(testDir, "plan.md");
+		fs.writeFileSync(planPath, "## Approach\n1. Do thing\n\n## Verification\n1. Test thing\n");
+		const fakeCtx = {
+			cwd: testDir,
+			taskDepth: 0,
+			ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+			models: {
+				resolve: (role: string) => (role === "@task" ? geminiModel : undefined),
+				list: () => [geminiModel],
+				current: () => undefined,
+				family: () => "test-family",
+			},
+		} as unknown as ExtensionContext;
+
+		const result = await registeredExecute!(
+			"call-1",
+			{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/index.ts"] },
+			new AbortController().signal,
+			undefined,
+			fakeCtx,
+		);
+
+		expect(result.content[0].text).toContain("stamp_execution_plan refused: no credential for google-antigravity/gemini-3.7-flash");
+		expect(stampCalled).toBe(false);
+		fs.rmSync(testDir, { recursive: true, force: true });
+	});
+	test("begin_execution_review denies fail-closed when remediation model switch fails", async () => {
+		let registeredExecute: ((id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }>) | undefined;
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			registerTool: (def: { execute: (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }> }) => {
+				registeredExecute = def.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			setModel: async () => false, // model switch fails
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const exec = {
+			grant: { grant_id: "grant-1", state: "active", grant_version: 1 },
+			items: [{ position: 0, work_id: "OMP-241", phase: "executing", close_attempts_started: 0, plan_stamp: { candidate_id: "cand-1", paths: ["src/index.ts"] } }],
+			activeItem: { position: 0, work_id: "OMP-241", phase: "executing", close_attempts_started: 0, plan_stamp: { candidate_id: "cand-1", paths: ["src/index.ts"] } },
+		};
+
+		const mockBackend = {
+			cacheFile: "cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			issueDetail: async () => ({
+				key: "OMP-241",
+				attemptSnapshot: { attemptId: "att-1", state: "audit_ready", candidateCommit: "commit-1", hasManifest: true },
+			}),
+			sealedAuditTask: async () => ({ taskSha256: "task-sha", taskBody: "audit this" }),
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-241", key: "OMP-241", title: "Test", project: "OMP" }),
+			finalizeExecutionCandidate: async () => ({}),
+			getExecution: async () => exec,
+			reserveAuditorLaunch: async () => ({ status: "reserved", launchId: "launch-1" }),
+			settleAuditorLaunch: async () => ({ verdict: "NEEDS_FIX", event: { renderedText: "AC-1 failed" } }),
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workflow: async () => ({
+					close_attempts: [{ attempt_id: "att-1", revision_id: "rev-1", candidate_id: "cand-1", candidate_sha256: "sha-1", candidate_commit: "commit-1" }],
+					item: { current_revision_id: "rev-1", candidate: { candidate_id: "cand-1", candidate_sha256: "sha-1", commit_sha: "commit-1" } },
+				}),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "model-routing-review-test-"));
+		const fakeCtx = {
+			cwd: testDir,
+			taskDepth: 0,
+			ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+			models: {
+				resolve: (role: string) => (role === "@plan" ? solModel : undefined),
+				list: () => [solModel],
+				current: () => undefined,
+				family: () => "test-family",
+			},
+		} as unknown as ExtensionContext;
+		const tcb = await computeAuditTcb(fakeCtx, mockBackend.workClient!);
+		exec.grant.judge_sha256 = tcb.judgeSha256;
+
+		const auditRunnerSpy = spyOn(auditorRunnerModule, "prepareNativeAuditRunner").mockResolvedValue(async () => ({
+			started: true,
+			payload: "VERDICT: NEEDS_FIX",
+		}));
+		const dirtySpy = spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+
+		try {
+			const res = await registeredExecute!(
+				"call-1",
+				{ action: "begin_execution_review", body: "verification", work: "OMP-241" },
+				new AbortController().signal,
+				undefined,
+				fakeCtx,
+			);
+			expect(res.content[0].text).toContain("remediation model switch refused: no credential for openai-codex/gpt-5.6-sol");
+		} finally {
+			auditRunnerSpy.mockRestore();
+			dirtySpy.mockRestore();
+			fs.rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
+	test("/execute start notifies and aborts fail-closed when planning model cannot be resolved", async () => {
+		const notifications: Array<{ msg: string; type?: string }> = [];
+		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		let beginCalled = false;
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				registeredCommands.set(name, def.handler);
+			},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			setModel: async () => true,
+			getSessionId: () => "sess-1",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const mockBackend = {
+			cacheFile: "cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-241", key: "OMP-241", title: "Test", project: "OMP" }),
+			beginExecution: async () => {
+				beginCalled = true;
+				return { grant: { grant_id: "grant-1", grant_version: 1 }, items: [] };
+			},
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workItem: async () => ({ work_id: "uuid-241", revision: { revision_id: "rev-1", description: "test request" } }),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "model-routing-start-test-"));
+		Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: testDir });
+		const headSpy = spyOn(gitModule, "headCommit").mockReturnValue("1".repeat(40));
+		const refSpy = spyOn(gitModule, "currentSymbolicRef").mockReturnValue("refs/heads/main");
+		const upToDateSpy = spyOn(gitModule, "ensureUpToDateWithDefault").mockReturnValue({ ok: true, detail: "up to date" });
+		const checksSpy = spyOn(gitModule, "requiredStatusCheckCount").mockReturnValue({ ok: true, count: 12, detail: "12 required checks" });
+		const gitOpSpy = spyOn(gitModule, "inProgressGitOp").mockReturnValue(false);
+
+		try {
+			const fakeCtx = {
+				cwd: testDir,
+				taskDepth: 0,
+				ui: { notify: (msg: string, type?: string) => { notifications.push({ msg, type }); }, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+				models: {
+					resolve: () => undefined, // no model resolves
+					list: () => [],
+					current: () => undefined,
+					family: () => "test-family",
+				},
+			} as unknown as ExtensionContext;
+
+			const execCmd = registeredCommands.get("execute");
+			expect(execCmd).toBeDefined();
+			await execCmd!("OMP-241", fakeCtx);
+
+			expect(notifications.some(n => n.msg.includes("could not resolve model for @plan"))).toBe(true);
+			expect(beginCalled).toBe(false);
+		} finally {
+			headSpy.mockRestore();
+			refSpy.mockRestore();
+			upToDateSpy.mockRestore();
+			checksSpy.mockRestore();
+			gitOpSpy.mockRestore();
+			fs.rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
+	test("host tool actions trigger model synchronization at phase boundaries", async () => {
+		const setModelCalls: Array<{ provider: string; id: string }> = [];
+		let registeredExecute: ((id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }>) | undefined;
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			registerTool: (def: { execute: (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: Array<{ text: string }> }> }) => {
+				registeredExecute = def.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			setModel: async (m: { provider: string; id: string }) => {
+				setModelCalls.push({ provider: m.provider, id: m.id });
+				return true;
+			},
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const exec = {
+			grant: { grant_id: "grant-1", state: "active", grant_version: 1 },
+			items: [{ position: 0, work_id: "OMP-241", phase: "planning", close_attempts_started: 0 }],
+			activeItem: { position: 0, work_id: "OMP-241", phase: "planning", close_attempts_started: 0 },
+		};
+
+		const workClientMock = {
+			healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+			workflow: async () => ({
+				close_attempts: [{ attempt_id: "att-1", revision_id: "rev-1", candidate_id: "cand-1", candidate_sha256: "sha-1", candidate_commit: "commit-1" }],
+				item: { current_revision_id: "rev-1", candidate: { candidate_id: "cand-1", candidate_sha256: "sha-1", commit_sha: "commit-1" } },
+			}),
+		};
+		const mockBackend = {
+			cacheFile: "cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			issueDetail: async () => ({
+				key: "OMP-241",
+				attemptSnapshot: { attemptId: "att-1", state: "audit_ready", candidateCommit: "commit-1", hasManifest: true },
+			}),
+			sealedAuditTask: async () => ({ taskSha256: "task-sha", taskBody: "audit this" }),
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-241", key: "OMP-241", title: "Test", project: "OMP" }),
+			finalizeExecutionCandidate: async () => ({}),
+			getExecution: async () => exec,
+			stampExecutionPlan: async () => exec,
+			sealExecutionCriteria: async () => ({
+				sealedCriteria: ["AC-1"],
+				grant: exec.grant,
+				item: exec.activeItem,
+			}),
+			settleAuditorLaunch: async () => ({
+				verdict: "NEEDS_FIX",
+				event: { renderedText: "Fix something" },
+			}),
+			beginCloseAttempt: async () => ({
+				status: "active",
+				attempt: { attempt_id: "att-1" },
+				candidate: { candidate_id: "cand-1" },
+			}),
+			sealAuditManifest: async () => ({
+				status: "active",
+				attempt: { attempt_id: "att-1" },
+			}),
+			reserveAuditorLaunch: async () => ({
+				status: "reserved",
+				launchId: "launch-1",
+			}),
+			workClient: workClientMock,
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "model-routing-test-"));
+		fs.mkdirSync(path.join(testDir, "src"), { recursive: true });
+		const planPath = path.join(testDir, "plan.md");
+		fs.writeFileSync(planPath, "## Approach\n1. Do thing\n\n## Verification\n1. Test thing\n");
+		const fakeCtx = {
+			cwd: testDir,
+			taskDepth: 0,
+			ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+			models: {
+				resolve: (role: string) => (role === "@plan" ? solModel : role === "@task" ? geminiModel : undefined),
+				list: () => [solModel, geminiModel],
+				current: () => undefined,
+				family: () => "test-family",
+			},
+		} as unknown as ExtensionContext;
+		const tcb = await computeAuditTcb(fakeCtx, mockBackend.workClient!);
+		exec.grant.judge_sha256 = tcb.judgeSha256;
+
+		await registeredExecute!(
+			"call-1",
+			{ action: "stamp_execution_plan", plan_file: planPath, paths: ["src/index.ts"] },
+			new AbortController().signal,
+			undefined,
+			fakeCtx,
+		);
+
+		expect(setModelCalls).toEqual([{ provider: "google-antigravity", id: "gemini-3.7-flash" }]);
+		fs.rmSync(testDir, { recursive: true, force: true });
+
+		// seal_execution_criteria switches to @plan
+		setModelCalls.length = 0;
+		exec.activeItem.phase = "criteria_pending";
+		await registeredExecute!(
+			"call-2",
+			{ action: "seal_execution_criteria", criteria: ["AC-1"] },
+			new AbortController().signal,
+			undefined,
+			fakeCtx,
+		);
+		expect(setModelCalls).toEqual([{ provider: "openai-codex", id: "gpt-5.6-sol" }]);
+
+		// begin_execution_review finding (NEEDS_FIX) switches to @plan (remediating)
+		setModelCalls.length = 0;
+		exec.activeItem.phase = "executing";
+		const auditRunnerSpy = spyOn(auditorRunnerModule, "prepareNativeAuditRunner").mockResolvedValue(async () => ({
+			started: true,
+			payload: "VERDICT: NEEDS_FIX",
+		}));
+		const dirtySpy = spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+
+		try {
+			await registeredExecute!(
+				"call-3",
+				{ action: "begin_execution_review", body: "verification", work: "OMP-241" },
+				new AbortController().signal,
+				undefined,
+				fakeCtx,
+			);
+			expect(setModelCalls).toEqual([{ provider: "openai-codex", id: "gpt-5.6-sol" }]);
+		} finally {
+			auditRunnerSpy.mockRestore();
+			dirtySpy.mockRestore();
+		}
+
 	});
 });

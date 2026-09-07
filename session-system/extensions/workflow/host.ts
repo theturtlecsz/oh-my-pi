@@ -502,6 +502,64 @@ function sectionItems(content: string, heading: "Approach" | "Verification" | "P
 	return items;
 }
 
+export interface PhaseModelSyncResult {
+	ok: boolean;
+	model?: unknown;
+	role?: string;
+	error?: "no_model" | "no_credential";
+	reason?: string;
+}
+
+/**
+ * OMP-241: sync the active session model to the execution grant phase (fail-closed).
+ * Planning and complex work (criteria_pending, planning, remediating)
+ * select SOL (@plan role, fallback @slow), while routine implementation
+ * and verification (executing, reviewing) select Gemini 3.7 Flash (@task,
+ * fallback @smol, @default).
+ */
+export async function syncExecutionPhaseModel(
+	phase: string | undefined,
+	ctx?: ExtensionContext,
+	pi?: ExtensionAPI,
+): Promise<PhaseModelSyncResult> {
+	if (!phase || !ctx || !pi || typeof pi.setModel !== "function" || !ctx.models) {
+		return { ok: true };
+	}
+	const isPlanPhase = ["criteria_pending", "planning", "remediating"].includes(phase);
+	const targetRoles = isPlanPhase
+		? ["@plan", "@slow"]
+		: ["@task", "@smol", "@default"];
+	let model: { provider: string; id: string; name?: string } | undefined;
+	let resolvedRole: string | undefined;
+	for (const role of targetRoles) {
+		const m = ctx.models.resolve?.(role);
+		if (m) {
+			model = m;
+			resolvedRole = role;
+			break;
+		}
+	}
+	if (!model) {
+		const primaryRole = isPlanPhase ? "@plan" : "@task";
+		return {
+			ok: false,
+			error: "no_model",
+			reason: `could not resolve model for ${primaryRole}; fix modelRoles.${primaryRole.slice(1)} and retry`,
+		};
+	}
+	const success = await pi.setModel(model as never);
+	if (!success) {
+		return {
+			ok: false,
+			error: "no_credential",
+			reason: `no credential for ${model.provider}/${model.id}; log in and retry`,
+			model,
+			role: resolvedRole,
+		};
+	}
+	return { ok: true, model, role: resolvedRole };
+}
+
 const DIGEST_LABELS = new Set(["PROBLEM", "MAKEUP", "DECISIONS", "BLOCKERS", "ON-YOU", "EVIDENCE", "STATE", "NEXT", "SUGGEST"]);
 
 /** Reads are free at any depth; every other canonical action is a write. */
@@ -1643,6 +1701,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 				pi.appendEntry(`${cfg.entryType}-execute-outbox`, pendingEntry);
 			}
 
+			if (ctx && current.activeItem?.phase) {
+				const modelSync = await syncExecutionPhaseModel(current.activeItem.phase, ctx, pi);
+				if (!modelSync.ok) {
+					ctx.ui?.notify?.(`Execution continuation suppressed: ${modelSync.reason}`, "error");
+					return false;
+				}
+			}
+
 			pi.sendMessage({
 				customType: `${TOOL_NAME}-execute`,
 				content: prompt.render(executePromptTemplate, { key: issueKey }),
@@ -2662,6 +2728,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 					persistSession();
 					await saveCache();
 					const preflight = await validateExecutionRecoveryPreflight(activeCtx, backend, exec, "paused");
+					const modelSync = await syncExecutionPhaseModel(exec.activeItem?.phase, activeCtx, pi);
+					if (!modelSync.ok) {
+						ctx.ui.notify(`Cannot resume: ${modelSync.reason}`, "error");
+						return;
+					}
 					if (!preflight.ok) {
 						ctx.ui.notify(`Cannot resume: ${preflight.reason}`, "error");
 						return;
@@ -2822,6 +2893,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 					return;
 				}
 				const primaryRoot = await executionWorkspaceManager.primaryRoot(sourceCwd);
+				const modelSync = await syncExecutionPhaseModel("criteria_pending", ctx, pi);
+				if (!modelSync.ok) {
+					ctx.ui.notify(`Cannot begin execution: ${modelSync.reason}`, "error");
+					return;
+				}
 				const tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
 				const provenance: ExecutionProvenanceEnvelope = {
 					owner_input_id: randomUUID(),
@@ -3641,6 +3717,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 							// (the derived proposal is discarded); derived criteria bind only
 							// when the item has none.
 							if (!params.criteria || !params.criteria.length) return deny("criteria array required");
+							const modelSync = await syncExecutionPhaseModel("planning", ctx, pi);
+							if (!modelSync.ok) {
+								return deny(`seal_execution_criteria refused: ${modelSync.reason}`);
+							}
 							const tcb = await computeAuditTcb(ctx, backend.workClient!);
 							const updated = await backend.sealExecutionCriteria({
 								grantId: exec.grant.grant_id,
@@ -3729,6 +3809,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const candidateId = randomUUID();
 							const planSha = Bun.SHA256.hash(planContent, "hex");
 							const candSha = sha256Hex(canonicalJson({ planSha, candidateId }));
+							const modelSync = await syncExecutionPhaseModel("executing", ctx, pi);
+							if (!modelSync.ok) {
+								return deny(`stamp_execution_plan refused: ${modelSync.reason}`);
+							}
 							const tcb = await computeAuditTcb(ctx, backend.workClient!);
 							const updated = await backend.stampExecutionPlan({
 								grantId: exec.grant.grant_id,
@@ -3997,6 +4081,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 										footer(ctx);
 										return deny(`Audit verdict: ${settle.verdict}.\n${notice.fullNotice}\n\nFindings:\n${settle.event?.renderedText ?? ""}`);
 									}
+									const modelSync = await syncExecutionPhaseModel("remediating", ctx, pi);
+									if (!modelSync.ok) {
+										return deny(`Audit verdict: ${settle.verdict}, but remediation model switch refused: ${modelSync.reason}.\n\nFindings:\n${settle.event?.renderedText ?? ""}`);
+									}
 									const reportSuffix = auditRun.payload ? `\n\n## Auditor Report\n${auditRun.payload}` : "";
 									return okText(`Audit verdict: ${settle.verdict}.\n\nFindings:\n${settle.event?.renderedText ?? ""}${reportSuffix}\n\nUpdate plan, stamp plan, fix findings, and rerun review.`);
 								}
@@ -4135,6 +4223,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 										await saveCache();
 										footer(ctx);
 									}
+									await syncExecutionPhaseModel("criteria_pending", ctx, pi);
 									return okText(`Item ${activeWorkId} completed and passed audit! Advanced to next queue item ${nextIssue?.key ?? nextPending.work_id} (phase: criteria_pending).`);
 								}
 								localClear(ctx, true);
