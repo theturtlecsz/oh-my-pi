@@ -2666,7 +2666,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		});
 
 		pi.registerCommand("execute", {
-			description: "One-command autonomous delivery cycle: /execute <key> [--queue] | status [key] | resume <key> | cancel <key>",
+			description: "One-command autonomous delivery cycle: /execute <key> [--queue] [--complex] | status [key] | resume [key] [--complex] | cancel <key>",
 			getArgumentCompletions: prefix => {
 				const opts = ["--queue", "--complex", "status", "resume", "cancel"];
 				return opts.filter(o => o.startsWith(prefix.trim())).map(o => ({ value: o, label: o }));
@@ -2674,6 +2674,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				const parts = trimmed.split(/\s+/).filter(Boolean);
+				const isComplex = parts.includes("--complex") || Boolean(state.executionWorkspace?.complex);
+				const isQueue = parts.includes("--queue");
 				const sub = parts[0]?.toLowerCase();
 
 				if (sub === "status") {
@@ -2703,7 +2705,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				}
 
 				if (sub === "resume") {
-					const key = parts[1];
+					const key = parts.find((p, i) => i > 0 && !p.startsWith("--"));
 					const exec = await backend.getExecution(key);
 					if (!exec) {
 						ctx.ui.notify("No execution grant found to resume", "error");
@@ -2730,11 +2732,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 						ctx.ui.notify(`Cannot resume: ${String(error)}`, "error");
 						return;
 					}
-					state.executionWorkspace = { ...workspace, key: resolvedKey };
+					state.executionWorkspace = { ...workspace, key: resolvedKey, complex: isComplex };
 					persistSession();
 					await saveCache();
 					const preflight = await validateExecutionRecoveryPreflight(activeCtx, backend, exec, "paused");
-					const modelSync = await syncExecutionPhaseModel(exec.activeItem?.phase, activeCtx, pi);
+					const modelSync = await syncExecutionPhaseModel(exec.activeItem?.phase, activeCtx, pi, { complex: isComplex });
 					if (!modelSync.ok) {
 						ctx.ui.notify(`Cannot resume: ${modelSync.reason}`, "error");
 						return;
@@ -2819,12 +2821,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 					pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
 					return;
 				}
-
-				const isQueue = parts.includes("--queue");
-				const isComplex = parts.includes("--complex");
 				const rawKey = parts.find(p => !p.startsWith("--")) ?? currentNowRef()?.key;
 				if (!rawKey) {
-					ctx.ui.notify("Usage: /execute <key> [--queue] | status | resume | cancel", "warning");
+					ctx.ui.notify("Usage: /execute <key> [--queue] [--complex] | status | resume | cancel", "warning");
 					return;
 				}
 				const issue = await backend.findIssue(rawKey);

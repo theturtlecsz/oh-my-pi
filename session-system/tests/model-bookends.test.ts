@@ -647,6 +647,96 @@ describe("/execute phase/model routing (OMP-241)", () => {
 		}
 	});
 
+	test("/execute resume --complex flag retains SOL (@plan) upon resume", async () => {
+		const setModelCalls: Array<{ provider: string; id: string }> = [];
+		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			registerTool: () => {},
+			registerMessageRenderer: () => {},
+			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+				registeredCommands.set(name, def.handler);
+			},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: () => {},
+			appendEntry: () => {},
+			setModel: async (m: { provider: string; id: string }) => {
+				setModelCalls.push({ provider: m.provider, id: m.id });
+				return true;
+			},
+			getSessionId: () => "sess-complex-resume-1",
+			zod: z,
+		} as unknown as ExtensionAPI;
+
+		const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "model-routing-resume-complex-"));
+		Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: testDir });
+		Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: testDir });
+		Bun.spawnSync(["git", "config", "user.email", "test@example.com"], { cwd: testDir });
+		Bun.spawnSync(["git", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: testDir });
+		const realHead = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: testDir }).stdout.toString().trim();
+
+		const exec = {
+			grant: { grant_id: "grant-complex-resume-1", state: "active", grant_version: 1 },
+			items: [{ position: 0, work_id: "OMP-241", phase: "executing", initial_git_baseline: realHead, close_attempts_started: 0 }],
+			activeItem: { position: 0, work_id: "OMP-241", phase: "executing", initial_git_baseline: realHead, close_attempts_started: 0 },
+		};
+
+		const mockBackend = {
+			cacheFile: "cache.json",
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-241", key: "OMP-241", title: "Test", project: "OMP" }),
+			getExecution: async () => exec,
+			setExecutionState: async () => ({ grant: { ...exec.grant, state: "active", grant_version: 2 }, items: exec.items, activeItem: exec.activeItem }),
+			workClient: {
+				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workItem: async () => ({ work_id: "uuid-241", revision: { revision_id: "rev-1", description: "test request" } }),
+				workflow: async () => ({ relations: [] }),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+			executionWorkspaceManager: {
+				ensure: async (_c, _k, grantId) => ({ path: testDir, grantId, isWorktree: false, primaryRoot: testDir }),
+				primaryRoot: async () => testDir,
+				clean: async () => ({ cleaned: true, detail: "cleaned" }),
+			},
+		})(fakePi);
+
+		const dirtySpy = spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+
+		try {
+			const fakeCtx = {
+				cwd: testDir,
+				taskDepth: 0,
+				ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
+				models: {
+					resolve: (role: string) => (role === "@plan" ? solModel : role === "@task" ? geminiModel : undefined),
+					list: () => [solModel, geminiModel],
+					current: () => undefined,
+					family: () => "test-family",
+				},
+			} as unknown as ExtensionContext;
+
+			const execCmd = registeredCommands.get("execute");
+			expect(execCmd).toBeDefined();
+			await execCmd!("resume OMP-241 --complex", fakeCtx);
+
+			expect(setModelCalls.length).toBeGreaterThan(0);
+			expect(setModelCalls.every(c => c.id === "gpt-5.6-sol")).toBe(true);
+		} finally {
+			dirtySpy.mockRestore();
+			fs.rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
 
 	test("host tool actions trigger model synchronization at phase boundaries", async () => {
 		const setModelCalls: Array<{ provider: string; id: string }> = [];
