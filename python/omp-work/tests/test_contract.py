@@ -18,10 +18,19 @@ import omp_work.__main__
 from omp_work.v1.models import (
     Anomaly,
     Approval,
+    AuditManifest,
+    AuditorLaunch,
     Candidate,
     CloseAttempt,
     CommandEnvelope,
+    CompletionArtifactReference,
+    CompletionBlocker,
+    CompletionCheckDefinition,
+    CompletionDeliveryBinding,
+    CompletionEvidence,
     CompletionInput,
+    CompletionRunnerIdentity,
+    CompletionSubject,
     CutoverManifest,
     EvidenceKind,
     EvidenceReceipt,
@@ -29,12 +38,13 @@ from omp_work.v1.models import (
     RelationKind,
     WorkAlias,
 )
-from omp_work.v1.canonical import command_sha256
+from omp_work.v1.canonical import command_sha256, sha256, text_sha256
 from omp_work.v1.semantics import (
     completion_blockers,
     normalize_auditor_report,
     replay_decision,
     revision_decision,
+    validate_completion_evidence,
     validate_cutover_manifest,
     would_create_cycle,
 )
@@ -47,7 +57,7 @@ CANDIDATE = UUID("00000000-0000-7000-8000-000000000003")
 
 def receipt(kind: EvidenceKind, **updates: object) -> EvidenceReceipt:
     data: dict[str, object] = {
-        "receipt_id": UUID(f"00000000-0000-7000-8000-00000000000{len(updates) + 4}"),
+        "receipt_id": UUID(f"00000000-0000-7000-8000-{(len(updates) + 4):012x}"),
         "work_id": WORK,
         "revision_id": REVISION,
         "candidate_id": CANDIDATE,
@@ -516,6 +526,454 @@ def test_completion_rejects_work_and_revision_binding_mismatches() -> None:
         assert "stale_evidence" in {
             blocker.code for blocker in completion_blockers(input)
         }
+
+
+
+def make_valid_completion_evidence_bundle() -> tuple[
+    CompletionEvidence,
+    UUID,
+    UUID,
+    Candidate,
+    CloseAttempt,
+    AuditManifest,
+    AuditorLaunch,
+    EvidenceReceipt,
+    EvidenceReceipt,
+    EvidenceReceipt,
+]:
+    work_id = WORK
+    revision_id = REVISION
+    cand = candidate()
+    attempt_id = UUID("00000000-0000-7000-8000-0000000000aa")
+    manifest_id = UUID("00000000-0000-7000-8000-0000000000bb")
+    launch_id = UUID("00000000-0000-7000-8000-0000000000cc")
+    verif_id = UUID("00000000-0000-7000-8000-000000000010")
+    audit_id = UUID("00000000-0000-7000-8000-000000000020")
+    push_id = UUID("00000000-0000-7000-8000-000000000030")
+
+    task_sha = "1" * 64
+    audit_report = "VERDICT: PASS\nFINDINGS\nnone"
+    audit_payload = {
+        "report": audit_report,
+        "manifest_id": str(manifest_id),
+        "launch_id": str(launch_id),
+    }
+    push_payload = {
+        "repository": "theturtlecsz/oh-my-pi",
+        "remote_url": "https://github.com/theturtlecsz/oh-my-pi.git",
+        "remote_ref": "refs/heads/main",
+        "candidate_commit": cand.commit_sha,
+        "result_tip": "d" * 40,
+        "prior_tip": "e" * 40,
+    }
+
+    verif_receipt = receipt(
+        EvidenceKind.VERIFICATION,
+        receipt_id=verif_id,
+        work_id=work_id,
+        revision_id=revision_id,
+        candidate_id=cand.candidate_id,
+        candidate_sha256=cand.candidate_sha256,
+        candidate_commit=cand.commit_sha,
+        payload_sha256="2" * 64,
+        artifact_sha256="3" * 64,
+    )
+    audit_receipt = receipt(
+        EvidenceKind.AUDIT,
+        receipt_id=audit_id,
+        work_id=work_id,
+        revision_id=revision_id,
+        candidate_id=cand.candidate_id,
+        candidate_sha256=cand.candidate_sha256,
+        candidate_commit=cand.commit_sha,
+        payload=audit_payload,
+        payload_sha256=sha256(audit_payload),
+        artifact_sha256=text_sha256(audit_report),
+        issuer="work-service/auditor-settle",
+        independent=True,
+        verdict="PASS",
+    )
+    push_receipt = receipt(
+        EvidenceKind.PUSH,
+        receipt_id=push_id,
+        work_id=work_id,
+        revision_id=revision_id,
+        candidate_id=cand.candidate_id,
+        candidate_sha256=cand.candidate_sha256,
+        candidate_commit=cand.commit_sha,
+        payload=push_payload,
+        payload_sha256=sha256(push_payload),
+        artifact_sha256=None,
+        remote_ref="refs/heads/main",
+        remote_commit="d" * 40,
+    )
+
+    attempt = close_attempt(
+        attempt_id=attempt_id,
+        work_id=work_id,
+        revision_id=revision_id,
+        candidate_id=cand.candidate_id,
+        candidate_sha256=cand.candidate_sha256,
+        candidate_commit=cand.commit_sha,
+        repository="theturtlecsz/oh-my-pi",
+    )
+
+    manifest = AuditManifest(
+        manifest_id=manifest_id,
+        work_id=work_id,
+        attempt_id=attempt_id,
+        manifest_version=1,
+        plan_receipt_id=UUID("00000000-0000-7000-8000-000000000001"),
+        verification_receipt_id=verif_id,
+        candidate_id=cand.candidate_id,
+        candidate_sha256=cand.candidate_sha256,
+        candidate_commit=cand.commit_sha,
+        task_body="audit task body",
+        task_sha256=task_sha,
+        section_hashes={},
+        created_at=NOW,
+    )
+
+    launch = AuditorLaunch(
+        launch_id=launch_id,
+        attempt_id=attempt_id,
+        manifest_id=manifest_id,
+        launch_number=1,
+        task_sha256=task_sha,
+        tool_call_id="call_123",
+        reserved_at=NOW,
+    )
+
+    evidence = CompletionEvidence(
+        runner=CompletionRunnerIdentity(
+            issuer="work-service/auditor-settle",
+            launch_id=launch_id,
+            tool_call_id="call_123",
+            task_sha256=task_sha,
+            judge_sha256=None,
+        ),
+        subject=CompletionSubject(
+            work_id=work_id,
+            revision_id=revision_id,
+            candidate_id=cand.candidate_id,
+            candidate_sha256=cand.candidate_sha256,
+            candidate_commit=cand.commit_sha,
+        ),
+        check=CompletionCheckDefinition(
+            definition="sealed_audit_manifest",
+            version=1,
+            manifest_id=manifest_id,
+            task_sha256=task_sha,
+        ),
+        result="PASS",
+        artifacts=(
+            CompletionArtifactReference(
+                receipt_id=verif_id,
+                kind="verification",
+                payload_sha256=verif_receipt.payload_sha256,
+                artifact_sha256=verif_receipt.artifact_sha256,
+            ),
+            CompletionArtifactReference(
+                receipt_id=audit_id,
+                kind="audit",
+                payload_sha256=audit_receipt.payload_sha256,
+                artifact_sha256=audit_receipt.artifact_sha256,
+            ),
+            CompletionArtifactReference(
+                receipt_id=push_id,
+                kind="push",
+                payload_sha256=push_receipt.payload_sha256,
+                artifact_sha256=None,
+            ),
+        ),
+        delivery=CompletionDeliveryBinding(
+            repository="theturtlecsz/oh-my-pi",
+            remote_url="https://github.com/theturtlecsz/oh-my-pi.git",
+            remote_ref="refs/heads/main",
+            candidate_commit=cand.commit_sha,
+            remote_commit="d" * 40,
+        ),
+    )
+
+    return (
+        evidence,
+        work_id,
+        revision_id,
+        cand,
+        attempt,
+        manifest,
+        launch,
+        verif_receipt,
+        audit_receipt,
+        push_receipt,
+    )
+
+
+def test_completion_evidence_model_validation_rejects_invalid_inputs() -> None:
+    (
+        evidence,
+        work_id,
+        revision_id,
+        cand,
+        attempt,
+        manifest,
+        launch,
+        verif_r,
+        audit_r,
+        push_r,
+    ) = make_valid_completion_evidence_bundle()
+
+    # 1. Missing artifact kind (e.g. only 2 artifacts)
+    with pytest.raises(ValueError, match="artifacts must contain exactly one"):
+        CompletionEvidence(
+            runner=evidence.runner,
+            subject=evidence.subject,
+            check=evidence.check,
+            result="PASS",
+            artifacts=evidence.artifacts[:2],
+            delivery=evidence.delivery,
+        )
+
+    # 2. Duplicate artifact kinds
+    with pytest.raises(ValueError, match="artifacts must contain exactly one"):
+        CompletionEvidence(
+            runner=evidence.runner,
+            subject=evidence.subject,
+            check=evidence.check,
+            result="PASS",
+            artifacts=(
+                evidence.artifacts[0],
+                CompletionArtifactReference(
+                    receipt_id=uuid4(),
+                    kind="verification",
+                    payload_sha256="4" * 64,
+                    artifact_sha256="5" * 64,
+                ),
+                evidence.artifacts[2],
+            ),
+            delivery=evidence.delivery,
+        )
+
+    # 3. Duplicate receipt_id
+    with pytest.raises(ValueError, match="duplicate artifact receipt_id"):
+        CompletionEvidence(
+            runner=evidence.runner,
+            subject=evidence.subject,
+            check=evidence.check,
+            result="PASS",
+            artifacts=(
+                evidence.artifacts[0],
+                CompletionArtifactReference(
+                    receipt_id=evidence.artifacts[0].receipt_id,
+                    kind="audit",
+                    payload_sha256="4" * 64,
+                    artifact_sha256="5" * 64,
+                ),
+                evidence.artifacts[2],
+            ),
+            delivery=evidence.delivery,
+        )
+
+    # 4. Malformed task_sha256
+    with pytest.raises(ValueError):
+        CompletionRunnerIdentity(
+            issuer="work-service/auditor-settle",
+            launch_id=uuid4(),
+            tool_call_id="call_1",
+            task_sha256="not-a-hash",
+        )
+    # 5. Non-PASS result
+    with pytest.raises(ValueError):
+        CompletionEvidence.model_validate(
+            {
+                **evidence.model_dump(mode="json"),
+                "result": "NEEDS_FIX",
+            }
+        )
+
+
+def test_validate_completion_evidence_pure_semantics() -> None:
+    (
+        evidence,
+        work_id,
+        revision_id,
+        cand,
+        attempt,
+        manifest,
+        launch,
+        verif_r,
+        audit_r,
+        push_r,
+    ) = make_valid_completion_evidence_bundle()
+
+    # Valid claim passes with no blockers
+    blockers = validate_completion_evidence(
+        evidence,
+        expected_work_id=work_id,
+        expected_revision_id=revision_id,
+        expected_candidate=cand,
+        attempt=attempt,
+        manifest=manifest,
+        launch=launch,
+        verification_receipt=verif_r,
+        audit_receipt=audit_r,
+        push_receipt=push_r,
+    )
+    assert blockers == ()
+
+    # Altered subject work_id
+    bad_subject = evidence.model_copy(
+        update={"subject": evidence.subject.model_copy(update={"work_id": uuid4()})}
+    )
+    b = validate_completion_evidence(
+        bad_subject,
+        expected_work_id=work_id,
+        expected_revision_id=revision_id,
+        expected_candidate=cand,
+        attempt=attempt,
+        manifest=manifest,
+        launch=launch,
+        verification_receipt=verif_r,
+        audit_receipt=audit_r,
+        push_receipt=push_r,
+    )
+    assert any("subject work_id" in x.detail for x in b)
+
+    # Altered manifest target bindings
+    for field, bad_val in [
+        ("work_id", uuid4()),
+        ("candidate_id", uuid4()),
+        ("candidate_sha256", "9" * 64),
+        ("candidate_commit", "9" * 40),
+    ]:
+        bad_manifest = manifest.model_copy(update={field: bad_val})
+        b = validate_completion_evidence(
+            evidence,
+            expected_work_id=work_id,
+            expected_revision_id=revision_id,
+            expected_candidate=cand,
+            attempt=attempt,
+            manifest=bad_manifest,
+            launch=launch,
+            verification_receipt=verif_r,
+            audit_receipt=audit_r,
+            push_receipt=push_r,
+        )
+        assert any("manifest target binding mismatch" in x.detail for x in b)
+
+    # Altered runner launch_id
+    bad_runner = evidence.model_copy(
+        update={"runner": evidence.runner.model_copy(update={"launch_id": uuid4()})}
+    )
+    b = validate_completion_evidence(
+        bad_runner,
+        expected_work_id=work_id,
+        expected_revision_id=revision_id,
+        expected_candidate=cand,
+        attempt=attempt,
+        manifest=manifest,
+        launch=launch,
+        verification_receipt=verif_r,
+        audit_receipt=audit_r,
+        push_receipt=push_r,
+    )
+    assert any("runner launch_id mismatch" in x.detail for x in b)
+
+    # Altered audit payload launch_id / manifest_id
+    bad_audit_payload = audit_r.model_copy(
+        update={"payload": {**audit_r.payload, "launch_id": str(uuid4())}}
+    )
+    b = validate_completion_evidence(
+        evidence,
+        expected_work_id=work_id,
+        expected_revision_id=revision_id,
+        expected_candidate=cand,
+        attempt=attempt,
+        manifest=manifest,
+        launch=launch,
+        verification_receipt=verif_r,
+        audit_receipt=bad_audit_payload,
+        push_receipt=push_r,
+    )
+    assert any("audit receipt payload launch_id mismatch" in x.detail for x in b)
+
+    bad_audit_manifest_payload = audit_r.model_copy(
+        update={"payload": {**audit_r.payload, "manifest_id": str(uuid4())}}
+    )
+    b = validate_completion_evidence(
+        evidence,
+        expected_work_id=work_id,
+        expected_revision_id=revision_id,
+        expected_candidate=cand,
+        attempt=attempt,
+        manifest=manifest,
+        launch=launch,
+        verification_receipt=verif_r,
+        audit_receipt=bad_audit_manifest_payload,
+        push_receipt=push_r,
+    )
+    assert any("audit receipt payload manifest_id mismatch" in x.detail for x in b)
+
+    # Non-PASS audit receipt
+    bad_verdict_audit = audit_r.model_copy(update={"verdict": "NEEDS_FIX"})
+    b = validate_completion_evidence(
+        evidence,
+        expected_work_id=work_id,
+        expected_revision_id=revision_id,
+        expected_candidate=cand,
+        attempt=attempt,
+        manifest=manifest,
+        launch=launch,
+        verification_receipt=verif_r,
+        audit_receipt=bad_verdict_audit,
+        push_receipt=push_r,
+    )
+    assert any("audit receipt verdict is NEEDS_FIX, not PASS" in x.detail for x in b)
+
+    # Altered delivery repository
+    bad_delivery = evidence.model_copy(
+        update={
+            "delivery": evidence.delivery.model_copy(
+                update={"repository": "other/repo"}
+            )
+        }
+    )
+    b = validate_completion_evidence(
+        bad_delivery,
+        expected_work_id=work_id,
+        expected_revision_id=revision_id,
+        expected_candidate=cand,
+        attempt=attempt,
+        manifest=manifest,
+        launch=launch,
+        verification_receipt=verif_r,
+        audit_receipt=audit_r,
+        push_receipt=push_r,
+    )
+    assert any("push receipt repository mismatch" in x.detail for x in b)
+
+    # Same-basename foreign-path refusal: "/foreign/path/theturtlecsz/oh-my-pi" vs "theturtlecsz/oh-my-pi"
+    foreign_path_delivery = evidence.model_copy(
+        update={
+            "delivery": evidence.delivery.model_copy(
+                update={"repository": "/foreign/path/theturtlecsz/oh-my-pi"}
+            )
+        }
+    )
+    b = validate_completion_evidence(
+        foreign_path_delivery,
+        expected_work_id=work_id,
+        expected_revision_id=revision_id,
+        expected_candidate=cand,
+        attempt=attempt,
+        manifest=manifest,
+        launch=launch,
+        verification_receipt=verif_r,
+        audit_receipt=audit_r,
+        push_receipt=push_r,
+        expected_repository="theturtlecsz/oh-my-pi",
+    )
+    assert any("push receipt repository mismatch" in x.detail for x in b)
 
 
 def test_bundle_approval_and_tamper_detection(

@@ -37,6 +37,7 @@ import lockRefusalText from "./lock-refusal.md" with { type: "text" };
 import { checkProspectiveContract } from "./config";
 import sequenceText from "./sequence.md" with { type: "text" };
 import toolDescriptionTemplate from "./tool-description.md" with { type: "text" };
+import { buildCompletionEvidence } from "./work";
 import {
 	type BackendIssue,
 	BatchPartialError,
@@ -1884,9 +1885,28 @@ export function createWorkflowHost(cfg: HostConfig) {
 					}
 				}
 			}
-			if (!executionRelocationInProgress && (ctx?.taskDepth === 0 || ctx?.taskDepth === undefined) && backend.workClient) {
+			if (!executionRelocationInProgress && (ctx?.taskDepth === 0 || ctx?.taskDepth === undefined)) {
 				try {
-					const exec = await backend.getExecution();
+					if (state.executionWorkspace) {
+						const ws = state.executionWorkspace;
+						const execCheck = await backend.getExecution(ws.key);
+						const validGrant =
+							execCheck?.grant.grant_id === ws.grantId &&
+							execCheck.grant.state === "active" &&
+							Boolean(execCheck.activeItem) &&
+							(!state.executingIssue || execCheck.activeItem?.work_id === state.executingIssue.id);
+						if (!validGrant) {
+							state.executingIssue = undefined;
+							state.approvedPlan = undefined;
+							state.obligationHandoff = undefined;
+							state.obligationReview = undefined;
+							state.executionWorkspace = undefined;
+							persistSession();
+							await saveCache();
+						}
+					}
+					if (backend.workClient) {
+						const exec = await backend.getExecution();
 					if (exec && (exec.grant.state === "stopped" || exec.grant.state === "canceled")) {
 						const anchorKey = await resolveAnchorKey(backend, exec, state.identifier);
 						const notice = computeExecutionNoticeDetails(exec, exec.grant.terminal_reason, anchorKey);
@@ -2006,6 +2026,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								}
 							}
 						}
+					}
 					}
 				} catch {}
 			}
@@ -2220,6 +2241,33 @@ export function createWorkflowHost(cfg: HostConfig) {
 				// OMP-25: the concise centering orientation is the final turn — no
 				// hidden checkpoint continuation rides on it.
 				if (event.stop_hook_active || !state.executingIssue) return;
+				if (state.executionWorkspace) {
+					const workspace = state.executionWorkspace;
+					const exec = await backend.getExecution(workspace.key);
+					const item = await backend.findIssue(state.executingIssue.key);
+					const isTerminal =
+						!item ||
+						item.archived ||
+						item.state === "DONE" ||
+						item.state === "CANCELED" ||
+						item.state === "CANCELLED";
+					const isDeadGrant =
+						!exec ||
+						exec.grant.grant_id !== workspace.grantId ||
+						exec.grant.state !== "active" ||
+						!exec.activeItem ||
+						exec.activeItem.work_id !== state.executingIssue.id;
+					if (isTerminal || isDeadGrant) {
+						state.executingIssue = undefined;
+						state.approvedPlan = undefined;
+						state.obligationHandoff = undefined;
+						state.obligationReview = undefined;
+						state.executionWorkspace = undefined;
+						persistSession();
+						await saveCache();
+						return;
+					}
+				}
 				const reviewOwed = state.obligationReview?.armed && !state.obligationReview.blockedOnce;
 				const handoffOwed = state.obligationHandoff?.armed && !state.obligationHandoff.blockedOnce;
 				if (!reviewOwed && !handoffOwed) return;
@@ -2701,6 +2749,16 @@ export function createWorkflowHost(cfg: HostConfig) {
 					ctx.ui.notify("Usage: /execute <key> [--queue] | status | resume | cancel", "warning");
 					return;
 				}
+				const issue = await backend.findIssue(rawKey);
+				if (!issue) {
+					ctx.ui.notify(`Issue ${rawKey} not found`, "error");
+					return;
+				}
+				const refusal = nowRefusal(issue);
+				if (refusal) {
+					ctx.ui.notify(`Cannot begin execution: ${refusal}`, "error");
+					return;
+				}
 
 				const sourceCwd = contextCwd(ctx);
 				if (inProgressGitOp(sourceCwd)) {
@@ -2712,13 +2770,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 					ctx.ui.notify("Not in a git repository", "error");
 					return;
 				}
-
-				const issue = await backend.findIssue(rawKey);
-				if (!issue) {
-					ctx.ui.notify(`Issue ${rawKey} not found`, "error");
-					return;
-				}
-
 				let claims: ExecutionGrantItemClaim[];
 				if (isQueue) {
 					claims = await backend.snapshotQueue(projectFilter ?? undefined, issue.key, sourceCwd);
@@ -3988,12 +4039,17 @@ export function createWorkflowHost(cfg: HostConfig) {
 								if (!mergeCheck.confirmed) {
 									return deny(`Work item completion pending merge confirmation: ${mergeCheck.detail}. Pushing to ${remoteRef} alone does not mark the item delivered.`);
 								}
+								const execView = await backend.workClient!.workflow(targetIssue.key);
+								const execAttempt =
+									execView.close_attempts.find(a => a.attempt_id === attemptId) ?? execView.close_attempts[0];
+								if (!execAttempt) throw new Error("no close attempt found on execution workflow view");
+								const evidence = buildCompletionEvidence(execView, execAttempt, pushReceiptId);
 								const completed = await backend.completeExecutionItem({
 									grantId: currentExec.grant.grant_id,
 									expectedGrantVersion: currentExec.grant.grant_version,
 									workId: currentExec.activeItem.work_id,
 									attemptId,
-									pushReceiptId,
+									evidence,
 									judgeSha256: tcb.judgeSha256,
 								});
 								const nextPending = completed.items.find(i => i.phase === "pending");
@@ -4081,6 +4137,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 									}
 									return okText(`Item ${activeWorkId} completed and passed audit! Advanced to next queue item ${nextIssue?.key ?? nextPending.work_id} (phase: criteria_pending).`);
 								}
+								localClear(ctx, true);
+								settleClosedIssue(targetIssue, ctx);
 								if (state.executionWorkspace?.grantId === completed.grant.grant_id) {
 									state.executionWorkspace.cleanupReady = true;
 									persistSession();
@@ -4088,7 +4146,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 								}
 								return okText(`Execution grant completed! Work item ${activeWorkId} delivered and closed.`);
 							};
-
 							if (liveAttempt && !attemptMatchesItem) {
 								// OMP-195 (owner ruling 2026-08-31): recovery is grant-internal.
 								// Fall through to the first-turn path — begin_close_attempt
@@ -4222,6 +4279,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 								remoteRef: push.remoteRef,
 								remoteCommit: push.remoteCommit,
 								priorTip: push.priorTip,
+								remoteUrl: push.remoteUrl,
+								repository: exec.grant.repository,
 							} as EvidenceMeta);
 							const pushReceiptId = pushEvidence && typeof pushEvidence === "object" && "receipt_id" in pushEvidence ? String(pushEvidence.receipt_id) : "";
 							if (!pushReceiptId) return deny("Push receipt recording failed");
@@ -4231,7 +4290,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								sessionId: exec.grant.authorization_hash,
 								startedAt: exec.grant.created_at,
 								startCommit: exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline,
-								repository: isAbsolute(exec.grant.repository) ? exec.grant.repository : cwd,
+								repository: exec.grant.repository,
 								diffSha256: rangeDiffSha256(cwd, exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline, freeze.commitSha) ?? "",
 								dirtyPaths: [],
 								authorization_kind: "execution",
@@ -4283,7 +4342,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 						}
 					}
 				} catch (e) {
-					console.error("FULL TOOL ERROR:", e);
 					const errorDetails = (e && typeof e === "object" && "diagnostics" in e && Array.isArray((e as any).diagnostics)) ? `${(e as any).code} (${(e as any).status}): ${(e as any).diagnostics.join("; ")}` : String(e);
 					return deny(`${TOOL_NAME} tool error: ${errorDetails}`);
 				}

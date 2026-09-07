@@ -1093,9 +1093,35 @@ export function verifyMergeConfirmation(
 	if (isDefaultBranch) {
 		return { confirmed: false, detail: "direct push to protected default branch is disabled; execution candidate must target a dedicated execution branch with merge confirmation" };
 	}
+	// 1. Fetch origin default branch first
+	const fetch = runGit(
+		root,
+		["fetch", "origin", `+${resolvedDefault}:refs/remotes/origin/${defaultBranchName}`],
+		30_000,
+	);
+
+	// 2. Already-delivered arm: ancestry + tree equality into origin default branch
+	if (fetch.ok) {
+		const ancestor = runGit(root, ["merge-base", "--is-ancestor", commitSha, `origin/${defaultBranchName}`]);
+		const candTree = runGit(root, ["rev-parse", `${commitSha}^{tree}`]);
+		const originTree = runGit(root, ["rev-parse", `origin/${defaultBranchName}^{tree}`]);
+		if (
+			ancestor.ok &&
+			candTree.ok &&
+			originTree.ok &&
+			candTree.out.trim().length > 0 &&
+			candTree.out.trim() === originTree.out.trim()
+		) {
+			return {
+				confirmed: true,
+				detail: `candidate ${commitSha} already delivered into origin/${defaultBranchName}: ancestry verified (merge-base --is-ancestor) and tree matches tip tree ${candTree.out.trim()} (rev-parse ^{tree})`,
+			};
+		}
+	}
+
 	const branchName = remoteRef.startsWith("refs/heads/") ? remoteRef.slice("refs/heads/".length) : remoteRef;
 	const queryRef = branchName;
-	// 1. Query PR status and required checks via gh runner (fails closed)
+	// 3. Query PR status and required checks via gh runner (fails closed)
 	const ghResult = ghRunner(root, queryRef);
 	if (!ghResult.ok || !ghResult.out || !ghResult.out.pr) {
 		return {
@@ -1165,15 +1191,12 @@ export function verifyMergeConfirmation(
 		}
 	}
 
-	// 2. Fetch origin default branch to verify ancestry against current remote tip
-	const fetch = runGit(root, ["fetch", "origin", `+${resolvedDefault}:refs/remotes/origin/${defaultBranchName}`], 30_000);
 	if (!fetch.ok) {
 		return {
 			confirmed: false,
 			detail: `fetch ${resolvedDefault} failed: ${fetch.err || "unable to fetch origin"}`,
 		};
 	}
-
 	// 3. Ancestry verification: origin/<defaultBranchName> must contain the candidate commit
 	const ancestor = runGit(root, ["merge-base", "--is-ancestor", commitSha, `origin/${defaultBranchName}`]);
 	if (!ancestor.ok) {

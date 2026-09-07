@@ -7,11 +7,19 @@ from uuid import UUID
 
 from .models import (
     Anomaly,
+    AuditManifest,
+    AuditorLaunch,
     Candidate,
     CloseAttempt,
     CloseAttemptState,
+    CompletionArtifactReference,
     CompletionBlocker,
+    CompletionCheckDefinition,
+    CompletionDeliveryBinding,
+    CompletionEvidence,
     CompletionInput,
+    CompletionRunnerIdentity,
+    CompletionSubject,
     ContractExamples,
     EvidenceKind,
     EvidenceReceipt,
@@ -298,6 +306,269 @@ def validate_cutover_manifest(
         raise ValueError("cutover invariant failed")
 
 
+
+
+def validate_completion_evidence(
+    evidence: CompletionEvidence,
+    *,
+    expected_work_id: UUID,
+    expected_revision_id: UUID,
+    expected_candidate: Candidate,
+    attempt: CloseAttempt | None,
+    manifest: AuditManifest | None,
+    launch: AuditorLaunch | None,
+    verification_receipt: EvidenceReceipt | None,
+    audit_receipt: EvidenceReceipt | None,
+    push_receipt: EvidenceReceipt | None,
+    expected_repository: str | None = None,
+    expected_remote_ref: str | None = None,
+) -> tuple[CompletionBlocker, ...]:
+    blockers: list[CompletionBlocker] = []
+
+    def _block(reason: str) -> None:
+        blockers.append(
+            CompletionBlocker(
+                code="completion_evidence_invalid",
+                detail=f"completion_evidence_invalid: {reason}",
+            )
+        )
+
+    if evidence.subject.work_id != expected_work_id:
+        _block(
+            f"subject work_id {evidence.subject.work_id} does not match expected {expected_work_id}"
+        )
+    if evidence.subject.revision_id != expected_revision_id:
+        _block(
+            f"subject revision_id {evidence.subject.revision_id} does not match expected {expected_revision_id}"
+        )
+    if evidence.subject.candidate_id != expected_candidate.candidate_id:
+        _block(
+            f"subject candidate_id {evidence.subject.candidate_id} does not match expected {expected_candidate.candidate_id}"
+        )
+    if evidence.subject.candidate_sha256 != expected_candidate.candidate_sha256:
+        _block("subject candidate_sha256 mismatch")
+    if evidence.subject.candidate_commit != expected_candidate.commit_sha:
+        _block("subject candidate_commit mismatch")
+    if expected_candidate.kind != "final" or expected_candidate.commit_sha is None:
+        _block("candidate is not final or commit_sha is missing")
+
+    if attempt is None:
+        _block("close attempt missing")
+    else:
+        if (
+            attempt.work_id != expected_work_id
+            or attempt.revision_id != expected_revision_id
+        ):
+            _block("attempt work/revision mismatch")
+        if (
+            attempt.candidate_id != expected_candidate.candidate_id
+            or attempt.candidate_sha256 != expected_candidate.candidate_sha256
+            or attempt.candidate_commit != expected_candidate.commit_sha
+        ):
+            _block("attempt candidate binding mismatch")
+
+    if manifest is None:
+        _block("audit manifest missing")
+    else:
+        if attempt is not None and manifest.attempt_id != attempt.attempt_id:
+            _block("manifest attempt_id mismatch")
+        if (
+            manifest.work_id != expected_work_id
+            or manifest.candidate_id != expected_candidate.candidate_id
+            or manifest.candidate_sha256 != expected_candidate.candidate_sha256
+            or manifest.candidate_commit != expected_candidate.commit_sha
+        ):
+            _block("manifest target binding mismatch")
+        if evidence.check.definition != "sealed_audit_manifest":
+            _block(
+                f"check definition {evidence.check.definition} is not sealed_audit_manifest"
+            )
+        if evidence.check.manifest_id != manifest.manifest_id:
+            _block("check manifest_id mismatch")
+        if evidence.check.version != manifest.manifest_version:
+            _block("check manifest version mismatch")
+        if evidence.check.task_sha256 != manifest.task_sha256:
+            _block("check task_sha256 mismatch")
+    verif_ref = next((a for a in evidence.artifacts if a.kind == "verification"), None)
+    audit_ref = next((a for a in evidence.artifacts if a.kind == "audit"), None)
+    push_ref = next((a for a in evidence.artifacts if a.kind == "push"), None)
+
+    if verif_ref is None or audit_ref is None or push_ref is None:
+        _block("artifacts must include verification, audit, and push references")
+
+    if verification_receipt is None:
+        _block("verification receipt missing")
+    else:
+        if verif_ref is not None:
+            if verif_ref.receipt_id != verification_receipt.receipt_id:
+                _block("verification receipt_id mismatch")
+            if verif_ref.payload_sha256 != verification_receipt.payload_sha256:
+                _block("verification payload_sha256 mismatch")
+            if verif_ref.artifact_sha256 != verification_receipt.artifact_sha256:
+                _block("verification artifact_sha256 mismatch")
+        if (
+            manifest is not None
+            and verification_receipt.receipt_id != manifest.verification_receipt_id
+        ):
+            _block("verification receipt does not match manifest.verification_receipt_id")
+        if verification_receipt.kind != EvidenceKind.VERIFICATION:
+            _block("verification receipt kind is not verification")
+        if (
+            verification_receipt.work_id != expected_work_id
+            or verification_receipt.revision_id != expected_revision_id
+            or verification_receipt.candidate_id != expected_candidate.candidate_id
+            or verification_receipt.candidate_sha256
+            != expected_candidate.candidate_sha256
+            or verification_receipt.candidate_commit != expected_candidate.commit_sha
+        ):
+            _block("verification receipt target binding mismatch")
+
+    if audit_receipt is None:
+        _block("audit receipt missing")
+    else:
+        if audit_ref is not None:
+            if audit_ref.receipt_id != audit_receipt.receipt_id:
+                _block("audit receipt_id mismatch")
+            if audit_ref.payload_sha256 != audit_receipt.payload_sha256:
+                _block("audit payload_sha256 mismatch")
+            if audit_ref.artifact_sha256 != audit_receipt.artifact_sha256:
+                _block("audit artifact_sha256 mismatch")
+        if audit_receipt.artifact_sha256 is None or (
+            audit_ref is not None and audit_ref.artifact_sha256 is None
+        ):
+            _block("audit artifact_sha256 must be present")
+        if audit_receipt.kind != EvidenceKind.AUDIT:
+            _block("audit receipt kind is not audit")
+        if not audit_receipt.independent:
+            _block("audit receipt is not independent")
+        if audit_receipt.verdict != "PASS":
+            _block(f"audit receipt verdict is {audit_receipt.verdict}, not PASS")
+        if audit_receipt.issuer != "work-service/auditor-settle":
+            _block(
+                f"audit receipt issuer is {audit_receipt.issuer}, not work-service/auditor-settle"
+            )
+        if (
+            audit_receipt.work_id != expected_work_id
+            or audit_receipt.revision_id != expected_revision_id
+            or audit_receipt.candidate_id != expected_candidate.candidate_id
+            or audit_receipt.candidate_sha256 != expected_candidate.candidate_sha256
+            or audit_receipt.candidate_commit != expected_candidate.commit_sha
+        ):
+            _block("audit receipt target binding mismatch")
+
+    if launch is None:
+        _block("auditor launch missing")
+    else:
+        if evidence.runner.issuer != "work-service/auditor-settle":
+            _block("runner issuer must be work-service/auditor-settle")
+        if evidence.runner.launch_id != launch.launch_id:
+            _block("runner launch_id mismatch")
+        if attempt is not None and launch.attempt_id != attempt.attempt_id:
+            _block("launch attempt_id mismatch")
+        if manifest is not None and launch.manifest_id != manifest.manifest_id:
+            _block("launch manifest_id mismatch")
+        if evidence.runner.tool_call_id != launch.tool_call_id:
+            _block("runner tool_call_id mismatch")
+        if evidence.runner.task_sha256 != launch.task_sha256:
+            _block("runner task_sha256 mismatch with launch")
+        if manifest is not None and evidence.runner.task_sha256 != manifest.task_sha256:
+            _block("runner task_sha256 mismatch with manifest")
+        if attempt is not None:
+            if (
+                attempt.judge_sha256
+                and evidence.runner.judge_sha256 != attempt.judge_sha256
+            ):
+                _block("runner judge_sha256 mismatch with attempt")
+            elif not attempt.judge_sha256 and evidence.runner.judge_sha256 is not None:
+                _block(
+                    "runner judge_sha256 should be None for manual attempt without judge"
+                )
+        if audit_receipt is not None:
+            if not isinstance(audit_receipt.payload, dict):
+                _block("audit receipt payload must be an object")
+            else:
+                audit_launch_id = audit_receipt.payload.get("launch_id")
+                audit_manifest_id = audit_receipt.payload.get("manifest_id")
+                if not audit_launch_id or str(launch.launch_id) != str(audit_launch_id):
+                    _block("audit receipt payload launch_id mismatch")
+                if manifest is not None:
+                    if not audit_manifest_id or str(manifest.manifest_id) != str(
+                        audit_manifest_id
+                    ):
+                        _block("audit receipt payload manifest_id mismatch")
+
+    if push_receipt is None:
+        _block("push receipt missing")
+    else:
+        if push_ref is not None:
+            if push_ref.receipt_id != push_receipt.receipt_id:
+                _block("push receipt_id mismatch")
+            if push_ref.payload_sha256 != push_receipt.payload_sha256:
+                _block("push payload_sha256 mismatch")
+            if push_ref.artifact_sha256 != push_receipt.artifact_sha256:
+                _block("push artifact_sha256 mismatch")
+        if push_receipt.kind != EvidenceKind.PUSH:
+            _block("push receipt kind is not push")
+        if (
+            push_receipt.work_id != expected_work_id
+            or push_receipt.revision_id != expected_revision_id
+            or push_receipt.candidate_id != expected_candidate.candidate_id
+            or push_receipt.candidate_commit != expected_candidate.commit_sha
+            or (
+                push_receipt.candidate_sha256 is not None
+                and push_receipt.candidate_sha256 != expected_candidate.candidate_sha256
+            )
+        ):
+            _block("push receipt target binding mismatch")
+        if not push_receipt.remote_commit:
+            _block("push receipt remote_commit is missing")
+        if not push_receipt.remote_ref:
+            _block("push receipt remote_ref is missing")
+
+        push_payload = push_receipt.payload
+        if not isinstance(push_payload, dict):
+            _block("push receipt payload must be an object")
+        else:
+            if push_payload.get("candidate_commit") != expected_candidate.commit_sha:
+                _block("push receipt candidate_commit mismatch")
+            if push_payload.get("remote_ref") != push_receipt.remote_ref:
+                _block("push receipt remote_ref mismatch")
+            if push_payload.get("result_tip") != push_receipt.remote_commit:
+                _block("push receipt result_tip mismatch")
+            if push_payload.get("repository") != evidence.delivery.repository:
+                _block("push receipt repository mismatch")
+            if push_payload.get("remote_url") != evidence.delivery.remote_url:
+                _block("push receipt remote_url mismatch")
+            if push_payload.get("remote_ref") != evidence.delivery.remote_ref:
+                _block("push receipt remote_ref mismatch")
+            if (
+                push_payload.get("candidate_commit")
+                != evidence.delivery.candidate_commit
+            ):
+                _block("push receipt candidate_commit mismatch")
+            if push_payload.get("result_tip") != evidence.delivery.remote_commit:
+                _block("push receipt result_tip mismatch")
+
+        if evidence.delivery.candidate_commit != expected_candidate.commit_sha:
+            _block("push receipt candidate_commit mismatch")
+        if evidence.delivery.remote_commit != push_receipt.remote_commit:
+            _block("push receipt result_tip mismatch")
+        if evidence.delivery.remote_ref != push_receipt.remote_ref:
+            _block("push receipt remote_ref mismatch")
+        if (
+            attempt is not None
+            and attempt.repository
+            and evidence.delivery.repository != attempt.repository
+        ):
+            _block("push receipt repository mismatch")
+        if expected_repository and evidence.delivery.repository != expected_repository:
+            _block("push receipt repository mismatch")
+        if expected_remote_ref and evidence.delivery.remote_ref != expected_remote_ref:
+            _block("push receipt remote_ref mismatch")
+    if evidence.result != "PASS":
+        _block(f"evidence result is {evidence.result}, not PASS")
+
+    return tuple(blockers)
 def validate_examples(examples: ContractExamples) -> None:
     immutable = examples.immutable_revision
     if (
@@ -333,3 +604,12 @@ def validate_examples(examples: ContractExamples) -> None:
         or pushed.candidate_commit == pushed.mismatched_remote
     ):
         raise ValueError("pushed branch example failed")
+    completion = examples.completion_evidence
+    if (
+        completion.matching_result != "no_blockers"
+        or completion.stale_candidate_result != "completion_blocked"
+        or completion.foreign_receipt_result != "completion_blocked"
+        or completion.self_asserted_audit_result != "completion_blocked"
+        or set(completion.required_artifacts) != {"verification", "audit", "push"}
+    ):
+        raise ValueError("completion evidence example failed")

@@ -140,3 +140,14 @@ describe("audit cutover (OMP-168: no model-transport interception)", () => {
 		expect(resResult).toBeUndefined();
 	});
 });
+
+describe("intake doctrine contract (OMP-247)", () => {
+	test("requires a native delivery->activation blocks edge for post-merge-only live probes", async () => {
+		const skillPath = path.join(repoRoot, "session-system/skills/intake/SKILL.md");
+		const content = await Bun.file(skillPath).text();
+		expect(content).toContain("Post-merge live activation: any criterion that can only be observed after candidate merge plus install/restart/reload must be published as a blocked activation child");
+		expect(content).toContain("delivery item owns repository changes, pre-merge tests/audit, and merge, while the activation child owns deploy/restart and live probes and is blocked by delivery through a native blocks edge");
+		expect(content).toContain("/execute delivery criteria must never require the currently running process to expose candidate code");
+		expect(content).toContain("Post-merge live probes: a blueprint with criteria that can only be observed after candidate merge plus install/restart/reload is invalid as one delivery item unless it publishes the linked delivery→activation batch");
+	});
+});

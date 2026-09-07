@@ -1436,7 +1436,8 @@
             "OMP-147",
             "OMP-180",
             "OMP-194",
-            "OMP-222"
+            "OMP-222",
+            "OMP-247"
           ],
           "title": "Issue",
           "type": "string"
@@ -4597,6 +4598,9 @@
               "title": "Attempt Id",
               "type": "string"
             },
+            "evidence": {
+              "$ref": "#/$defs/CompletionEvidence"
+            },
             "expected_grant_version": {
               "minimum": 1,
               "title": "Expected Grant Version",
@@ -4612,11 +4616,6 @@
               "title": "Judge Sha256",
               "type": "string"
             },
-            "push_receipt_id": {
-              "format": "uuid",
-              "title": "Push Receipt Id",
-              "type": "string"
-            },
             "work_id": {
               "format": "uuid",
               "title": "Work Id",
@@ -4628,7 +4627,7 @@
             "expected_grant_version",
             "work_id",
             "attempt_id",
-            "push_receipt_id",
+            "evidence",
             "judge_sha256"
           ],
           "title": "CompleteExecutionItemPayload",
@@ -4675,6 +4674,9 @@
               "title": "Done Authorization Ref",
               "type": "string"
             },
+            "evidence": {
+              "$ref": "#/$defs/CompletionEvidence"
+            },
             "input": {
               "$ref": "#/$defs/CompletionInput"
             },
@@ -4691,9 +4693,169 @@
           "required": [
             "input",
             "attempt_id",
-            "done_authorization_ref"
+            "done_authorization_ref",
+            "evidence"
           ],
           "title": "CompleteWorkPayload",
+          "type": "object"
+        },
+        "CompletionArtifactReference": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "kind": {
+              "enum": [
+                "verification",
+                "audit",
+                "push"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "kind",
+            "payload_sha256"
+          ],
+          "title": "CompletionArtifactReference",
+          "type": "object"
+        },
+        "CompletionCheckDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "definition": {
+              "const": "sealed_audit_manifest",
+              "default": "sealed_audit_manifest",
+              "title": "Definition",
+              "type": "string"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "version": {
+              "default": 1,
+              "enum": [
+                1,
+                2,
+                3
+              ],
+              "title": "Version",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "manifest_id",
+            "task_sha256"
+          ],
+          "title": "CompletionCheckDefinition",
+          "type": "object"
+        },
+        "CompletionDeliveryBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "remote_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Remote Commit",
+              "type": "string"
+            },
+            "remote_ref": {
+              "minLength": 1,
+              "title": "Remote Ref",
+              "type": "string"
+            },
+            "remote_url": {
+              "minLength": 1,
+              "title": "Remote Url",
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "title": "Repository",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repository",
+            "remote_url",
+            "remote_ref",
+            "candidate_commit",
+            "remote_commit"
+          ],
+          "title": "CompletionDeliveryBinding",
+          "type": "object"
+        },
+        "CompletionEvidence": {
+          "additionalProperties": false,
+          "properties": {
+            "artifacts": {
+              "items": {
+                "$ref": "#/$defs/CompletionArtifactReference"
+              },
+              "title": "Artifacts",
+              "type": "array"
+            },
+            "check": {
+              "$ref": "#/$defs/CompletionCheckDefinition"
+            },
+            "delivery": {
+              "$ref": "#/$defs/CompletionDeliveryBinding"
+            },
+            "result": {
+              "const": "PASS",
+              "default": "PASS",
+              "title": "Result",
+              "type": "string"
+            },
+            "runner": {
+              "$ref": "#/$defs/CompletionRunnerIdentity"
+            },
+            "subject": {
+              "$ref": "#/$defs/CompletionSubject"
+            }
+          },
+          "required": [
+            "runner",
+            "subject",
+            "check",
+            "artifacts",
+            "delivery"
+          ],
+          "title": "CompletionEvidence",
           "type": "object"
         },
         "CompletionInput": {
@@ -4732,6 +4894,91 @@
             "closeout_requested"
           ],
           "title": "CompletionInput",
+          "type": "object"
+        },
+        "CompletionRunnerIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {
+              "const": "work-service/auditor-settle",
+              "default": "work-service/auditor-settle",
+              "title": "Issuer",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "tool_call_id",
+            "task_sha256"
+          ],
+          "title": "CompletionRunnerIdentity",
+          "type": "object"
+        },
+        "CompletionSubject": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "candidate_sha256",
+            "candidate_commit"
+          ],
+          "title": "CompletionSubject",
           "type": "object"
         },
         "CreateBatchRelation": {
@@ -6783,6 +7030,9 @@
               "title": "Attempt Id",
               "type": "string"
             },
+            "evidence": {
+              "$ref": "#/$defs/CompletionEvidence"
+            },
             "expected_grant_version": {
               "minimum": 1,
               "title": "Expected Grant Version",
@@ -6798,11 +7048,6 @@
               "title": "Judge Sha256",
               "type": "string"
             },
-            "push_receipt_id": {
-              "format": "uuid",
-              "title": "Push Receipt Id",
-              "type": "string"
-            },
             "work_id": {
               "format": "uuid",
               "title": "Work Id",
@@ -6814,10 +7059,254 @@
             "expected_grant_version",
             "work_id",
             "attempt_id",
-            "push_receipt_id",
+            "evidence",
             "judge_sha256"
           ],
           "title": "CompleteExecutionItemPayload",
+          "type": "object"
+        },
+        "CompletionArtifactReference": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "kind": {
+              "enum": [
+                "verification",
+                "audit",
+                "push"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "kind",
+            "payload_sha256"
+          ],
+          "title": "CompletionArtifactReference",
+          "type": "object"
+        },
+        "CompletionCheckDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "definition": {
+              "const": "sealed_audit_manifest",
+              "default": "sealed_audit_manifest",
+              "title": "Definition",
+              "type": "string"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "version": {
+              "default": 1,
+              "enum": [
+                1,
+                2,
+                3
+              ],
+              "title": "Version",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "manifest_id",
+            "task_sha256"
+          ],
+          "title": "CompletionCheckDefinition",
+          "type": "object"
+        },
+        "CompletionDeliveryBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "remote_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Remote Commit",
+              "type": "string"
+            },
+            "remote_ref": {
+              "minLength": 1,
+              "title": "Remote Ref",
+              "type": "string"
+            },
+            "remote_url": {
+              "minLength": 1,
+              "title": "Remote Url",
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "title": "Repository",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repository",
+            "remote_url",
+            "remote_ref",
+            "candidate_commit",
+            "remote_commit"
+          ],
+          "title": "CompletionDeliveryBinding",
+          "type": "object"
+        },
+        "CompletionEvidence": {
+          "additionalProperties": false,
+          "properties": {
+            "artifacts": {
+              "items": {
+                "$ref": "#/$defs/CompletionArtifactReference"
+              },
+              "title": "Artifacts",
+              "type": "array"
+            },
+            "check": {
+              "$ref": "#/$defs/CompletionCheckDefinition"
+            },
+            "delivery": {
+              "$ref": "#/$defs/CompletionDeliveryBinding"
+            },
+            "result": {
+              "const": "PASS",
+              "default": "PASS",
+              "title": "Result",
+              "type": "string"
+            },
+            "runner": {
+              "$ref": "#/$defs/CompletionRunnerIdentity"
+            },
+            "subject": {
+              "$ref": "#/$defs/CompletionSubject"
+            }
+          },
+          "required": [
+            "runner",
+            "subject",
+            "check",
+            "artifacts",
+            "delivery"
+          ],
+          "title": "CompletionEvidence",
+          "type": "object"
+        },
+        "CompletionRunnerIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {
+              "const": "work-service/auditor-settle",
+              "default": "work-service/auditor-settle",
+              "title": "Issuer",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "tool_call_id",
+            "task_sha256"
+          ],
+          "title": "CompletionRunnerIdentity",
+          "type": "object"
+        },
+        "CompletionSubject": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "candidate_sha256",
+            "candidate_commit"
+          ],
+          "title": "CompletionSubject",
           "type": "object"
         }
       },
@@ -6840,12 +7329,261 @@
       "type": "object"
     },
     "CompleteExecutionItemPayload": {
+      "$defs": {
+        "CompletionArtifactReference": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "kind": {
+              "enum": [
+                "verification",
+                "audit",
+                "push"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "kind",
+            "payload_sha256"
+          ],
+          "title": "CompletionArtifactReference",
+          "type": "object"
+        },
+        "CompletionCheckDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "definition": {
+              "const": "sealed_audit_manifest",
+              "default": "sealed_audit_manifest",
+              "title": "Definition",
+              "type": "string"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "version": {
+              "default": 1,
+              "enum": [
+                1,
+                2,
+                3
+              ],
+              "title": "Version",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "manifest_id",
+            "task_sha256"
+          ],
+          "title": "CompletionCheckDefinition",
+          "type": "object"
+        },
+        "CompletionDeliveryBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "remote_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Remote Commit",
+              "type": "string"
+            },
+            "remote_ref": {
+              "minLength": 1,
+              "title": "Remote Ref",
+              "type": "string"
+            },
+            "remote_url": {
+              "minLength": 1,
+              "title": "Remote Url",
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "title": "Repository",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repository",
+            "remote_url",
+            "remote_ref",
+            "candidate_commit",
+            "remote_commit"
+          ],
+          "title": "CompletionDeliveryBinding",
+          "type": "object"
+        },
+        "CompletionEvidence": {
+          "additionalProperties": false,
+          "properties": {
+            "artifacts": {
+              "items": {
+                "$ref": "#/$defs/CompletionArtifactReference"
+              },
+              "title": "Artifacts",
+              "type": "array"
+            },
+            "check": {
+              "$ref": "#/$defs/CompletionCheckDefinition"
+            },
+            "delivery": {
+              "$ref": "#/$defs/CompletionDeliveryBinding"
+            },
+            "result": {
+              "const": "PASS",
+              "default": "PASS",
+              "title": "Result",
+              "type": "string"
+            },
+            "runner": {
+              "$ref": "#/$defs/CompletionRunnerIdentity"
+            },
+            "subject": {
+              "$ref": "#/$defs/CompletionSubject"
+            }
+          },
+          "required": [
+            "runner",
+            "subject",
+            "check",
+            "artifacts",
+            "delivery"
+          ],
+          "title": "CompletionEvidence",
+          "type": "object"
+        },
+        "CompletionRunnerIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {
+              "const": "work-service/auditor-settle",
+              "default": "work-service/auditor-settle",
+              "title": "Issuer",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "tool_call_id",
+            "task_sha256"
+          ],
+          "title": "CompletionRunnerIdentity",
+          "type": "object"
+        },
+        "CompletionSubject": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "candidate_sha256",
+            "candidate_commit"
+          ],
+          "title": "CompletionSubject",
+          "type": "object"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "attempt_id": {
           "format": "uuid",
           "title": "Attempt Id",
           "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/CompletionEvidence"
         },
         "expected_grant_version": {
           "minimum": 1,
@@ -6862,11 +7600,6 @@
           "title": "Judge Sha256",
           "type": "string"
         },
-        "push_receipt_id": {
-          "format": "uuid",
-          "title": "Push Receipt Id",
-          "type": "string"
-        },
         "work_id": {
           "format": "uuid",
           "title": "Work Id",
@@ -6878,7 +7611,7 @@
         "expected_grant_version",
         "work_id",
         "attempt_id",
-        "push_receipt_id",
+        "evidence",
         "judge_sha256"
       ],
       "title": "CompleteExecutionItemPayload",
@@ -6998,6 +7731,9 @@
               "title": "Done Authorization Ref",
               "type": "string"
             },
+            "evidence": {
+              "$ref": "#/$defs/CompletionEvidence"
+            },
             "input": {
               "$ref": "#/$defs/CompletionInput"
             },
@@ -7014,9 +7750,169 @@
           "required": [
             "input",
             "attempt_id",
-            "done_authorization_ref"
+            "done_authorization_ref",
+            "evidence"
           ],
           "title": "CompleteWorkPayload",
+          "type": "object"
+        },
+        "CompletionArtifactReference": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "kind": {
+              "enum": [
+                "verification",
+                "audit",
+                "push"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "kind",
+            "payload_sha256"
+          ],
+          "title": "CompletionArtifactReference",
+          "type": "object"
+        },
+        "CompletionCheckDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "definition": {
+              "const": "sealed_audit_manifest",
+              "default": "sealed_audit_manifest",
+              "title": "Definition",
+              "type": "string"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "version": {
+              "default": 1,
+              "enum": [
+                1,
+                2,
+                3
+              ],
+              "title": "Version",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "manifest_id",
+            "task_sha256"
+          ],
+          "title": "CompletionCheckDefinition",
+          "type": "object"
+        },
+        "CompletionDeliveryBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "remote_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Remote Commit",
+              "type": "string"
+            },
+            "remote_ref": {
+              "minLength": 1,
+              "title": "Remote Ref",
+              "type": "string"
+            },
+            "remote_url": {
+              "minLength": 1,
+              "title": "Remote Url",
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "title": "Repository",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repository",
+            "remote_url",
+            "remote_ref",
+            "candidate_commit",
+            "remote_commit"
+          ],
+          "title": "CompletionDeliveryBinding",
+          "type": "object"
+        },
+        "CompletionEvidence": {
+          "additionalProperties": false,
+          "properties": {
+            "artifacts": {
+              "items": {
+                "$ref": "#/$defs/CompletionArtifactReference"
+              },
+              "title": "Artifacts",
+              "type": "array"
+            },
+            "check": {
+              "$ref": "#/$defs/CompletionCheckDefinition"
+            },
+            "delivery": {
+              "$ref": "#/$defs/CompletionDeliveryBinding"
+            },
+            "result": {
+              "const": "PASS",
+              "default": "PASS",
+              "title": "Result",
+              "type": "string"
+            },
+            "runner": {
+              "$ref": "#/$defs/CompletionRunnerIdentity"
+            },
+            "subject": {
+              "$ref": "#/$defs/CompletionSubject"
+            }
+          },
+          "required": [
+            "runner",
+            "subject",
+            "check",
+            "artifacts",
+            "delivery"
+          ],
+          "title": "CompletionEvidence",
           "type": "object"
         },
         "CompletionInput": {
@@ -7055,6 +7951,91 @@
             "closeout_requested"
           ],
           "title": "CompletionInput",
+          "type": "object"
+        },
+        "CompletionRunnerIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {
+              "const": "work-service/auditor-settle",
+              "default": "work-service/auditor-settle",
+              "title": "Issuer",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "tool_call_id",
+            "task_sha256"
+          ],
+          "title": "CompletionRunnerIdentity",
+          "type": "object"
+        },
+        "CompletionSubject": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "candidate_sha256",
+            "candidate_commit"
+          ],
+          "title": "CompletionSubject",
           "type": "object"
         },
         "EvidenceKind": {
@@ -7326,6 +8307,165 @@
           "title": "Candidate",
           "type": "object"
         },
+        "CompletionArtifactReference": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "kind": {
+              "enum": [
+                "verification",
+                "audit",
+                "push"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "kind",
+            "payload_sha256"
+          ],
+          "title": "CompletionArtifactReference",
+          "type": "object"
+        },
+        "CompletionCheckDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "definition": {
+              "const": "sealed_audit_manifest",
+              "default": "sealed_audit_manifest",
+              "title": "Definition",
+              "type": "string"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "version": {
+              "default": 1,
+              "enum": [
+                1,
+                2,
+                3
+              ],
+              "title": "Version",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "manifest_id",
+            "task_sha256"
+          ],
+          "title": "CompletionCheckDefinition",
+          "type": "object"
+        },
+        "CompletionDeliveryBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "remote_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Remote Commit",
+              "type": "string"
+            },
+            "remote_ref": {
+              "minLength": 1,
+              "title": "Remote Ref",
+              "type": "string"
+            },
+            "remote_url": {
+              "minLength": 1,
+              "title": "Remote Url",
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "title": "Repository",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repository",
+            "remote_url",
+            "remote_ref",
+            "candidate_commit",
+            "remote_commit"
+          ],
+          "title": "CompletionDeliveryBinding",
+          "type": "object"
+        },
+        "CompletionEvidence": {
+          "additionalProperties": false,
+          "properties": {
+            "artifacts": {
+              "items": {
+                "$ref": "#/$defs/CompletionArtifactReference"
+              },
+              "title": "Artifacts",
+              "type": "array"
+            },
+            "check": {
+              "$ref": "#/$defs/CompletionCheckDefinition"
+            },
+            "delivery": {
+              "$ref": "#/$defs/CompletionDeliveryBinding"
+            },
+            "result": {
+              "const": "PASS",
+              "default": "PASS",
+              "title": "Result",
+              "type": "string"
+            },
+            "runner": {
+              "$ref": "#/$defs/CompletionRunnerIdentity"
+            },
+            "subject": {
+              "$ref": "#/$defs/CompletionSubject"
+            }
+          },
+          "required": [
+            "runner",
+            "subject",
+            "check",
+            "artifacts",
+            "delivery"
+          ],
+          "title": "CompletionEvidence",
+          "type": "object"
+        },
         "CompletionInput": {
           "additionalProperties": false,
           "properties": {
@@ -7362,6 +8502,91 @@
             "closeout_requested"
           ],
           "title": "CompletionInput",
+          "type": "object"
+        },
+        "CompletionRunnerIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {
+              "const": "work-service/auditor-settle",
+              "default": "work-service/auditor-settle",
+              "title": "Issuer",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "tool_call_id",
+            "task_sha256"
+          ],
+          "title": "CompletionRunnerIdentity",
+          "type": "object"
+        },
+        "CompletionSubject": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "candidate_sha256",
+            "candidate_commit"
+          ],
+          "title": "CompletionSubject",
           "type": "object"
         },
         "EvidenceKind": {
@@ -7544,6 +8769,9 @@
           "title": "Done Authorization Ref",
           "type": "string"
         },
+        "evidence": {
+          "$ref": "#/$defs/CompletionEvidence"
+        },
         "input": {
           "$ref": "#/$defs/CompletionInput"
         },
@@ -7560,9 +8788,54 @@
       "required": [
         "input",
         "attempt_id",
-        "done_authorization_ref"
+        "done_authorization_ref",
+        "evidence"
       ],
       "title": "CompleteWorkPayload",
+      "type": "object"
+    },
+    "CompletionArtifactReference": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Sha256"
+        },
+        "kind": {
+          "enum": [
+            "verification",
+            "audit",
+            "push"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "payload_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Payload Sha256",
+          "type": "string"
+        },
+        "receipt_id": {
+          "format": "uuid",
+          "title": "Receipt Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "receipt_id",
+        "kind",
+        "payload_sha256"
+      ],
+      "title": "CompletionArtifactReference",
       "type": "object"
     },
     "CompletionBlocker": {
@@ -7580,7 +8853,8 @@
             "attempt_missing",
             "attempt_not_requested",
             "delivery_pending",
-            "child_receipt_invalid"
+            "child_receipt_invalid",
+            "completion_evidence_invalid"
           ],
           "title": "Code",
           "type": "string"
@@ -7595,6 +8869,375 @@
         "detail"
       ],
       "title": "CompletionBlocker",
+      "type": "object"
+    },
+    "CompletionCheckDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "definition": {
+          "const": "sealed_audit_manifest",
+          "default": "sealed_audit_manifest",
+          "title": "Definition",
+          "type": "string"
+        },
+        "manifest_id": {
+          "format": "uuid",
+          "title": "Manifest Id",
+          "type": "string"
+        },
+        "task_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "version": {
+          "default": 1,
+          "enum": [
+            1,
+            2,
+            3
+          ],
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "manifest_id",
+        "task_sha256"
+      ],
+      "title": "CompletionCheckDefinition",
+      "type": "object"
+    },
+    "CompletionDeliveryBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_commit": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Candidate Commit",
+          "type": "string"
+        },
+        "remote_commit": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Remote Commit",
+          "type": "string"
+        },
+        "remote_ref": {
+          "minLength": 1,
+          "title": "Remote Ref",
+          "type": "string"
+        },
+        "remote_url": {
+          "minLength": 1,
+          "title": "Remote Url",
+          "type": "string"
+        },
+        "repository": {
+          "minLength": 1,
+          "title": "Repository",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "remote_url",
+        "remote_ref",
+        "candidate_commit",
+        "remote_commit"
+      ],
+      "title": "CompletionDeliveryBinding",
+      "type": "object"
+    },
+    "CompletionEvidence": {
+      "$defs": {
+        "CompletionArtifactReference": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "kind": {
+              "enum": [
+                "verification",
+                "audit",
+                "push"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "kind",
+            "payload_sha256"
+          ],
+          "title": "CompletionArtifactReference",
+          "type": "object"
+        },
+        "CompletionCheckDefinition": {
+          "additionalProperties": false,
+          "properties": {
+            "definition": {
+              "const": "sealed_audit_manifest",
+              "default": "sealed_audit_manifest",
+              "title": "Definition",
+              "type": "string"
+            },
+            "manifest_id": {
+              "format": "uuid",
+              "title": "Manifest Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "version": {
+              "default": 1,
+              "enum": [
+                1,
+                2,
+                3
+              ],
+              "title": "Version",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "manifest_id",
+            "task_sha256"
+          ],
+          "title": "CompletionCheckDefinition",
+          "type": "object"
+        },
+        "CompletionDeliveryBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "remote_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Remote Commit",
+              "type": "string"
+            },
+            "remote_ref": {
+              "minLength": 1,
+              "title": "Remote Ref",
+              "type": "string"
+            },
+            "remote_url": {
+              "minLength": 1,
+              "title": "Remote Url",
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "title": "Repository",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repository",
+            "remote_url",
+            "remote_ref",
+            "candidate_commit",
+            "remote_commit"
+          ],
+          "title": "CompletionDeliveryBinding",
+          "type": "object"
+        },
+        "CompletionRunnerIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {
+              "const": "work-service/auditor-settle",
+              "default": "work-service/auditor-settle",
+              "title": "Issuer",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Judge Sha256"
+            },
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "tool_call_id",
+            "task_sha256"
+          ],
+          "title": "CompletionRunnerIdentity",
+          "type": "object"
+        },
+        "CompletionSubject": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Candidate Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "candidate_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "candidate_id",
+            "candidate_sha256",
+            "candidate_commit"
+          ],
+          "title": "CompletionSubject",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/CompletionArtifactReference"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "check": {
+          "$ref": "#/$defs/CompletionCheckDefinition"
+        },
+        "delivery": {
+          "$ref": "#/$defs/CompletionDeliveryBinding"
+        },
+        "result": {
+          "const": "PASS",
+          "default": "PASS",
+          "title": "Result",
+          "type": "string"
+        },
+        "runner": {
+          "$ref": "#/$defs/CompletionRunnerIdentity"
+        },
+        "subject": {
+          "$ref": "#/$defs/CompletionSubject"
+        }
+      },
+      "required": [
+        "runner",
+        "subject",
+        "check",
+        "artifacts",
+        "delivery"
+      ],
+      "title": "CompletionEvidence",
+      "type": "object"
+    },
+    "CompletionEvidenceExample": {
+      "additionalProperties": false,
+      "description": "OMP-247: typed completion claim validated against service-owned rows.",
+      "properties": {
+        "foreign_receipt_result": {
+          "const": "completion_blocked",
+          "title": "Foreign Receipt Result",
+          "type": "string"
+        },
+        "matching_result": {
+          "const": "no_blockers",
+          "title": "Matching Result",
+          "type": "string"
+        },
+        "required_artifacts": {
+          "items": {
+            "enum": [
+              "verification",
+              "audit",
+              "push"
+            ],
+            "type": "string"
+          },
+          "title": "Required Artifacts",
+          "type": "array"
+        },
+        "self_asserted_audit_result": {
+          "const": "completion_blocked",
+          "title": "Self Asserted Audit Result",
+          "type": "string"
+        },
+        "stale_candidate_result": {
+          "const": "completion_blocked",
+          "title": "Stale Candidate Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "matching_result",
+        "stale_candidate_result",
+        "foreign_receipt_result",
+        "self_asserted_audit_result",
+        "required_artifacts"
+      ],
+      "title": "CompletionEvidenceExample",
       "type": "object"
     },
     "CompletionInput": {
@@ -7854,6 +9497,91 @@
         "closeout_requested"
       ],
       "title": "CompletionInput",
+      "type": "object"
+    },
+    "CompletionRunnerIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "issuer": {
+          "const": "work-service/auditor-settle",
+          "default": "work-service/auditor-settle",
+          "title": "Issuer",
+          "type": "string"
+        },
+        "judge_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Judge Sha256"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "title": "Launch Id",
+          "type": "string"
+        },
+        "task_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "minLength": 1,
+          "title": "Tool Call Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "launch_id",
+        "tool_call_id",
+        "task_sha256"
+      ],
+      "title": "CompletionRunnerIdentity",
+      "type": "object"
+    },
+    "CompletionSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_commit": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Candidate Commit",
+          "type": "string"
+        },
+        "candidate_id": {
+          "format": "uuid",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "candidate_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Sha256",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "candidate_id",
+        "candidate_sha256",
+        "candidate_commit"
+      ],
+      "title": "CompletionSubject",
       "type": "object"
     },
     "Contract": {
@@ -8266,6 +9994,53 @@
           "title": "CloseAttemptExample",
           "type": "object"
         },
+        "CompletionEvidenceExample": {
+          "additionalProperties": false,
+          "description": "OMP-247: typed completion claim validated against service-owned rows.",
+          "properties": {
+            "foreign_receipt_result": {
+              "const": "completion_blocked",
+              "title": "Foreign Receipt Result",
+              "type": "string"
+            },
+            "matching_result": {
+              "const": "no_blockers",
+              "title": "Matching Result",
+              "type": "string"
+            },
+            "required_artifacts": {
+              "items": {
+                "enum": [
+                  "verification",
+                  "audit",
+                  "push"
+                ],
+                "type": "string"
+              },
+              "title": "Required Artifacts",
+              "type": "array"
+            },
+            "self_asserted_audit_result": {
+              "const": "completion_blocked",
+              "title": "Self Asserted Audit Result",
+              "type": "string"
+            },
+            "stale_candidate_result": {
+              "const": "completion_blocked",
+              "title": "Stale Candidate Result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "matching_result",
+            "stale_candidate_result",
+            "foreign_receipt_result",
+            "self_asserted_audit_result",
+            "required_artifacts"
+          ],
+          "title": "CompletionEvidenceExample",
+          "type": "object"
+        },
         "CutoverExample": {
           "additionalProperties": false,
           "properties": {
@@ -8565,6 +10340,9 @@
         "close_attempt": {
           "$ref": "#/$defs/CloseAttemptExample"
         },
+        "completion_evidence": {
+          "$ref": "#/$defs/CompletionEvidenceExample"
+        },
         "cutover": {
           "$ref": "#/$defs/CutoverExample"
         },
@@ -8595,7 +10373,8 @@
         "pushed_branch",
         "close_attempt",
         "same_session",
-        "cutover"
+        "cutover",
+        "completion_evidence"
       ],
       "title": "ContractExamples",
       "type": "object"

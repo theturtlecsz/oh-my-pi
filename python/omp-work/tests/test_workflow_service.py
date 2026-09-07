@@ -178,6 +178,35 @@ def _batch(items: list[dict], relations: list[dict] | None = None) -> dict:
 def _receipt(
     work_id, revision_id, candidate_id, kind: str, *, body: dict | None = None, **extra
 ) -> dict:
+    if kind == "push":
+        remote_commit = extra.get("remote_commit", "c" * 40)
+        candidate_commit = extra.get("candidate_commit", remote_commit)
+        remote_ref = extra.get("remote_ref", "refs/heads/main")
+        prior_tip = extra.get("prior_tip", "0" * 40)
+        repository = extra.get("repository", "/repo")
+        remote_url = extra.get(
+            "remote_url", "https://github.com/theturtlecsz/oh-my-pi.git"
+        )
+        if body is None:
+            body = {
+                "repository": repository,
+                "remote_url": remote_url,
+                "remote_ref": remote_ref,
+                "prior_tip": prior_tip,
+                "candidate_commit": candidate_commit,
+                "result_tip": remote_commit,
+            }
+        elif isinstance(body, dict):
+            body.setdefault("repository", repository)
+            body.setdefault("remote_url", remote_url)
+            body.setdefault("remote_ref", remote_ref)
+            body.setdefault("prior_tip", prior_tip)
+            body.setdefault("candidate_commit", candidate_commit)
+            body.setdefault("result_tip", remote_commit)
+        extra.setdefault("candidate_commit", candidate_commit)
+        extra.setdefault("remote_ref", remote_ref)
+        extra.setdefault("remote_commit", remote_commit)
+
     body = body if body is not None else {"body": f"{kind} evidence body"}
     return {
         "receipt_id": str(uuid4()),
@@ -191,6 +220,228 @@ def _receipt(
         "issued_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }
+
+def _push_receipt(
+    work_id,
+    revision_id,
+    candidate_id,
+    commit_sha: str,
+    *,
+    candidate_sha256: str | None = None,
+    remote_ref="refs/heads/main",
+    remote_commit=None,
+    prior_tip="0" * 40,
+    repository="theturtlecsz/oh-my-pi",
+    remote_url="https://github.com/theturtlecsz/oh-my-pi.git",
+) -> dict:
+    remote_commit = remote_commit or commit_sha
+    payload = {
+        "repository": repository,
+        "remote_url": remote_url,
+        "remote_ref": remote_ref,
+        "prior_tip": prior_tip,
+        "candidate_commit": commit_sha,
+        "result_tip": remote_commit,
+    }
+    return _receipt(
+        work_id,
+        revision_id,
+        candidate_id,
+        "push",
+        body=payload,
+        candidate_sha256=candidate_sha256,
+        candidate_commit=commit_sha,
+        remote_ref=remote_ref,
+        remote_commit=remote_commit,
+    )
+
+
+def _execution_grant_audited_attempt(
+    service, workspace_id, title: str = "exec item"
+) -> tuple[str, str, str, str, str, str, str, dict]:
+    item = _create(service, workspace_id, title, description="The request description")
+    work_id = item["work_id"]
+    rev_id = item["revision_id"]
+
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    head_commit = "0" * 40
+
+    provenance = {
+        "owner_input_id": str(uuid4()),
+        "owner_session_id": "session-1",
+        "normalized_command": f"/execute {item['key']}",
+        "workspace_id": str(workspace_id),
+        "repository": "theturtlecsz/oh-my-pi",
+        "nonce": str(uuid4()),
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": provenance,
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": str(work_id),
+                        "revision_id": str(rev_id),
+                        "position": 0,
+                        "original_request": "The request description",
+                        "original_request_sha256": text_sha256(
+                            "The request description"
+                        ),
+                        "initial_git_baseline": head_commit,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 200, body
+
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "seal_execution_criteria",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 1,
+                "work_id": str(work_id),
+                "expected_revision_id": str(rev_id),
+                "criteria": ["AC-1: criteria one"],
+                "description_sha256": text_sha256("The request description"),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    new_rev_id = body["result"]["revision"]["revision_id"]
+
+    candidate_id = str(uuid4())
+    plan_content = "## Approach\n1. Step one\n\n## Verification\n1. Check one"
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "stamp_execution_plan",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 2,
+                "work_id": str(work_id),
+                "revision_id": str(new_rev_id),
+                "candidate_id": candidate_id,
+                "plan_file": "local://execute-plan.md",
+                "plan_body": plan_content,
+                "plan_sha256": sha256(plan_content),
+                "approach": ["1. Step one"],
+                "verification": ["1. Check one"],
+                "paths": ["src/feature.ts"],
+                "candidate_sha256": "1" * 64,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    plan_stamp_sha = body["result"]["item"]["plan_stamp_sha256"]
+
+    final_commit = "1" * 40
+    final_cand_id = str(uuid4())
+    final_cand_sha = "2" * 64
+    _finalize(
+        service,
+        workspace_id,
+        {"work_id": work_id, "revision_id": new_rev_id},
+        candidate_id,
+        commit=final_commit,
+        final_id=final_cand_id,
+        candidate_hash=final_cand_sha,
+    )
+
+    attempt_id = str(uuid4())
+    status, begin_body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_close_attempt",
+            "payload": {
+                "work_id": str(work_id),
+                "attempt_id": attempt_id,
+                "authorization_ref": f"execution:{grant_id}:0:1",
+                "owner_session_id": "session-1",
+                "owner_session_started_at": datetime.now(timezone.utc).isoformat(),
+                "owner_session_start_commit": head_commit,
+                "repository": "theturtlecsz/oh-my-pi",
+                "diff_sha256": "5" * 64,
+                "authorization_kind": "execution",
+                "execution_grant_id": grant_id,
+                "candidate_tree_sha": final_cand_sha,
+                "original_request_sha256": text_sha256("The request description"),
+                "criteria_sha256": sha256(["AC-1: criteria one"]),
+                "plan_stamp_sha256": plan_stamp_sha,
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, begin_body
+
+    seal = _verify_and_seal(
+        service,
+        workspace_id,
+        {"work_id": work_id, "revision_id": new_rev_id},
+        {"candidate_id": final_cand_id, "candidate_sha256": final_cand_sha, "commit_sha": final_commit},
+        {"attempt_id": attempt_id, "work_id": work_id, "revision_id": new_rev_id, "candidate_id": final_cand_id, "candidate_sha256": final_cand_sha, "candidate_commit": final_commit},
+    )
+    exec_task_sha = seal["manifest"]["task_sha256"]
+
+    status, body = _reserve(service, workspace_id, attempt_id, exec_task_sha)
+    assert status == 200, body
+    exec_launch_id = body["result"]["launch"]["launch_id"]
+
+    status, body = _settle(
+        service,
+        workspace_id,
+        attempt_id,
+        exec_launch_id,
+        json.dumps({"verdict": "PASS", "report": PASS_REPORT}),
+    )
+    assert status == 200 and body["result"]["verdict"] == "PASS", body
+
+    push_r = _push_receipt(
+        work_id,
+        new_rev_id,
+        final_cand_id,
+        final_commit,
+        candidate_sha256=final_cand_sha,
+        prior_tip=head_commit,
+        repository="theturtlecsz/oh-my-pi",
+        remote_url="https://github.com/theturtlecsz/oh-my-pi.git",
+    )
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "append_evidence", "payload": {"receipt": push_r}},
+    )
+    assert status == 200, body
+    _drain_deliveries(service, workspace_id, key=item["key"])
+
+    return (
+        grant_id,
+        str(work_id),
+        str(new_rev_id),
+        str(final_cand_id),
+        str(attempt_id),
+        str(push_r["receipt_id"]),
+        judge_sha,
+        item,
+    )
 
 
 def _create(service, workspace_id, title: str = "item", **extra) -> dict:
@@ -466,6 +717,177 @@ def _record_review(
     )
 
 
+def _build_completion_evidence_from_view(
+    view: dict, push_receipt_id: str | None = None
+) -> dict:
+    cand = view["item"].get("candidate") or {
+        "candidate_id": str(uuid4()),
+        "candidate_sha256": "0" * 64,
+        "commit_sha": "0" * 40,
+    }
+    manifest = view.get("audit_manifest") or {
+        "manifest_id": str(uuid4()),
+        "manifest_version": 1,
+        "verification_receipt_id": str(uuid4()),
+        "task_sha256": "0" * 64,
+        "attempt_id": str(uuid4()),
+    }
+    receipts = view.get("receipts") or []
+    attempts = view.get("close_attempts") or []
+    attempt = next(
+        (a for a in attempts if str(a["attempt_id"]) == str(manifest["attempt_id"])),
+        attempts[0] if attempts else {},
+    )
+
+    verif_receipt = next(
+        (
+            r
+            for r in receipts
+            if str(r["receipt_id"]) == str(manifest["verification_receipt_id"])
+        ),
+        None,
+    )
+    if verif_receipt is None:
+        verif_receipt = next(
+            (r for r in receipts if r["kind"] == "verification"), None
+        )
+    if verif_receipt is None:
+        verif_receipt = {
+            "receipt_id": str(uuid4()),
+            "kind": "verification",
+            "payload_sha256": "0" * 64,
+            "artifact_sha256": None,
+        }
+
+    audit_receipt = next(
+        (r for r in receipts if r["kind"] == "audit" and r["verdict"] == "PASS"),
+        None,
+    )
+    if audit_receipt is None:
+        audit_receipt = next((r for r in receipts if r["kind"] == "audit"), None)
+    if audit_receipt is None:
+        audit_receipt = {
+            "receipt_id": str(uuid4()),
+            "kind": "audit",
+            "payload": {},
+            "payload_sha256": "0" * 64,
+            "artifact_sha256": "0" * 64,
+        }
+
+    audit_payload = audit_receipt.get("payload") or {}
+    if isinstance(audit_payload, str):
+        try:
+            audit_payload = json.loads(audit_payload)
+        except Exception:
+            audit_payload = {}
+    launch_id = audit_payload.get("launch_id", str(uuid4()))
+    launches = view.get("auditor_launches") or []
+    launch = next(
+        (l for l in launches if str(l["launch_id"]) == str(launch_id)),
+        launches[0]
+        if launches
+        else {
+            "launch_id": launch_id,
+            "tool_call_id": "call_default",
+            "task_sha256": manifest["task_sha256"],
+        },
+    )
+
+    if push_receipt_id:
+        push_receipt = next(
+            (r for r in receipts if str(r["receipt_id"]) == str(push_receipt_id)),
+            None,
+        )
+    else:
+        push_receipt = next((r for r in receipts if r["kind"] == "push"), None)
+
+    if push_receipt is None:
+        push_receipt = {
+            "receipt_id": str(uuid4()),
+            "kind": "push",
+            "payload": {
+                "repository": attempt.get("repository", "/repo"),
+                "remote_url": "https://github.com/theturtlecsz/oh-my-pi.git",
+                "remote_ref": "refs/heads/main",
+                "candidate_commit": cand["commit_sha"],
+                "result_tip": cand["commit_sha"],
+            },
+            "payload_sha256": "0" * 64,
+            "artifact_sha256": None,
+            "remote_ref": "refs/heads/main",
+            "remote_commit": cand["commit_sha"],
+        }
+
+    push_payload = push_receipt.get("payload") or {}
+    if isinstance(push_payload, str):
+        try:
+            push_payload = json.loads(push_payload)
+        except Exception:
+            push_payload = {}
+
+    rev_id = (
+        view["item"]["revision"]["revision_id"]
+        if "revision" in view["item"] and isinstance(view["item"]["revision"], dict)
+        else view["item"].get("current_revision_id", str(uuid4()))
+    )
+
+    return {
+        "runner": {
+            "issuer": "work-service/auditor-settle",
+            "launch_id": str(launch["launch_id"]),
+            "tool_call_id": launch.get("tool_call_id", "call_default"),
+            "task_sha256": launch.get("task_sha256", manifest["task_sha256"]),
+            "judge_sha256": attempt.get("judge_sha256"),
+        },
+        "subject": {
+            "work_id": str(view["item"]["work_id"]),
+            "revision_id": str(rev_id),
+            "candidate_id": str(cand["candidate_id"]),
+            "candidate_sha256": cand["candidate_sha256"],
+            "candidate_commit": cand["commit_sha"],
+        },
+        "check": {
+            "definition": "sealed_audit_manifest",
+            "version": manifest["manifest_version"],
+            "manifest_id": str(manifest["manifest_id"]),
+            "task_sha256": manifest["task_sha256"],
+        },
+        "result": "PASS",
+        "artifacts": [
+            {
+                "receipt_id": str(verif_receipt["receipt_id"]),
+                "kind": "verification",
+                "payload_sha256": verif_receipt["payload_sha256"],
+                "artifact_sha256": verif_receipt.get("artifact_sha256"),
+            },
+            {
+                "receipt_id": str(audit_receipt["receipt_id"]),
+                "kind": "audit",
+                "payload_sha256": audit_receipt["payload_sha256"],
+                "artifact_sha256": audit_receipt.get("artifact_sha256")
+                or ("0" * 64),
+            },
+            {
+                "receipt_id": str(push_receipt["receipt_id"]),
+                "kind": "push",
+                "payload_sha256": push_receipt["payload_sha256"],
+                "artifact_sha256": push_receipt.get("artifact_sha256"),
+            },
+        ],
+        "delivery": {
+            "repository": push_payload.get(
+                "repository", attempt.get("repository", "/repo")
+            ),
+            "remote_url": push_payload.get(
+                "remote_url", "https://github.com/theturtlecsz/oh-my-pi.git"
+            ),
+            "remote_ref": push_receipt.get("remote_ref", "refs/heads/main"),
+            "candidate_commit": cand["commit_sha"],
+            "remote_commit": push_receipt.get("remote_commit", cand["commit_sha"]),
+        },
+    }
+
+
 def _complete(
     service,
     workspace_id,
@@ -478,28 +900,34 @@ def _complete(
     cancellations: list[dict] | None = None,
     key: str = "OMP-1",
     operation_id=None,
+    completion_payload: dict | None = None,
 ) -> tuple[int, dict]:
-    workflow = service.client.get(
-        f"/v1/work-items/{key}/workflow", headers=_owner_headers(workspace_id)
-    ).json()
-    completion = {
-        "work_id": item["work_id"],
-        "current_revision_id": item["revision_id"],
-        "candidate": workflow["item"]["candidate"],
-        "receipts": [
-            receipt
-            for receipt in workflow["receipts"]
-            if receipt["candidate_id"] == final["candidate_id"]
-        ],
-        "closeout_requested": True,
-    }
-    payload = {
-        "input": completion,
-        "attempt_id": attempt_id,
-        "done_authorization_ref": done_ref or f"done:{uuid4()}",
-        **({"satisfied_work_ids": satisfied} if satisfied else {}),
-        **({"cancellations": cancellations} if cancellations else {}),
-    }
+    if completion_payload is not None:
+        payload = completion_payload
+    else:
+        workflow = service.client.get(
+            f"/v1/work-items/{key}/workflow", headers=_owner_headers(workspace_id)
+        ).json()
+        completion = {
+            "work_id": item["work_id"],
+            "current_revision_id": item["revision_id"],
+            "candidate": workflow["item"]["candidate"],
+            "receipts": [
+                receipt
+                for receipt in workflow["receipts"]
+                if receipt["candidate_id"] == final["candidate_id"]
+            ],
+            "closeout_requested": True,
+        }
+        evidence = _build_completion_evidence_from_view(workflow)
+        payload = {
+            "input": completion,
+            "attempt_id": attempt_id,
+            "done_authorization_ref": done_ref or f"done:{uuid4()}",
+            "evidence": evidence,
+            **({"satisfied_work_ids": satisfied} if satisfied else {}),
+            **({"cancellations": cancellations} if cancellations else {}),
+        }
     return _command(
         service,
         workspace_id,
@@ -768,14 +1196,35 @@ def test_sealed_manifest_and_full_pass_flow_to_done(service) -> None:
     )
     operation_id = uuid4()
     done_ref = f"done:{uuid4()}"
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    completion = {
+        "work_id": item["work_id"],
+        "current_revision_id": item["revision_id"],
+        "candidate": workflow["item"]["candidate"],
+        "receipts": [
+            receipt
+            for receipt in workflow["receipts"]
+            if receipt["candidate_id"] == final["candidate_id"]
+        ],
+        "closeout_requested": True,
+    }
+    evidence = _build_completion_evidence_from_view(workflow)
+    complete_payload = {
+        "input": completion,
+        "attempt_id": attempt["attempt_id"],
+        "done_authorization_ref": done_ref,
+        "evidence": evidence,
+    }
     status, body = _complete(
         service,
         workspace_id,
         item,
         final,
         attempt["attempt_id"],
-        done_ref=done_ref,
         operation_id=operation_id,
+        completion_payload=complete_payload,
     )
     assert (
         status == 200
@@ -788,8 +1237,8 @@ def test_sealed_manifest_and_full_pass_flow_to_done(service) -> None:
         item,
         final,
         attempt["attempt_id"],
-        done_ref=done_ref,
         operation_id=operation_id,
+        completion_payload=complete_payload,
     )
     assert (
         status == 200
@@ -2153,13 +2602,13 @@ def _close_ritual(
     status, body = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and body["result"]["status"] == "applied", body
     _drain_deliveries(service, workspace_id, key=item["key"])
-    push = _receipt(
+    push = _push_receipt(
         item["work_id"],
         item["revision_id"],
         final["candidate_id"],
-        "push",
-        remote_ref="refs/heads/main",
-        remote_commit=final["commit_sha"],
+        final["commit_sha"],
+        candidate_sha256=final["candidate_sha256"],
+        repository=attempt.get("repository", "/repo"),
     )
     status, body = _command(
         service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}}
@@ -2429,15 +2878,52 @@ def test_complete_work_with_cancellations_applied_and_events(service) -> None:
             "reason": "superseded by primary OMP-1",
         }
     ]
-    status, body = _close_ritual(
+    _drain_deliveries(service, workspace_id, key=item["key"])
+    status, body = _record_review(service, workspace_id, item, final, attempt)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    _drain_deliveries(service, workspace_id, key=item["key"])
+    push = _push_receipt(
+        item["work_id"],
+        item["revision_id"],
+        final["candidate_id"],
+        final["commit_sha"],
+        candidate_sha256=final["candidate_sha256"],
+        repository=attempt.get("repository", "/repo"),
+    )
+    status, body = _command(
+        service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}}
+    )
+    assert status == 200, body
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    completion = {
+        "work_id": item["work_id"],
+        "current_revision_id": item["revision_id"],
+        "candidate": workflow["item"]["candidate"],
+        "receipts": [
+            receipt
+            for receipt in workflow["receipts"]
+            if receipt["candidate_id"] == final["candidate_id"]
+        ],
+        "closeout_requested": True,
+    }
+    evidence = _build_completion_evidence_from_view(workflow)
+    complete_payload = {
+        "input": completion,
+        "attempt_id": attempt["attempt_id"],
+        "done_authorization_ref": done_ref,
+        "evidence": evidence,
+        "cancellations": cancellations,
+    }
+    status, body = _complete(
         service,
         workspace_id,
         item,
         final,
-        attempt,
-        done_ref=done_ref,
-        cancellations=cancellations,
+        attempt["attempt_id"],
         operation_id=operation_id,
+        completion_payload=complete_payload,
     )
     assert body["result"]["canceled_work_ids"] == [target["work_id"]]
 
@@ -2461,10 +2947,8 @@ def test_complete_work_with_cancellations_applied_and_events(service) -> None:
         item,
         final,
         attempt["attempt_id"],
-        done_ref=done_ref,
-        cancellations=cancellations,
-        key=item["key"],
         operation_id=operation_id,
+        completion_payload=complete_payload,
     )
     assert status == 200 and replay["receipt"]["state"] == "replayed"
     assert replay["result"]["canceled_work_ids"] == [target["work_id"]]
@@ -3644,6 +4128,10 @@ def test_execution_grant_lifecycle_pass(service) -> None:
         },
     )
     # Complete execution item
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    evidence = _build_completion_evidence_from_view(workflow, push_receipt_id)
     status, body = _command(
         service,
         workspace_id,
@@ -3654,7 +4142,7 @@ def test_execution_grant_lifecycle_pass(service) -> None:
                 "expected_grant_version": 3,
                 "work_id": str(work_id),
                 "attempt_id": attempt_id,
-                "push_receipt_id": push_receipt_id,
+                "evidence": evidence,
                 "judge_sha256": judge_sha,
             },
         },
@@ -4428,6 +4916,10 @@ def test_execution_grant_lifecycle_blocked_remediation(service) -> None:
     )
 
     # Complete execution item
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    evidence = _build_completion_evidence_from_view(workflow, push_receipt_2_id)
     status, body = _command(
         service,
         workspace_id,
@@ -4438,7 +4930,7 @@ def test_execution_grant_lifecycle_blocked_remediation(service) -> None:
                 "expected_grant_version": 4,
                 "work_id": str(work_id),
                 "attempt_id": att_2_id,
-                "push_receipt_id": push_receipt_2_id,
+                "evidence": evidence,
                 "judge_sha256": judge_sha,
             },
         },
@@ -4939,6 +5431,10 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
             },
         },
     )
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    bad_evidence = _build_completion_evidence_from_view(workflow, bad_push_id)
     status, body = _command(
         service,
         workspace_id,
@@ -4949,7 +5445,7 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
                 "expected_grant_version": 3,
                 "work_id": str(work_id),
                 "attempt_id": att_id,
-                "push_receipt_id": bad_push_id,
+                "evidence": bad_evidence,
                 "judge_sha256": judge_sha,
             },
         },
@@ -5001,6 +5497,10 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
             },
         )
         assert status == 200, body
+        workflow = service.client.get(
+            f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+        ).json()
+        bad_evidence = _build_completion_evidence_from_view(workflow, bad_id)
         status, body = _command(
             service,
             workspace_id,
@@ -5011,7 +5511,7 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
                     "expected_grant_version": 3,
                     "work_id": str(work_id),
                     "attempt_id": att_id,
-                    "push_receipt_id": bad_id,
+                    "evidence": bad_evidence,
                     "judge_sha256": judge_sha,
                 },
             },
@@ -5071,6 +5571,10 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
     assert status == 200, body
 
     # Prove pending delivery blocks completion
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    good_evidence = _build_completion_evidence_from_view(workflow, good_push_id)
     status, body = _command(
         service,
         workspace_id,
@@ -5081,7 +5585,7 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
                 "expected_grant_version": 3,
                 "work_id": str(work_id),
                 "attempt_id": att_id,
-                "push_receipt_id": good_push_id,
+                "evidence": good_evidence,
                 "judge_sha256": judge_sha,
             },
         },
@@ -5114,7 +5618,7 @@ def test_execution_grant_completion_push_binding_enforcement(service) -> None:
                 "expected_grant_version": 3,
                 "work_id": str(work_id),
                 "attempt_id": att_id,
-                "push_receipt_id": good_push_id,
+                "evidence": good_evidence,
                 "judge_sha256": judge_sha,
             },
         },
@@ -6208,6 +6712,10 @@ def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
     assert status == 200, body
     _drain_deliveries(restarted_service, workspace_id, key=item["key"])
 
+    workflow = restarted_service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    evidence = _build_completion_evidence_from_view(workflow, push_receipt_id)
     status, body = _command(
         restarted_service,
         workspace_id,
@@ -6217,7 +6725,7 @@ def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
                 "grant_id": grant_id,
                 "work_id": str(work_id),
                 "attempt_id": attempt_id,
-                "push_receipt_id": push_receipt_id,
+                "evidence": evidence,
                 "expected_grant_version": 6,
                 "judge_sha256": new_judge_sha,
             },
@@ -6411,3 +6919,459 @@ def test_execution_grant_pre_review_replan_and_stale_service_pause_stop(
     )
     assert status == 200, body
     assert body["result"]["grant"]["state"] == "stopped"
+
+
+def test_completion_evidence_service_boundary(service) -> None:
+    # OMP-247: complete_work and complete_execution_item require valid CompletionEvidence
+    # verified against service-owned rows.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(
+        service, workspace_id, "evidence service boundary"
+    )
+    push_r = _push_receipt(
+        item["work_id"],
+        item["revision_id"],
+        final["candidate_id"],
+        final["commit_sha"],
+        candidate_sha256=final["candidate_sha256"],
+        repository=attempt["repository"],
+    )
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "append_evidence", "payload": {"receipt": push_r}},
+    )
+    assert status == 200, body
+    push_receipt_id = push_r["receipt_id"]
+
+    _drain_deliveries(service, workspace_id, key=item["key"])
+    status, body = _record_review(service, workspace_id, item, final, attempt)
+    assert status == 200, body
+    _drain_deliveries(service, workspace_id, key=item["key"])
+
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    valid_evidence = _build_completion_evidence_from_view(workflow, push_receipt_id)
+
+    # Negative test 1: arbitrary caller PASS prose plus fabricated audit reference is refused
+    fake_audit_id = str(uuid4())
+    fake_evidence = dict(valid_evidence)
+    fake_evidence["artifacts"] = [
+        valid_evidence["artifacts"][0],
+        {
+            "receipt_id": fake_audit_id,
+            "kind": "audit",
+            "payload_sha256": "0" * 64,
+            "artifact_sha256": "0" * 64,
+        },
+        valid_evidence["artifacts"][2],
+    ]
+    completion_input = {
+        "work_id": item["work_id"],
+        "current_revision_id": item["revision_id"],
+        "candidate": workflow["item"]["candidate"],
+        "receipts": [
+            r for r in workflow["receipts"] if r["candidate_id"] == final["candidate_id"]
+        ],
+        "closeout_requested": True,
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_work",
+            "payload": {
+                "input": completion_input,
+                "attempt_id": attempt["attempt_id"],
+                "done_authorization_ref": f"done:{uuid4()}",
+                "evidence": fake_evidence,
+            },
+        },
+    )
+    assert status == 200 and body["result"]["status"] == "refused", body
+    assert "completion_evidence_invalid" in body["result"]["event"]["reason"]
+
+    # Negative test 2: foreign receipt naming another work item is refused
+    other_item = _create(service, workspace_id, "other work item")
+    other_plan = _plan(service, workspace_id, other_item)
+    foreign_evidence = dict(valid_evidence)
+    foreign_evidence["artifacts"] = [
+        {
+            "receipt_id": other_plan["receipt_id"],
+            "kind": "verification",
+            "payload_sha256": other_plan["payload_sha256"],
+            "artifact_sha256": other_plan.get("artifact_sha256"),
+        },
+        valid_evidence["artifacts"][1],
+        valid_evidence["artifacts"][2],
+    ]
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_work",
+            "payload": {
+                "input": completion_input,
+                "attempt_id": attempt["attempt_id"],
+                "done_authorization_ref": f"done:{uuid4()}",
+                "evidence": foreign_evidence,
+            },
+        },
+    )
+    assert status == 200 and body["result"]["status"] == "refused", body
+
+    _drain_deliveries(service, workspace_id, key=item["key"])
+
+    # Positive complete_work with valid evidence succeeds
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_work",
+            "payload": {
+                "input": completion_input,
+                "attempt_id": attempt["attempt_id"],
+                "done_authorization_ref": f"done:{uuid4()}",
+                "evidence": valid_evidence,
+            },
+        },
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["state"] == "DONE"
+
+    # Now test complete_execution_item path
+    (
+        grant_id,
+        exec_work_id,
+        exec_rev_id,
+        exec_cand_id,
+        exec_attempt_id,
+        exec_push_id,
+        exec_judge_sha,
+        exec_item,
+    ) = _execution_grant_audited_attempt(
+        service, workspace_id, "exec item for boundary"
+    )
+    workflow_exec = service.client.get(
+        f"/v1/work-items/{exec_item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    valid_exec_evidence = _build_completion_evidence_from_view(
+        workflow_exec, exec_push_id
+    )
+
+    # Negative probe 1: fabricated audit receipt in evidence is refused with completion_blocked
+    fake_exec_evidence = dict(valid_exec_evidence)
+    fake_exec_evidence["artifacts"] = [
+        valid_exec_evidence["artifacts"][0],
+        {
+            "receipt_id": str(uuid4()),
+            "kind": "audit",
+            "payload_sha256": "0" * 64,
+            "artifact_sha256": "0" * 64,
+        },
+        valid_exec_evidence["artifacts"][2],
+    ]
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": exec_work_id,
+                "attempt_id": exec_attempt_id,
+                "evidence": fake_exec_evidence,
+                "judge_sha256": exec_judge_sha,
+            },
+        },
+    )
+    assert status == 409 and body["error"]["code"] == "completion_blocked", body
+
+    # Negative probe 2: foreign receipt naming another work item is refused with completion_blocked
+    foreign_exec_evidence = dict(valid_exec_evidence)
+    foreign_exec_evidence["artifacts"] = [
+        {
+            "receipt_id": other_plan["receipt_id"],
+            "kind": "verification",
+            "payload_sha256": other_plan["payload_sha256"],
+            "artifact_sha256": other_plan.get("artifact_sha256"),
+        },
+        valid_exec_evidence["artifacts"][1],
+        valid_exec_evidence["artifacts"][2],
+    ]
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": exec_work_id,
+                "attempt_id": exec_attempt_id,
+                "evidence": foreign_exec_evidence,
+                "judge_sha256": exec_judge_sha,
+            },
+        },
+    )
+    assert status == 409 and body["error"]["code"] == "completion_blocked", body
+
+    # Positive complete_execution_item with valid evidence succeeds
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": exec_work_id,
+                "attempt_id": exec_attempt_id,
+                "evidence": valid_exec_evidence,
+                "judge_sha256": exec_judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["state"] == "DONE"
+    assert body["result"]["grant"]["state"] == "completed"
+
+
+def test_receipt_idempotency_exact_retry_returns_original_row(service) -> None:
+    # OMP-247 step 3: identical receipt payload returns the existing persisted row
+    # without primary key failure; changed payload conflicts.
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "idempotent receipt target")
+    plan = _plan(service, workspace_id, item)
+
+    # 1. Verification receipt retry
+    verif_id = str(uuid4())
+    verif_payload = {"notes": "initial verification evidence"}
+    verif_body = {
+        "receipt_id": verif_id,
+        "work_id": str(item["work_id"]),
+        "revision_id": str(item["revision_id"]),
+        "candidate_id": str(plan["candidate_id"]),
+        "kind": "verification",
+        "payload": verif_payload,
+        "payload_sha256": sha256(verif_payload),
+        "artifact_sha256": None,
+        "issuer": "test",
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+        "candidate_sha256": plan["candidate_sha256"],
+        "candidate_commit": plan["candidate_commit"],
+        "verdict": None,
+        "independent": False,
+        "remote_ref": None,
+        "remote_commit": None,
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "append_evidence", "payload": {"receipt": verif_body}},
+    )
+    assert status == 200, body
+    first_verif = body["result"]["receipt"]
+
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "append_evidence", "payload": {"receipt": verif_body}},
+    )
+    assert status == 200, body
+    assert body["result"]["receipt"]["receipt_id"] == first_verif["receipt_id"]
+
+    # 2. Plan receipt retry
+    plan_id = str(uuid4())
+    plan_cand_id = str(uuid4())
+    plan_payload = {"body": "## Approach\n1. do it\n\n## Verification\n1. prove it"}
+    plan_body = {
+        "receipt_id": plan_id,
+        "work_id": str(item["work_id"]),
+        "revision_id": str(item["revision_id"]),
+        "candidate_id": plan_cand_id,
+        "kind": "plan",
+        "payload": plan_payload,
+        "payload_sha256": sha256(plan_payload),
+        "artifact_sha256": None,
+        "issuer": "test",
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+        "candidate_sha256": "7" * 64,
+        "candidate_commit": None,
+        "verdict": None,
+        "independent": False,
+        "remote_ref": None,
+        "remote_commit": None,
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "append_evidence", "payload": {"receipt": plan_body}},
+    )
+    assert status == 200, body
+    first_plan = body["result"]["receipt"]
+
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "append_evidence", "payload": {"receipt": plan_body}},
+    )
+    assert status == 200, body
+    assert body["result"]["receipt"]["receipt_id"] == first_plan["receipt_id"]
+
+    # 3. Same receipt_id with altered claim field fails with idempotency_conflict
+    altered_receipt = dict(verif_body)
+    altered_receipt["payload"] = {"notes": "altered payload"}
+    altered_receipt["payload_sha256"] = sha256({"notes": "altered payload"})
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "append_evidence", "payload": {"receipt": altered_receipt}},
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "idempotency_conflict"
+
+
+def test_completion_evidence_idempotency_and_claim_race(service) -> None:
+    # OMP-247 step 2: same operation_id replays; same operation_id + changed claim conflicts;
+    # concurrent completions yield exactly one owner.
+    import concurrent.futures
+
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(
+        service, workspace_id, "idempotency replay item"
+    )
+    push_r = _push_receipt(
+        item["work_id"],
+        item["revision_id"],
+        final["candidate_id"],
+        final["commit_sha"],
+        candidate_sha256=final["candidate_sha256"],
+        repository=attempt["repository"],
+    )
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "append_evidence", "payload": {"receipt": push_r}},
+    )
+    assert status == 200, body
+    push_receipt_id = push_r["receipt_id"]
+
+    _drain_deliveries(service, workspace_id, key=item["key"])
+    status, body = _record_review(service, workspace_id, item, final, attempt)
+    assert status == 200, body
+    _drain_deliveries(service, workspace_id, key=item["key"])
+
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    valid_evidence = _build_completion_evidence_from_view(workflow, push_receipt_id)
+
+    completion_input = {
+        "work_id": item["work_id"],
+        "current_revision_id": item["revision_id"],
+        "candidate": workflow["item"]["candidate"],
+        "receipts": [
+            r for r in workflow["receipts"] if r["candidate_id"] == final["candidate_id"]
+        ],
+        "closeout_requested": True,
+    }
+    op_id = uuid4()
+    payload = {
+        "input": completion_input,
+        "attempt_id": attempt["attempt_id"],
+        "done_authorization_ref": f"done:{uuid4()}",
+        "evidence": valid_evidence,
+    }
+
+    # 1. First completion applies
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "complete_work", "payload": payload},
+        operation_id=op_id,
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+
+    # 2. Identical request with same operation_id replays
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "complete_work", "payload": payload},
+        operation_id=op_id,
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+
+    # 3. Changed payload with same operation_id returns idempotency_conflict
+    altered_payload = dict(payload)
+    altered_payload["done_authorization_ref"] = f"done:{uuid4()}"
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "complete_work", "payload": altered_payload},
+        operation_id=op_id,
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "idempotency_conflict"
+
+    # 4. Concurrent race test: two concurrent transactions trying to complete
+    item2, final2, attempt2 = _audited_attempt(
+        service, workspace_id, "race completion item"
+    )
+    push_r2 = _push_receipt(
+        item2["work_id"],
+        item2["revision_id"],
+        final2["candidate_id"],
+        final2["commit_sha"],
+        candidate_sha256=final2["candidate_sha256"],
+        repository=attempt2["repository"],
+    )
+    _command(service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push_r2}})
+    _drain_deliveries(service, workspace_id, key=item2["key"])
+    _record_review(service, workspace_id, item2, final2, attempt2)
+    _drain_deliveries(service, workspace_id, key=item2["key"])
+
+    workflow2 = service.client.get(
+        f"/v1/work-items/{item2['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    valid_evidence2 = _build_completion_evidence_from_view(workflow2, push_r2["receipt_id"])
+    completion_input2 = {
+        "work_id": item2["work_id"],
+        "current_revision_id": item2["revision_id"],
+        "candidate": workflow2["item"]["candidate"],
+        "receipts": [
+            r for r in workflow2["receipts"] if r["candidate_id"] == final2["candidate_id"]
+        ],
+        "closeout_requested": True,
+    }
+
+    race_payload_1 = {
+        "input": completion_input2,
+        "attempt_id": attempt2["attempt_id"],
+        "done_authorization_ref": f"done:{uuid4()}",
+        "evidence": valid_evidence2,
+    }
+    race_payload_2 = {
+        "input": completion_input2,
+        "attempt_id": attempt2["attempt_id"],
+        "done_authorization_ref": f"done:{uuid4()}",
+        "evidence": valid_evidence2,
+    }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(
+            _command, service, workspace_id, {"type": "complete_work", "payload": race_payload_1}
+        )
+        f2 = executor.submit(
+            _command, service, workspace_id, {"type": "complete_work", "payload": race_payload_2}
+        )
+        r1 = f1.result()
+        r2 = f2.result()
+
+    applied_count = sum(1 for (st, bd) in (r1, r2) if st == 200 and bd.get("result", {}).get("status") == "applied")
+    assert applied_count == 1, f"Expected exactly 1 applied completion, got {r1} and {r2}"

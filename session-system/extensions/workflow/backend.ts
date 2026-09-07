@@ -8,6 +8,7 @@ import type {
 	Candidate,
 	Command,
 	CommandResult,
+	CompletionEvidence,
 	EvidenceReceipt,
 	ExecutionGrantItemClaim,
 	ExecutionGrantItemView,
@@ -672,7 +673,7 @@ export interface WorkflowBackend {
 		expectedGrantVersion: number;
 		workId: string;
 		attemptId: string;
-		pushReceiptId: string;
+		evidence: CompletionEvidence;
 		judgeSha256: string;
 	}): Promise<ExecutionSnapshot>;
 	getPendingExecutionClaims?(): Promise<Array<{ command: Command; result?: CommandResult }>>;

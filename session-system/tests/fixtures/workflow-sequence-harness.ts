@@ -739,14 +739,20 @@ globalThis.fetch = (async (url: unknown, init?: { body?: string; method?: string
 					? ["fix the findings", "after fixing: if code changed, enter /plan then /summary; otherwise enter /summary"]
 					: ["resolve the blocker", "after resolving: if code changed, enter /plan then /summary; otherwise enter /summary"];
 			const event = mockEvent(attempt.work_id, attempt.attempt_id, "auditor_launch_settled", `verdict_${verdict.toLowerCase()}`, true, actions, verdict !== "PASS");
+			const manifest = manifests.find(m => m.attempt_id === attempt.attempt_id);
 			const receipt = {
 				receipt_id: `rec-audit-${eventSeq}`,
 				work_id: attempt.work_id,
 				revision_id: attempt.revision_id,
 				candidate_id: attempt.candidate_id,
 				kind: "audit",
-				payload: { report: text.trim() },
+				payload: {
+					report: text.trim(),
+					manifest_id: manifest?.manifest_id ?? "00000000-0000-7000-8000-000000000010",
+					launch_id: (payload.launch_id as string) ?? "00000000-0000-7000-8000-000000000020",
+				},
 				payload_sha256: "0".repeat(64),
+				artifact_sha256: "0".repeat(64),
 				issuer: "work-service/auditor-settle",
 				issued_at: new Date().toISOString(),
 				candidate_sha256: attempt.candidate_sha256,
@@ -2035,6 +2041,19 @@ if (mode === "intake") {
 	if (!attempt) throw new Error("no attempt after /summary");
 	attempt.state = "audited";
 	attempt.accepted_report_count = 1;
+	const manifest = manifests.find(m => m.attempt_id === attempt.attempt_id);
+	const launchId = "00000000-0000-7000-8000-000000000020";
+	if (!launches.some(l => l.manifest_id === manifest?.manifest_id)) {
+		launches.push({
+			launch_id: launchId,
+			attempt_id: attempt.attempt_id,
+			manifest_id: manifest?.manifest_id ?? "00000000-0000-7000-8000-000000000010",
+			launch_number: 1,
+			task_sha256: "0".repeat(64),
+			tool_call_id: "call-1",
+			reserved_at: new Date().toISOString(),
+		});
+	}
 	receipts.push({
 		receipt_id: "rec-a",
 		work_id: attempt.work_id,
@@ -2043,8 +2062,13 @@ if (mode === "intake") {
 		kind: "audit",
 		verdict: "PASS",
 		independent: true,
-		payload: { report: "VERDICT: PASS" },
+		payload: {
+			report: "VERDICT: PASS",
+			manifest_id: manifest?.manifest_id ?? "00000000-0000-7000-8000-000000000010",
+			launch_id: launchId,
+		},
 		payload_sha256: "0".repeat(64),
+		artifact_sha256: "0".repeat(64),
 		issuer: "work-service/auditor-settle",
 		issued_at: new Date().toISOString(),
 		candidate_sha256: attempt.candidate_sha256,
@@ -2290,6 +2314,19 @@ if (mode === "intake") {
 	if (!attempt) throw new Error("no attempt after /summary");
 	attempt.state = "audited";
 	attempt.accepted_report_count = 1;
+	const manifest = manifests.find(m => m.attempt_id === attempt.attempt_id);
+	const launchId = "00000000-0000-7000-8000-000000000020";
+	if (!launches.some(l => l.manifest_id === manifest?.manifest_id)) {
+		launches.push({
+			launch_id: launchId,
+			attempt_id: attempt.attempt_id,
+			manifest_id: manifest?.manifest_id ?? "00000000-0000-7000-8000-000000000010",
+			launch_number: 1,
+			task_sha256: "0".repeat(64),
+			tool_call_id: "call-1",
+			reserved_at: new Date().toISOString(),
+		});
+	}
 	receipts.push({
 		receipt_id: "rec-a",
 		work_id: attempt.work_id,
@@ -2298,8 +2335,13 @@ if (mode === "intake") {
 		kind: "audit",
 		verdict: "PASS",
 		independent: true,
-		payload: { report: "VERDICT: PASS" },
+		payload: {
+			report: "VERDICT: PASS",
+			manifest_id: manifest?.manifest_id ?? "00000000-0000-7000-8000-000000000010",
+			launch_id: launchId,
+		},
 		payload_sha256: "0".repeat(64),
+		artifact_sha256: "0".repeat(64),
 		issuer: "work-service/auditor-settle",
 		issued_at: new Date().toISOString(),
 		candidate_sha256: attempt.candidate_sha256,

@@ -299,9 +299,69 @@ class CompletionBlocker(StrictModel):
         "attempt_not_requested",
         "delivery_pending",
         "child_receipt_invalid",
+        "completion_evidence_invalid",
     ]
     detail: str
 
+
+
+class CompletionRunnerIdentity(StrictModel):
+    issuer: Literal["work-service/auditor-settle"] = "work-service/auditor-settle"
+    launch_id: UUID
+    tool_call_id: str = Field(min_length=1)
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    judge_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class CompletionSubject(StrictModel):
+    work_id: UUID
+    revision_id: UUID
+    candidate_id: UUID
+    candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+
+
+class CompletionCheckDefinition(StrictModel):
+    definition: Literal["sealed_audit_manifest"] = "sealed_audit_manifest"
+    version: Literal[1, 2, 3] = 1
+    manifest_id: UUID
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CompletionArtifactReference(StrictModel):
+    receipt_id: UUID
+    kind: Literal["verification", "audit", "push"]
+    payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    artifact_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class CompletionDeliveryBinding(StrictModel):
+    repository: str = Field(min_length=1)
+    remote_url: str = Field(min_length=1)
+    remote_ref: str = Field(min_length=1)
+    candidate_commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    remote_commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+
+
+class CompletionEvidence(StrictModel):
+    runner: CompletionRunnerIdentity
+    subject: CompletionSubject
+    check: CompletionCheckDefinition
+    result: Literal["PASS"] = "PASS"
+    artifacts: tuple[CompletionArtifactReference, ...]
+    delivery: CompletionDeliveryBinding
+
+    @model_validator(mode="after")
+    def _validate_artifacts(self) -> CompletionEvidence:
+        receipt_ids = [ref.receipt_id for ref in self.artifacts]
+        if len(receipt_ids) != len(set(receipt_ids)):
+            raise ValueError("duplicate artifact receipt_id")
+        kinds = {ref.kind for ref in self.artifacts}
+        if kinds != {"verification", "audit", "push"} or len(self.artifacts) != 3:
+            raise ValueError(
+                "artifacts must contain exactly one verification, audit, and push reference"
+            )
+        return self
 
 class OperationReceipt(StrictModel):
     operation_id: UUID
@@ -549,9 +609,9 @@ class CompleteWorkPayload(StrictModel):
     input: CompletionInput
     attempt_id: UUID
     done_authorization_ref: str = Field(min_length=1)
+    evidence: CompletionEvidence
     satisfied_work_ids: tuple[UUID, ...] = ()
     cancellations: tuple[CancellationProof, ...] = Field(default=(), max_length=128)
-
     @model_validator(mode="after")
     def _cancellations_unique(self) -> CompleteWorkPayload:
         ids = [proof.work_id for proof in self.cancellations]
@@ -821,9 +881,8 @@ class CompleteExecutionItemPayload(StrictModel):
     expected_grant_version: int = Field(ge=1)
     work_id: UUID
     attempt_id: UUID
-    push_receipt_id: UUID
+    evidence: CompletionEvidence
     judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-
 
 class BeginExecutionCommand(StrictModel):
     type: Literal["begin_execution"]
@@ -1179,6 +1238,16 @@ class CutoverExample(StrictModel):
     parity_differences: tuple[str, ...]
 
 
+
+class CompletionEvidenceExample(StrictModel):
+    """OMP-247: typed completion claim validated against service-owned rows."""
+
+    matching_result: Literal["no_blockers"]
+    stale_candidate_result: Literal["completion_blocked"]
+    foreign_receipt_result: Literal["completion_blocked"]
+    self_asserted_audit_result: Literal["completion_blocked"]
+    required_artifacts: tuple[Literal["verification", "audit", "push"], ...]
+
 class ContractExamples(StrictModel):
     immutable_revision: ImmutableRevisionExample
     relation_cycle: RelationCycleExample
@@ -1188,7 +1257,7 @@ class ContractExamples(StrictModel):
     close_attempt: CloseAttemptExample
     same_session: SameSessionExample
     cutover: CutoverExample
-
+    completion_evidence: CompletionEvidenceExample
 
 class BindingManifest(StrictModel):
     paths: tuple[str, ...]
@@ -1215,4 +1284,5 @@ class Approval(StrictModel):
         "OMP-180",
         "OMP-194",
         "OMP-222",
+        "OMP-247",
     ]

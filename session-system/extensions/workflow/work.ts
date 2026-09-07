@@ -7,8 +7,9 @@
  * sha mixes in the fresh candidate_id so a re-approved plan after a negative
  * audit never collides on UNIQUE(work_id, revision_id, candidate_sha256).
  */
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
+import { basename, dirname, isAbsolute } from "node:path";
 import {
 	type Candidate,
 	type CloseAttempt,
@@ -16,6 +17,7 @@ import {
 	type Command,
 	type CommandEnvelope,
 	type CommandResult,
+	type CompletionEvidence,
 	type EvidenceKind as ServiceEvidenceKind,
 	type EvidenceReceipt,
 	type Fetch,
@@ -255,6 +257,17 @@ function planPacketBytes(body: string, criteria: readonly string[]): number {
 	);
 }
 
+function primaryRepoName(cwd: string): string {
+	const common = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { encoding: "utf8" });
+	if (common.status === 0 && common.stdout.trim()) {
+		const commonPath = common.stdout.trim();
+		if (isAbsolute(commonPath)) {
+			return basename(dirname(commonPath));
+		}
+	}
+	return basename(cwd);
+}
+
 /** OMP-38 bounded audit-reconstruction packet: NEWEST plan receipt on the
  *  CURRENT candidate — deterministically newest by issued_at then receipt_id,
  *  independent of service row order — or undefined when no candidate/plan
@@ -295,6 +308,152 @@ export function buildPlanPacket(view: WorkflowView): PlanPacket | undefined {
 		return { ...base, acceptanceCriteria: [], capped: { bytes, max: PLAN_PACKET_MAX_BYTES } };
 	}
 	return { ...base, planBody: body, acceptanceCriteria: criteria };
+}
+
+/**
+ * OMP-247 single canonical claim builder for complete_work and complete_execution_item.
+ * Resolves the sealed manifest, its verification receipt, the named/active push receipt,
+ * the service-minted PASS audit receipt, and that receipt's manifest-bound launch.
+ * Fails closed on missing or ambiguous rows.
+ */
+export function buildCompletionEvidence(
+	view: WorkflowView,
+	attempt: CloseAttempt,
+	pushReceiptId?: UUID,
+): CompletionEvidence {
+	const candidate = view.item.candidate;
+	if (!candidate || candidate.kind !== "final" || !candidate.commit_sha) {
+		throw new Error("completion evidence requires a finalized candidate on the current work item");
+	}
+
+	const manifest = view.audit_manifest;
+	if (!manifest || manifest.attempt_id !== attempt.attempt_id) {
+		throw new Error("completion evidence requires a sealed audit manifest bound to the attempt");
+	}
+
+	const verificationReceipts = view.receipts.filter(
+		r => r.receipt_id === manifest.verification_receipt_id && r.kind === "verification",
+	);
+	if (verificationReceipts.length !== 1) {
+		throw new Error(
+			`completion evidence requires exactly one verification receipt matching manifest ${manifest.verification_receipt_id} (found ${verificationReceipts.length})`,
+		);
+	}
+	const verifReceipt = verificationReceipts[0]!;
+
+	const auditReceipts = view.receipts.filter(
+		r =>
+			r.kind === "audit" &&
+			r.verdict === "PASS" &&
+			r.independent === true &&
+			r.issuer === "work-service/auditor-settle" &&
+			r.candidate_id === candidate.candidate_id &&
+			r.revision_id === view.item.revision.revision_id &&
+			r.work_id === view.item.work_id &&
+			(r.payload as Record<string, unknown>)?.manifest_id === manifest.manifest_id,
+	);
+	if (auditReceipts.length !== 1) {
+		throw new Error(
+			`completion evidence requires exactly one service-minted PASS audit receipt for manifest ${manifest.manifest_id} (found ${auditReceipts.length})`,
+		);
+	}
+	const auditReceipt = auditReceipts[0]!;
+	if (!auditReceipt.artifact_sha256) {
+		throw new Error("audit receipt artifact_sha256 is required for completion evidence");
+	}
+
+	const launchId = (auditReceipt.payload as Record<string, unknown>)?.launch_id as string | undefined;
+	if (!launchId) {
+		throw new Error("audit receipt payload is missing launch_id");
+	}
+
+	const matchingLaunches = view.auditor_launches.filter(
+		l => l.launch_id === launchId && l.manifest_id === manifest.manifest_id && l.attempt_id === attempt.attempt_id,
+	);
+	if (matchingLaunches.length !== 1) {
+		throw new Error(
+			`completion evidence requires exactly one auditor launch matching ${launchId} (found ${matchingLaunches.length})`,
+		);
+	}
+	const launch = matchingLaunches[0]!;
+	const pushReceipts = pushReceiptId
+		? view.receipts.filter(
+				r =>
+					r.receipt_id === pushReceiptId &&
+					r.kind === "push" &&
+					r.candidate_id === candidate.candidate_id &&
+					r.revision_id === view.item.revision.revision_id,
+			)
+		: view.receipts.filter(
+				r =>
+					r.kind === "push" &&
+					r.candidate_id === candidate.candidate_id &&
+					r.revision_id === view.item.revision.revision_id,
+			);
+	if (pushReceipts.length !== 1) {
+		throw new Error(
+			`completion evidence requires exactly one push receipt on the current candidate (found ${pushReceipts.length})`,
+		);
+	}
+	const pushReceipt = pushReceipts[0]!;
+	if (!pushReceipt.remote_ref || !pushReceipt.remote_commit) {
+		throw new Error("push receipt is missing remote_ref or remote_commit");
+	}
+
+	const pushPayload = pushReceipt.payload as Record<string, unknown>;
+	const repository = (pushPayload?.repository as string) || attempt.repository || process.cwd();
+	const remoteUrl = (pushPayload?.remote_url as string) || "";
+
+	return {
+		runner: {
+			issuer: "work-service/auditor-settle",
+			launch_id: launch.launch_id,
+			tool_call_id: launch.tool_call_id,
+			task_sha256: launch.task_sha256,
+			judge_sha256: attempt.judge_sha256 ?? null,
+		},
+		subject: {
+			work_id: view.item.work_id,
+			revision_id: view.item.revision.revision_id,
+			candidate_id: candidate.candidate_id,
+			candidate_sha256: candidate.candidate_sha256,
+			candidate_commit: candidate.commit_sha,
+		},
+		check: {
+			definition: "sealed_audit_manifest",
+			version: manifest.manifest_version,
+			manifest_id: manifest.manifest_id,
+			task_sha256: manifest.task_sha256,
+		},
+		result: "PASS",
+		artifacts: [
+			{
+				receipt_id: verifReceipt.receipt_id,
+				kind: "verification",
+				payload_sha256: verifReceipt.payload_sha256,
+				artifact_sha256: verifReceipt.artifact_sha256 ?? null,
+			},
+			{
+				receipt_id: auditReceipt.receipt_id,
+				kind: "audit",
+				payload_sha256: auditReceipt.payload_sha256,
+				artifact_sha256: auditReceipt.artifact_sha256,
+			},
+			{
+				receipt_id: pushReceipt.receipt_id,
+				kind: "push",
+				payload_sha256: pushReceipt.payload_sha256,
+				artifact_sha256: pushReceipt.artifact_sha256 ?? null,
+			},
+		],
+		delivery: {
+			repository,
+			remote_url: remoteUrl,
+			remote_ref: pushReceipt.remote_ref,
+			candidate_commit: candidate.commit_sha,
+			remote_commit: pushReceipt.remote_commit,
+		},
+	};
 }
 
 export function createWorkBackend(
@@ -441,9 +600,19 @@ export function createWorkBackend(
 			return { ...base, candidate_sha256: _meta?.candidateSha256 ?? candidate.candidate_sha256, ...((_meta?.candidateCommit ?? candidate.commit_sha) ? { candidate_commit: _meta?.candidateCommit ?? candidate.commit_sha } : {}) };
 		}
 		if (kind === "push") {
+			const view = await client.workflow(issue.key);
+			const attempt = liveAttempt(view);
+			const metaObj = _meta as Record<string, unknown> | undefined;
+			const remoteUrl =
+				(typeof metaObj?.remoteUrl === "string" ? metaObj.remoteUrl : undefined) ??
+				"https://github.com/theturtlecsz/oh-my-pi.git";
+			const repository =
+				(typeof metaObj?.repository === "string" ? metaObj.repository : undefined) ??
+				attempt?.repository ??
+				process.cwd();
 			const pushPayload = {
-				repository: basename(process.cwd()),
-				remote_url: "git@github.com:owner/oh-my-pi.git",
+				repository,
+				remote_url: remoteUrl,
 				remote_ref: _meta?.remoteRef ?? "refs/heads/main",
 				prior_tip: _meta?.priorTip !== undefined ? _meta.priorTip : (item.candidate?.commit_sha ?? null),
 				candidate_commit: _meta?.candidateCommit ?? candidate.commit_sha,
@@ -453,6 +622,7 @@ export function createWorkBackend(
 			const pSha = payloadHash(pushPayload);
 			return {
 				...base,
+				receipt_id: stableId("receipt", item.work_id, item.revision.revision_id, candidate.candidate_id, "push", pSha),
 				payload: pushPayload,
 				payload_sha256: pSha,
 				candidate_sha256: _meta?.candidateSha256 ?? candidate.candidate_sha256,
@@ -481,13 +651,9 @@ export function createWorkBackend(
 					receipt.remote_commit === push.remoteCommit,
 			);
 		if (!alreadyRecorded) {
-			const r = await receipt("push", now, push.detail ?? `pushed ${push.remoteRef}`, {
-				candidateCommit: commitSha,
-				remoteRef: push.remoteRef,
-				remoteCommit: push.remoteCommit,
-			});
+			const attempt = liveAttempt(view);
 			const pushPayload = {
-				repository: basename(hooks.cwd),
+				repository: attempt?.repository || hooks.cwd,
 				remote_url: push.remoteUrl,
 				remote_ref: push.remoteRef,
 				prior_tip: push.priorTip ?? null,
@@ -495,11 +661,26 @@ export function createWorkBackend(
 				result_tip: push.remoteCommit ?? commitSha,
 				detail: push.detail,
 			};
+			const pushPayloadSha = payloadHash(pushPayload);
+			const r = await receipt("push", now, push.detail ?? `pushed ${push.remoteRef}`, {
+				candidateCommit: commitSha,
+				remoteRef: push.remoteRef,
+				remoteCommit: push.remoteCommit,
+			});
+			const deterministicPushReceiptId = stableId(
+				"receipt",
+				view.item.work_id,
+				view.item.revision.revision_id,
+				candidate?.candidate_id ?? r.candidate_id,
+				"push",
+				pushPayloadSha,
+			);
 			await run("append_evidence", {
 				receipt: {
 					...r,
+					receipt_id: deterministicPushReceiptId,
 					payload: pushPayload,
-					payload_sha256: payloadHash(pushPayload),
+					payload_sha256: pushPayloadSha,
 					...(push.remoteRef ? { remote_ref: push.remoteRef } : {}),
 					...(push.remoteCommit ? { remote_commit: push.remoteCommit } : {}),
 					...(push.status === "contained" ? { candidate_commit: commitSha } : {}),
@@ -1288,6 +1469,13 @@ export function createWorkBackend(
 				);
 				if (bound) satisfied.push(child.work_id);
 			}
+			const pushReceipt = refreshed.receipts.find(
+				r =>
+					r.kind === "push" &&
+					r.candidate_id === refreshed.item.candidate?.candidate_id &&
+					r.remote_commit === push.remoteCommit,
+			);
+			const evidence = buildCompletionEvidence(refreshed, attempt, pushReceipt?.receipt_id);
 			const result = await run("complete_work", {
 				input: {
 					work_id: now.id,
@@ -1298,6 +1486,7 @@ export function createWorkBackend(
 				},
 				attempt_id: attempt.attempt_id,
 				done_authorization_ref: doneAuthorizationRef,
+				evidence,
 				...(satisfied.length > 0 ? { satisfied_work_ids: satisfied } : {}),
 				...(cancellations && cancellations.length > 0 ? { cancellations } : {}),
 			});
@@ -1751,7 +1940,7 @@ export function createWorkBackend(
 				expected_grant_version: input.expectedGrantVersion,
 				work_id: input.workId,
 				attempt_id: input.attemptId,
-				push_receipt_id: input.pushReceiptId,
+				evidence: input.evidence,
 				judge_sha256: input.judgeSha256,
 			});
 			if (result.type !== "complete_execution_item") throw new Error(`unexpected result ${result.type}`);
