@@ -45,7 +45,7 @@ Both values are recorded. Native versions must match the archived package.
 
 The stage contains an exact Git archive, release-local JavaScript dependencies
 installed with copyfile semantics, a copied Bun executable and native addons,
-generated tool-view assets, and a noneditable WorkService installation from its
+generated tool-view and embedded stats assets, and a noneditable WorkService installation from its
 frozen dependency lock. The manifest inventories all files/links and records
 interpreters, dependencies, platform, and source identity. Shared inodes and
 unexpected external links are rejected. Python's system interpreter and stdlib

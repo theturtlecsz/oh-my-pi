@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $which, isRecord, logger, pathIsWithin, type WhichOptions } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
-import { getConfigDirPaths } from "../config";
+import { getConfigDirPaths, getDiscoveryCwd } from "../config";
 import { type ClaudePluginRoot, getPreloadedPluginRoots } from "../discovery/helpers";
 import { BiomeClient } from "./clients/biome-client";
 import { SwiftLintClient } from "./clients/swiftlint-client";
@@ -361,6 +361,7 @@ function marketplaceConfigSource(root: ClaudePluginRoot): ConfigSource {
  * Supports both visible and hidden variants at each config location.
  */
 function getConfigSources(cwd: string): ConfigSource[] {
+	cwd = getDiscoveryCwd(cwd);
 	const filenames = ["lsp.json", ".lsp.json", "lsp.yaml", ".lsp.yaml", "lsp.yml", ".lsp.yml"];
 	const sources: ConfigSource[] = [];
 

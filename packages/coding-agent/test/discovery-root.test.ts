@@ -16,6 +16,10 @@ interface DiscoveryProbe {
 	prompt: string | null;
 	advisorModel: string | null;
 	advisorBaseline: string | null;
+	lspCommand: string | null;
+	dapCommand: string | null;
+	claudePluginBeforeRefresh: boolean;
+	claudePluginAfterRefresh: boolean;
 	ancestorSkill: boolean;
 	workspaceRead: string;
 }
@@ -27,10 +31,29 @@ afterEach(async () => {
 });
 
 async function writeConfiguration(root: string, origin: string, thinking: string): Promise<void> {
+	await fs.mkdir(root, { recursive: true });
 	const config = path.join(root, ".omp");
 	const plugins = path.join(config, "plugins");
 	const plugin = path.join(plugins, "node_modules", "root-plugin");
+	const executable = path.join(root, "discovery-server");
 	await Promise.all([
+		fs.symlink(process.execPath, executable),
+		Bun.write(
+			path.join(root, "lsp.json"),
+			JSON.stringify({
+				servers: {
+					"root-lsp": { command: executable, fileTypes: [".fixture"], rootMarkers: [".discovery-workspace"] },
+				},
+			}),
+		),
+		Bun.write(
+			path.join(root, "dap.json"),
+			JSON.stringify({
+				adapters: {
+					"root-dap": { command: executable, fileTypes: [".fixture"], rootMarkers: [".discovery-workspace"] },
+				},
+			}),
+		),
 		Bun.write(path.join(config, "config.yml"), `modelRoles:\n  audit: test/${origin}\n`),
 		Bun.write(path.join(config, "settings.json"), JSON.stringify({ defaultThinkingLevel: thinking })),
 		Bun.write(
@@ -77,13 +100,34 @@ async function fixture() {
 	const candidate = path.join(root, "candidate");
 	const empty = path.join(root, "empty");
 	const home = path.join(root, "home");
+	const claudePlugin = path.join(home, ".claude", "plugins", "cache", "resume-plugin");
 	await Promise.all([
 		fs.mkdir(path.join(root, ".git")),
-		fs.mkdir(home),
+		fs.mkdir(home, { recursive: true }),
 		fs.mkdir(empty),
 		writeConfiguration(root, "ancestor", "low"),
 		writeConfiguration(approved, "approved", "high"),
 		writeConfiguration(candidate, "candidate", "minimal"),
+		Bun.write(path.join(candidate, ".discovery-workspace"), "Candidate workspace marker.\n"),
+		Bun.write(
+			path.join(home, ".claude", "settings.json"),
+			JSON.stringify({ enabledPlugins: { "resume-plugin@fixture": false } }),
+		),
+		Bun.write(
+			path.join(candidate, ".claude", "settings.json"),
+			JSON.stringify({ enabledPlugins: { "resume-plugin@fixture": true } }),
+		),
+		Bun.write(
+			path.join(home, ".claude", "plugins", "installed_plugins.json"),
+			JSON.stringify({
+				version: 2,
+				plugins: { "resume-plugin@fixture": [{ scope: "user", installPath: claudePlugin, version: "1.0.0" }] },
+			}),
+		),
+		Bun.write(
+			path.join(claudePlugin, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ name: "resume-plugin", version: "1.0.0" }),
+		),
 		Bun.write(
 			path.join(root, ".omp", "skills", "ancestor-only", "SKILL.md"),
 			"---\nname: ancestor-only\ndescription: Ancestor discovery fixture.\n---\nFixture.\n",
@@ -134,6 +178,10 @@ describe("host-owned discovery root", () => {
 			prompt: "approved probe",
 			advisorModel: "test/approved",
 			advisorBaseline: "approved baseline",
+			lspCommand: path.join(paths.approved, "discovery-server"),
+			dapCommand: path.join(paths.approved, "discovery-server"),
+			claudePluginBeforeRefresh: false,
+			claudePluginAfterRefresh: false,
 			ancestorSkill: false,
 		});
 		expect(result.workspaceRead).toContain("candidate workspace contents");
@@ -154,6 +202,10 @@ describe("host-owned discovery root", () => {
 			prompt: "candidate probe",
 			advisorModel: "test/candidate",
 			advisorBaseline: "ancestor baseline\n\ncandidate baseline",
+			lspCommand: path.join(paths.candidate, "discovery-server"),
+			dapCommand: path.join(paths.candidate, "discovery-server"),
+			claudePluginBeforeRefresh: true,
+			claudePluginAfterRefresh: true,
 			ancestorSkill: true,
 		});
 		expect(result.workspaceRead).toContain("candidate workspace contents");
@@ -172,6 +224,10 @@ describe("host-owned discovery root", () => {
 			prompt: null,
 			advisorModel: null,
 			advisorBaseline: null,
+			lspCommand: null,
+			dapCommand: null,
+			claudePluginBeforeRefresh: false,
+			claudePluginAfterRefresh: false,
 			ancestorSkill: false,
 		});
 		expect(result.workspaceRead).toContain("candidate workspace contents");

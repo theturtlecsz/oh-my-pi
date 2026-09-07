@@ -166,18 +166,24 @@ export async function prepareLaunch(options: {
 		env.OMP_WORK_POSTGRES_PORT = String(options.postgresPort);
 	}
 	await prepareState(releaseRoot, stateRoot, workspace, manifest, manifestSha256, env);
+	const cliArguments =
+		options.args.length === 1 && options.args[0] === "--smoke-test"
+			? options.args
+			: [
+					"--cwd",
+					workspace,
+					"--trusted-extension",
+					path.join(releaseRoot, "source/session-system/extensions/work-now.ts"),
+					"--trusted-extension",
+					path.join(releaseRoot, "source/session-system/extensions/model-bookends.ts"),
+					...options.args,
+				];
 	const command = options.service
 		? [path.join(releaseRoot, manifest.python.path), "-I", "-B", "-m", "omp_work", ...options.args]
 		: [
 				path.join(releaseRoot, manifest.bun.path),
 				path.join(releaseRoot, "source/packages/coding-agent/src/cli.ts"),
-				"--cwd",
-				workspace,
-				"--trusted-extension",
-				path.join(releaseRoot, "source/session-system/extensions/work-now.ts"),
-				"--trusted-extension",
-				path.join(releaseRoot, "source/session-system/extensions/model-bookends.ts"),
-				...options.args,
+				...cliArguments,
 			];
 	return { command, cwd: env.OMP_DISCOVERY_CWD, env, manifestSha256 };
 }

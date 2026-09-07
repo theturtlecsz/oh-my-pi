@@ -150,6 +150,9 @@ export async function stageRelease(options: StageReleaseOptions): Promise<Staged
 		.quiet();
 	await $`${bunPath} run gen:tool-views`.cwd(source).env(env).quiet();
 	const uvVersion = (await $`${uvPath} --version`.cwd(destination).env(env).quiet().text()).trim();
+	// Source-mode stats otherwise compiles into its package directory on first
+	// use. Embed its dashboard now so runtime extraction stays in private TMPDIR.
+	await $`${bunPath} run gen:stats`.cwd(source).env(env).quiet();
 	await $`${uvPath} sync --project ${path.join(source, "python/omp-work")} --python ${pythonPath} --frozen --no-editable --no-dev --link-mode copy --no-python-downloads --no-progress`
 		.cwd(destination)
 		.env(env)

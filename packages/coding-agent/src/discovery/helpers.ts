@@ -956,6 +956,7 @@ export async function listClaudePluginRoots(
 	home: string,
 	cwd?: string,
 ): Promise<{ roots: ClaudePluginRoot[]; warnings: string[] }> {
+	if (cwd || process.env.OMP_DISCOVERY_CWD) cwd = getDiscoveryCwd(cwd ?? getProjectDir());
 	const claudeConfigDir = resolveClaudePaths(home).configDir;
 	const ompRegistryPath = path.join(getPluginsDir(home), "installed_plugins.json");
 	const resolvedProjectPath = cwd ? await resolveActiveProjectRegistryPath(cwd) : null;
