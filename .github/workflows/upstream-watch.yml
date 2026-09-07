@@ -1,0 +1,67 @@
+name: Upstream watch
+
+# Standing upstream-compatibility guardrail, discovery leg (OMP-229).
+# Weekly: find the newest stable upstream release above the accepted baseline,
+# resolve it to one immutable commit, and create or refresh the single tracked
+# review issue for that candidate. Incorporation itself rides the guarded
+# update path (docs/upstream-guardrail.md); this workflow only watches.
+
+on:
+   schedule:
+      - cron: "17 6 * * 1" # Mondays 06:17 UTC
+   workflow_dispatch:
+
+permissions:
+   contents: read
+   issues: write
+
+jobs:
+   discover:
+      name: Discover newest stable upstream release
+      runs-on: ubuntu-22.04
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+           with:
+              bun-version: "1.4"
+         - name: Run discovery
+           id: discovery
+           env:
+              GITHUB_TOKEN: ${{ github.token }}
+           run: |
+              set -euo pipefail
+              bun scripts/upstream-discovery.ts --json | tee /tmp/discovery.json
+              echo "newer=$(jq -r .newer /tmp/discovery.json)" >> "$GITHUB_OUTPUT"
+              echo "version=$(jq -r '.candidate_version // empty' /tmp/discovery.json)" >> "$GITHUB_OUTPUT"
+              echo "tag=$(jq -r '.candidate_tag // empty' /tmp/discovery.json)" >> "$GITHUB_OUTPUT"
+              echo "commit=$(jq -r '.candidate_commit // empty' /tmp/discovery.json)" >> "$GITHUB_OUTPUT"
+              echo "baseline=$(jq -r .baseline_version /tmp/discovery.json)" >> "$GITHUB_OUTPUT"
+         - name: Create or refresh the tracked review issue
+           if: steps.discovery.outputs.newer == 'true'
+           env:
+              GH_TOKEN: ${{ github.token }}
+              VERSION: ${{ steps.discovery.outputs.version }}
+              TAG: ${{ steps.discovery.outputs.tag }}
+              COMMIT: ${{ steps.discovery.outputs.commit }}
+              BASELINE: ${{ steps.discovery.outputs.baseline }}
+           run: |
+              set -euo pipefail
+              title="Upstream compatibility review: $VERSION"
+              body="Weekly upstream discovery found stable release **$TAG** above the accepted baseline **$BASELINE**.
+
+              - Immutable candidate commit: \`$COMMIT\`
+              - Discovered: $(date -u +%Y-%m-%d)
+
+              Run the standing compatibility review per docs/upstream-guardrail.md. Incorporation is
+              blocked until the review record passes the full guardrail (verify-upstream-handoff)."
+              existing="$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
+                --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
+              if [ -n "$existing" ]; then
+                gh issue comment "$existing" --body "$body"
+                echo "refreshed tracked review issue #$existing"
+              else
+                gh issue create --title "$title" --body "$body"
+              fi
+         - name: Report up to date
+           if: steps.discovery.outputs.newer != 'true'
+           run: echo "No stable upstream release above the accepted baseline."
