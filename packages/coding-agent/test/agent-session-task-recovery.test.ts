@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentEvent } from "@oh-my-pi/pi-agent-core";
+import { completeSimple } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as customTools from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools";
@@ -12,6 +13,7 @@ import type { ExtensionAPI, ExtensionFactory } from "@oh-my-pi/pi-coding-agent/e
 import { initializeExtensions } from "@oh-my-pi/pi-coding-agent/modes/runtime-init";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, getAgentTombstonePath } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { ensurePersistedRoster } from "@oh-my-pi/pi-coding-agent/registry/persisted-agents";
 import * as sdk from "@oh-my-pi/pi-coding-agent/sdk";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -19,6 +21,7 @@ import * as artifacts from "@oh-my-pi/pi-coding-agent/session/artifacts";
 import { TOOL_EXECUTION_START_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
 import { loadSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import { loadBundledAgents } from "@oh-my-pi/pi-coding-agent/task/agents";
 import * as discovery from "@oh-my-pi/pi-coding-agent/task/discovery";
@@ -29,13 +32,16 @@ import {
 	readPreparationRecord,
 	readTaskBinding,
 	TASK_NATIVE_RESULT_READY,
+	TASK_READ_CONTINUATION_READY,
+	TASK_READ_CONTINUATION_STARTED,
 	TASK_RESULT_PROCESSING_STARTED,
+	type TaskReadContinuationReadyV1,
 	taskRecoveryHash,
 	taskResultRecoveryState,
 } from "@oh-my-pi/pi-coding-agent/task/recovery";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/types";
 import * as outputMeta from "@oh-my-pi/pi-coding-agent/tools/output-meta";
-import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+import { nativePlainReadProvenance, ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { TempDir, untilAborted } from "@oh-my-pi/pi-utils";
 import assignment from "../../../python/omp-work/tests/fixtures/task-active-assignment.md" with { type: "text" };
 import ownerResume from "./fixtures/task-recovery-owner-resume.md" with { type: "text" };
@@ -66,7 +72,16 @@ describe("native task recovery session integration", () => {
 		startRun = true,
 		preparedContext = false,
 		assistantNarration = false,
-		testOptions: { maxRuntimeMs?: number; outputSchema?: unknown; extensions?: ExtensionFactory[] } = {},
+		testOptions: {
+			maxRuntimeMs?: number;
+			readPrelude?: boolean;
+			readPath?: string;
+			outputSchema?: unknown;
+			extensions?: ExtensionFactory[];
+			holdReadResponse?: boolean;
+			readHttpError?: "terminal" | "strict-once";
+			onReadHttpError?: () => void;
+		} = {},
 	) {
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
@@ -82,7 +97,10 @@ describe("native task recovery session integration", () => {
 		const parentReached = Promise.withResolvers<void>();
 		const releaseChild = Promise.withResolvers<void>();
 		const releaseParent = Promise.withResolvers<void>();
+		const readRequestReached = Promise.withResolvers<void>();
+		const releaseReadResponse = Promise.withResolvers<void>();
 		const calls: WireRequest[] = [];
+		let readHttpErrorSent = false;
 		const call = (id: string, name: string, args: unknown) => ({
 			index: 0,
 			id,
@@ -105,12 +123,39 @@ describe("native task recovery session integration", () => {
 						function: { name: string; arguments: string };
 					}>;
 				};
-				if (input.model === "child") {
+				if (input.model === "child" && input.tools?.some(tool => tool.function.name === "yield")) {
 					if (results.length === 0) {
 						childReached.resolve();
 						await releaseChild.promise;
+						delta = {
+							tool_calls: testOptions.readPrelude
+								? [
+										call("prelude-read-a", "read", { path: "result.txt" }),
+										{ ...call("prelude-read-b", "read", { path: "result.txt" }), index: 1 },
+									]
+								: [call("child-read", "read", { path: testOptions.readPath ?? "result.txt" })],
+						};
+					} else if (testOptions.readPrelude && results.length === 2) {
 						delta = { tool_calls: [call("child-read", "read", { path: "result.txt" })] };
 					} else {
+						readRequestReached.resolve();
+						if (testOptions.readHttpError && !readHttpErrorSent) {
+							readHttpErrorSent = true;
+							testOptions.onReadHttpError?.();
+							return Response.json(
+								{
+									error: {
+										message:
+											testOptions.readHttpError === "strict-once"
+												? "strict tools unsupported"
+												: "Rejected completion fixture",
+										type: "invalid_request_error",
+									},
+								},
+								{ status: 400 },
+							);
+						}
+						if (testOptions.holdReadResponse) await releaseReadResponse.promise;
 						delta = {
 							tool_calls: [
 								call("child-yield", "yield", {
@@ -167,6 +212,7 @@ describe("native task recovery session integration", () => {
 			models: ["parent", "child"].map(id => ({
 				id,
 				name: id,
+				...(testOptions.readHttpError === "strict-once" ? { compat: { supportsStrictMode: true } } : {}),
 				reasoning: false,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -193,6 +239,7 @@ describe("native task recovery session integration", () => {
 		cleanups.push(async () => {
 			releaseChild.resolve();
 			releaseParent.resolve();
+			releaseReadResponse.resolve();
 			await run?.catch(() => {});
 			await session?.dispose();
 			server.stop(true);
@@ -301,6 +348,8 @@ describe("native task recovery session integration", () => {
 			manager,
 			calls,
 			childReached,
+			readRequestReached,
+			releaseReadResponse,
 			parentReached,
 			releaseChild,
 			releaseParent,
@@ -314,6 +363,1447 @@ describe("native task recovery session integration", () => {
 				session = next;
 			},
 		};
+	}
+
+	function installChildExtensions(factories: ExtensionFactory[]): void {
+		const create = sdk.createAgentSession;
+		vi.spyOn(sdk, "createAgentSession").mockImplementation(options =>
+			create({ ...options, extensions: [...(options?.extensions ?? []), ...(options?.agentId ? factories : [])] }),
+		);
+	}
+
+	async function readRecoveryFixture() {
+		const f = await fixture(false, true, false, false, {
+			holdReadResponse: true,
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.readRequestReached.promise);
+		const snapshot = await f.takeSnapshot();
+		const originalChild = AgentRegistry.global().get(snapshot.binding.child.registryId)!.session!;
+		const beforeChild = originalChild.sessionManager.getEntries();
+		f.releaseReadResponse.resolve();
+		f.releaseParent.resolve();
+		await f.run;
+		await f.session.dispose();
+		await originalChild.dispose();
+		await fs.rm(snapshot.artifactsDir, { recursive: true, force: true });
+		for (const [name, bytes] of snapshot.artifacts) await Bun.write(path.join(snapshot.artifactsDir, name), bytes);
+		await Bun.write(snapshot.file, snapshot.journal);
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		const journal = await SessionManager.open(snapshot.file);
+		const created = await f.createParent(journal);
+		f.setCurrentSession(created.session);
+		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
+			createPersistedSubagentReviverFactory({
+				session: created.session,
+				authStorage: f.auth,
+				modelRegistry: f.models,
+				settings: f.settings,
+				enableLsp: false,
+				eventBus: created.eventBus,
+			}),
+			0,
+		);
+		await initializeExtensions(created.session, { reportSendError: () => {}, reportRuntimeError: () => {} });
+		return { f, snapshot, beforeChild, journal, created };
+	}
+
+	for (const scenario of [
+		"prior-tool-history",
+		"selector-metadata",
+		"plain-metadata",
+		"start-metadata",
+		"request-metadata",
+		"image-preparation",
+	] as const) {
+		it(`unsupported read ${scenario} completes normally without a continuation certificate`, async () => {
+			if (scenario !== "prior-tool-history") {
+				installChildExtensions([
+					pi => {
+						if (scenario === "image-preparation") {
+							pi.on("before_agent_start", () => ({
+								message: {
+									customType: "read-image-context",
+									content: [
+										{
+											type: "image",
+											data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+											mimeType: "image/png",
+										},
+									],
+									display: false,
+								},
+							}));
+						} else if (scenario === "request-metadata") {
+							let appended = false;
+							pi.on("before_provider_request", async (event, ctx) => {
+								const payload = event.payload as WireRequest;
+								if (appended || !payload.tools?.some(tool => tool.function.name === "yield")) return;
+								appended = true;
+								const deadline = AbortSignal.timeout(5000);
+								while (
+									!ctx.sessionManager
+										.getEntries()
+										.some(entry => entry.type === "custom" && entry.customType === "prompt-preparation")
+								) {
+									deadline.throwIfAborted();
+									await Bun.sleep(1);
+								}
+								pi.appendEntry("read-observer", { phase: "request" });
+							});
+						} else if (scenario === "start-metadata") {
+							pi.on("tool_execution_start", event => {
+								if (event.toolName === "read") pi.appendEntry("read-observer", { callId: event.toolCallId });
+							});
+						} else {
+							pi.on("tool_call", event => {
+								if (event.toolName === "read") pi.appendEntry("read-observer", { callId: event.toolCallId });
+							});
+						}
+					},
+				]);
+			}
+			const f = await fixture(false, true, false, false, {
+				readPrelude: scenario === "prior-tool-history",
+				readPath: scenario === "selector-metadata" ? "result.txt:1" : undefined,
+				extensions: [
+					pi => {
+						pi.on("tool_call", event =>
+							event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+						);
+					},
+				],
+			});
+			f.releaseChild.resolve();
+			f.releaseParent.resolve();
+			await untilAborted(AbortSignal.timeout(10000), f.run!);
+			expect(
+				f.calls.filter(
+					request =>
+						request.model === "parent" &&
+						request.messages.some(message => message.tool_call_id === "original-task"),
+				),
+			).toHaveLength(1);
+			const parentResult = f.manager
+				.getEntries()
+				.find(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "toolResult" &&
+						entry.message.toolCallId === "original-task",
+				);
+			if (parentResult?.type !== "message" || parentResult.message.role !== "toolResult")
+				throw new Error("Ordinary task result missing");
+			expect(parentResult.message.isError).toBe(false);
+			expect(JSON.stringify(parentResult.message.content)).toContain("before");
+			const binding = f.manager
+				.getEntries()
+				.map(readTaskBinding)
+				.find(value => value !== undefined)!;
+			const child = AgentRegistry.global().get(binding.child.registryId)!.session!;
+			const entries = child.sessionManager.getEntries();
+			expect(
+				entries.filter(
+					entry =>
+						entry.type === "custom" &&
+						(entry.customType === TASK_READ_CONTINUATION_READY ||
+							entry.customType === TASK_READ_CONTINUATION_STARTED),
+				),
+			).toHaveLength(0);
+			const reads = entries.filter(
+				entry =>
+					entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "read",
+			);
+			expect(reads).toHaveLength(scenario === "prior-tool-history" ? 3 : 1);
+			expect(
+				reads.every(
+					entry => entry.type === "message" && entry.message.role === "toolResult" && !entry.message.isError,
+				),
+			).toBe(true);
+			if (scenario !== "prior-tool-history" && scenario !== "image-preparation")
+				expect(
+					entries.filter(entry => entry.type === "custom" && entry.customType === "read-observer"),
+				).toHaveLength(1);
+		}, 15000);
+	}
+
+	it("native read checkpoint precedes held next HTTP headers and response claim precedes response hooks", async () => {
+		const originalCreate = sdk.createAgentSession;
+		let responseHooks = 0;
+		let responseMessages = 0;
+		let yieldHooks = 0;
+		vi.spyOn(sdk, "createAgentSession").mockImplementation(options =>
+			originalCreate({
+				...options,
+				extensions: [
+					...(options?.extensions ?? []),
+					...(options?.agentId
+						? [
+								(pi: ExtensionAPI) => {
+									const assertClaim = async (ctx: extensions.ExtensionContext) => {
+										const disk = await loadSessionFile(ctx.sessionManager.getSessionFile()!);
+										expect(
+											disk.entries.filter(
+												entry =>
+													entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED,
+											),
+										).toHaveLength(1);
+									};
+									pi.on("after_provider_response", async (_event, ctx) => {
+										if (
+											ctx.sessionManager
+												.getEntries()
+												.some(
+													entry =>
+														entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY,
+												)
+										) {
+											await assertClaim(ctx);
+											responseHooks++;
+										}
+									});
+									pi.on("message_start", async (event, ctx) => {
+										if (
+											event.message.role === "assistant" &&
+											ctx.sessionManager
+												.getEntries()
+												.some(
+													entry =>
+														entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY,
+												)
+										) {
+											await assertClaim(ctx);
+											responseMessages++;
+										}
+									});
+									pi.on("tool_call", async (event, ctx) => {
+										if (event.toolName === "yield") {
+											await assertClaim(ctx);
+											yieldHooks++;
+										}
+									});
+								},
+							]
+						: []),
+				],
+			}),
+		);
+		const f = await fixture(false, true, false, false, {
+			holdReadResponse: true,
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		try {
+			await untilAborted(AbortSignal.timeout(10000), f.readRequestReached.promise);
+		} catch (error) {
+			throw new Error(`${String(error)}; parent=${JSON.stringify(f.session.messages)}`);
+		}
+		const binding = f.manager
+			.getEntries()
+			.map(readTaskBinding)
+			.find(value => value !== undefined)!;
+		const child = AgentRegistry.global().get(binding.child.registryId)!.session!;
+		const disk = await loadSessionFile(binding.child.sessionFile);
+		const ready = disk.entries.filter(
+			entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY,
+		);
+		expect(ready).toHaveLength(1);
+		expect(
+			disk.entries.filter(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED),
+		).toHaveLength(0);
+		expect(responseHooks).toBe(0);
+		expect(responseMessages).toBe(0);
+		expect(yieldHooks).toBe(0);
+		const wire = f.calls.filter(request => request.model === "child").at(-1)!;
+		expect(wire.messages.filter(message => message.tool_call_id === "child-read")).toHaveLength(1);
+		expect(child.sessionManager.getLeafId()).toBe(ready[0].id);
+		f.releaseReadResponse.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.run!);
+		expect(responseHooks).toBe(1);
+		expect(responseMessages).toBe(1);
+		expect(yieldHooks).toBe(1);
+		expect(
+			f.calls.filter(
+				request =>
+					request.model === "parent" && request.messages.some(message => message.tool_call_id === "original-task"),
+			),
+		).toHaveLength(1);
+	}, 30000);
+
+	it("nested read result-hook mutation preserves native proof and binds transformed result on wire", async () => {
+		let nativeHash = "";
+		let nativeProof: unknown;
+		const observe = AgentSession.prototype.observeNativeTaskRead;
+		vi.spyOn(AgentSession.prototype, "observeNativeTaskRead").mockImplementation(function (
+			this: AgentSession,
+			id,
+			args,
+			result,
+		) {
+			if (id === "child-read") {
+				nativeHash = taskRecoveryHash(result);
+				nativeProof = structuredClone(nativePlainReadProvenance(result));
+			}
+			observe.call(this, id, args, result);
+		});
+		let changed = false;
+		installChildExtensions([
+			pi => {
+				pi.on("tool_result", event => {
+					if (event.toolName !== "read") return;
+					const text = event.content.find(part => part.type === "text");
+					if (!text) throw new Error("Native text result missing");
+					text.text = `hook-transformed:${text.text}`;
+					const details = event.details as { meta?: { source?: string } };
+					if (!details.meta) throw new Error("Native result metadata missing");
+					details.meta.source = "hook-source";
+					changed = true;
+				});
+			},
+		]);
+		const f = await fixture(false, true, false, false, {
+			holdReadResponse: true,
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.readRequestReached.promise);
+		const snapshot = await f.takeSnapshot();
+		const disk = await loadSessionFile(snapshot.binding.child.sessionFile);
+		const readyEntry = disk.entries.find(
+			entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY,
+		);
+		if (readyEntry?.type !== "custom") throw new Error("Native ready missing");
+		const ready = readyEntry.data as TaskReadContinuationReadyV1;
+		const result = disk.entries.find(entry => entry.id === ready.read.resultEntryId);
+		if (result?.type !== "message" || result.message.role !== "toolResult") throw new Error("Durable read missing");
+		expect(changed).toBe(true);
+		expect(ready.read.nativeResultSha256).toBe(nativeHash);
+		expect(taskRecoveryHash(ready.read.native)).toBe(taskRecoveryHash(nativeProof));
+		expect(ready.read.nativeResultSha256).not.toBe(
+			taskRecoveryHash({ content: result.message.content, details: result.message.details }),
+		);
+		expect(ready.read.finalResultSha256).toBe(taskRecoveryHash(result.message));
+		const wire = f.calls
+			.filter(request => request.model === "child" && request.tools?.some(tool => tool.function.name === "yield"))
+			.at(-1)!;
+		const text = result.message.content
+			.filter(part => part.type === "text")
+			.map(part => part.text)
+			.join("\n");
+		expect(text.startsWith("hook-transformed:")).toBe(true);
+		expect(wire.messages.find(message => message.tool_call_id === "child-read")!.content).toBe(text);
+		f.releaseReadResponse.resolve();
+		f.releaseParent.resolve();
+		await f.run;
+	}, 15000);
+
+	it("read continuation waits for queued read-assistant message-update work before certifying", async () => {
+		const held = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const preparing = Promise.withResolvers<void>();
+		const originalCreate = sdk.createAgentSession;
+		let blocked = false;
+		vi.spyOn(sdk, "createAgentSession").mockImplementation(options =>
+			originalCreate({
+				...options,
+				extensions: [
+					...(options?.extensions ?? []),
+					...(options?.agentId
+						? [
+								(pi: ExtensionAPI) => {
+									pi.on("message_update", async event => {
+										if (
+											!blocked &&
+											event.message.role === "assistant" &&
+											event.message.content.some(part => part.type === "toolCall" && part.name === "read")
+										) {
+											blocked = true;
+											held.resolve();
+											await release.promise;
+										}
+									});
+									pi.on("before_provider_request", event => {
+										if (JSON.stringify(event.payload).includes("child-read")) preparing.resolve();
+									});
+								},
+							]
+						: []),
+				],
+			}),
+		);
+		const f = await fixture(false, true, false, false, {
+			holdReadResponse: true,
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+				},
+			],
+		});
+		cleanups.push(async () => release.resolve());
+		f.releaseChild.resolve();
+		await untilAborted(AbortSignal.timeout(10000), Promise.all([held.promise, preparing.promise]));
+		await Promise.race([f.readRequestReached.promise, Bun.sleep(50)]);
+		const binding = f.manager
+			.getEntries()
+			.map(readTaskBinding)
+			.find(value => value !== undefined)!;
+		const child = AgentRegistry.global().get(binding.child.registryId)!.session!;
+		const ready = child.sessionManager
+			.getEntries()
+			.filter(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY);
+		expect(blocked).toBe(true);
+		expect(ready).toHaveLength(0);
+		expect(f.calls.filter(request => request.model === "child")).toHaveLength(1);
+		release.resolve();
+		f.releaseReadResponse.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.run!);
+		expect(
+			child.sessionManager
+				.getEntries()
+				.filter(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY),
+		).toHaveLength(1);
+	}, 15000);
+
+	it("read checkpoint cannot adopt foreign metadata during a held request hook", async () => {
+		const held = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const originalCreate = sdk.createAgentSession;
+		let blocked = false;
+		vi.spyOn(sdk, "createAgentSession").mockImplementation(options =>
+			originalCreate({
+				...options,
+				extensions: [
+					...(options?.extensions ?? []),
+					...(options?.agentId
+						? [
+								(pi: ExtensionAPI) => {
+									pi.on("before_provider_request", async event => {
+										if (!blocked && JSON.stringify(event.payload).includes("child-read")) {
+											blocked = true;
+											held.resolve();
+											await release.promise;
+										}
+									});
+								},
+							]
+						: []),
+				],
+			}),
+		);
+		const f = await fixture(false, true, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+				},
+			],
+		});
+		cleanups.push(async () => release.resolve());
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), held.promise);
+		const binding = f.manager
+			.getEntries()
+			.map(readTaskBinding)
+			.find(value => value !== undefined)!;
+		const child = AgentRegistry.global().get(binding.child.registryId)!.session!;
+		const foreign = child.sessionManager.appendServiceTierChange(null);
+		await child.sessionManager.flush();
+		release.resolve();
+		await untilAborted(
+			AbortSignal.timeout(10000),
+			f.run!.catch(() => {}),
+		);
+		const persisted = (await loadSessionFile(binding.child.sessionFile)).entries;
+		expect(persisted.find(entry => entry.id === foreign)?.type).toBe("service_tier_change");
+		expect(
+			persisted.filter(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY),
+		).toHaveLength(0);
+		expect(f.calls.filter(request => request.model === "child")).toHaveLength(1);
+	}, 15000);
+
+	it("certified read cold continuation claims the same manager before SDK and resumes without another read or input", async () => {
+		const { f, snapshot, beforeChild, journal, created } = await readRecoveryFixture();
+		const nativeRead = vi.spyOn(ReadTool.prototype, "execute");
+		const originalCreate = sdk.createAgentSession;
+		let claimManager: SessionManager | undefined;
+		let sdkObserved = false;
+		let startupObserved = false;
+		const append = SessionManager.prototype.appendCustomEntry;
+		vi.spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(function (
+			this: SessionManager,
+			type,
+			data,
+		) {
+			if (type === TASK_READ_CONTINUATION_STARTED) claimManager = this;
+			return append.call(this, type, data);
+		});
+		const sdkConstruction = vi.spyOn(sdk, "createAgentSession").mockImplementation(async options => {
+			if (options?.agentId) {
+				expect(options.sessionManager).toBe(claimManager);
+				const disk = await loadSessionFile(snapshot.binding.child.sessionFile);
+				expect(
+					disk.entries.filter(
+						entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED,
+					),
+				).toHaveLength(1);
+				sdkObserved = true;
+				return originalCreate({
+					...options,
+					extensions: [
+						...(options.extensions ?? []),
+						(pi: ExtensionAPI) => {
+							pi.on("session_start", async (_event, ctx) => {
+								const saved = await loadSessionFile(ctx.sessionManager.getSessionFile()!);
+								expect(
+									saved.entries.filter(
+										entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED,
+									),
+								).toHaveLength(1);
+								startupObserved = true;
+							});
+						},
+					],
+				});
+			}
+			return originalCreate(options);
+		});
+		const before = f.calls.length;
+		const refusals: unknown[] = [];
+		const outcome = created.session.requestPersistedTurnContinuation({
+			sessionId: created.session.sessionId,
+			entryId: snapshot.binding.call.promptEntryId,
+			expectedLeafId: journal.getLeafId()!,
+			recoverSynchronousTask: true,
+			validateDispatch: async () => ({ ok: true }),
+			onRefused: reason => refusals.push(reason),
+		});
+		expect(outcome.status).toBe("scheduled");
+		await untilAborted(AbortSignal.timeout(10000), created.session.waitForIdle());
+		expect(refusals).toEqual([]);
+		expect(sdkObserved).toBe(true);
+		expect(startupObserved).toBe(true);
+		expect(nativeRead).not.toHaveBeenCalled();
+		const childRequests = f.calls.slice(before).filter(request => request.model === "child");
+		expect(childRequests).toHaveLength(1);
+		expect(childRequests[0].messages.filter(message => message.tool_call_id === "child-read")).toHaveLength(1);
+		const wire = childRequests[0].messages;
+		const savedAssistant = beforeChild.find(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "assistant" &&
+				entry.message.content.some(part => part.type === "toolCall" && part.id === "child-read"),
+		);
+		if (savedAssistant?.type !== "message" || savedAssistant.message.role !== "assistant")
+			throw new Error("Saved read assistant missing");
+		const savedCall = savedAssistant.message.content.find(
+			part => part.type === "toolCall" && part.id === "child-read",
+		);
+		if (savedCall?.type !== "toolCall") throw new Error("Saved read call missing");
+		const calls = wire
+			.filter(message => message.role === "assistant")
+			.flatMap(message => message.tool_calls ?? [])
+			.filter(call => call.id === "child-read");
+		expect(calls).toHaveLength(1);
+		expect(calls[0].function.name).toBe("read");
+		expect(JSON.parse(calls[0].function.arguments)).toEqual(savedCall.arguments);
+		const callIndex = wire.findIndex(
+			message => message.role === "assistant" && message.tool_calls?.some(call => call.id === "child-read"),
+		);
+		const resultIndex = wire.findIndex(message => message.role === "tool" && message.tool_call_id === "child-read");
+		expect(resultIndex).toBeGreaterThan(callIndex);
+		const savedResult = beforeChild.find(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolCallId === "child-read",
+		);
+		if (savedResult?.type !== "message" || savedResult.message.role !== "toolResult")
+			throw new Error("Saved read result missing");
+		expect(wire[resultIndex].content).toBe(
+			savedResult.message.content
+				.filter(part => part.type === "text")
+				.map(part => part.text)
+				.join("\n"),
+		);
+		const resumedChild = AgentRegistry.global().get(snapshot.binding.child.registryId)!.session!;
+		const afterChild = resumedChild.sessionManager.getEntries();
+		const prepBefore = beforeChild.filter(
+			entry => entry.type === "custom" && entry.customType === "prompt-preparation",
+		);
+		expect(afterChild.filter(entry => entry.type === "custom" && entry.customType === "prompt-preparation")).toEqual(
+			prepBefore,
+		);
+		expect(afterChild.filter(entry => entry.type === "message" && entry.message.role === "user")).toEqual(
+			beforeChild.filter(entry => entry.type === "message" && entry.message.role === "user"),
+		);
+		expect(
+			f.calls
+				.slice(before)
+				.filter(
+					request =>
+						request.model === "parent" &&
+						request.messages.some(message => message.tool_call_id === "original-task"),
+				),
+		).toHaveLength(1);
+		const parentWire = f.calls
+			.slice(before)
+			.find(
+				request => request.model === "parent" && request.tools?.some(tool => tool.function.name === "task"),
+			)!.messages;
+		const parentCalls = parentWire
+			.filter(message => message.role === "assistant")
+			.flatMap(message => message.tool_calls ?? [])
+			.filter(call => call.id === "original-task");
+		expect(parentCalls).toHaveLength(1);
+		expect(parentCalls[0].function.name).toBe("task");
+		expect(JSON.parse(parentCalls[0].function.arguments)).toEqual({ name: "Child", agent: "task", task: assignment });
+		expect(parentWire.findIndex(message => message.tool_call_id === "original-task")).toBeGreaterThan(
+			parentWire.findIndex(message => message.tool_calls?.some(call => call.id === "original-task")),
+		);
+		sdkConstruction.mockRestore();
+		await AgentLifecycleManager.global().park(snapshot.binding.child.registryId);
+		const reopenedChild = await AgentLifecycleManager.global().ensureLive(snapshot.binding.child.registryId);
+		expect(reopenedChild.sessionId).toBe(snapshot.binding.child.sessionId);
+		await reopenedChild.dispose();
+	}, 30000);
+
+	it("read response error cannot expose terminal hooks while its claim authority is pending", async () => {
+		const held = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const exposed = Promise.withResolvers<void>();
+		let terminalEffects = 0;
+		let requestRejected = false;
+		const originalCreate = sdk.createAgentSession;
+		vi.spyOn(sdk, "createAgentSession").mockImplementation(options =>
+			originalCreate({
+				...options,
+				extensions: [
+					...(options?.extensions ?? []),
+					...(options?.agentId
+						? [
+								(pi: ExtensionAPI) => {
+									pi.on("turn_end", (_event, ctx) => {
+										if (
+											ctx.sessionManager
+												.getEntries()
+												.some(
+													entry =>
+														entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY,
+												)
+										) {
+											terminalEffects++;
+											exposed.resolve();
+										}
+									});
+									pi.on("agent_end", (_event, ctx) => {
+										if (
+											ctx.sessionManager
+												.getEntries()
+												.some(
+													entry =>
+														entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY,
+												)
+										) {
+											terminalEffects++;
+											exposed.resolve();
+										}
+									});
+								},
+							]
+						: []),
+				],
+			}),
+		);
+		const f = await fixture(false, true, false, false, {
+			readHttpError: "terminal",
+			onReadHttpError: () => {
+				requestRejected = true;
+			},
+			extensions: [
+				pi => {
+					pi.on("tool_call", (event, ctx) =>
+						event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										const binding = ctx.sessionManager
+											.getEntries()
+											.map(readTaskBinding)
+											.find(value => value !== undefined);
+										const child = binding
+											? AgentRegistry.global().get(binding.child.registryId)?.session
+											: undefined;
+										if (
+											requestRejected &&
+											child?.sessionManager
+												.getEntries()
+												.some(
+													entry =>
+														entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY,
+												) &&
+											!child.sessionManager
+												.getEntries()
+												.some(
+													entry =>
+														entry.type === "custom" &&
+														entry.customType === TASK_READ_CONTINUATION_STARTED,
+												)
+										) {
+											held.resolve();
+											await release.promise;
+										}
+										return { ok: true };
+									},
+								}
+							: undefined,
+					);
+				},
+			],
+		});
+		cleanups.push(async () => release.resolve());
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), held.promise);
+		await Promise.race([exposed.promise, Bun.sleep(50)]);
+		expect(requestRejected).toBe(true);
+		expect(terminalEffects).toBe(0);
+		release.resolve();
+		await untilAborted(
+			AbortSignal.timeout(10000),
+			f.run!.catch(() => {}),
+		);
+		expect(terminalEffects).toBeGreaterThan(0);
+		const binding = f.manager
+			.getEntries()
+			.map(readTaskBinding)
+			.find(value => value !== undefined)!;
+		const disk = await loadSessionFile(binding.child.sessionFile);
+		expect(
+			disk.entries.filter(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED),
+		).toHaveLength(1);
+	}, 15000);
+
+	for (const failedHook of [
+		"tool_result",
+		"message_end",
+		"turn_end",
+		"before_provider_request",
+		"queued-emission",
+	] as const) {
+		it(`read certificate refuses ${failedHook} failure without parent fallback hooks`, async () => {
+			let failed = false;
+			let parentHooks = 0;
+			const fail = () => {
+				failed = true;
+				throw new Error("Returned read-step hook failure");
+			};
+			installChildExtensions([
+				pi => {
+					if (failedHook === "tool_result")
+						pi.on("tool_result", event => {
+							if (event.toolName === "read") fail();
+						});
+					if (failedHook === "message_end")
+						pi.on("message_end", event => {
+							if (event.message.role === "toolResult" && event.message.toolName === "read") fail();
+						});
+					if (failedHook === "turn_end")
+						pi.on("turn_end", event => {
+							if (
+								event.message.role === "assistant" &&
+								event.message.content.some(part => part.type === "toolCall" && part.name === "read")
+							)
+								fail();
+						});
+					if (failedHook === "before_provider_request")
+						pi.on("before_provider_request", event => {
+							if (JSON.stringify(event.payload).includes("child-read")) fail();
+						});
+					if (failedHook === "queued-emission") pi.on("message_update", () => {});
+				},
+			]);
+			if (failedHook === "queued-emission") {
+				const emit = extensions.ExtensionRunner.prototype.emit;
+				vi.spyOn(extensions.ExtensionRunner.prototype, "emit").mockImplementation(function (
+					this: extensions.ExtensionRunner,
+					event: Parameters<typeof emit>[0],
+				) {
+					if (
+						event.type === "message_update" &&
+						event.message.role === "assistant" &&
+						event.message.content.some(part => part.type === "toolCall" && part.name === "read")
+					) {
+						failed = true;
+						return Promise.reject(new Error("Queued extension emit rejected"));
+					}
+					return emit.call(this, event);
+				} as typeof emit);
+			}
+			const f = await fixture(false, true, false, false, {
+				extensions: [
+					pi => {
+						pi.on("tool_call", event =>
+							event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+						);
+						pi.on("tool_result", event => {
+							if (event.toolName === "task") parentHooks++;
+						});
+					},
+				],
+			});
+			f.releaseChild.resolve();
+			f.releaseParent.resolve();
+			await untilAborted(
+				AbortSignal.timeout(10000),
+				f.run!.catch(() => {}),
+			);
+			expect(failed).toBe(true);
+			expect(parentHooks).toBe(0);
+			expect(
+				f.calls.filter(
+					request => request.model === "parent" && request.tools?.some(tool => tool.function.name === "task"),
+				),
+			).toHaveLength(1);
+			const binding = f.manager
+				.getEntries()
+				.map(readTaskBinding)
+				.find(value => value !== undefined)!;
+			const disk = await loadSessionFile(binding.child.sessionFile);
+			expect(
+				disk.entries.filter(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY),
+			).toHaveLength(0);
+			expect(
+				f.calls.filter(
+					request => request.model === "child" && request.tools?.some(tool => tool.function.name === "yield"),
+				),
+			).toHaveLength(1);
+		}, 15000);
+	}
+
+	it("read step drains a nested same-model side request without fencing it as the next main request", async () => {
+		let sideRequests = 0;
+		installChildExtensions([
+			pi => {
+				pi.on("turn_end", async (event, ctx) => {
+					if (
+						event.message.role !== "assistant" ||
+						!event.message.content.some(part => part.type === "toolCall" && part.name === "read")
+					)
+						return;
+					const child = AgentRegistry.global().get("Child")!.session!;
+					const model = child.model!;
+					await completeSimple(
+						model,
+						{ messages: [{ role: "user", content: ownerResume, timestamp: Date.now() }] },
+						child.prepareSimpleStreamOptions({ apiKey: "local-test", maxTokens: 32 }, model.provider),
+					);
+					expect(
+						ctx.sessionManager
+							.getEntries()
+							.filter(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY),
+					).toHaveLength(0);
+					sideRequests++;
+				});
+			},
+		]);
+		const f = await fixture(false, true, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.run!);
+		expect(sideRequests).toBe(1);
+		expect(f.calls.filter(request => request.model === "child" && !request.tools?.length)).toHaveLength(1);
+		expect(
+			f.calls.filter(
+				request => request.model === "child" && request.tools?.some(tool => tool.function.name === "yield"),
+			),
+		).toHaveLength(2);
+	}, 15000);
+
+	it("read retry claims before reentering request hooks after an actual strict-schema HTTP rejection", async () => {
+		let requestEffects = 0;
+		installChildExtensions([
+			pi => {
+				pi.on("before_provider_request", async (event, ctx) => {
+					if (!JSON.stringify(event.payload).includes("child-read")) return;
+					requestEffects++;
+					const disk = await loadSessionFile(ctx.sessionManager.getSessionFile()!);
+					const starts = disk.entries.filter(
+						entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED,
+					);
+					expect(starts).toHaveLength(requestEffects === 1 ? 0 : 1);
+				});
+			},
+		]);
+		const f = await fixture(false, true, false, false, {
+			readHttpError: "strict-once",
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.run!);
+		expect(requestEffects).toBe(2);
+		expect(
+			f.calls.filter(
+				request =>
+					request.model === "child" && request.messages.some(message => message.tool_call_id === "child-read"),
+			),
+		).toHaveLength(2);
+		expect(
+			f.calls.filter(
+				request =>
+					request.model === "parent" && request.messages.some(message => message.tool_call_id === "original-task"),
+			),
+		).toHaveLength(1);
+	}, 15000);
+
+	it("read main transport receives the validated private payload when a hook mutates its retained object during authority", async () => {
+		let retained: WireRequest | undefined;
+		let mutated = false;
+		installChildExtensions([
+			pi => {
+				pi.on("before_provider_request", event => {
+					const payload = event.payload as WireRequest;
+					if (payload.messages.some(message => message.tool_call_id === "child-read")) retained = payload;
+				});
+			},
+		]);
+		const f = await fixture(false, true, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										if (retained && !mutated) {
+											retained.messages.find(message => message.tool_call_id === "child-read")!.content =
+												"Hook mutated retained payload";
+											mutated = true;
+										}
+										return { ok: true };
+									},
+								}
+							: undefined,
+					);
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.run!);
+		expect(mutated).toBe(true);
+		const wire = f.calls.find(
+			request =>
+				request.model === "child" && request.messages.some(message => message.tool_call_id === "child-read"),
+		)!;
+		expect(wire.messages.find(message => message.tool_call_id === "child-read")!.content).toContain("before");
+		expect(wire.messages.find(message => message.tool_call_id === "child-read")!.content).not.toContain(
+			"Hook mutated",
+		);
+	}, 15000);
+
+	for (const mutation of ["missing-call", "wrong-role", "reversed-pair"] as const) {
+		it(`read final main payload rejects ${mutation} before HTTP`, async () => {
+			let changed = false;
+			installChildExtensions([
+				pi => {
+					pi.on("before_provider_request", event => {
+						const payload = event.payload as WireRequest;
+						if (!payload.messages.some(message => message.tool_call_id === "child-read")) return;
+						const index = payload.messages.findIndex(message =>
+							message.tool_calls?.some(call => call.id === "child-read"),
+						);
+						if (mutation === "missing-call") payload.messages[index].tool_calls = [];
+						else if (mutation === "wrong-role") payload.messages[index].role = "user";
+						else {
+							const [call] = payload.messages.splice(index, 1);
+							payload.messages.push(call);
+						}
+						changed = true;
+						return payload;
+					});
+				},
+			]);
+			const f = await fixture(false, true, false, false, {
+				extensions: [
+					pi => {
+						pi.on("tool_call", event =>
+							event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+						);
+					},
+				],
+			});
+			f.releaseChild.resolve();
+			f.releaseParent.resolve();
+			await untilAborted(
+				AbortSignal.timeout(10000),
+				f.run!.catch(() => {}),
+			);
+			expect(changed).toBe(true);
+			expect(
+				f.calls.filter(
+					request => request.model === "child" && request.tools?.some(tool => tool.function.name === "yield"),
+				),
+			).toHaveLength(1);
+		}, 15000);
+	}
+
+	it("cold read claim coalesces two revivals and rejects a second preparation manager before SDK", async () => {
+		const { snapshot, journal, created } = await readRecoveryFixture();
+		const held = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		cleanups.push(async () => release.resolve());
+		let manager: SessionManager | undefined;
+		let sdkStarts = 0;
+		const flush = SessionManager.prototype.flush;
+		vi.spyOn(SessionManager.prototype, "flush").mockImplementation(async function (this: SessionManager) {
+			if (
+				!manager &&
+				this.getSessionFile() === snapshot.binding.child.sessionFile &&
+				this.getEntries().some(
+					entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED,
+				)
+			) {
+				manager = this;
+				held.resolve();
+				await release.promise;
+			}
+			return flush.call(this);
+		});
+		const create = sdk.createAgentSession;
+		vi.spyOn(sdk, "createAgentSession").mockImplementation(options => {
+			if (options?.agentId) sdkStarts++;
+			return create(options);
+		});
+		const refusals: unknown[] = [];
+		created.session.requestPersistedTurnContinuation({
+			sessionId: created.session.sessionId,
+			entryId: snapshot.binding.call.promptEntryId,
+			expectedLeafId: journal.getLeafId()!,
+			recoverSynchronousTask: true,
+			validateDispatch: async () => ({ ok: true }),
+			onRefused: reason => refusals.push(reason),
+		});
+		await untilAborted(AbortSignal.timeout(10000), held.promise);
+		expect(sdkStarts).toBe(0);
+		const ref = AgentRegistry.global().get(snapshot.binding.child.registryId)!;
+		const second = AgentLifecycleManager.global().ensureLive(ref.id);
+		const other = await SessionManager.open(snapshot.binding.child.sessionFile, undefined, undefined, {
+			suppressBreadcrumb: true,
+		});
+		try {
+			await expect(created.session.prepareTaskRecoveryRevival(ref, other)).rejects.toThrow("Another manager");
+		} finally {
+			await other.close();
+		}
+		expect(sdkStarts).toBe(0);
+		release.resolve();
+		const coalesced = await second;
+		await untilAborted(AbortSignal.timeout(10000), created.session.waitForIdle());
+		expect(refusals).toEqual([]);
+		expect(sdkStarts).toBe(1);
+		expect(coalesced.sessionManager).toBe(manager!);
+		const disk = await loadSessionFile(snapshot.binding.child.sessionFile);
+		expect(
+			disk.entries.filter(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED),
+		).toHaveLength(1);
+	}, 15000);
+
+	for (const change of ["registry", "tombstone", "branch", "file", "policy", "owner", "authority"] as const) {
+		it(`cold read ${change} during claim flush blocks SDK startup and preserves claim`, async () => {
+			const { f, snapshot, journal, created } = await readRecoveryFixture();
+			const held = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			cleanups.push(async () => release.resolve());
+			let stopped = false;
+			let manager: SessionManager | undefined;
+			let deny = false;
+			let sdkStarts = 0;
+			const flush = SessionManager.prototype.flush;
+			vi.spyOn(SessionManager.prototype, "flush").mockImplementation(async function (this: SessionManager) {
+				if (
+					!stopped &&
+					this.getSessionFile() === snapshot.binding.child.sessionFile &&
+					this.getEntries().some(
+						entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED,
+					)
+				) {
+					stopped = true;
+					manager = this;
+					held.resolve();
+					await release.promise;
+				}
+				return flush.call(this);
+			});
+			const create = sdk.createAgentSession;
+			vi.spyOn(sdk, "createAgentSession").mockImplementation(options => {
+				if (options?.agentId) sdkStarts++;
+				return create(options);
+			});
+			const refusals: unknown[] = [];
+			created.session.requestPersistedTurnContinuation({
+				sessionId: created.session.sessionId,
+				entryId: snapshot.binding.call.promptEntryId,
+				expectedLeafId: journal.getLeafId()!,
+				recoverSynchronousTask: true,
+				validateDispatch: async () =>
+					deny ? { ok: false, reason: "Authority revoked during claim" } : { ok: true },
+				onRefused: reason => refusals.push(reason),
+			});
+			await untilAborted(AbortSignal.timeout(10000), held.promise);
+			const registry = AgentRegistry.global();
+			const ref = registry.get(snapshot.binding.child.registryId)!;
+			if (change === "registry") registry.register({ ...ref, session: null, status: "parked" });
+			else if (change === "tombstone")
+				await Bun.write(getAgentTombstonePath(snapshot.binding.child.sessionFile), "");
+			else if (change === "branch") {
+				manager!.branch(snapshot.binding.child.initEntryId);
+				manager!.appendCustomEntry("foreign-owner", {});
+			} else if (change === "file") {
+				const other = path.join(f.root.path(), "other-child.jsonl");
+				await Bun.write(other, Bun.file(snapshot.binding.child.sessionFile));
+				await manager!.setSessionFile(other);
+			} else if (change === "policy") created.session.settings.set("tools.approval", { task: "deny" });
+			else if (change === "owner") await created.session.sendUserMessage(ownerResume, { deliverAs: "followUp" });
+			else deny = true;
+			release.resolve();
+			await untilAborted(AbortSignal.timeout(10000), created.session.waitForIdle());
+			expect(refusals).toHaveLength(1);
+			expect(sdkStarts).toBe(0);
+			if (change === "owner") expect(created.session.getQueuedMessages().followUp).toEqual([ownerResume]);
+			expect(registry.get(ref.id)?.session).toBeNull();
+			const disk = await loadSessionFile(snapshot.binding.child.sessionFile);
+			expect(
+				disk.entries.filter(
+					entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED,
+				),
+			).toHaveLength(1);
+		}, 15000);
+	}
+
+	it("unbound managed revival cannot run startup from an undelivered read certificate", async () => {
+		const { f, snapshot } = await readRecoveryFixture();
+		await ensurePersistedRoster(AgentRegistry.global(), snapshot.file);
+		const create = vi.spyOn(sdk, "createAgentSession");
+		const before = f.calls.length;
+		await expect(AgentLifecycleManager.global().ensureLive(snapshot.binding.child.registryId)).rejects.toThrow(
+			"Undelivered read continuation",
+		);
+		expect(create).not.toHaveBeenCalled();
+		expect(f.calls).toHaveLength(before);
+		const disk = await loadSessionFile(snapshot.binding.child.sessionFile);
+		expect(
+			disk.entries.filter(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED),
+		).toHaveLength(0);
+	}, 15000);
+
+	it("in-memory parent result after actual storage failure cannot authorize marked child revival", async () => {
+		let parentFile: string | undefined;
+		let failed = false;
+		let block = true;
+		const rejectResult = (file: string, text: string) => {
+			if (
+				block &&
+				file === parentFile &&
+				text.includes('"role":"toolResult"') &&
+				text.includes('"toolCallId":"original-task"')
+			) {
+				failed = true;
+				throw new Error("Original result disk write refused");
+			}
+		};
+		const open = FileSessionStorage.prototype.openWriter;
+		vi.spyOn(FileSessionStorage.prototype, "openWriter").mockImplementation(function (
+			this: FileSessionStorage,
+			file,
+			options,
+		) {
+			const writer = open.call(this, file, options);
+			const append = writer.appendSync!.bind(writer);
+			vi.spyOn(writer, "appendSync").mockImplementation(text => {
+				rejectResult(file, text);
+				append(text);
+			});
+			return writer;
+		});
+		const sync = FileSessionStorage.prototype.writeTextSync;
+		vi.spyOn(FileSessionStorage.prototype, "writeTextSync").mockImplementation(function (
+			this: FileSessionStorage,
+			file,
+			text,
+		) {
+			rejectResult(file, text);
+			sync.call(this, file, text);
+		});
+		const atomic = FileSessionStorage.prototype.writeTextAtomic;
+		vi.spyOn(FileSessionStorage.prototype, "writeTextAtomic").mockImplementation(function (
+			this: FileSessionStorage,
+			file,
+			text,
+			options,
+		) {
+			rejectResult(file, text);
+			return atomic.call(this, file, text, options);
+		});
+		const f = await fixture(false, false, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+				},
+			],
+		});
+		cleanups.push(async () => {
+			block = false;
+			await f.manager.recoverPersistenceFromCurrentState();
+		});
+		parentFile = f.manager.getSessionFile();
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(
+			AbortSignal.timeout(10000),
+			f.session
+				.sendCustomMessage(
+					{ customType: "work-execute", content: assignment, display: false, attribution: "agent" },
+					{ triggerTurn: true },
+				)
+				.catch(() => {}),
+		);
+		expect(failed).toBe(true);
+		const binding = f.manager
+			.getEntries()
+			.map(readTaskBinding)
+			.find(value => value !== undefined)!;
+		const memoryResults = f.manager
+			.getEntries()
+			.filter(
+				entry =>
+					entry.type === "message" &&
+					entry.message.role === "toolResult" &&
+					entry.message.toolCallId === "original-task",
+			);
+		expect(memoryResults).toHaveLength(1);
+		const disk = await loadSessionFile(parentFile!);
+		expect(
+			disk.entries.filter(
+				entry =>
+					entry.type === "message" &&
+					entry.message.role === "toolResult" &&
+					entry.message.toolCallId === "original-task",
+			),
+		).toHaveLength(0);
+		await AgentLifecycleManager.global().park(binding.child.registryId);
+		const create = vi.spyOn(sdk, "createAgentSession");
+		// Rebuild only the managed roster, retaining the actual failed parent manager in memory.
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
+			createPersistedSubagentReviverFactory({
+				session: f.session,
+				authStorage: f.auth,
+				modelRegistry: f.models,
+				settings: f.settings,
+				enableLsp: false,
+			}),
+			0,
+		);
+		await ensurePersistedRoster(AgentRegistry.global(), parentFile!);
+		await expect(AgentLifecycleManager.global().ensureLive(binding.child.registryId)).rejects.toThrow(
+			"Undelivered read continuation",
+		);
+		expect(create).not.toHaveBeenCalled();
+		expect(
+			f.calls.filter(
+				request => request.model === "parent" && request.tools?.some(tool => tool.function.name === "task"),
+			),
+		).toHaveLength(1);
+	}, 15000);
+
+	it("cold startup effect leaves a durable claim that refuses a fresh replay", async () => {
+		const { f, snapshot, journal, created } = await readRecoveryFixture();
+		let effects = 0;
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		cleanups.push(async () => release.resolve());
+		installChildExtensions([
+			pi => {
+				pi.on("session_start", async () => {
+					effects++;
+					await Bun.write(path.join(f.root.path(), "read-startup-effect.txt"), String(effects));
+					reached.resolve();
+					await release.promise;
+				});
+			},
+		]);
+		const refused: unknown[] = [];
+		created.session.requestPersistedTurnContinuation({
+			sessionId: created.session.sessionId,
+			entryId: snapshot.binding.call.promptEntryId,
+			expectedLeafId: journal.getLeafId()!,
+			recoverSynchronousTask: true,
+			validateDispatch: async () => ({ ok: true }),
+			onRefused: reason => refused.push(reason),
+		});
+		await untilAborted(AbortSignal.timeout(10000), reached.promise);
+		const checkpoint = await f.takeSnapshot(created.session);
+		const child = AgentRegistry.global().get(snapshot.binding.child.registryId)!.session!;
+		expect(
+			child.sessionManager
+				.getEntries()
+				.filter(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED),
+		).toHaveLength(1);
+		release.resolve();
+		await untilAborted(AbortSignal.timeout(10000), created.session.waitForIdle());
+		expect(effects).toBe(1);
+		expect(refused).toEqual([]);
+		await created.session.dispose();
+		await child.dispose();
+		// Restore only exact runtime bytes captured while the first startup effect was held.
+		await fs.rm(checkpoint.artifactsDir, { recursive: true, force: true });
+		for (const [name, bytes] of checkpoint.artifacts)
+			await Bun.write(path.join(checkpoint.artifactsDir, name), bytes);
+		await Bun.write(checkpoint.file, checkpoint.journal);
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		const reopened = await SessionManager.open(snapshot.file);
+		const next = await f.createParent(reopened);
+		f.setCurrentSession(next.session);
+		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
+			createPersistedSubagentReviverFactory({
+				session: next.session,
+				authStorage: f.auth,
+				modelRegistry: f.models,
+				settings: f.settings,
+				enableLsp: false,
+				eventBus: next.eventBus,
+			}),
+			0,
+		);
+		await initializeExtensions(next.session, { reportSendError: () => {}, reportRuntimeError: () => {} });
+		const before = f.calls.length;
+		const again: unknown[] = [];
+		const outcome = next.session.requestPersistedTurnContinuation({
+			sessionId: next.session.sessionId,
+			entryId: snapshot.binding.call.promptEntryId,
+			expectedLeafId: reopened.getLeafId()!,
+			recoverSynchronousTask: true,
+			validateDispatch: async () => ({ ok: true }),
+			onRefused: reason => again.push(reason),
+		});
+		await untilAborted(AbortSignal.timeout(10000), next.session.waitForIdle());
+		expect(JSON.stringify([outcome, ...again])).toContain("task-read-continuation-started");
+		expect(effects).toBe(1);
+		expect(f.calls).toHaveLength(before);
+		expect(await Bun.file(path.join(f.root.path(), "read-startup-effect.txt")).text()).toBe("1");
+	}, 15000);
+
+	for (const fault of ["ready-append", "ready-flush", "claim-append", "claim-flush"] as const) {
+		it(`read ${fault} failure cannot enter response or parent result hooks`, async () => {
+			let failed = false;
+			let responseEffects = 0;
+			let parentEffects = 0;
+			installChildExtensions([
+				pi => {
+					pi.on("after_provider_response", (_event, ctx) => {
+						if (
+							ctx.sessionManager
+								.getEntries()
+								.some(entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY)
+						)
+							responseEffects++;
+					});
+				},
+			]);
+			const marker = fault.startsWith("ready") ? TASK_READ_CONTINUATION_READY : TASK_READ_CONTINUATION_STARTED;
+			if (fault.endsWith("append")) {
+				const append = SessionManager.prototype.appendCustomEntry;
+				vi.spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(function (
+					this: SessionManager,
+					type,
+					data,
+				) {
+					if (type === marker) {
+						failed = true;
+						throw new Error("Read append failed");
+					}
+					return append.call(this, type, data);
+				});
+			} else {
+				const flush = SessionManager.prototype.flush;
+				vi.spyOn(SessionManager.prototype, "flush").mockImplementation(async function (this: SessionManager) {
+					if (
+						!failed &&
+						this.getBranch().some(
+							entry => entry.id === this.getLeafId() && entry.type === "custom" && entry.customType === marker,
+						)
+					) {
+						failed = true;
+						throw new Error("Read flush failed");
+					}
+					return flush.call(this);
+				});
+			}
+			const f = await fixture(false, true, false, false, {
+				extensions: [
+					pi => {
+						pi.on("tool_call", event =>
+							event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+						);
+						pi.on("tool_result", event => {
+							if (event.toolName === "task") parentEffects++;
+						});
+					},
+				],
+			});
+			f.releaseChild.resolve();
+			f.releaseParent.resolve();
+			await untilAborted(
+				AbortSignal.timeout(10000),
+				f.run!.catch(() => {}),
+			);
+			expect(failed).toBe(true);
+			expect(responseEffects).toBe(0);
+			expect(parentEffects).toBe(0);
+		}, 15000);
 	}
 
 	async function completedReadyFixture() {

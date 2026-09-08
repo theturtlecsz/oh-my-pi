@@ -306,6 +306,11 @@ export class AgentLifecycleManager {
 		return park.promise;
 	}
 
+	/** Read-only managed-revival ownership check; this is not a journal writer lock. */
+	hasPendingRevival(id: string, expected: AgentRef): boolean {
+		return this.#revivals.get(id)?.ref === expected;
+	}
+
 	/**
 	 * Return the live session, reviving from the sessionFile if parked.
 	 * Throws a plain Error if the id is unknown or parked without a reviver.

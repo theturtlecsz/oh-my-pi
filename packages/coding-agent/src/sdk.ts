@@ -17,6 +17,7 @@ import type {
 	Message,
 	Model,
 	ModelUsageHealth,
+	ProviderResponseMetadata,
 	ProviderSessionState,
 	ServiceTier,
 	SimpleStreamOptions,
@@ -1728,6 +1729,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			captureTaskCall: (toolCallId, params, signal) =>
 				session ? session.captureTaskCall(toolCallId, params, signal) : Promise.resolve(undefined),
 			getTaskResultProcessingGate: id => session?.getTaskResultProcessingGate(id),
+			observeNativeTaskRead: (id, args, result) => session?.observeNativeTaskRead(id, args, result),
 			get cwd() {
 				return sessionManager.getCwd();
 			},
@@ -3425,8 +3427,41 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					settings.get("externalThinking") &&
 					agent.state.tools.some(tool => tool.name === "think") &&
 					supportsExternalThinking(streamModel);
+				const readFence = !externalThinking
+					? session?.createTaskReadRequest(streamModel, context, streamOptions?.signal)
+					: undefined;
 				return settingsAwareStreamFn(streamModel, context, {
 					...streamOptions,
+					...(readFence
+						? {
+								onPayload: async (payload: unknown, requestModel?: Model) => {
+									try {
+										await readFence.beforePayload();
+										const adjusted = await (streamOptions?.onPayload ?? onPayload)(payload, requestModel);
+										const prepared = await readFence.preparedPayload(
+											adjusted === undefined ? payload : adjusted,
+										);
+										readFence.check();
+										return prepared;
+									} catch (error) {
+										readFence.failed(error);
+										throw error;
+									}
+								},
+								onResponse: async (response: ProviderResponseMetadata, requestModel?: Model) => {
+									try {
+										await readFence.response();
+										readFence.check();
+										await (streamOptions?.onResponse ?? onResponse)(response, requestModel);
+										await readFence.response();
+										readFence.check();
+									} catch (error) {
+										readFence.failed(error);
+										throw error;
+									}
+								},
+							}
+						: {}),
 					anthropicCacheRefresh: true,
 					forceReasoningOff: externalThinking || streamOptions?.forceReasoningOff,
 					...(codeModeState.namespacesInfo === undefined
@@ -3488,6 +3523,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// (defaulting to read/grep/glob).
 		const advisorToolSession: ToolSession = {
 			...toolSession,
+			observeNativeTaskRead: undefined,
 			get cwd() {
 				return sessionManager.getCwd();
 			},

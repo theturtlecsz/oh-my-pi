@@ -31,7 +31,7 @@ import type { SessionManager } from "../session/session-manager";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
-import type { TaskCallCapture, TaskResultProcessingGate } from "../task/recovery";
+import type { NativeTaskReadObserver, TaskCallCapture, TaskResultProcessingGate } from "../task/recovery";
 import { canSpawnAtDepth, type StructuredSubagentSchemaMode } from "../task/types";
 import type { EventBus } from "../utils/event-bus";
 import { type InspectImageMode, isInspectImageToolActive } from "../utils/inspect-image-mode";
@@ -163,6 +163,7 @@ export interface ToolSession {
 		signal?: AbortSignal,
 	) => Promise<TaskCallCapture | undefined>;
 	getTaskResultProcessingGate?: (toolCallId: string) => TaskResultProcessingGate | undefined;
+	observeNativeTaskRead?: NativeTaskReadObserver;
 	/** Current working directory */
 	cwd: string;
 	/** Additional workspace directories beyond cwd (multi-root), forwarded to subagents. */
@@ -696,7 +697,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		baseEntries.map(async ([name, factory]) => {
 			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, session);
 			return tool
-				? wrapToolWithMetaNotice(tool, name === "task" ? session.getTaskResultProcessingGate : undefined)
+				? wrapToolWithMetaNotice(
+						tool,
+						name === "task" ? session.getTaskResultProcessingGate : undefined,
+						name === "read" ? session.observeNativeTaskRead : undefined,
+					)
 				: null;
 		}),
 	);

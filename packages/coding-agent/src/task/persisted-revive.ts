@@ -13,6 +13,7 @@ import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
 import type { EventBus } from "../utils/event-bus";
 import { attachIrcWakeTurnMonitor, createMCPProxyTools, createSubagentSettings } from "./executor";
+import { hasTaskReadContinuationMarkers } from "./recovery";
 import type { AgentDefinition } from "./types";
 
 /**
@@ -57,7 +58,6 @@ export function createPersistedSubagentReviverFactory(
 ): PersistedSubagentReviverFactory {
 	const registry = AgentRegistry.global();
 	return async ref => {
-		let boundRecovery = ctx.session.isTaskRecoveryRevival(ref);
 		const sessionFile = ref.sessionFile;
 		if (!sessionFile) return undefined;
 		const peek = await SessionManager.peekSessionInit(sessionFile);
@@ -102,13 +102,16 @@ export function createPersistedSubagentReviverFactory(
 				? [formatModelRoleAlias(init.modelRole), ...(init.resolvedModel ? [init.resolvedModel] : [])]
 				: init.resolvedModel;
 		return async expectedRef => {
+			const boundRecovery = ctx.session.isTaskRecoveryRevival(expectedRef);
 			// Re-open fresh on every revive: park closes the writer, so this takes
-			// the single-writer lock cleanly and restores the full message history.
+			// a fresh manager-owned writer and restores the full message history.
 			const reopened = await SessionManager.open(sessionFile, undefined, undefined, {
 				suppressBreadcrumb: true,
 			});
 			let created: AgentSession | undefined;
 			try {
+				if (boundRecovery || hasTaskReadContinuationMarkers(reopened.getEntries()))
+					await ctx.session.prepareTaskRecoveryRevival(expectedRef, reopened);
 				const artifactManager = ctx.session.sessionManager.getArtifactManager();
 				if (artifactManager) reopened.adoptArtifactManager(artifactManager);
 				// A restricted persisted contract must not consult process-global MCP
@@ -120,7 +123,8 @@ export function createPersistedSubagentReviverFactory(
 					disableInheritedAsyncJobs: boundRecovery,
 					prepareSessionBeforeAttach: child => {
 						created = child;
-						boundRecovery ||= ctx.session.isTaskRecoveryRevival(ref);
+						if (boundRecovery !== ctx.session.isTaskRecoveryRevival(expectedRef))
+							throw new Error("Bound revival ownership changed after pre-SDK preparation");
 						if (boundRecovery) ctx.session.installTaskRecoveryChild(expectedRef, child);
 					},
 					cwd: ctx.session.sessionManager.getCwd(),
