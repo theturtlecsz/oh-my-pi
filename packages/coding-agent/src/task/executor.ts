@@ -67,6 +67,8 @@ import { resolveAgentPrewalkDefault } from "./prewalk";
 import { isReadOnlyAgent } from "./read-only-policy";
 import type {
 	BoundTaskDriverControls,
+	NativeTaskOutputIdentity,
+	NativeTaskResultObserver,
 	PersistedTaskBindingV1,
 	PersistedTaskCallRef,
 	PreparedTaskChild,
@@ -1905,7 +1907,12 @@ const MAX_YIELD_RETRIES = 3;
  */
 type SubagentTurnStart =
 	| { kind: "new"; taskBindingId?: string }
-	| { kind: "persisted"; execute: () => Promise<void>; controls: BoundTaskDriverControls };
+	| {
+			kind: "persisted";
+			binding: PersistedTaskBindingV1;
+			execute: () => Promise<void>;
+			controls: BoundTaskDriverControls;
+	  };
 
 async function driveSessionToYield(
 	session: AgentSession,
@@ -2162,6 +2169,7 @@ async function driveSessionToYield(
 }
 
 interface FinalizeRunArgs {
+	onNativeResult?: NativeTaskResultObserver;
 	monitor: SubagentRunMonitor;
 	done: { exitCode: number; error?: string; aborted?: boolean; abortReason?: string; durationMs: number };
 	index: number;
@@ -2258,10 +2266,17 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	// (followUpTurn is unset), preserving the documented missing-yield artifact.
 	let outputMeta: { lineCount: number; charCount: number } | undefined;
 	let outputPath: string | undefined;
+	let nativeOutput: NativeTaskOutputIdentity | undefined;
 	if (args.artifactsDir && (!args.followUpTurn || hasYield)) {
 		const candidatePath = path.join(args.artifactsDir, `${id}.md`);
 		try {
-			await writeArtifact(candidatePath, rawOutput);
+			const bytes = await writeArtifact(candidatePath, rawOutput);
+			if (args.onNativeResult)
+				nativeOutput = {
+					path: candidatePath,
+					bytes,
+					sha256: new Bun.CryptoHasher("sha256").update(rawOutput).digest("hex"),
+				};
 			outputPath = candidatePath;
 			outputMeta = {
 				lineCount: rawOutput.split("\n").length,
@@ -2301,22 +2316,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
 	monitor.scheduleProgress(true);
 
-	// Emit lifecycle end event after finalization so yield status is reflected
-	if (args.eventBus) {
-		args.eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
-			id,
-			agent: agent.name,
-			parentToolCallId: args.parentToolCallId,
-			detached: args.detached,
-			agentSource: agent.source,
-			description: progress.description,
-			status: progress.status as "completed" | "failed" | "aborted",
-			sessionFile: args.sessionFile,
-			index,
-		});
-	}
-
-	return {
+	const result: SingleResult = {
 		index,
 		id,
 		agent: agent.name,
@@ -2348,6 +2348,24 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		retryFailure: progress.retryFailure,
 		outputMeta,
 	};
+	await args.onNativeResult?.(result, nativeOutput);
+
+	// Emit lifecycle end event after finalization so yield status is reflected
+	if (args.eventBus) {
+		args.eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			id,
+			agent: agent.name,
+			parentToolCallId: args.parentToolCallId,
+			detached: args.detached,
+			agentSource: agent.source,
+			description: progress.description,
+			status: progress.status as "completed" | "failed" | "aborted",
+			sessionFile: args.sessionFile,
+			index,
+		});
+	}
+
+	return result;
 }
 
 /** Inputs for {@link attachIrcWakeTurnMonitor}. */
@@ -2655,6 +2673,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 }
 
 export interface PersistedTaskRunOptions {
+	onNativeResult: NativeTaskResultObserver;
 	session: AgentSession;
 	binding: PersistedTaskBindingV1;
 	signal: AbortSignal;
@@ -2684,9 +2703,10 @@ export async function runPersistedTask(options: PersistedTaskRunOptions): Promis
 				parentToolCallId: binding.call.toolCallId,
 				artifactsDir: options.artifactsDir,
 				maxRuntimeMs: options.maxRuntimeMs,
+				onNativeResult: options.onNativeResult,
 			},
 			session,
-			{ kind: "persisted", execute, controls },
+			{ kind: "persisted", binding, execute, controls },
 			false,
 			Date.now(),
 		),
@@ -2694,7 +2714,7 @@ export async function runPersistedTask(options: PersistedTaskRunOptions): Promis
 }
 
 async function runMonitoredExistingSession(
-	options: FollowUpTurnOptions & { assignment?: string },
+	options: FollowUpTurnOptions & { assignment?: string; onNativeResult?: NativeTaskResultObserver },
 	session: AgentSession,
 	start: SubagentTurnStart,
 	detached: boolean,
@@ -2741,19 +2761,34 @@ async function runMonitoredExistingSession(
 
 	monitor.setActiveSession(session);
 	const unsubscribe = monitor.attach(session);
-	let outcome: DriveOutcome;
+	let outcome!: DriveOutcome;
+	let completedDrive = false;
+	let completionCleanupSettled = true;
+	let assertCompletionSettled: (() => void) | undefined;
 	try {
 		outcome = await driveSessionToYield(session, monitor, message, start);
+		completedDrive = true;
 	} finally {
 		try {
 			await untilAborted(AbortSignal.timeout(5000), () => monitor.waitForActiveSessionAbort());
 		} catch {
-			// Ignore abort cleanup timeouts; the session stays adopted either way.
+			// Ordinary follow-ups retain their prior cleanup behavior; certification cannot ignore an unknown cleanup.
+			completionCleanupSettled = false;
 		}
-		unsubscribe();
-		const active = monitor.takeActiveSession();
-		if (active) monitor.captureSalvage(active);
-		monitor.finish();
+		try {
+			if (completedDrive && completionCleanupSettled && start.kind === "persisted") {
+				assertCompletionSettled = await session.flushBoundTaskCompletion(start.binding);
+				const lateError = monitor.terminalError();
+				if (lateError) outcome = { ...outcome, exitCode: 1, error: outcome.error ?? lateError };
+				if (monitor.runtimeLimitExceeded() || signal?.aborted)
+					outcome = { ...outcome, exitCode: 1, aborted: true, abortReasonText: monitor.resolveAbortReasonText() };
+			}
+		} finally {
+			unsubscribe();
+			const active = monitor.takeActiveSession();
+			if (active) monitor.captureSalvage(active);
+			monitor.finish();
+		}
 	}
 
 	return finalizeRunResult({
@@ -2774,6 +2809,15 @@ async function runMonitoredExistingSession(
 		parentToolCallId: options.parentToolCallId,
 		detached,
 		followUpTurn: detached,
+		onNativeResult:
+			start.kind === "persisted" && options.onNativeResult
+				? async (result, output) => {
+						if (!completionCleanupSettled) throw new Error("Native task completion cleanup did not settle");
+						assertCompletionSettled?.();
+						await options.onNativeResult!(result, output);
+						assertCompletionSettled?.();
+					}
+				: undefined,
 		sessionFile,
 		startTime,
 	});

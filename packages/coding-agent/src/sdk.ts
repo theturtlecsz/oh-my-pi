@@ -3556,16 +3556,21 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			assertSynchronousTaskPolicy: binding => nativeTaskForRecovery().native.assertRecoveryPolicy(binding),
 			recoverSynchronousTask: async request => {
 				const { native, wrapped } = nativeTaskForRecovery();
-				const result = await native.recoverPersistedCall(request);
+				const nativeResult = await native.recoverPersistedCall(request);
+				const completion = await request.claimResultProcessing(nativeResult.completion);
 				const context = toolContextStore.getContext();
-				const processed = await processToolResultOutput(result, "task", context);
+				request.assertProcessingOwnership(completion);
+				const processed = await processToolResultOutput(nativeResult.result, "task", context);
+				await request.validateAuthority();
+				request.assertProcessingOwnership(completion);
 				const transformed = await wrapped.processResult(
 					request.binding.call.toolCallId,
 					request.binding.contract.args,
 					processed,
 					context,
 				);
-				return { binding: request.binding, result: transformed };
+				request.assertProcessingOwnership(completion);
+				return { binding: request.binding, result: transformed, completion };
 			},
 			codeModeState,
 			advisorWatchdogPrompt,

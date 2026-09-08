@@ -199,3 +199,21 @@ requires runtime-written identity before dispatch, original-child recovery and
 durability of the real original-call result before parent continuation.
 Historical unbound children remain refused. This baseline records an open
 recovery gap, not a passing task-recovery qualification or full S2.2 completion.
+
+## Completed child with missing parent result
+
+The [result-gap reproduction plan](omp-task-result-gap-plan.md) holds actual
+successful WorkService authority response bytes after the original child has
+durable read/yield output and a completed lifecycle, while the original parent
+result remains absent. R1 and R2 reached that boundary, killed the shared process,
+and observed two explicit restart refusals without provider requests or duplicate
+effects. The positive recovery assertion failed; the held GET is not S2.3's
+committed-mutation response-loss proof.
+
+The [completed-result implementation plan](omp-completed-task-result-plan.md)
+bounds the next remedy to runtime-certified completion from a recovered task.
+Native readiness and parent processing-start provenance distinguish safe cached
+result delivery from uncertain hook progress. Legacy completion, ordinary
+first-run completion without certification, and partially processed results
+remain refusal boundaries. Matching installed qualification is still required;
+these plans and baseline refusals do not establish a successful remedy.

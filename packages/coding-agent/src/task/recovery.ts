@@ -1,19 +1,22 @@
-import * as fs from "node:fs/promises";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { isRecord, pathIsWithin, stableStringifyJson } from "@oh-my-pi/pi-utils";
+import { isEnoent, isRecord, pathIsWithin, stableStringifyJson } from "@oh-my-pi/pi-utils";
 import { resolveAgentAdvisorSelection, resolveAgentPrewalkPattern } from "../config/model-resolver";
-import type { AgentRef } from "../registry/agent-registry";
+import { type AgentRef, getAgentTombstonePath } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
 import type { PromptOptions } from "../session/agent-session-types";
 import type { SessionEntry, SessionInitEntry } from "../session/session-entries";
 import type { ToolSession } from "../tools";
 import { resolveAgentPrewalkDefault } from "./prewalk";
 import { repairTaskParams } from "./repair-args";
-import type { AgentDefinition, TaskParams } from "./types";
+import type { AgentDefinition, SingleResult, TaskParams, TaskToolDetails } from "./types";
 
 export const TASK_RUN_BINDING = "task-run-binding";
 export const PROMPT_PREPARATION = "prompt-preparation";
+export const TASK_NATIVE_RESULT_READY = "task-native-result-ready";
+export const TASK_RESULT_PROCESSING_STARTED = "task-result-processing-started";
+export const TASK_RESULT_PROCESSING_PROTOCOL = "claim-before-parent-processing-v1";
 
 export interface PersistedTaskCallRef {
 	bindingId: string;
@@ -94,6 +97,71 @@ export interface PersistedTaskResultRef {
 	contractSha256: string;
 	toolCallId: string;
 	childSessionId: string;
+	completion?: TaskResultProcessingRef;
+}
+
+export interface NativeTaskOutputIdentity {
+	path: string;
+	bytes: number;
+	sha256: string;
+}
+export type NativeTaskResultObserver = (
+	result: SingleResult,
+	output: NativeTaskOutputIdentity | undefined,
+) => Promise<void>;
+
+export interface NativeTaskResultReadyV1 {
+	version: 1;
+	producer: "recovered-sync-task-v1";
+	processingProtocol: typeof TASK_RESULT_PROCESSING_PROTOCOL;
+	call: PersistedTaskCallRef;
+	contractSha256: string;
+	child: {
+		sessionId: string;
+		initEntryId: string;
+		promptEntryId: string;
+		leafId: string;
+		branchSha256: string;
+		entriesSha256: string;
+		fileSha256: string;
+		yieldResultEntryId: string;
+	};
+	output: NativeTaskOutputIdentity;
+	/** Immutable bytes; processors receive a freshly parsed value, never this journal's nested objects. */
+	payloadJson: string;
+	payloadSha256: string;
+}
+
+export interface NativeTaskResultReadyCheckpoint {
+	entryId: string;
+	sha256: string;
+	record: NativeTaskResultReadyV1;
+}
+
+export interface TaskResultProcessingStartedV1 {
+	version: 1;
+	protocol: typeof TASK_RESULT_PROCESSING_PROTOCOL;
+	call: PersistedTaskCallRef;
+	contractSha256: string;
+	readyEntryId: string;
+	readySha256: string;
+}
+
+export interface TaskResultProcessingRef {
+	readyEntryId: string;
+	readySha256: string;
+	processingEntryId: string;
+	processingSha256: string;
+}
+
+export interface TaskResultRecoveryState {
+	ready?: NativeTaskResultReadyCheckpoint;
+	processing?: { entryId: string; sha256: string; record: TaskResultProcessingStartedV1 };
+}
+
+export interface NativeRecoveredTaskResult {
+	result: AgentToolResult<TaskToolDetails>;
+	completion: NativeTaskResultReadyCheckpoint;
 }
 
 export interface TaskCallCapture {
@@ -113,9 +181,16 @@ export interface BoundTaskRecoveryRequest {
 	validateAuthority(): Promise<void>;
 	setPolicyGuard(guard: () => Promise<void>): void;
 	validateChild(ref: AgentRef, session: AgentSession): Promise<void>;
+	findNativeResultReady(): NativeTaskResultReadyCheckpoint | undefined;
+	recordNativeResultReady(record: NativeTaskResultReadyV1): Promise<NativeTaskResultReadyCheckpoint>;
+	claimResultProcessing(ready: NativeTaskResultReadyCheckpoint): Promise<TaskResultProcessingRef>;
+	assertProcessingOwnership(completion: TaskResultProcessingRef): void;
+	pinCompletedChild(ref: AgentRef): void;
+	setCompletionGuard(guard: () => Promise<() => void>): void;
 }
 
 export interface RecoveredTaskResult {
+	completion?: TaskResultProcessingRef;
 	result: AgentToolResult<unknown>;
 	binding: PersistedTaskBindingV1;
 }
@@ -312,14 +387,14 @@ export async function assertTaskChildPath(
 	cwd: string,
 ): Promise<void> {
 	const [root, child, workspace] = await Promise.all([
-		fs.realpath(artifactsDir),
-		fs.realpath(binding.child.sessionFile),
-		fs.realpath(cwd),
+		fs.promises.realpath(artifactsDir),
+		fs.promises.realpath(binding.child.sessionFile),
+		fs.promises.realpath(cwd),
 	]);
 	if (
 		!pathIsWithin(root, child) ||
 		child !== path.join(root, `${binding.child.registryId}.jsonl`) ||
-		(await fs.realpath(binding.child.cwd)) !== workspace
+		(await fs.promises.realpath(binding.child.cwd)) !== workspace
 	)
 		throw new Error("Task child path or workspace differs from original artifact owner");
 }
@@ -328,4 +403,248 @@ export async function assertTaskChildPath(
 export interface BoundTaskDriverControls {
 	prompt(text: string, options?: PromptOptions): Promise<boolean>;
 	abort(): Promise<void>;
+}
+
+/** Reject lossy/non-JSON values; native optional object fields may be omitted normally. */
+export function serializeNativeTaskResult(result: AgentToolResult<TaskToolDetails>): string {
+	const ancestors = new Set<object>();
+	const check = (value: unknown, arrayMember = false): void => {
+		if (value === null || typeof value === "string" || typeof value === "boolean") return;
+		if (value === undefined && !arrayMember) return;
+		if (typeof value === "number" && Number.isFinite(value)) return;
+		if (
+			typeof value !== "object" ||
+			value === null ||
+			ancestors.has(value) ||
+			(!Array.isArray(value) &&
+				Object.getPrototypeOf(value) !== Object.prototype &&
+				Object.getPrototypeOf(value) !== null) ||
+			Object.getOwnPropertySymbols(value).length > 0
+		)
+			throw new Error("Native task result is not losslessly JSON serializable");
+		ancestors.add(value);
+		if (Array.isArray(value)) for (const item of value) check(item, true);
+		else for (const item of Object.values(value)) check(item);
+		ancestors.delete(value);
+	};
+	check(result);
+	return stableStringifyJson(result);
+}
+
+export function nativeTaskResultPayload(ready: NativeTaskResultReadyCheckpoint): AgentToolResult<TaskToolDetails> {
+	if (
+		taskRecoveryHash(ready.record) !== ready.sha256 ||
+		taskRecoveryHash(ready.record.payloadJson) !== ready.record.payloadSha256
+	)
+		throw new Error("Native task result checkpoint hash changed");
+	const result: unknown = JSON.parse(ready.record.payloadJson);
+	if (
+		!isRecord(result) ||
+		!Array.isArray(result.content) ||
+		result.isError ||
+		!isRecord(result.details) ||
+		!Array.isArray(result.details.results) ||
+		result.details.results.length !== 1
+	)
+		throw new Error("Native task result checkpoint has no successful original result");
+	const child = result.details.results[0];
+	if (
+		!isRecord(child) ||
+		child.exitCode !== 0 ||
+		child.aborted ||
+		child.error ||
+		child.agent !== "task" ||
+		child.agentSource !== "bundled" ||
+		!isRecord(child.extractedToolData) ||
+		!Array.isArray(child.extractedToolData.yield) ||
+		!child.extractedToolData.yield.some(value => isRecord(value) && value.status === "success")
+	)
+		throw new Error("Native task result checkpoint is not successful finalized task output");
+	return result as unknown as AgentToolResult<TaskToolDetails>;
+}
+
+export function taskResultRecoveryState(
+	entries: readonly SessionEntry[],
+	branch: readonly SessionEntry[],
+	binding: PersistedTaskBindingV1,
+): TaskResultRecoveryState {
+	const byId = new Map(entries.map(entry => [entry.id, entry]));
+	for (const entry of entries) {
+		if (
+			entry.type !== "branch_summary" ||
+			!isRecord(entry.details) ||
+			entry.details.kind !== "discarded-entry-branch"
+		)
+			continue;
+		const visited = new Set<string>();
+		let ancestor: SessionEntry | undefined = entry;
+		while (ancestor && !visited.has(ancestor.id)) {
+			if (ancestor.id === binding.call.promptEntryId || ancestor.id === binding.call.assistantEntryId)
+				throw new Error("Task result processing history was discarded; unstarted processing cannot be proved");
+			visited.add(ancestor.id);
+			ancestor = ancestor.parentId ? byId.get(ancestor.parentId) : undefined;
+		}
+	}
+	const ready: NativeTaskResultReadyCheckpoint[] = [];
+	const processing: NonNullable<TaskResultRecoveryState["processing"]>[] = [];
+	for (const entry of entries) {
+		if (
+			entry.type !== "custom" ||
+			(entry.customType !== TASK_NATIVE_RESULT_READY && entry.customType !== TASK_RESULT_PROCESSING_STARTED)
+		)
+			continue;
+		const data = entry.data;
+		if (!isRecord(data) || data.version !== 1 || !isRecord(data.call))
+			throw new Error("Malformed task result recovery record");
+		if (
+			data.call.bindingId !== binding.call.bindingId &&
+			!(data.call.sessionId === binding.call.sessionId && data.call.toolCallId === binding.call.toolCallId)
+		)
+			continue;
+		if (
+			taskRecoveryHash(data.call) !== taskRecoveryHash(binding.call) ||
+			data.contractSha256 !== binding.contractSha256
+		)
+			throw new Error("Task completion belongs to a different original call or contract");
+		if (entry.customType === TASK_NATIVE_RESULT_READY) {
+			if (
+				data.producer !== "recovered-sync-task-v1" ||
+				data.processingProtocol !== TASK_RESULT_PROCESSING_PROTOCOL ||
+				!isRecord(data.child) ||
+				!isRecord(data.output) ||
+				typeof data.payloadJson !== "string" ||
+				typeof data.payloadSha256 !== "string"
+			)
+				throw new Error("Malformed native task completion protocol");
+			for (const field of [
+				"sessionId",
+				"initEntryId",
+				"promptEntryId",
+				"leafId",
+				"branchSha256",
+				"entriesSha256",
+				"fileSha256",
+				"yieldResultEntryId",
+			])
+				if (typeof data.child[field] !== "string" || !data.child[field])
+					throw new Error("Malformed completed child identity");
+			if (
+				data.child.sessionId !== binding.child.sessionId ||
+				data.child.initEntryId !== binding.child.initEntryId ||
+				typeof data.output.path !== "string" ||
+				typeof data.output.sha256 !== "string" ||
+				typeof data.output.bytes !== "number" ||
+				!Number.isSafeInteger(data.output.bytes) ||
+				data.output.bytes < 0
+			)
+				throw new Error("Completed task child/output identity differs");
+			const checkpoint = {
+				entryId: entry.id,
+				sha256: taskRecoveryHash(data),
+				record: data as unknown as NativeTaskResultReadyV1,
+			};
+			const payload = nativeTaskResultPayload(checkpoint);
+			if (
+				payload.details?.results[0].id !== binding.child.registryId ||
+				payload.details?.results[0].outputPath !== data.output.path
+			)
+				throw new Error("Native task payload names a different child/output");
+			ready.push(checkpoint);
+		} else {
+			if (
+				data.protocol !== TASK_RESULT_PROCESSING_PROTOCOL ||
+				typeof data.readyEntryId !== "string" ||
+				typeof data.readySha256 !== "string"
+			)
+				throw new Error("Malformed task result processing claim");
+			processing.push({
+				entryId: entry.id,
+				sha256: taskRecoveryHash(data),
+				record: data as unknown as TaskResultProcessingStartedV1,
+			});
+		}
+	}
+	if (ready.length > 1 || processing.length > 1)
+		throw new Error("Conflicting retained task completion/processing records");
+	if (ready.length && !branch.some(entry => entry.id === ready[0].entryId))
+		throw new Error("Native task completion is outside the authorized branch");
+	if (
+		processing.length &&
+		(!ready.length ||
+			processing[0].record.readyEntryId !== ready[0].entryId ||
+			processing[0].record.readySha256 !== ready[0].sha256)
+	)
+		throw new Error("Task result processing claim has no exact retained completion");
+	return { ready: ready[0], processing: processing[0] };
+}
+
+export async function assertNativeTaskOutput(
+	binding: PersistedTaskBindingV1,
+	artifactsDir: string,
+	output: NativeTaskOutputIdentity,
+): Promise<void> {
+	const root = await fs.promises.realpath(artifactsDir);
+	if (
+		output.path !== path.join(artifactsDir, `${binding.child.registryId}.md`) ||
+		(await fs.promises.realpath(output.path)) !== path.join(root, `${binding.child.registryId}.md`)
+	)
+		throw new Error("Native task output escaped its original artifact owner");
+	const bytes = await Bun.file(output.path).bytes();
+	if (bytes.length !== output.bytes || new Bun.CryptoHasher("sha256").update(bytes).digest("hex") !== output.sha256)
+		throw new Error("Native task output artifact changed or is incomplete");
+}
+
+/** Optimistic, scoped file witness. Hashes prove bytes; pinned metadata catches changes across later awaits. */
+export function nativeTaskCompletionGuard(
+	binding: PersistedTaskBindingV1,
+	artifactsDir: string,
+	ready: NativeTaskResultReadyCheckpoint,
+): () => Promise<() => void> {
+	const files = [binding.child.sessionFile, ready.record.output.path];
+	const paths = [...files, artifactsDir, binding.child.cwd];
+	const fingerprint = (stat: fs.BigIntStats): string => {
+		if (!stat.isFile()) throw new Error("Certified task artifact is no longer a file");
+		return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+	};
+	let pinned: string[] | undefined;
+	const noTombstone = () => {
+		try {
+			fs.lstatSync(getAgentTombstonePath(binding.child.sessionFile));
+		} catch (error) {
+			if (isEnoent(error)) return;
+			throw error;
+		}
+		throw new Error("Certified completed task was tombstoned");
+	};
+	const assertStable = () => {
+		noTombstone();
+		const current = [
+			...files.map(file => fingerprint(fs.statSync(file, { bigint: true }))),
+			...paths.map(file => fs.realpathSync(file)),
+		];
+		if (!pinned || taskRecoveryHash(current) !== taskRecoveryHash(pinned))
+			throw new Error("Certified task files changed during result processing");
+	};
+	const observe = async () => [
+		...(await Promise.all(files.map(async file => fingerprint(await fs.promises.stat(file, { bigint: true }))))),
+		...(await Promise.all(paths.map(file => fs.promises.realpath(file)))),
+	];
+	return async () => {
+		if (pinned) assertStable();
+		const before = await observe();
+		await assertTaskChildPath(binding, artifactsDir, binding.child.cwd);
+		await assertNativeTaskOutput(binding, artifactsDir, ready.record.output);
+		const bytes = await Bun.file(binding.child.sessionFile).bytes();
+		if (new Bun.CryptoHasher("sha256").update(bytes).digest("hex") !== ready.record.child.fileSha256)
+			throw new Error("Certified completed child journal changed");
+		const after = await observe();
+		if (
+			taskRecoveryHash(before) !== taskRecoveryHash(after) ||
+			(pinned && taskRecoveryHash(pinned) !== taskRecoveryHash(after))
+		)
+			throw new Error("Certified task files changed while verifying completion");
+		pinned ??= after;
+		assertStable();
+		return assertStable;
+	};
 }

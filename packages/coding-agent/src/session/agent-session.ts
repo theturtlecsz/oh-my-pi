@@ -191,6 +191,8 @@ import {
 	type BoundTaskDriverControls,
 	effectiveTaskArguments,
 	initializationContract,
+	type NativeTaskResultReadyCheckpoint,
+	type NativeTaskResultReadyV1,
 	type PersistedTaskBindingV1,
 	type PersistedTaskResultRef,
 	PROMPT_PREPARATION,
@@ -198,10 +200,16 @@ import {
 	preparedEntryIds,
 	readPreparationRecord,
 	readTaskBinding,
+	TASK_NATIVE_RESULT_READY,
+	TASK_RESULT_PROCESSING_PROTOCOL,
+	TASK_RESULT_PROCESSING_STARTED,
 	TASK_RUN_BINDING,
 	type TaskCallCapture,
 	type TaskRecoveryContract,
+	type TaskResultProcessingRef,
+	type TaskResultProcessingStartedV1,
 	taskRecoveryHash,
+	taskResultRecoveryState,
 	taskRuntimeContract,
 } from "../task/recovery";
 import {
@@ -476,6 +484,11 @@ class PersistedContinuationError extends Error {
 	}
 }
 interface ParentTaskRecoveryScope {
+	validateCompletion?: () => Promise<() => void>;
+	assertCompletionFiles?: () => void;
+	completion?: TaskResultProcessingRef;
+	completedChildRef?: AgentRef;
+	advanceExpectedLeaf(entryId: string): void;
 	loadedPolicyHash: string;
 	phase: "child" | "parent";
 	resultEntryId?: string;
@@ -493,6 +506,7 @@ interface ParentTaskRecoveryScope {
 	releaseChild?: () => void;
 }
 interface ChildTaskRecoveryScope {
+	assertNativeCompletion?: () => void;
 	loadedPolicyHash: string;
 	generation: number;
 	anchorEntryId?: string;
@@ -2625,6 +2639,7 @@ export class AgentSession {
 					}
 				: undefined);
 		const entryId = this.sessionManager.appendMessage(message, taskResult);
+		commitScope?.advanceExpectedLeaf(entryId);
 		this.#recordPreparedMessage(message, entryId);
 		if (message.role === "assistant") {
 			(message as PersistedAssistantMessage)[kPersistedSessionEntryId] = entryId;
@@ -3792,6 +3807,7 @@ export class AgentSession {
 			try {
 				return this.#boundParentTask(entryId);
 			} catch (error) {
+				if (error instanceof PersistedContinuationError) throw error;
 				throw new PersistedContinuationError(
 					pending ? "pending-tools" : "unsafe-suffix",
 					`${pending ?? "Task continuation refused."} ${String(error)}`,
@@ -3875,6 +3891,23 @@ export class AgentSession {
 			if (entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "reset_boundary")
 				throw new Error("Task branch was reset or compacted");
 		}
+		const completion = taskResultRecoveryState(this.sessionManager.getEntries(), branch, binding);
+		if (
+			results.length === 0 &&
+			completion.processing &&
+			(!this.#activeTaskRecovery?.completion ||
+				taskRecoveryHash(this.#activeTaskRecovery.completion) !==
+					taskRecoveryHash({
+						readyEntryId: completion.ready!.entryId,
+						readySha256: completion.ready!.sha256,
+						processingEntryId: completion.processing.entryId,
+						processingSha256: completion.processing.sha256,
+					}))
+		)
+			throw new PersistedContinuationError(
+				"task-result-processing-incomplete",
+				"Retained processing claim has no durable original parent result",
+			);
 		const pending = collectPendingToolCalls(branch);
 		if (
 			results.length === 0
@@ -3886,7 +3919,25 @@ export class AgentSession {
 	}
 
 	#taskResultRef(binding: PersistedTaskBindingV1): PersistedTaskResultRef {
+		const branch = this.sessionManager.getBranch();
+		const state = taskResultRecoveryState(this.sessionManager.getEntries(), branch, binding);
+		let completion: TaskResultProcessingRef | undefined;
+		if (state.ready) {
+			if (
+				!state.processing ||
+				branch.findIndex(entry => entry.id === state.processing!.entryId) <=
+					branch.findIndex(entry => entry.id === state.ready!.entryId)
+			)
+				throw new Error("Native task result lacks its exact active-branch processing claim");
+			completion = {
+				readyEntryId: state.ready.entryId,
+				readySha256: state.ready.sha256,
+				processingEntryId: state.processing.entryId,
+				processingSha256: state.processing.sha256,
+			};
+		}
 		return {
+			...(completion ? { completion } : {}),
 			bindingId: binding.call.bindingId,
 			contractSha256: binding.contractSha256,
 			toolCallId: binding.call.toolCallId,
@@ -3960,6 +4011,149 @@ export class AgentSession {
 		});
 		if (!dispatched)
 			throw new PersistedContinuationError("dispatch-failed", "Prompt preparation declined continuation");
+	}
+
+	async #recordNativeTaskResult(
+		scope: ParentTaskRecoveryScope,
+		record: NativeTaskResultReadyV1,
+	): Promise<NativeTaskResultReadyCheckpoint> {
+		scope.assertOwnership();
+		if (
+			!scope.child ||
+			record.child.sessionId !== scope.child.sessionId ||
+			record.child.leafId !== scope.child.sessionManager.getLeafId() ||
+			taskRecoveryHash(scope.child.sessionManager.getBranch()) !== record.child.branchSha256 ||
+			taskRecoveryHash(record.call) !== taskRecoveryHash(scope.binding.call) ||
+			record.contractSha256 !== scope.binding.contractSha256
+		)
+			throw new Error("Native completion lost original child/call ownership");
+		scope.child.#assertSettledTaskCompletion();
+		const state = taskResultRecoveryState(
+			this.sessionManager.getEntries(),
+			this.sessionManager.getBranch(),
+			scope.binding,
+		);
+		if (state.ready || state.processing)
+			throw new Error("Original task already has retained completion/processing ownership");
+		const snapshot = JSON.parse(JSON.stringify(record)) as NativeTaskResultReadyV1;
+		const assertOriginalCompletion = scope.child.#childTaskRecovery?.assertNativeCompletion;
+		if (!assertOriginalCompletion) throw new Error("Native completion has no original settled-child lease");
+		scope.assertOwnership();
+		assertOriginalCompletion();
+		const entryId = this.sessionManager.appendCustomEntry(TASK_NATIVE_RESULT_READY, snapshot);
+		scope.advanceExpectedLeaf(entryId);
+		const ready = taskResultRecoveryState(
+			this.sessionManager.getEntries(),
+			this.sessionManager.getBranch(),
+			scope.binding,
+		).ready!;
+		await this.sessionManager.flush();
+		scope.assertOwnership();
+		assertOriginalCompletion();
+		if (
+			scope.child.sessionManager.getLeafId() !== snapshot.child.leafId ||
+			taskRecoveryHash(scope.child.sessionManager.getBranch()) !== snapshot.child.branchSha256
+		)
+			throw new Error("Completed child changed while native checkpoint became durable");
+		scope.child.#assertSettledTaskCompletion();
+		if (taskRecoveryHash(scope.child.sessionManager.getEntries()) !== snapshot.child.entriesSha256)
+			throw new Error("Completed child retained history changed");
+		return { entryId, sha256: ready.sha256, record: JSON.parse(JSON.stringify(snapshot)) as NativeTaskResultReadyV1 };
+	}
+
+	async #claimTaskResultProcessing(
+		scope: ParentTaskRecoveryScope,
+		expected: NativeTaskResultReadyCheckpoint,
+	): Promise<TaskResultProcessingRef> {
+		await scope.validateAuthority();
+		scope.assertOwnership();
+		const state = taskResultRecoveryState(
+			this.sessionManager.getEntries(),
+			this.sessionManager.getBranch(),
+			scope.binding,
+		);
+		if (
+			!state.ready ||
+			state.ready.entryId !== expected.entryId ||
+			state.ready.sha256 !== expected.sha256 ||
+			taskRecoveryHash(expected.record) !== state.ready.sha256 ||
+			state.processing
+		)
+			throw new Error("task-result-processing-incomplete: completion missing, changed, or already claimed");
+		const record: TaskResultProcessingStartedV1 = {
+			version: 1,
+			protocol: TASK_RESULT_PROCESSING_PROTOCOL,
+			call: { ...scope.binding.call },
+			contractSha256: scope.binding.contractSha256,
+			readyEntryId: state.ready.entryId,
+			readySha256: state.ready.sha256,
+		};
+		const entryId = this.sessionManager.appendCustomEntry(TASK_RESULT_PROCESSING_STARTED, record);
+		scope.advanceExpectedLeaf(entryId);
+		scope.completion = {
+			readyEntryId: state.ready.entryId,
+			readySha256: state.ready.sha256,
+			processingEntryId: entryId,
+			processingSha256: taskRecoveryHash(record),
+		};
+		await this.sessionManager.flush();
+		await scope.validateAuthority();
+		scope.assertOwnership();
+		return { ...scope.completion };
+	}
+
+	#assertSettledTaskCompletion(): void {
+		if (
+			this.agent.state.isStreaming ||
+			this.agent.isAborting ||
+			this.#promptInFlightCount > 0 ||
+			this.#inFlightEventHandlers.size > 0 ||
+			this.#pendingMessageEndPersistence.size > 0 ||
+			this.#postPromptTasks.size > 0
+		)
+			throw new Error("Task child has unsettled completion-critical work");
+	}
+
+	/** Drain only the settled recovered child, before native finalization publishes its output artifact. */
+	async flushBoundTaskCompletion(binding: PersistedTaskBindingV1): Promise<() => void> {
+		const scope = this.#childTaskRecovery;
+		if (!scope || taskRecoveryHash(scope.parent.binding) !== taskRecoveryHash(binding))
+			throw new Error("No original task driver owns completion persistence");
+		const existing = scope.assertNativeCompletion;
+		if (existing) {
+			existing();
+			return existing;
+		}
+		this.#checkTaskRecoveryDriver();
+		if (this.agent.state.isStreaming || this.#promptInFlightCount > 0)
+			throw new Error("Task child is not settled for native completion certification");
+		await this.#drainInFlightEventHandlers();
+		await this.#messageEndPersistenceTail;
+		await this.sessionManager.flush();
+		if (this.#childTaskRecovery !== scope) throw new Error("Original completion driver changed during persistence");
+		const published = scope.assertNativeCompletion;
+		if (published) {
+			published();
+			return published;
+		}
+		this.#checkTaskRecoveryDriver();
+		this.#assertSettledTaskCompletion();
+		const leaf = this.sessionManager.getLeafId();
+		const entriesHash = taskRecoveryHash(this.sessionManager.getEntries());
+		const tail = this.#messageEndPersistenceTail;
+		const assertOriginal = () => {
+			if (this.#childTaskRecovery !== scope) throw new Error("Original completion driver was replaced");
+			this.#checkTaskRecoveryDriver();
+			this.#assertSettledTaskCompletion();
+			if (
+				this.sessionManager.getLeafId() !== leaf ||
+				taskRecoveryHash(this.sessionManager.getEntries()) !== entriesHash ||
+				this.#messageEndPersistenceTail !== tail
+			)
+				throw new Error("Settled child changed during native finalization");
+		};
+		scope.assertNativeCompletion = assertOriginal;
+		return assertOriginal;
 	}
 
 	/** Restore only the bound call that ordinary replay projected away while it lacked a result. */
@@ -4039,6 +4233,7 @@ export class AgentSession {
 				this.#assertSynchronousTaskPolicy?.(binding);
 				if (scope !== this.#activeTaskRecovery || scope.revoked || signal.aborted)
 					throw new Error(scope.revoked ?? "Task result/dispatch scope was revoked");
+				this.#assertTaskCompletionOwnership(scope);
 				if (scope.phase === "child") {
 					this.#assertPersistedLocal(currentRequest, generation, 1);
 					this.#boundParentTask(request.entryId);
@@ -4051,9 +4246,20 @@ export class AgentSession {
 				)
 					throw new Error("Task child ownership changed before parent attachment");
 			},
+			advanceExpectedLeaf: entryId => {
+				const entry = this.sessionManager.getEntry(entryId);
+				if (
+					!entry ||
+					entry.parentId !== currentRequest.expectedLeafId ||
+					this.sessionManager.getLeafId() !== entryId
+				)
+					this.#revokeTaskRecovery("Task journal append lost its exact prior leaf lease");
+				currentRequest = { ...currentRequest, expectedLeafId: entryId };
+			},
 			validateAuthority: async () => {
 				scope.assertOwnership();
 				await scope.validatePolicy?.();
+				if (scope.validateCompletion) scope.assertCompletionFiles = await scope.validateCompletion();
 				const authority = await request.validateDispatch();
 				if (!authority.ok) throw new PersistedContinuationError("authority-refused", authority.reason);
 				scope.assertOwnership();
@@ -4091,9 +4297,41 @@ export class AgentSession {
 						scope.validatePolicy = guard;
 					},
 					validateChild: (ref, child) => this.validateTaskRecoveryChild(ref, child),
+					findNativeResultReady: () => {
+						scope.assertOwnership();
+						return taskResultRecoveryState(
+							this.sessionManager.getEntries(),
+							this.sessionManager.getBranch(),
+							binding,
+						).ready;
+					},
+					recordNativeResultReady: record => this.#recordNativeTaskResult(scope, record),
+					claimResultProcessing: ready => this.#claimTaskResultProcessing(scope, ready),
+					assertProcessingOwnership: completion => {
+						scope.assertOwnership();
+						if (taskRecoveryHash(scope.completion) !== taskRecoveryHash(completion))
+							throw new Error("Task result processing caller has no exact core claim");
+					},
+					setCompletionGuard: guard => {
+						scope.assertOwnership();
+						scope.validateCompletion = guard;
+					},
+					pinCompletedChild: ref => {
+						scope.assertOwnership();
+						if (
+							ref.id !== binding.child.registryId ||
+							ref.session ||
+							ref.status !== "parked" ||
+							AgentRegistry.global().get(ref.id) !== ref
+						)
+							throw new Error("Completed task child is not exclusively parked");
+						scope.completedChildRef = ref;
+					},
 				});
 				await scope.validateAuthority();
 				scope.assertOwnership();
+				if (taskRecoveryHash(completed.completion ?? null) !== taskRecoveryHash(scope.completion ?? null))
+					throw new Error("Native task result lost its core processing identity");
 				if (taskRecoveryHash(completed.binding) !== taskRecoveryHash(binding) || completed.result.isError)
 					throw new Error("Native task did not return the bound successful result");
 				const message: ToolResultMessage = {
@@ -4135,7 +4373,7 @@ export class AgentSession {
 				)
 					throw new Error("Original task result did not become durable");
 				candidateDurable = true;
-				currentRequest = { ...request, expectedLeafId: this.sessionManager.getLeafId()! };
+				scope.assertOwnership();
 			}
 			await scope.validateAuthority();
 			if (candidateDurable) this.#restorePairedTaskAssistant(scope, projectionBeforeRecovery);
@@ -4184,6 +4422,8 @@ export class AgentSession {
 	/** SDK calls synchronously before making a rebuilt child reachable by peers. */
 	installTaskRecoveryChild(ref: AgentRef, child: AgentSession): void {
 		const parent = this.#activeTaskRecovery;
+		if (parent?.completedChildRef)
+			this.#revokeTaskRecovery("Completed task cannot be revived during cached result processing");
 		if (
 			!parent ||
 			!this.isTaskRecoveryRevival(ref) ||
@@ -4345,7 +4585,24 @@ export class AgentSession {
 		});
 	}
 
+	#assertTaskCompletionOwnership(scope: ParentTaskRecoveryScope): void {
+		if (
+			scope.completedChildRef &&
+			(AgentRegistry.global().get(scope.binding.child.registryId) !== scope.completedChildRef ||
+				scope.completedChildRef.session !== null ||
+				scope.completedChildRef.status !== "parked")
+		)
+			this.#revokeTaskRecovery("Completed task child acquired a different execution owner");
+		if (
+			scope.completion &&
+			taskRecoveryHash(this.#taskResultRef(scope.binding).completion) !== taskRecoveryHash(scope.completion)
+		)
+			this.#revokeTaskRecovery("Task completion/processing ownership changed");
+		scope.assertCompletionFiles?.();
+	}
+
 	#assertParentTaskRecovery(scope: ParentTaskRecoveryScope, signal?: AbortSignal): void {
+		this.#assertTaskCompletionOwnership(scope);
 		if (scope.loadedPolicyHash !== this.#dispatchPolicyHash())
 			this.#revokeTaskRecovery("Loaded parent policy changed during final authorization await");
 		this.#assertSynchronousTaskPolicy?.(scope.binding);
