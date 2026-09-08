@@ -16,6 +16,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 import httpx
+import psycopg
 from installed_runtime_support import (
     InstalledRelease,
     RpcProcess,
@@ -29,13 +30,22 @@ from installed_runtime_support import (
 )
 from omp_work.operations.config import OperationsConfig
 from pg_native import native_postgres, seed_authority
+from psycopg.rows import dict_row
 
 
 class RecoveryProvider:
     """Pause a real HTTP request after production review returned its tool result."""
 
-    def __init__(self, root: Path, checkpoint: Literal["review", "resume"]):
+    def __init__(
+        self,
+        root: Path,
+        checkpoint: Literal["review", "resume", "persisted"],
+        progress: bool = False,
+    ):
         self.root = root
+        self.progress = progress
+        self.progressed = threading.Event()
+        self.operation_calls = 0
         self.checkpoint = checkpoint
         self.key = ""
         self.calls: list[dict] = []
@@ -55,8 +65,40 @@ class RecoveryProvider:
         if self.restarting:
             self.recovery_calls += 1
             self.recovered.set()
+            if self.progress:
+                results = [
+                    message
+                    for message in request.get("messages", [])
+                    if message.get("role") == "tool"
+                ]
+                if not results:
+                    self.operation_calls += 1
+                    return {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "recovered-criteria",
+                                "type": "function",
+                                "function": {
+                                    "name": "work",
+                                    "arguments": json.dumps(
+                                        {
+                                            "action": "seal_execution_criteria",
+                                            "work": self.key,
+                                            "criteria": ["result.txt contains after"],
+                                        }
+                                    ),
+                                },
+                            }
+                        ]
+                    }
+                if "criteria sealed successfully" not in str(
+                    results[-1].get("content", "")
+                ):
+                    self.error = str(results[-1])
+                self.progressed.set()
             return {"content": "Recovery continuation observed."}
-        if self.checkpoint == "resume":
+        if self.checkpoint in ("resume", "persisted"):
             self.barrier.set()
             self.release.wait(60)
             return {"content": "Turn ended."}
@@ -200,7 +242,11 @@ def execution_message_count(entries: list[dict]) -> int:
 
 
 def exercise_controller_recovery(
-    release: InstalledRelease, tmp_path: Path, checkpoint: Literal["review", "resume"]
+    release: InstalledRelease,
+    tmp_path: Path,
+    checkpoint: Literal["review", "resume", "persisted"],
+    *,
+    progress: bool = False,
 ) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -239,7 +285,7 @@ def exercise_controller_recovery(
         port=pg_port,
     )
     base_url = f"http://127.0.0.1:{service_port}"
-    provider = RecoveryProvider(tmp_path, checkpoint)
+    provider = RecoveryProvider(tmp_path, checkpoint, progress)
     with native_postgres(tmp_path / "postgres", pg_port), provider.serve() as model_url:
         service_command("ops", "bootstrap")
         seed_authority(
@@ -458,7 +504,7 @@ def exercise_controller_recovery(
                             if line
                         ]
                         if (
-                            checkpoint == "review"
+                            checkpoint in ("review", "persisted")
                             or any(
                                 entry.get("customType") == "work-now-execute-outbox"
                                 and entry.get("data", {}).get("postVersion")
@@ -490,7 +536,37 @@ def exercise_controller_recovery(
                         for i, entry in enumerate(entries)
                         if entry.get("data", {}).get("messageId") == intent["messageId"]
                     )
-                    assert execution_message_count(entries[intent_index:]) == 0
+                    if checkpoint == "persisted":
+                        persisted = [
+                            entry
+                            for entry in entries
+                            if entry.get("type") == "custom_message"
+                            and entry.get("customType") == "work-execute"
+                            and entry.get("details", {})
+                            .get("executionContinuation", {})
+                            .get("messageId")
+                            == intent["messageId"]
+                        ]
+                        assert len(persisted) == 1
+                        persisted_index = entries.index(persisted[0])
+                        suffix = entries[persisted_index + 1 :]
+                        assert not any(
+                            entry.get("type")
+                            in ("message", "custom_message", "tool_execution_start")
+                            for entry in suffix
+                        ), suffix
+                        (tmp_path / "persisted-boundary.json").write_text(
+                            json.dumps(
+                                {
+                                    "entry": persisted[0],
+                                    "suffix": suffix,
+                                    "providerRequests": len(provider.calls),
+                                },
+                                indent=2,
+                            )
+                        )
+                    else:
+                        assert execution_message_count(entries[intent_index:]) == 0
                     workflow_url = f"/v1/work-items/{provider.key}/workflow"
                     deadline = time.monotonic() + 10
                     while True:
@@ -578,8 +654,10 @@ def exercise_controller_recovery(
                         json.dumps(before_execution, indent=2)
                     )
                     shutil.copyfile(actual_session, tmp_path / "before-session.jsonl")
+                    held_provider_requests = len(provider.calls)
                     os.killpg(cli.pid, signal.SIGKILL)
-                    assert cli.wait(timeout=10) == -signal.SIGKILL
+                    killed_exit = cli.wait(timeout=10)
+                    assert killed_exit == -signal.SIGKILL
                 provider.restarting = True
                 restart_log = tmp_path / "controller-after.stderr"
                 restart_args = (
@@ -602,6 +680,11 @@ def exercise_controller_recovery(
                     resumed = restarted_rpc.request("get_state")
                     assert resumed["sessionId"] == initial["sessionId"]
                     recovered = provider.recovered.wait(10)
+                    if progress and recovered:
+                        assert provider.progressed.wait(10), (
+                            "Resumed tool operation did not return"
+                        )
+                        assert provider.error is None, provider.error
                     after_response = client.get(execution_url)
                     after_response.raise_for_status()
                     after_execution = after_response.json()
@@ -616,6 +699,10 @@ def exercise_controller_recovery(
                         "beforePid": cli.pid,
                         "afterPid": restarted.pid,
                         "signal": "SIGKILL",
+                        "exitCode": killed_exit,
+                        "providerRequestsBeforeKill": held_provider_requests,
+                        "providerRequestsAfterRestart": len(provider.calls)
+                        - held_provider_requests,
                         "session": str(actual_session),
                         "sessionId": initial["sessionId"],
                         "outbox": outbox,
@@ -626,7 +713,7 @@ def exercise_controller_recovery(
                         "beforeHead": before_head,
                         "beforeResult": before_result,
                         "beforeRemoteRefs": before_remote_refs,
-                        "heldProviderRequest": len(provider.calls),
+                        "heldProviderRequest": held_provider_requests,
                     }
                     (tmp_path / "recovery-evidence.json").write_text(
                         json.dumps(evidence, indent=2)
@@ -647,17 +734,60 @@ def exercise_controller_recovery(
                     (tmp_path / "recovery-refusals.json").write_text(
                         json.dumps(recovery_refusals, indent=2)
                     )
-                    if checkpoint == "resume":
+                    if checkpoint in ("resume", "persisted"):
                         assert not recovery_refusals, (
                             f"Preflight refusal prevents isolated outbox attribution: {recovery_refusals}"
                         )
-                    assert after_execution["grant"] == before_execution["grant"], (
-                        "Recovery must not reserve another continuation or change authority"
-                    )
-                    assert (
-                        after_execution["active_item"]
-                        == before_execution["active_item"]
-                    )
+                    progress_operations: list[dict] = []
+
+                    def read_progress_operations() -> list[dict]:
+                        # Read only the disposable service's real idempotency receipts.
+                        with psycopg.connect(
+                            **config.connection_kwargs("postgres"), row_factory=dict_row
+                        ) as connection:
+                            return connection.execute(
+                                "SELECT operation_id::text, request_id::text, request_sha256, result_sha256, state, response FROM omp_control.idempotent_commands WHERE workspace_id=%s AND command_type='seal_execution_criteria' ORDER BY operation_id",
+                                (identity["workspace_id"],),
+                            ).fetchall()
+
+                    if progress:
+                        assert (
+                            before_execution["active_item"]["phase"]
+                            == "criteria_pending"
+                        )
+                        assert after_execution["active_item"]["phase"] == "planning"
+                        assert after_execution["grant"]["grant_id"] == intent["grantId"]
+                        assert (
+                            after_execution["grant"]["continuations_scheduled"]
+                            == before_execution["grant"]["continuations_scheduled"]
+                        )
+                        assert (
+                            after_execution["grant"]["grant_version"]
+                            == before_execution["grant"]["grant_version"] + 1
+                        )
+                        progress_operations = read_progress_operations()
+                        assert len(progress_operations) == 1
+                        operation = progress_operations[0]
+                        assert operation["state"] == "applied"
+                        assert (
+                            operation["response"]["grant"] == after_execution["grant"]
+                        )
+                        assert (
+                            operation["response"]["item"]["work_id"] == intent["workId"]
+                        )
+                        assert (
+                            operation["response"]["revision"]["revision_id"]
+                            == after_execution["active_item"]["criteria_revision_id"]
+                        )
+                        evidence["progressOperations"] = progress_operations
+                    else:
+                        assert after_execution["grant"] == before_execution["grant"], (
+                            "Recovery must not reserve another continuation or change authority"
+                        )
+                        assert (
+                            after_execution["active_item"]
+                            == before_execution["active_item"]
+                        )
                     assert _run(["git", "show-ref"], remote, env) == before_remote_refs
                     assert recovered, (
                         f"Authorized execution did not recover after SIGKILL; startup refusals: {recovery_refusals}"
@@ -668,12 +798,29 @@ def exercise_controller_recovery(
                         and time.monotonic() < deadline
                     ):
                         time.sleep(0.05)
-                    resumed_entries = [
-                        json.loads(line)
-                        for line in actual_session.read_text().splitlines()
-                        if line
-                    ]
-                    assert execution_message_count(resumed_entries) == 2, (
+                    deadline = time.monotonic() + 5
+                    while True:
+                        resumed_entries = [
+                            json.loads(line)
+                            for line in actual_session.read_text().splitlines()
+                            if line
+                        ]
+                        if (
+                            checkpoint != "persisted"
+                            or any(
+                                entry.get("type") == "message"
+                                and entry.get("message", {}).get("role") == "assistant"
+                                and entry["message"].get("stopReason") == "stop"
+                                for entry in resumed_entries
+                            )
+                            or time.monotonic() >= deadline
+                        ):
+                            break
+                        time.sleep(0.05)
+                    shutil.copyfile(actual_session, tmp_path / "settled-session.jsonl")
+                    assert execution_message_count(resumed_entries) == (
+                        1 if checkpoint == "persisted" else 2
+                    ), (
                         "Recovery must persist the previously hidden continuation exactly once"
                     )
                     recovered_messages = [
@@ -686,6 +833,36 @@ def exercise_controller_recovery(
                         .get("messageId")
                         == intent["messageId"]
                     ]
+                    if checkpoint == "persisted":
+                        assert recovered_messages[0]["id"] == persisted[0]["id"]
+                        restarted_requests = [
+                            call
+                            for call in provider.calls
+                            if any(
+                                tool.get("function", {}).get("name") == "work"
+                                for tool in call.get("tools", [])
+                            )
+                        ][1:]
+                        for request in restarted_requests:
+                            provider_content = json.dumps(request.get("messages", []))
+                            assert (
+                                provider_content.count(
+                                    "# Autonomous Delivery Cycle (/execute)"
+                                )
+                                == 1
+                            )
+                        terminal = [
+                            entry
+                            for entry in resumed_entries[
+                                resumed_entries.index(recovered_messages[0]) + 1 :
+                            ]
+                            if entry.get("type") == "message"
+                            and entry.get("message", {}).get("role") == "assistant"
+                            and entry["message"].get("stopReason") == "stop"
+                        ]
+                        assert len(terminal) == 1, (
+                            "Recovered answer has not settled durably"
+                        )
                     assert len(recovered_messages) == 1, (
                         "Recovery must inject the saved intent, not a fresh unrelated continuation"
                     )
@@ -708,7 +885,7 @@ def exercise_controller_recovery(
                         "Recovered continuation changed its saved authority binding"
                     )
                     assert_local_candidate_unchanged()
-                    assert provider.recovery_calls == 1
+                    assert provider.recovery_calls == (2 if progress else 1)
                     evidence["recoveredIdentity"] = recovered_identity
                     evidence["localCandidateUnchangedAfterRecovery"] = True
                     (tmp_path / "recovery-evidence.json").write_text(
@@ -726,12 +903,26 @@ def exercise_controller_recovery(
                         == initial["sessionId"]
                     )
                     time.sleep(1)
-                    assert provider.recovery_calls == 1, (
-                        "A second restart duplicated consumed continuation"
-                    )
+                    if progress:
+                        assert provider.operation_calls == 1, (
+                            "A second restart duplicated the original service operation"
+                        )
+                        assert read_progress_operations() == progress_operations
+                    else:
+                        assert provider.recovery_calls == 1, (
+                            "A second restart duplicated the settled turn"
+                        )
                     again_response = client.get(execution_url)
                     again_response.raise_for_status()
-                    assert again_response.json()["grant"] == before_execution["grant"]
+                    if progress:
+                        assert (
+                            again_response.json()["active_item"]["criteria_revision_id"]
+                            == after_execution["active_item"]["criteria_revision_id"]
+                        )
+                    else:
+                        assert (
+                            again_response.json()["grant"] == before_execution["grant"]
+                        )
                     assert _run(["git", "show-ref"], remote, env) == before_remote_refs
                     assert_local_candidate_unchanged()
                     assert (
@@ -764,3 +955,19 @@ def test_killed_controller_recovers_queued_resume_continuation(
 ) -> None:
     """With unchanged baseline HEAD, queued resume work must survive controller death."""
     exercise_controller_recovery(installed_release, tmp_path, "resume")
+
+
+def test_killed_controller_resumes_persisted_unanswered_turn(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """A durable execution prompt with no answer must resume without reinjection."""
+    exercise_controller_recovery(installed_release, tmp_path, "persisted")
+
+
+def test_killed_persisted_turn_performs_one_real_criteria_seal(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Recovered model tool dispatch must advance real service state exactly once."""
+    exercise_controller_recovery(
+        installed_release, tmp_path, "persisted", progress=True
+    )

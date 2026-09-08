@@ -16,6 +16,8 @@ import { USER_INTERRUPT_LABEL } from "../session/messages";
 export type ExtensionSendAction = "extension_send" | "extension_send_user";
 
 export interface InitializeExtensionsOptions {
+	/** False when this invocation already has explicit owner input to dispatch. */
+	allowPersistedTurnContinuation?: boolean;
 	/** Reports an error thrown by an extension-initiated send. */
 	reportSendError: (action: ExtensionSendAction, error: Error) => void;
 	/** Reports a runtime error surfaced through {@link ExtensionRunner.onError}. */
@@ -98,6 +100,14 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 			getSessionName: () => session.sessionManager.getSessionName(),
 			getSessionId: () => session.sessionManager.getSessionId(),
 			deliverMessage: message => session.queueExtensionDelivery(message),
+			requestPersistedTurnContinuation: request =>
+				options.allowPersistedTurnContinuation === false
+					? {
+							status: "refused",
+							code: "queued-input",
+							reason: "Explicit host input takes precedence over persisted turn recovery",
+						}
+					: session.requestPersistedTurnContinuation(request),
 			setSessionName: async name => {
 				await session.sessionManager.setSessionName(name, "user");
 			},

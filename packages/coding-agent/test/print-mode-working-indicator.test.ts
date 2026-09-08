@@ -122,6 +122,7 @@ function createDelayedSession(
 			messages.push(finalMessage);
 			return true;
 		},
+		waitForIdle: async () => {},
 		prepareForHeadlessAdvisorDrain: () => {
 			advisorDrainPrepared = true;
 		},
@@ -288,6 +289,7 @@ describe("print mode working indicator", () => {
 				messages.push(message);
 				return true;
 			},
+			waitForIdle: async () => {},
 			prepareForHeadlessAdvisorDrain: () => {},
 			waitForAdvisorCatchup: async (timeoutMs: number) => {
 				catchupTimeoutMs = timeoutMs;
@@ -352,6 +354,7 @@ describe("print mode working indicator", () => {
 				return true;
 			},
 			setTextOutputCommitted: () => {},
+			waitForIdle: async () => {},
 			prepareForHeadlessAdvisorDrain: () => {},
 			waitForAdvisorCatchup: async (timeoutMs: number) => {
 				catchupTimeoutMs = timeoutMs;

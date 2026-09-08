@@ -173,3 +173,10 @@ missing identity cannot retroactively prove delivery. Persisted-but-unconsumed
 turns and actual task-worker termination remain separate, unfinished S2.2
 boundaries. These two controller cases do not establish exactly-once effects
 across every crash window or complete OMP-246 acceptance.
+
+The [persisted-turn plan](omp-recovery-persisted-turn-plan.md) adds a separate
+saved-before-first-response boundary and a real service-progress variant. They
+resume existing context without reinjecting the execution message or spending
+another reservation. Lifecycle, owner input, client ownership, persistence and
+fresh authority guards are required. This remains a bounded no-tool suffix;
+unbound preparation context and task/result restoration are still open.

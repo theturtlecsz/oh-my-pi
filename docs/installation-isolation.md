@@ -142,6 +142,12 @@ transport, disposable WorkService, and local Git effects. They do not qualify
 task-worker death, persisted-but-unconsumed turns, or every recovery boundary;
 see the [recovery coverage map](omp-recovery-coverage.md).
 
+Additional persisted-turn cases target a prompt already saved before its first
+response, using the same message identity and reservation. Recovery reuses normal
+prompt preparation and checks fresh authority; ambiguous history, unfinished
+tools, owner input and deferred-client ownership refuse. Unbound preparation
+messages after that prompt and task-result restoration remain unqualified.
+
 Existing halt, replay, canceled-grant, merge-head, and completion-evidence tests
 remain part of the workflow suites. The execution smoke is now an explicit CI
 step, but its synthetic session/transport parts remain documented limitations.

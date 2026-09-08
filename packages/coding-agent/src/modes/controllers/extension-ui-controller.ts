@@ -236,6 +236,7 @@ export class ExtensionUiController {
 			getSessionName: () => this.ctx.sessionManager.getSessionName(),
 			getSessionId: () => this.ctx.sessionManager.getSessionId(),
 			deliverMessage: message => this.ctx.session.queueExtensionDelivery(message),
+			requestPersistedTurnContinuation: request => this.ctx.session.requestPersistedTurnContinuation(request),
 			setSessionName: name => this.#updateSessionName(name),
 		};
 		const contextActions: ExtensionContextActions = {
@@ -440,6 +441,7 @@ export class ExtensionUiController {
 			getSessionName: () => this.ctx.sessionManager.getSessionName(),
 			getSessionId: () => this.ctx.sessionManager.getSessionId(),
 			deliverMessage: message => this.ctx.session.queueExtensionDelivery(message),
+			requestPersistedTurnContinuation: request => this.ctx.session.requestPersistedTurnContinuation(request),
 			setSessionName: name => this.#updateSessionName(name),
 		};
 		const contextActions: ExtensionContextActions = {

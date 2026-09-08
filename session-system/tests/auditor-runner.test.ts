@@ -8,7 +8,7 @@ import { z } from "zod";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type Model, AssistantMessageEventStream } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
-import { AgentSession, SessionManager, Settings, type ExtensionAPI, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { AgentSession, SessionManager, Settings, type ExtensionAPI, type ExtensionContext, type PersistedTurnContinuationRequest } from "@oh-my-pi/pi-coding-agent";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -81,6 +81,7 @@ describe("execution recovery identity guards", () => {
 		data: ContinuationIdentity & { status: "pending" | "queued"; at: string };
 	};
 	type InjectedEntry = {
+		id?: string;
 		type: "custom_message";
 		customType: "work-execute";
 		details: { executionContinuation: ContinuationIdentity };
@@ -105,6 +106,7 @@ describe("execution recovery identity guards", () => {
 		let head = baseline;
 		const exec = makeSnapshot("active", "single", [{ position: 0, work_id: "work-recovery", phase: "executing" }]);
 		exec.grant.grant_version = 2;
+		exec.grant.expires_at = new Date(Date.now() + 86400000).toISOString();
 		exec.activeItem!.initial_git_baseline = baseline;
 		exec.activeItem!.current_git_baseline = baseline;
 		exec.activeItem!.criteria_revision_id = "criteria-revision";
@@ -120,6 +122,7 @@ describe("execution recovery identity guards", () => {
 		const entries: Array<OutboxEntry | InjectedEntry> = [];
 		const sent: Array<{ customType?: string; details?: { executionContinuation?: ContinuationIdentity } }> = [];
 		const notices: string[] = [];
+		const continuations: PersistedTurnContinuationRequest[] = [];
 		const handlers: Array<(event: unknown, ctx: ExtensionContext) => Promise<void>> = [];
 		const issue = { id: item.work_id, key: "OMP-246", title: "Recovery", project: "Bookends" };
 		const reserve = vi.fn(async () => {
@@ -142,7 +145,7 @@ describe("execution recovery identity guards", () => {
 		} as unknown as WorkflowBackend;
 		const ctx = {
 			cwd, taskDepth: 0,
-			sessionManager: { getBranch: () => entries, getCwd: () => cwd, getSessionId: () => sessionId },
+			sessionManager: { getBranch: () => entries, getCwd: () => cwd, getSessionId: () => sessionId, getLeafId: () => "persisted-entry" },
 			ui: { notify: (text: string) => notices.push(text), theme: { fg: (_color: string, text: string) => text }, setStatus: () => {} },
 		} as unknown as ExtensionContext;
 		const pi = {
@@ -150,6 +153,7 @@ describe("execution recovery identity guards", () => {
 			registerTool: () => {}, registerCommand: () => {}, registerFlag: () => {}, registerMessageRenderer: () => {},
 			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<void>) => { if (event === "session_start") handlers.push(handler); },
 			getSessionId: () => sessionId,
+			requestPersistedTurnContinuation: (request: PersistedTurnContinuationRequest) => { continuations.push(request); return { status: "scheduled" }; },
 			sendMessage: (message: typeof sent[number]) => sent.push(message),
 			appendEntry: () => {}, zod: z,
 		} as unknown as ExtensionAPI;
@@ -163,7 +167,7 @@ describe("execution recovery identity guards", () => {
 		};
 		entries.push({ type: "custom", customType: "work-now-execute-outbox", data: { ...intent, status: "queued", at: new Date().toISOString() } });
 		return {
-			intent, entries, sent, reserve, notices, attempts, item, exec,
+			intent, entries, sent, reserve, notices, attempts, item, exec, continuations,
 			setHead: (value: string) => { head = value; },
 			start: async () => {
 				if (!handlers.length) throw new Error("workflow host did not register startup recovery");
@@ -184,6 +188,29 @@ describe("execution recovery identity guards", () => {
 		await fixture.start();
 		expect(fixture.sent.filter(message => message.customType === "work-execute")).toHaveLength(0);
 		expect(fixture.reserve).not.toHaveBeenCalled();
+	});
+
+	test("persisted intent resumes its original entry and rechecks authority without another reservation", async () => {
+		const fixture = await recoveryFixture();
+		fixture.entries.push({ id: "persisted-entry", type: "custom_message", customType: "work-execute", details: { executionContinuation: fixture.intent } });
+		await fixture.start();
+		expect(fixture.continuations).toHaveLength(1);
+		expect(fixture.continuations[0]).toMatchObject({ sessionId: fixture.intent.sessionId, entryId: "persisted-entry", expectedLeafId: "persisted-entry" });
+		expect(fixture.sent.filter(message => message.customType === "work-execute")).toHaveLength(0);
+		expect(fixture.reserve).not.toHaveBeenCalled();
+		expect(await fixture.continuations[0].validateDispatch()).toEqual({ ok: true });
+		fixture.exec.grant.state = "canceled";
+		expect(await fixture.continuations[0].validateDispatch()).toMatchObject({ ok: false });
+	});
+
+	test("duplicate active-branch continuation identity refuses instead of resuming either copy", async () => {
+		const fixture = await recoveryFixture();
+		for (const id of ["first-entry", "second-entry"]) fixture.entries.push({ id, type: "custom_message", customType: "work-execute", details: { executionContinuation: fixture.intent } });
+		await fixture.start();
+		expect(fixture.continuations).toHaveLength(0);
+		expect(fixture.sent.filter(message => message.customType === "work-execute")).toHaveLength(0);
+		expect(fixture.reserve).not.toHaveBeenCalled();
+		expect(fixture.notices.some(notice => notice.includes("multiple active-branch messages"))).toBe(true);
 	});
 
 	test("a different item's persisted message cannot suppress the current queued intent", async () => {

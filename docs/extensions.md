@@ -192,6 +192,30 @@ Also exposed:
 
 `pi.sendUserMessage(content, { deliverAs })` always goes through prompt flow. Omit `deliverAs` to start a normal prompt when idle; while streaming, omitted `deliverAs` queues the message as a steer. Set `deliverAs: "followUp"` to wait until the current run finishes.
 
+### Recovering an existing persisted turn
+
+`pi.requestPersistedTurnContinuation(request)` requests a guarded continuation
+without appending the original prompt again. The request names `sessionId`, the
+active-branch `entryId`, and `expectedLeafId`; `validateDispatch` asynchronously
+checks the caller's application-specific authority immediately before dispatch.
+The runtime separately checks persistence, identity, lifecycle and queued input.
+The anchor must be an agent-attributed `custom_message` entry.
+
+The synchronous result is `scheduled`, `alreadyScheduled`, or `refused` with a
+code and reason. Scheduling is not a delivery, consumption or completion receipt.
+Handle the immediate result and provide `onRefused` for later preparation or
+dispatch refusals. Requests made during startup wait for the actual
+`session_start` lifecycle to finish. Existing prompt preparation runs again;
+the original execution message is not inserted a second time.
+
+This initial recovery surface accepts only an unambiguous unfinished turn with
+no later conversation or tool activity. Completed turns, pending tools, stale
+branches, queued owner input, failed persistence and ambiguous suffixes refuse.
+Unbound preparation messages after the anchor also refuse; their attribution
+alone does not establish ownership by this turn. Clients that defer agent-started
+turns, including that ACP configuration, report the capability as unavailable.
+No new RPC command or automatic task-result reconciliation is implied.
+
 ## 2) Handler context (`ExtensionContext`)
 
 Handlers and tool `execute` receive `ctx` with:
