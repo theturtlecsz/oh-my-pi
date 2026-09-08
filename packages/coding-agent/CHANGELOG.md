@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Fixed recovery losing a completed resumed task before its result was saved to the parent session when result processing has not started.
 - Fixed restart recovery for a bound synchronous task interrupted before its first response, preserving the original child session and parent task result.
 - Fixed automatic restart recovery for saved, unanswered execution prompts when no later conversation or tool activity exists.
 - Fixed execution recovery losing queued continuation prompts or rejecting its own frozen candidate after a controller restart.

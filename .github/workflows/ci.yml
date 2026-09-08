@@ -1151,4 +1151,6 @@ jobs:
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/task-*.jsonl
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/task-*.stderr
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/provider-*.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/authority-*.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/task-completed-output-*.md
               if-no-files-found: warn

@@ -20,6 +20,7 @@ from uuid import UUID, uuid4
 import httpx
 import psycopg
 from installed_runtime_support import (
+    AuthorityResponseProxy,
     InstalledRelease,
     RpcProcess,
     _free_port,
@@ -34,7 +35,9 @@ from omp_work.operations.config import OperationsConfig
 from pg_native import native_postgres, seed_authority
 from psycopg.rows import dict_row
 
-TaskFault = Literal["child-request", "repeated-child-request", "parent-result"]
+TaskFault = Literal[
+    "child-request", "repeated-child-request", "parent-result", "child-result-gap"
+]
 
 
 class RecoveryProvider:
@@ -69,6 +72,7 @@ class RecoveryProvider:
         self.restart_generation = 0
         self.restarted_child_held = threading.Event()
         self.parent_result_held = threading.Event()
+        self.completion_observer_ready = threading.Event()
         self.child_read_content: object | None = None
         self.task_assignment = (
             (Path(__file__).parent / "fixtures/task-active-assignment.md").read_text()
@@ -105,6 +109,11 @@ class RecoveryProvider:
         # model before parent/auxiliary handling, including after restart.
         if self.checkpoint == "task-active" and request.get("model") == "local-task":
             if self.restarting:
+                if (
+                    self.task_fault == "child-result-gap"
+                    and self.restart_generation == 1
+                ):
+                    self.completion_observer_ready.wait(300)
                 if (
                     self.task_fault == "repeated-child-request"
                     and self.restart_generation == 1
@@ -379,6 +388,7 @@ class RecoveryProvider:
             yield f"http://127.0.0.1:{server.server_port}/v1"
         finally:
             self.release.set()
+            self.completion_observer_ready.set()
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
@@ -542,6 +552,14 @@ def task_preparation_records(
     return records
 
 
+def task_recovery_hash(value: object) -> str:
+    """Hash canonical fixture JSON with taskRecoveryHash's sorted-key domain."""
+    canonical = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(b"omp-task-recovery-v1\0" + canonical.encode()).hexdigest()
+
+
 def require_task_binding(
     parent: list[dict], child: list[dict], child_snapshot: dict
 ) -> dict:
@@ -557,13 +575,7 @@ def require_task_binding(
     assert bindings[0] in parent_branch, "Task binding is outside durable parent branch"
     binding = bindings[0]["data"]
     assert binding["version"] == 1 and binding["mode"] == "sync-flat"
-    canonical = json.dumps(
-        binding["contract"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
-    assert (
-        hashlib.sha256(b"omp-task-recovery-v1\0" + canonical.encode()).hexdigest()
-        == binding["contractSha256"]
-    )
+    assert task_recovery_hash(binding["contract"]) == binding["contractSha256"]
     call = binding["call"]
     parent_header = next(entry for entry in parent if entry.get("type") == "session")
     assert call["sessionId"] == parent_header["id"]
@@ -584,13 +596,7 @@ def require_task_binding(
     assert set(raw_args) == {"name", "agent", "task"}
     effective_args = {key: raw_args[key].strip() for key in ("name", "agent", "task")}
     assert binding["contract"]["args"] == effective_args
-    args_json = json.dumps(
-        effective_args, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
-    assert (
-        call["argumentsSha256"]
-        == hashlib.sha256(b"omp-task-recovery-v1\0" + args_json.encode()).hexdigest()
-    )
+    assert call["argumentsSha256"] == task_recovery_hash(effective_args)
     prompt = next(
         entry for entry in parent_branch if entry.get("id") == call["promptEntryId"]
     )
@@ -656,6 +662,7 @@ def capture_task_active_recovery(
     rpc: RpcProcess,
     initial: dict[str, object],
     service_pid: int,
+    authority_proxy: AuthorityResponseProxy | None = None,
 ) -> None:
     """Fault observer for real synchronous task execution; no runtime repair writes."""
     evidence: dict = {
@@ -666,6 +673,8 @@ def capture_task_active_recovery(
         "launcherPid": cli.pid,
         "barrierReached": False,
     }
+    if provider.task_fault == "child-result-gap":
+        evidence["completionBarrierReached"] = False
     evidence_file = tmp_path / "task-recovery-evidence.json"
 
     def save() -> None:
@@ -964,6 +973,50 @@ def capture_task_active_recovery(
             and entry["message"].get("toolCallId") == call_id
         ]
 
+    def result_records(entries: list[dict], custom_type: str) -> list[dict]:
+        # One task exists in this fixture. Scan retained history, not just the
+        # active branch, so rewind cannot hide competing completion ownership.
+        return [
+            entry
+            for entry in entries
+            if entry.get("type") == "custom" and entry.get("customType") == custom_type
+        ]
+
+    def native_ready(entries: list[dict]) -> dict | None:
+        records = result_records(entries, "task-native-result-ready")
+        if not records:
+            return None
+        assert len(records) == 1, "Competing retained native completion records"
+        entry = records[0]
+        branch = durable_session_branch(entries)
+        assert entry in branch, "Native ready checkpoint is outside bound branch"
+        data = entry["data"]
+        assert data["version"] == 1 and data["producer"] == "recovered-sync-task-v1"
+        assert data["processingProtocol"] == "claim-before-parent-processing-v1"
+        assert (
+            data["call"] == binding["call"]
+            and data["contractSha256"] == binding["contractSha256"]
+        )
+        assert data["child"]["sessionId"] == binding["child"]["sessionId"]
+        assert data["child"]["initEntryId"] == binding["child"]["initEntryId"]
+        assert data["payloadSha256"] == task_recovery_hash(data["payloadJson"])
+        raw = json.loads(data["payloadJson"])
+        assert not raw.get("isError")
+        native = raw["details"]["results"]
+        assert len(native) == 1 and native[0]["id"] == child["id"]
+        assert native[0]["agent"] == "task" and native[0]["agentSource"] == "bundled"
+        assert (
+            native[0]["exitCode"] == 0
+            and not native[0].get("aborted")
+            and not native[0].get("error")
+        )
+        assert native[0]["outputPath"] == data["output"]["path"]
+        assert any(
+            item.get("status") == "success"
+            for item in native[0]["extractedToolData"]["yield"]
+        )
+        return entry
+
     def successful_result(entries: list[dict]) -> dict:
         results = original_results(entries)
         assert len(results) == 1 and not results[0]["message"].get("isError"), results
@@ -976,12 +1029,49 @@ def capture_task_active_recovery(
         assert branch.index(binding_entry) < branch.index(entry), (
             "Task result precedes original binding"
         )
-        assert entry["taskResult"] == {
+        expected_ref = {
             "bindingId": binding["call"]["bindingId"],
             "contractSha256": binding["contractSha256"],
             "toolCallId": call_id,
             "childSessionId": binding["child"]["sessionId"],
-        }, "Parent result lost core binding after result processing"
+        }
+        ready_entry = native_ready(entries)
+        claims = result_records(entries, "task-result-processing-started")
+        if ready_entry is not None:
+            assert len(claims) == 1, (
+                "Native ready result needs one retained processing claim"
+            )
+            claim = claims[0]
+            assert claim in branch
+            assert claim["data"] == {
+                "version": 1,
+                "protocol": "claim-before-parent-processing-v1",
+                "call": binding["call"],
+                "contractSha256": binding["contractSha256"],
+                "readyEntryId": ready_entry["id"],
+                "readySha256": task_recovery_hash(ready_entry["data"]),
+            }
+            assert (
+                branch.index(binding_entry)
+                < branch.index(ready_entry)
+                < branch.index(claim)
+                < branch.index(entry)
+            )
+            expected_ref["completion"] = {
+                "readyEntryId": ready_entry["id"],
+                "readySha256": task_recovery_hash(ready_entry["data"]),
+                "processingEntryId": claim["id"],
+                "processingSha256": task_recovery_hash(claim["data"]),
+            }
+            assert (
+                entry["message"]["details"]["results"]
+                == json.loads(ready_entry["data"]["payloadJson"])["details"]["results"]
+            ), "Parent processing changed the certified native outcome"
+        else:
+            assert not claims, "Processing claim has no native ready checkpoint"
+        assert entry["taskResult"] == expected_ref, (
+            "Parent result lost core binding after result processing"
+        )
         native = entry["message"]["details"]["results"]
         assert len(native) == 1 and native[0]["id"] == child["id"]
         assert native[0]["agent"] == "task" and native[0]["agentSource"] == "bundled"
@@ -1069,6 +1159,15 @@ def capture_task_active_recovery(
         assert_stable_state()
         return parent_now, child_now
 
+    gap_output_path = child_path.with_suffix(".md")
+    gap_child_baseline: list[dict] | None = None
+    gap_ready_entry: dict | None = None
+    gap_output_bytes: bytes | None = None
+    gap_outcomes: list[dict] = []
+    if provider.task_fault == "child-result-gap":
+        assert authority_proxy is not None
+        assert gap_output_path.name == f"{binding['child']['registryId']}.md"
+        authority_proxy.arm(gap_output_path, f"/v1/workspaces/{workspace_id}/execution")
     kill_host(cli, "initial-child-request")
     provider.restarting = True
     restart_args = (
@@ -1096,6 +1195,9 @@ def capture_task_active_recovery(
             restart_log,
         ) as restarted:
             restarted_rpc = RpcProcess(restarted, restart_log)
+            if provider.task_fault == "child-result-gap" and generation == 1:
+                restarted_rpc.request("set_subagent_subscription", level="events")
+                provider.completion_observer_ready.set()
             restarted_state = restarted_rpc.request("get_state")
             assert restarted_state["sessionId"] == current["sessionId"]
             restart_record = {
@@ -1105,6 +1207,391 @@ def capture_task_active_recovery(
             }
             evidence["restarts"].append(restart_record)
             save()
+
+            if generation == 1 and provider.task_fault == "child-result-gap":
+                assert authority_proxy is not None
+                deadline = time.monotonic() + 45
+                while True:
+                    parent_now = read_complete_session(parent_path)
+                    child_now = read_complete_session(child_path)
+                    events = read_complete_session(restarted_rpc.stdout_log)
+                    completed = [
+                        event
+                        for event in events
+                        if event.get("type") == "subagent_lifecycle"
+                        and event.get("payload", {}).get("id") == child["id"]
+                        and event["payload"].get("parentToolCallId") == call_id
+                        and event["payload"].get("status") == "completed"
+                    ]
+                    read_results = [
+                        entry
+                        for entry in durable_session_branch(child_now)
+                        if entry.get("type") == "message"
+                        and entry.get("message", {}).get("role") == "toolResult"
+                        and entry["message"].get("toolCallId") == "task-child-read"
+                    ]
+                    yield_results = [
+                        entry
+                        for entry in durable_session_branch(child_now)
+                        if entry.get("type") == "message"
+                        and entry.get("message", {}).get("role") == "toolResult"
+                        and entry["message"].get("toolCallId") == "task-child-yield"
+                    ]
+                    held = [row for row in authority_proxy.snapshot() if row["held"]]
+                    if (
+                        completed
+                        and len(read_results) == len(yield_results) == 1
+                        and held
+                        and result_records(parent_now, "task-native-result-ready")
+                    ):
+                        break
+                    if (
+                        time.monotonic() >= deadline
+                        or authority_proxy.error
+                        or provider.error
+                    ):
+                        break
+                    time.sleep(0.05)
+                restart_record["completionBarrierObservation"] = {
+                    "completedLifecycle": completed,
+                    "heldAuthorityReads": held,
+                    "readResults": read_results,
+                    "yieldResults": yield_results,
+                    "proxyError": authority_proxy.error,
+                    "providerError": provider.error,
+                    "parentResults": original_results(parent_now),
+                }
+                save()
+                assert authority_proxy.error is None and provider.error is None
+                assert len(completed) == 1, (
+                    "Original child completion lifecycle was not observed"
+                )
+                payload = completed[0]["payload"]
+                assert (
+                    payload["agent"] == "task" and payload["agentSource"] == "bundled"
+                )
+                assert payload["sessionFile"] == str(child_path)
+                assert payload.get("detached") is not True
+                assert len(read_results) == len(yield_results) == 1
+                read_message, yield_message = (
+                    read_results[0]["message"],
+                    yield_results[0]["message"],
+                )
+                assert read_message["toolName"] == "read" and not read_message.get(
+                    "isError"
+                )
+                assert yield_message["toolName"] == "yield" and not yield_message.get(
+                    "isError"
+                )
+                expected_output = {
+                    "path": "result.txt",
+                    "observed": provider.child_read_content,
+                }
+                assert provider.child_read_content is not None
+                assert yield_message["details"] == {
+                    "data": expected_output,
+                    "status": "success",
+                }
+                assert [
+                    part["text"]
+                    for part in read_message["content"]
+                    if part.get("type") == "text"
+                ] == [provider.child_read_content]
+                gap_output_bytes = gap_output_path.read_bytes()
+                assert json.loads(gap_output_bytes) == expected_output
+                assert held and all(
+                    200 <= row["status"] < 300 and row["artifactPresent"]
+                    for row in held
+                )
+                assert all(
+                    not row["responseStarted"] and row["responseBytesWritten"] == 0
+                    for row in held
+                )
+                for row in held:
+                    response_bytes = Path(row["bodyFile"]).read_bytes()
+                    assert (
+                        hashlib.sha256(response_bytes).hexdigest() == row["bodySha256"]
+                    )
+                    assert json.loads(response_bytes) == before_execution, (
+                        "Held bytes are not unchanged real authority"
+                    )
+                parent_now, child_now = assert_same_journals()
+                gap_ready_entry = native_ready(parent_now)
+                assert gap_ready_entry is not None, (
+                    "Completed cut has no runtime-certified ready result"
+                )
+                assert not result_records(
+                    parent_now, "task-result-processing-started"
+                ), "Parent processing already entered before held cut"
+                ready_data = gap_ready_entry["data"]
+                child_branch = durable_session_branch(child_now)
+                child_entries = [
+                    entry
+                    for entry in child_now
+                    if entry.get("type") not in ("title", "session")
+                ]
+                assert ready_data["child"] == {
+                    "sessionId": binding["child"]["sessionId"],
+                    "initEntryId": binding["child"]["initEntryId"],
+                    "promptEntryId": original_preparation[0]["anchorEntryId"],
+                    "leafId": child_branch[-1]["id"],
+                    "branchSha256": task_recovery_hash(child_branch),
+                    "entriesSha256": task_recovery_hash(child_entries),
+                    "fileSha256": hashlib.sha256(child_path.read_bytes()).hexdigest(),
+                    "yieldResultEntryId": yield_results[0]["id"],
+                }
+                assert ready_data["output"] == {
+                    "path": str(gap_output_path),
+                    "bytes": len(gap_output_bytes),
+                    "sha256": hashlib.sha256(gap_output_bytes).hexdigest(),
+                }
+                assert (
+                    json.loads(
+                        json.loads(ready_data["payloadJson"])["details"]["results"][0][
+                            "output"
+                        ]
+                    )
+                    == expected_output
+                )
+                assert not original_results(parent_now), (
+                    "Parent result became durable before completion cut"
+                )
+                assert not any(
+                    event.get("type") in ("message_start", "message_end")
+                    and event.get("message", {}).get("role") == "toolResult"
+                    and event["message"].get("toolCallId") == call_id
+                    for event in events
+                ), "Parent result event preceded completion cut"
+                assert not any(
+                    row["model"] == "local-recovery"
+                    and row["restartGeneration"] == generation
+                    for row in provider.request_observations
+                ), "Parent provider continuation preceded completion cut"
+                gap_child_baseline = child_now
+                shutil.copyfile(
+                    parent_path,
+                    tmp_path / "task-parent-completion-gap-before-kill.jsonl",
+                )
+                shutil.copyfile(
+                    child_path, tmp_path / "task-child-completion-gap-before-kill.jsonl"
+                )
+                shutil.copyfile(
+                    gap_output_path, tmp_path / "task-completed-output-before-kill.md"
+                )
+                restart_record["completionBarrier"] = {
+                    "observedAt": time.time(),
+                    "binding": binding,
+                    "nativeReadyEntry": gap_ready_entry,
+                    "nativeReadySha256": task_recovery_hash(ready_data),
+                    "processingClaimAbsentAcrossRetainedHistory": True,
+                    "childSessionId": binding["child"]["sessionId"],
+                    "outputPath": str(gap_output_path),
+                    "outputSha256": hashlib.sha256(gap_output_bytes).hexdigest(),
+                    "output": expected_output,
+                    "completedLifecycle": completed[0],
+                    "heldAuthorityReads": held,
+                    "execution": get_view(execution_url),
+                    "workflow": get_view(workflow_url),
+                    "effects": effects(),
+                    "parentResultAbsent": True,
+                    "parentProviderAbsent": True,
+                    "authorityAwaitAttribution": "Production ordering identifies the choke point; no individual GET is attributed to one internal await.",
+                }
+                save()
+                # All witnesses remain pinned while every successful authority response is held.
+                assert gap_output_path.read_bytes() == gap_output_bytes
+                assert read_complete_session(child_path) == gap_child_baseline
+                assert not original_results(read_complete_session(parent_path))
+                assert (
+                    native_ready(read_complete_session(parent_path)) == gap_ready_entry
+                )
+                assert not result_records(
+                    read_complete_session(parent_path), "task-result-processing-started"
+                )
+                assert_stable_state()
+                assert not any(
+                    event.get("type") in ("message_start", "message_end")
+                    and event.get("message", {}).get("role") == "toolResult"
+                    and event["message"].get("toolCallId") == call_id
+                    for event in read_complete_session(restarted_rpc.stdout_log)
+                )
+                latest_reads = authority_proxy.snapshot()
+                assert all(
+                    not row["artifactPresent"]
+                    or not (200 <= row["status"] < 300)
+                    or row["held"]
+                    for row in latest_reads
+                ), "A qualifying authority response escaped the cut"
+                assert all(
+                    not row["responseStarted"] for row in latest_reads if row["held"]
+                )
+                evidence["completionBarrierReached"] = True
+                save()
+                kill_host(restarted, "completed-child-before-original-parent-result")
+                restarted_rpc.reader.join(timeout=2)
+                assert not restarted_rpc.reader.is_alive(), (
+                    "Killed host RPC stream did not reach EOF"
+                )
+                assert not original_results(read_complete_session(parent_path))
+                assert (
+                    native_ready(read_complete_session(parent_path)) == gap_ready_entry
+                )
+                assert not result_records(
+                    read_complete_session(parent_path), "task-result-processing-started"
+                )
+                assert read_complete_session(child_path) == gap_child_baseline
+                assert not any(
+                    row["model"] == "local-recovery"
+                    and row["restartGeneration"] == generation
+                    for row in provider.request_observations
+                )
+                assert not any(
+                    event.get("type") in ("message_start", "message_end")
+                    and event.get("message", {}).get("role") == "toolResult"
+                    and event["message"].get("toolCallId") == call_id
+                    for event in read_complete_session(restarted_rpc.stdout_log)
+                )
+                authority_proxy.allow_responses()
+                continue
+
+            if generation > 1 and provider.task_fault == "child-result-gap":
+                assert gap_child_baseline is not None and gap_output_bytes is not None
+                assert gap_ready_entry is not None
+                deadline = time.monotonic() + 30
+                while True:
+                    parent_now = read_complete_session(parent_path)
+                    events = read_complete_session(restarted_rpc.stdout_log)
+                    refusals = [
+                        event
+                        for event in events
+                        if event.get("type") == "extension_ui_request"
+                        and event.get("method") == "notify"
+                        and str(event.get("message", "")).startswith(
+                            "Execution recovery skipped:"
+                        )
+                    ]
+                    finished = terminal_parent_answer(parent_now) is not None
+                    if finished or refusals or time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.05)
+                # This is an observation window, not a synthetic startup/completion receipt.
+                time.sleep(2)
+                assert provider.error is None, provider.error
+                parent_now, child_now = assert_same_journals()
+                assert native_ready(parent_now) == gap_ready_entry, (
+                    "Restart changed original ready checkpoint"
+                )
+                observations = [
+                    dict(row)
+                    for row in provider.request_observations
+                    if row["restartGeneration"] == generation
+                ]
+                assert not any(row["model"] == "local-task" for row in observations), (
+                    "Completed child was dispatched again"
+                )
+                assert child_now == gap_child_baseline, (
+                    "Completed child evidence was rewritten"
+                )
+                assert gap_output_path.read_bytes() == gap_output_bytes
+                result = (
+                    successful_result(parent_now)
+                    if original_results(parent_now)
+                    else None
+                )
+                if gap_outcomes:
+                    assert result == gap_outcomes[0]["originalResult"], (
+                        "Repeated restart rewrote original parent result"
+                    )
+                    assert not observations, (
+                        "Repeated completion-gap restart dispatched another request"
+                    )
+                elif finished:
+                    parent_requests = [
+                        provider.calls[row["ordinal"] - 1]
+                        for row in observations
+                        if row["model"] == "local-recovery"
+                        and any(
+                            tool.get("function", {}).get("name") == "work"
+                            for tool in provider.calls[row["ordinal"] - 1].get(
+                                "tools", []
+                            )
+                        )
+                    ]
+                    assert len(parent_requests) == 1, (
+                        "Cached result needs one actual tool-bearing parent request"
+                    )
+                    messages = parent_requests[0]["messages"]
+                    wire_calls = [
+                        (index, tool_call)
+                        for index, message in enumerate(messages)
+                        if message.get("role") == "assistant"
+                        for tool_call in message.get("tool_calls", [])
+                    ]
+                    assert len(wire_calls) == 1, (
+                        "Parent wire omitted or duplicated original task call"
+                    )
+                    call_index, wire_call = wire_calls[0]
+                    assert wire_call["id"] == call_id
+                    assert (
+                        wire_call["function"]["name"]
+                        == parent_calls[0]["name"]
+                        == "task"
+                    )
+                    assert (
+                        json.loads(wire_call["function"]["arguments"])
+                        == parent_calls[0]["arguments"]
+                    ), "Parent wire changed original raw task arguments"
+                    wire_results = [
+                        (index, message)
+                        for index, message in enumerate(messages)
+                        if message.get("role") == "tool"
+                        and message.get("tool_call_id") == call_id
+                    ]
+                    assert len(wire_results) == 1 and wire_results[0][0] > call_index, (
+                        "Parent wire has no unique result after original task call"
+                    )
+                if not finished:
+                    assert result is None, (
+                        "Refused completed-task recovery attached a parent result"
+                    )
+                    assert not observations, (
+                        "Refused completed-task recovery dispatched a provider request"
+                    )
+                roster = restarted_rpc.request("get_subagents")["subagents"]
+                assert len(roster) <= 1 and all(
+                    row["id"] == child["id"] for row in roster
+                )
+                assert provider.task_calls == 1
+                outcome = {
+                    "generation": generation,
+                    "parentCompleted": finished,
+                    "originalResult": result,
+                    "nativeReadyEntry": gap_ready_entry,
+                    "processingClaims": result_records(
+                        parent_now, "task-result-processing-started"
+                    ),
+                    "refusals": refusals,
+                    "providerObservations": observations,
+                    "endState": restarted_rpc.request("get_state"),
+                    "subagents": roster,
+                    "execution": get_view(execution_url),
+                    "workflow": get_view(workflow_url),
+                    "effects": effects(),
+                    "refusalSafety": bool(refusals)
+                    and result is None
+                    and not observations,
+                }
+                gap_outcomes.append(outcome)
+                restart_record["completionGapOutcome"] = outcome
+                evidence["completionGapOutcomes"] = gap_outcomes
+                shutil.copyfile(
+                    parent_path, tmp_path / f"task-parent-after-{generation}.jsonl"
+                )
+                shutil.copyfile(
+                    child_path, tmp_path / f"task-child-after-{generation}.jsonl"
+                )
+                save()
+                continue
 
             if generation == 1 and provider.task_fault == "repeated-child-request":
                 assert provider.restarted_child_held.wait(40), (
@@ -1294,7 +1781,10 @@ def capture_task_active_recovery(
                 child_path, tmp_path / f"task-child-after-{generation}.jsonl"
             )
             save()
-        if generation == recovery_restarts:
+        if (
+            generation == recovery_restarts
+            and provider.task_fault != "child-result-gap"
+        ):
             # The completed host's normal SIGTERM disposal can append session_exit
             # to its child journal. Capture the quiet-restart baseline only after
             # that process has exited; retain the earlier live-host snapshots.
@@ -1311,6 +1801,15 @@ def capture_task_active_recovery(
                 "childEntryCount": len(completed_child),
             }
             save()
+
+    if provider.task_fault == "child-result-gap":
+        assert len(gap_outcomes) == 2
+        assert all(
+            row["parentCompleted"] and row["originalResult"] for row in gap_outcomes
+        ), (
+            "Completed original child did not recover its original parent result; "
+            "recorded refusal safety is not automatic task recovery"
+        )
 
 
 def exercise_controller_recovery(
@@ -1359,7 +1858,20 @@ def exercise_controller_recovery(
     )
     base_url = f"http://127.0.0.1:{service_port}"
     provider = RecoveryProvider(tmp_path, checkpoint, progress, task_fault)
-    with native_postgres(tmp_path / "postgres", pg_port), provider.serve() as model_url:
+    authority_proxy = (
+        AuthorityResponseProxy(base_url, tmp_path)
+        if task_fault == "child-result-gap"
+        else None
+    )
+    with (
+        native_postgres(tmp_path / "postgres", pg_port),
+        provider.serve() as model_url,
+        (
+            authority_proxy.serve()
+            if authority_proxy
+            else contextlib.nullcontext(base_url)
+        ) as client_base_url,
+    ):
         service_command("ops", "bootstrap")
         seed_authority(
             config.connection_kwargs("postgres"),
@@ -1375,7 +1887,7 @@ def exercise_controller_recovery(
             "--owner-id",
             identity["owner_id"],
             "--base-url",
-            base_url,
+            client_base_url,
         )
         agent_dir = state / "home/.omp/agent"
         (agent_dir / "models.yml").write_text(
@@ -1473,6 +1985,8 @@ def exercise_controller_recovery(
             client_config = json.loads(
                 (state / "config/omp-work/client.json").read_text()
             )
+            if authority_proxy is not None:
+                assert client_config["base_url"] == client_base_url
             capability = json.loads(Path(client_config["bearer_file"]).read_text())
             headers: dict[str, str] = {
                 "Authorization": f"Bearer {capability['token']}",
@@ -1520,6 +2034,7 @@ def exercise_controller_recovery(
                             rpc=rpc,
                             initial=initial,
                             service_pid=service.pid,
+                            authority_proxy=authority_proxy,
                         )
                         return
                     assert provider.barrier.wait(60), (
@@ -2098,4 +2613,14 @@ def test_persisted_parent_task_result_resumes_without_child_dispatch(
     """A durable original task result resumes parent without child dispatch/writes."""
     exercise_controller_recovery(
         installed_release, tmp_path, "task-active", task_fault="parent-result"
+    )
+
+
+def test_completed_child_recovers_missing_original_parent_result(
+    installed_release: InstalledRelease,
+    tmp_path: Path,
+) -> None:
+    """A completed original child must recover its missing parent result once."""
+    exercise_controller_recovery(
+        installed_release, tmp_path, "task-active", task_fault="child-result-gap"
     )

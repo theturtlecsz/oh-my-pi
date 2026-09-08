@@ -55,14 +55,21 @@ import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimitAllSettled, Semaphore } from "./parallel";
 import {
+	assertNativeTaskOutput,
 	assertTaskChildPath,
 	type BoundTaskRecoveryRequest,
 	effectiveTaskArguments,
 	initializationContract,
+	type NativeRecoveredTaskResult,
+	type NativeTaskResultReadyCheckpoint,
+	nativeTaskCompletionGuard,
+	nativeTaskResultPayload,
 	type PersistedTaskBindingV1,
 	preparedEntryIds,
 	readPreparationRecord,
+	serializeNativeTaskResult,
 	supportsTaskRecoveryAgent,
+	TASK_RESULT_PROCESSING_PROTOCOL,
 	taskRecoveryHash,
 	taskRecoveryPolicy,
 } from "./recovery";
@@ -1550,7 +1557,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		if (approval.policy === "deny") throw new Error("Task recovery is denied by current tool policy");
 	}
 
-	async recoverPersistedCall(request: BoundTaskRecoveryRequest): Promise<AgentToolResult<TaskToolDetails>> {
+	async recoverPersistedCall(request: BoundTaskRecoveryRequest): Promise<NativeRecoveredTaskResult> {
 		const { binding } = request;
 		const params = effectiveTaskArguments(binding.contract.args);
 		const validatePolicy = () => this.validateRecoveryPolicy(binding);
@@ -1559,6 +1566,16 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const artifactsDir = this.session.getArtifactsDir?.();
 		if (!artifactsDir) throw new Error("Original parent task artifact root is unavailable");
 		await assertTaskChildPath(binding, artifactsDir, this.session.cwd);
+		const ready = request.findNativeResultReady();
+		if (ready) {
+			await ensurePersistedRoster(AgentRegistry.global(), this.session.getSessionFile());
+			const parked = AgentRegistry.global().get(binding.child.registryId);
+			if (!parked || parked.session || parked.status !== "parked")
+				throw new Error("Completed task child is live, absent, or terminal");
+			request.pinCompletedChild(parked);
+			request.setCompletionGuard(nativeTaskCompletionGuard(binding, artifactsDir, ready));
+			await request.validateAuthority();
+		}
 		const original = await SessionManager.open(binding.child.sessionFile, undefined, undefined, {
 			suppressBreadcrumb: true,
 		});
@@ -1582,7 +1599,28 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			if (anchor?.type !== "message" || anchor.message.role !== "user" || anchor.message.attribution !== "agent")
 				throw new Error("Task recovery input is not the original agent-authored user prompt");
 			const prepared = preparedEntryIds(branch, binding.child.sessionId, anchorId, binding.call.bindingId);
-			for (const entry of branch) {
+			if (ready) {
+				const completed = ready.record.child;
+				const yielded = original.getEntry(completed.yieldResultEntryId);
+				if (
+					completed.promptEntryId !== anchorId ||
+					original.getLeafId() !== completed.leafId ||
+					taskRecoveryHash(branch) !== completed.branchSha256 ||
+					taskRecoveryHash(original.getEntries()) !== completed.entriesSha256 ||
+					yielded?.type !== "message" ||
+					yielded.message.role !== "toolResult" ||
+					yielded.message.toolName !== "yield" ||
+					yielded.message.isError ||
+					!isRecord(yielded.message.details) ||
+					yielded.message.details.status !== "success"
+				)
+					throw new Error("Certified completed child branch/yield changed");
+				await assertNativeTaskOutput(binding, artifactsDir, ready.record.output);
+				await request.validateAuthority();
+				return { result: nativeTaskResultPayload(ready), completion: ready };
+			}
+			// A branch rewind cannot turn previously executed child tools into an unanswered task.
+			for (const entry of original.getEntries()) {
 				if (entry.id === anchorId || prepared.has(entry.id)) continue;
 				if (
 					entry.type === "message" ||
@@ -1616,7 +1654,64 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		await request.validateChild(expected, child);
 		const policy = await this.#resolveSpawnPreflight(params);
 		const startTime = Date.now();
+		let completion: NativeTaskResultReadyCheckpoint | undefined;
 		const result = await runPersistedTask({
+			onNativeResult: async (result, output) => {
+				if (
+					result.id !== binding.child.registryId ||
+					result.exitCode !== 0 ||
+					result.aborted ||
+					result.error ||
+					!result.extractedToolData?.yield?.some(value => isRecord(value) && value.status === "success")
+				)
+					return;
+				if (!output || result.outputPath !== output.path)
+					throw new Error("Native task completion has no validated output artifact");
+				await child.sessionManager.flush();
+				await assertNativeTaskOutput(binding, artifactsDir, output);
+				const childBranch = child.sessionManager.getBranch();
+				const preparation = childBranch
+					.map(readPreparationRecord)
+					.filter(record => record?.taskBindingId === binding.call.bindingId);
+				const anchorIds = new Set(preparation.map(record => record!.anchorEntryId));
+				const yielded = childBranch.filter(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "toolResult" &&
+						entry.message.toolName === "yield" &&
+						!entry.message.isError &&
+						isRecord(entry.message.details) &&
+						entry.message.details.status === "success",
+				);
+				if (anchorIds.size !== 1 || yielded.length !== 1 || !child.sessionManager.getLeafId())
+					throw new Error("Native task completion has no unique durable original input/yield");
+				const payloadJson = serializeNativeTaskResult(
+					this.#buildResultPayload(result, policy.discovery.projectAgentsDir, Date.now() - startTime, ""),
+				);
+				completion = await request.recordNativeResultReady({
+					version: 1,
+					producer: "recovered-sync-task-v1",
+					processingProtocol: TASK_RESULT_PROCESSING_PROTOCOL,
+					call: { ...binding.call },
+					contractSha256: binding.contractSha256,
+					child: {
+						sessionId: binding.child.sessionId,
+						initEntryId: binding.child.initEntryId,
+						promptEntryId: [...anchorIds][0],
+						leafId: child.sessionManager.getLeafId()!,
+						branchSha256: taskRecoveryHash(childBranch),
+						entriesSha256: taskRecoveryHash(child.sessionManager.getEntries()),
+						fileSha256: new Bun.CryptoHasher("sha256")
+							.update(await Bun.file(binding.child.sessionFile).bytes())
+							.digest("hex"),
+						yieldResultEntryId: yielded[0].id,
+					},
+					output: { ...output },
+					payloadJson,
+					payloadSha256: taskRecoveryHash(payloadJson),
+				});
+				request.setCompletionGuard(nativeTaskCompletionGuard(binding, artifactsDir, completion));
+			},
 			session: child,
 			binding,
 			signal: request.signal,
@@ -1635,7 +1730,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			!result.extractedToolData?.yield?.some(value => isRecord(value) && value.status === "success")
 		)
 			throw new Error("Original child did not complete through a real successful yield");
-		return this.#buildResultPayload(result, policy.discovery.projectAgentsDir, Date.now() - startTime, "");
+		if (!completion) throw new Error("Recovered task has no successful native result checkpoint");
+		return { result: nativeTaskResultPayload(completion), completion };
 	}
 
 	/** Build the tool result (summary text + details) for a settled run. */

@@ -444,6 +444,7 @@ export interface PersistedTurnRefusal {
 		| "missing-anchor"
 		| "unsafe-suffix"
 		| "pending-tools"
+		| "task-result-processing-incomplete"
 		| "turn-settled"
 		| "persistence-failed"
 		| "authority-refused"

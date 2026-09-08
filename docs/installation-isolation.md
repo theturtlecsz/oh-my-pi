@@ -146,7 +146,7 @@ Additional persisted-turn cases target a prompt already saved before its first
 response, using the same message identity and reservation. Recovery reuses normal
 prompt preparation and checks fresh authority; ambiguous history, unfinished
 tools, owner input and deferred-client ownership refuse. Unbound preparation
-messages after that prompt and task-result restoration remain unqualified.
+messages after that prompt remain refused.
 
 The bounded synchronous-task qualification additionally requires runtime-written
 parent/child identity before the first child response, repeated restart after
@@ -159,6 +159,15 @@ durability remain explicit refusal boundaries. The
 [task recovery plan](omp-task-recovery-implementation-plan.md) names the required
 ownership, authority and persistence guards; only matching executed evidence
 qualifies a candidate.
+
+The completed-result case holds a real authority response after a resumed child
+finishes but before its parent result is saved. Its candidate must write native
+readiness before that cut and claim parent processing durably before output or
+result hooks run. Cached recovery must reuse that certified result without child
+execution. A started processing claim without a durable parent result remains a
+refusal, as do legacy and ordinary first-run completions lacking certification.
+This read-only response boundary does not qualify committed-mutation response
+loss; see the [completed-result plan](omp-completed-task-result-plan.md).
 
 Existing halt, replay, canceled-grant, merge-head, and completion-evidence tests
 remain part of the workflow suites. The execution smoke is now an explicit CI

@@ -230,8 +230,15 @@ ineligible for automatic recovery.
 The opt-in preserves startup, owner-input and fresh-authority guards throughout
 child execution and parent continuation. Async/batch/isolated tasks, multiple
 pending calls, historical unbound children, changed contracts and ambiguous
-child activity refuse. A child that finished before its parent result became
-durable remains outside this bounded recovery path. No new RPC command is added.
+child activity refuse.
+
+A successfully resumed child can leave a runtime-certified native result before
+parent processing starts. Recovery can consume that saved result without opening
+or rerunning the child. A durable processing-start claim without a parent result
+refuses automatic replay because output or extension hooks may already have run.
+Legacy completed children and ordinary first-run completion without this
+certificate remain ineligible. Extensions cannot create the certificate or
+replace its core provenance through result details. No new RPC command is added.
 
 ## 2) Handler context (`ExtensionContext`)
 
