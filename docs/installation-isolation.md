@@ -1,5 +1,7 @@
 # Pinned source installations
 
+For the session-by-session checklist, start with [OMP stabilization](omp-stabilization-plan.md).
+
 This is the bounded installation-isolation slice of OMP-249, developed outside
 OMP's execution loop. It retains repository layout and existing WorkService
 authority. It introduces no Fleet controller or general plugin framework.

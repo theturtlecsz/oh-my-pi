@@ -505,6 +505,20 @@ def test_corrupted_disposable_release_is_refused_before_runtime_launch(
     assert expected_contract not in refused.stdout, (
         "service started despite changed extension bytes"
     )
+    # Import-time transpilation must not create cache-only runtime directories
+    # before the selected installation has passed admission (Bun 1.4 regression).
+    fresh_state = tmp_path / "refused-fresh-runtime"
+    refused_fresh = subprocess.run(
+        copied_release.command(fresh_state, workspace, "--service", "hash"),
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert refused_fresh.returncode != 0
+    assert "inventory changed" in refused_fresh.stderr.lower()
+    assert not fresh_state.exists(), "bootstrap wrote runtime state before admission"
     assert (
         hashlib.sha256((selected.root / "manifest.json").read_bytes()).hexdigest()
         == selected.digest
