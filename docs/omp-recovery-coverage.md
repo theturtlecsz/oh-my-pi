@@ -277,10 +277,10 @@ hooks and persistence settle. A separate processing-start record must precede
 response effects or cold SDK startup. Cold continuation reuses the original
 child and saved read result; unmarked history and incomplete claimed attempts
 remain refused. Scope is text-only `openai-completions` under one managed writer.
-Source verification passes 230 affected tests with 865 assertions and `bun check`.
+Initial `31bfecedf4` source verification passed 230 affected tests with 865 assertions and `bun check`.
 Actual SDK scenarios cover original readiness, same-manager cold startup,
 preserved read/result wire, hook and storage failures, and competing ownership.
-Independent producer and cold-recovery reviews found no remaining source blocker.
+Initial producer and cold-recovery reviews cleared that bounded recovery path.
 The immutable runtime from `31bfecedf45bee9489717fdd4da3206a47f04996`, manifest
 `9a2878f8972839fae18ba895a5f3caa438a15acca4a81223f76a1eaef85c4943`,
 passed all twelve installed-process cases with zero failures, errors or skips
@@ -289,3 +289,23 @@ the next response is held, then checks the durable cold claim at the first
 resumed child request, original call/result delivery and a quiet later restart.
 Source and installed evidence retain separate identities. Full S2.2 acceptance,
 required CI delivery and live activation remain separate gates.
+
+Follow-up review found ordinary-path compatibility defects: a single read after
+earlier tool history, pre-native extension metadata, or non-text prepared context
+could enter certification too early. Actual SDK regressions reproduced ordinary
+task refusal and misleading certificates. The correction checks first-step,
+retained-prefix, leaf and text-context eligibility before protocol entry;
+unsupported histories continue ordinarily without certification. Original
+preparation guards and entered-protocol failures remain strict. The affected
+recovery/classifier/provenance suites pass 108 tests with 601 assertions and
+package `bun check` passes; independent targeted review cleared the correction.
+Corrected-source installed qualification remains separate from the initial
+twelve-case pass. Neither result establishes complete S2.2 acceptance.
+
+PR #26 CI also exposed an existing broker-idle fixture startup race. The fixture
+now retains project presence until its authenticated client starts a controlled
+real child, then proves the child keeps the broker alive after clients detach
+and that releasing the child allows idle shutdown. The original 100 ms grace
+remains unchanged. A controlled 150 ms authentication delay reproduces the old
+failure and passes with the correction; 20 repeated runs and the three related
+launch tests pass. No broker production behavior changed.

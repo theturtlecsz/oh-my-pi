@@ -74,6 +74,8 @@ describe("native task recovery session integration", () => {
 		assistantNarration = false,
 		testOptions: {
 			maxRuntimeMs?: number;
+			readPrelude?: boolean;
+			readPath?: string;
 			outputSchema?: unknown;
 			extensions?: ExtensionFactory[];
 			holdReadResponse?: boolean;
@@ -125,6 +127,15 @@ describe("native task recovery session integration", () => {
 					if (results.length === 0) {
 						childReached.resolve();
 						await releaseChild.promise;
+						delta = {
+							tool_calls: testOptions.readPrelude
+								? [
+										call("prelude-read-a", "read", { path: "result.txt" }),
+										{ ...call("prelude-read-b", "read", { path: "result.txt" }), index: 1 },
+									]
+								: [call("child-read", "read", { path: testOptions.readPath ?? "result.txt" })],
+						};
+					} else if (testOptions.readPrelude && results.length === 2) {
 						delta = { tool_calls: [call("child-read", "read", { path: "result.txt" })] };
 					} else {
 						readRequestReached.resolve();
@@ -403,6 +414,125 @@ describe("native task recovery session integration", () => {
 		);
 		await initializeExtensions(created.session, { reportSendError: () => {}, reportRuntimeError: () => {} });
 		return { f, snapshot, beforeChild, journal, created };
+	}
+
+	for (const scenario of [
+		"prior-tool-history",
+		"selector-metadata",
+		"plain-metadata",
+		"start-metadata",
+		"request-metadata",
+		"image-preparation",
+	] as const) {
+		it(`unsupported read ${scenario} completes normally without a continuation certificate`, async () => {
+			if (scenario !== "prior-tool-history") {
+				installChildExtensions([
+					pi => {
+						if (scenario === "image-preparation") {
+							pi.on("before_agent_start", () => ({
+								message: {
+									customType: "read-image-context",
+									content: [
+										{
+											type: "image",
+											data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+											mimeType: "image/png",
+										},
+									],
+									display: false,
+								},
+							}));
+						} else if (scenario === "request-metadata") {
+							let appended = false;
+							pi.on("before_provider_request", async (event, ctx) => {
+								const payload = event.payload as WireRequest;
+								if (appended || !payload.tools?.some(tool => tool.function.name === "yield")) return;
+								appended = true;
+								const deadline = AbortSignal.timeout(5000);
+								while (
+									!ctx.sessionManager
+										.getEntries()
+										.some(entry => entry.type === "custom" && entry.customType === "prompt-preparation")
+								) {
+									deadline.throwIfAborted();
+									await Bun.sleep(1);
+								}
+								pi.appendEntry("read-observer", { phase: "request" });
+							});
+						} else if (scenario === "start-metadata") {
+							pi.on("tool_execution_start", event => {
+								if (event.toolName === "read") pi.appendEntry("read-observer", { callId: event.toolCallId });
+							});
+						} else {
+							pi.on("tool_call", event => {
+								if (event.toolName === "read") pi.appendEntry("read-observer", { callId: event.toolCallId });
+							});
+						}
+					},
+				]);
+			}
+			const f = await fixture(false, true, false, false, {
+				readPrelude: scenario === "prior-tool-history",
+				readPath: scenario === "selector-metadata" ? "result.txt:1" : undefined,
+				extensions: [
+					pi => {
+						pi.on("tool_call", event =>
+							event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+						);
+					},
+				],
+			});
+			f.releaseChild.resolve();
+			f.releaseParent.resolve();
+			await untilAborted(AbortSignal.timeout(10000), f.run!);
+			expect(
+				f.calls.filter(
+					request =>
+						request.model === "parent" &&
+						request.messages.some(message => message.tool_call_id === "original-task"),
+				),
+			).toHaveLength(1);
+			const parentResult = f.manager
+				.getEntries()
+				.find(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "toolResult" &&
+						entry.message.toolCallId === "original-task",
+				);
+			if (parentResult?.type !== "message" || parentResult.message.role !== "toolResult")
+				throw new Error("Ordinary task result missing");
+			expect(parentResult.message.isError).toBe(false);
+			expect(JSON.stringify(parentResult.message.content)).toContain("before");
+			const binding = f.manager
+				.getEntries()
+				.map(readTaskBinding)
+				.find(value => value !== undefined)!;
+			const child = AgentRegistry.global().get(binding.child.registryId)!.session!;
+			const entries = child.sessionManager.getEntries();
+			expect(
+				entries.filter(
+					entry =>
+						entry.type === "custom" &&
+						(entry.customType === TASK_READ_CONTINUATION_READY ||
+							entry.customType === TASK_READ_CONTINUATION_STARTED),
+				),
+			).toHaveLength(0);
+			const reads = entries.filter(
+				entry =>
+					entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "read",
+			);
+			expect(reads).toHaveLength(scenario === "prior-tool-history" ? 3 : 1);
+			expect(
+				reads.every(
+					entry => entry.type === "message" && entry.message.role === "toolResult" && !entry.message.isError,
+				),
+			).toBe(true);
+			if (scenario !== "prior-tool-history" && scenario !== "image-preparation")
+				expect(
+					entries.filter(entry => entry.type === "custom" && entry.customType === "read-observer"),
+				).toHaveLength(1);
+		}, 15000);
 	}
 
 	it("native read checkpoint precedes held next HTTP headers and response claim precedes response hooks", async () => {

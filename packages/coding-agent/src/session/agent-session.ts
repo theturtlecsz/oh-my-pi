@@ -199,6 +199,7 @@ import {
 	effectiveTaskArguments,
 	hasTaskReadContinuationMarkers,
 	initializationContract,
+	isTaskReadTextContent,
 	type NativePlainReadProvenance,
 	type NativeTaskResultReadyCheckpoint,
 	type NativeTaskResultReadyV1,
@@ -228,6 +229,7 @@ import {
 	taskRecoveryHash,
 	taskResultRecoveryState,
 	taskRuntimeContract,
+	validateTaskReadContinuationPrefix,
 } from "../task/recovery";
 import {
 	AUTO_THINKING,
@@ -562,6 +564,7 @@ interface ParentTaskRecoveryScope {
 interface TaskReadCandidate {
 	assistant: AssistantMessage;
 	toolCallId: string;
+	disqualified?: boolean;
 	arguments?: { path: string };
 	native?: NativePlainReadProvenance;
 	nativeResultSha256?: string;
@@ -2778,10 +2781,15 @@ export class AgentSession {
 	#advanceTaskReadLease(entryId: string): void {
 		const scope = this.#childTaskRecovery;
 		const read = scope?.read;
-		if (!scope || !read || read.ready || read.claim) return;
+		if (!scope || !read || read.disqualified || read.ready || read.claim) return;
 		if (read.expectedLeaf === entryId) return;
 		const entry = this.sessionManager.getEntry(entryId);
 		if (!entry || entry.parentId !== read.expectedLeaf || this.sessionManager.getLeafId() !== entryId) {
+			if (!scope.readProtocolEntered) {
+				// Before native qualification, extension metadata only makes this read ineligible.
+				read.disqualified = true;
+				return;
+			}
 			const error = new Error("Native read lost its exact pre-hook journal lease");
 			this.#noteTaskReadFailure(scope, error);
 			throw error;
@@ -2813,7 +2821,14 @@ export class AgentSession {
 	observeNativeTaskRead(toolCallId: string, args: unknown, result: AgentToolResult<unknown>): void {
 		const scope = this.#childTaskRecovery;
 		const read = scope?.read;
-		if (!scope || !read || read.toolCallId !== toolCallId || read.native || this.model?.api !== "openai-completions")
+		if (
+			!scope ||
+			!read ||
+			read.disqualified ||
+			read.toolCallId !== toolCallId ||
+			read.native ||
+			this.model?.api !== "openai-completions"
+		)
 			return;
 		const native = nativePlainReadProvenance(result);
 		if (
@@ -2824,6 +2839,47 @@ export class AgentSession {
 			result.isError
 		)
 			return;
+		// Ownership and tracked failures remain authoritative even while the read is tentative.
+		try {
+			this.#checkTaskRecoveryDriver();
+			scope.parent.assertOwnership();
+			if (scope.readFailure) throw new Error(scope.readFailure);
+		} catch (error) {
+			scope.readProtocolEntered = true;
+			this.#noteTaskReadFailure(scope, error);
+			throw error;
+		}
+		const entries = this.sessionManager.getEntries();
+		const assistant = this.messages.find(
+			message =>
+				message.role === "assistant" &&
+				assistantSnapshotOrigin(message) === assistantSnapshotOrigin(read.assistant),
+		);
+		const start = entries.find(
+			entry =>
+				entry.type === "custom" &&
+				entry.customType === TOOL_EXECUTION_START_CUSTOM_TYPE &&
+				isRecord(entry.data) &&
+				entry.data.toolName === "read" &&
+				entry.data.toolCallId === toolCallId,
+		);
+		if (
+			this.sessionManager.getLeafId() !== read.expectedLeaf ||
+			this.settings.get("externalThinking") ||
+			this.messages.some(message => "content" in message && !isTaskReadTextContent(message.content))
+		) {
+			read.disqualified = true;
+			return;
+		}
+		try {
+			validateTaskReadContinuationPrefix(entries, this.sessionManager.getBranch(), scope.parent.binding, {
+				assistantEntryId: assistant ? this.#persistedEntryByMessage.get(assistant) : undefined,
+				startEntryId: start?.id,
+			});
+		} catch {
+			read.disqualified = true;
+			return;
+		}
 		scope.readProtocolEntered = true;
 		try {
 			this.#assertTaskReadOwner(scope, read);
@@ -2899,13 +2955,7 @@ export class AgentSession {
 		if (
 			model.api !== "openai-completions" ||
 			this.settings.get("externalThinking") ||
-			context.messages.some(message =>
-				!Array.isArray(message.content)
-					? typeof message.content !== "string"
-					: message.content.some(
-							part => part.type !== "text" && part.type !== "thinking" && part.type !== "toolCall",
-						),
-			)
+			context.messages.some(message => !isTaskReadTextContent(message.content))
 		) {
 			if (read.claim) {
 				const error = new Error("Claimed read continuation requires text-only supported provider context");
@@ -6239,12 +6289,19 @@ export class AgentSession {
 	 */
 	async #beforeToolCall(ctx: BeforeToolCallContext, signal?: AbortSignal): Promise<BeforeToolCallResult | undefined> {
 		const childScope = this.#childTaskRecovery;
+		const readAssistantOrigin = assistantSnapshotOrigin(ctx.assistantMessage);
 		if (
 			childScope &&
 			!childScope.read &&
 			ctx.tool.name === "read" &&
 			this.model?.api === "openai-completions" &&
-			ctx.assistantMessage.content.filter(part => part.type === "toolCall").length === 1
+			ctx.assistantMessage.content.filter(part => part.type === "toolCall").length === 1 &&
+			!this.messages.some(
+				message =>
+					message.role === "toolResult" ||
+					(message.role === "assistant" &&
+						(!readAssistantOrigin || assistantSnapshotOrigin(message) !== readAssistantOrigin)),
+			)
 		) {
 			const turnEnd = Promise.withResolvers<void>();
 			childScope.read = {

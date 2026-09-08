@@ -176,12 +176,13 @@ export interface TaskReadNativeProof {
 	nativeResultSha256: string;
 }
 
-export function buildTaskReadContinuationRecord(
+/** Shared retained-prefix rules for tentative native qualification and durable certification. */
+export function validateTaskReadContinuationPrefix(
 	entries: readonly SessionEntry[],
 	branch: readonly SessionEntry[],
 	binding: PersistedTaskBindingV1,
-	proof: TaskReadNativeProof,
-): TaskReadContinuationReadyV1 {
+	read: { assistantEntryId?: string; startEntryId?: string; resultEntryId?: string },
+): string {
 	const preparations = branch
 		.map(readPreparationRecord)
 		.filter(record => record?.taskBindingId === binding.call.bindingId);
@@ -189,6 +190,61 @@ export function buildTaskReadContinuationRecord(
 	if (anchors.size !== 1) throw new Error("Read continuation has no unique original preparation");
 	const promptEntryId = [...anchors][0];
 	const prepared = preparedEntryIds(branch, binding.child.sessionId, promptEntryId, binding.call.bindingId);
+	const assistantIndex = read.assistantEntryId
+		? branch.findIndex(entry => entry.id === read.assistantEntryId)
+		: branch.length;
+	const allowed = new Set([promptEntryId, ...prepared, read.assistantEntryId, read.startEntryId, read.resultEntryId]);
+	for (const entry of entries) {
+		if (!branch.some(current => current.id === entry.id))
+			throw new Error("Read continuation has discarded or off-branch history");
+		if (allowed.has(entry.id)) continue;
+		if (
+			entry.type === "session_init" &&
+			(entry.id !== binding.child.initEntryId ||
+				taskRecoveryHash(entry.taskCall) !== taskRecoveryHash(binding.call) ||
+				taskRecoveryHash(initializationContract(entry)) !== taskRecoveryHash(binding.contract.initialization))
+		)
+			throw new Error("Read continuation has duplicate or foreign child initialization");
+		if (entry.type === "custom" && entry.customType === PROMPT_PREPARATION) {
+			const record = readPreparationRecord(entry);
+			if (
+				!record ||
+				record.sessionId !== binding.child.sessionId ||
+				record.anchorEntryId !== promptEntryId ||
+				record.taskBindingId !== binding.call.bindingId ||
+				branch.indexOf(entry) >= assistantIndex
+			)
+				throw new Error("Read continuation has foreign or late preparation metadata");
+		}
+		if (
+			entry.type === "message" ||
+			entry.type === "custom_message" ||
+			entry.type === "compaction" ||
+			entry.type === "branch_summary" ||
+			entry.type === "reset_boundary" ||
+			(entry.type === "custom" && entry.customType !== PROMPT_PREPARATION)
+		)
+			throw new Error("Read continuation has additional conversation or effect history");
+	}
+	return promptEntryId;
+}
+
+export function isTaskReadTextContent(content: unknown): boolean {
+	return (
+		typeof content === "string" ||
+		(Array.isArray(content) &&
+			content.every(
+				part => isRecord(part) && (part.type === "text" || part.type === "thinking" || part.type === "toolCall"),
+			))
+	);
+}
+
+export function buildTaskReadContinuationRecord(
+	entries: readonly SessionEntry[],
+	branch: readonly SessionEntry[],
+	binding: PersistedTaskBindingV1,
+	proof: TaskReadNativeProof,
+): TaskReadContinuationReadyV1 {
 	const assistant = branch.find(entry => entry.id === proof.assistantEntryId);
 	if (
 		assistant?.type !== "message" ||
@@ -225,39 +281,11 @@ export function buildTaskReadContinuationRecord(
 		result.message.content.some(part => part.type !== "text")
 	)
 		throw new Error("Read continuation has unresolved, non-text, foreign, or failed tool history");
-	const allowed = new Set([promptEntryId, ...prepared, assistant.id, start.id, result.id]);
-	for (const entry of entries) {
-		if (!branch.some(current => current.id === entry.id))
-			throw new Error("Read continuation has discarded or off-branch history");
-		if (allowed.has(entry.id)) continue;
-		if (
-			entry.type === "session_init" &&
-			(entry.id !== binding.child.initEntryId ||
-				taskRecoveryHash(entry.taskCall) !== taskRecoveryHash(binding.call) ||
-				taskRecoveryHash(initializationContract(entry)) !== taskRecoveryHash(binding.contract.initialization))
-		)
-			throw new Error("Read continuation has duplicate or foreign child initialization");
-		if (entry.type === "custom" && entry.customType === PROMPT_PREPARATION) {
-			const record = readPreparationRecord(entry);
-			if (
-				!record ||
-				record.sessionId !== binding.child.sessionId ||
-				record.anchorEntryId !== promptEntryId ||
-				record.taskBindingId !== binding.call.bindingId ||
-				branch.indexOf(entry) >= branch.indexOf(assistant)
-			)
-				throw new Error("Read continuation has foreign or late preparation metadata");
-		}
-		if (
-			entry.type === "message" ||
-			entry.type === "custom_message" ||
-			entry.type === "compaction" ||
-			entry.type === "branch_summary" ||
-			entry.type === "reset_boundary" ||
-			(entry.type === "custom" && entry.customType !== PROMPT_PREPARATION)
-		)
-			throw new Error("Read continuation has additional conversation or effect history");
-	}
+	const promptEntryId = validateTaskReadContinuationPrefix(entries, branch, binding, {
+		assistantEntryId: assistant.id,
+		startEntryId: start.id,
+		resultEntryId: result.id,
+	});
 	const leaf = branch.at(-1);
 	if (!leaf || branch.indexOf(assistant) >= branch.indexOf(result) || !branch.includes(start))
 		throw new Error("Read continuation branch ordering differs");
