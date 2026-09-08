@@ -13,6 +13,7 @@
  *   - Progress tracking via JSON events
  *   - Session artifacts for debugging
  */
+
 import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
@@ -23,6 +24,7 @@ import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.m
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskAsyncContractTemplate from "../prompts/tools/task-async-contract.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
+import type { AgentSession } from "../session/agent-session";
 import { TASK_EFFORTS, type TaskEffort } from "../thinking";
 import { resolveApproval, truncateForPrompt } from "../tools/approval";
 import { isIrcEnabled } from "../tools/hub";
@@ -61,7 +63,9 @@ import {
 	effectiveTaskArguments,
 	initializationContract,
 	type NativeRecoveredTaskResult,
+	type NativeTaskOutputIdentity,
 	type NativeTaskResultReadyCheckpoint,
+	type NativeTaskResultReadyV1,
 	nativeTaskCompletionGuard,
 	nativeTaskResultPayload,
 	type PersistedTaskBindingV1,
@@ -1428,6 +1432,70 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		return this.#runSpawn(toolCallId, params, signal, onUpdate, preAllocatedId, spawnIndex, detached, launchTiming);
 	}
 
+	async #certifyNativeTaskResult(
+		binding: PersistedTaskBindingV1,
+		child: AgentSession,
+		result: SingleResult,
+		output: NativeTaskOutputIdentity | undefined,
+		artifactsDir: string,
+		producer: NativeTaskResultReadyV1["producer"],
+		projectAgentsDir: string | null,
+		durationMs: number,
+		recordReady: (record: NativeTaskResultReadyV1) => Promise<NativeTaskResultReadyCheckpoint>,
+	): Promise<NativeTaskResultReadyCheckpoint | undefined> {
+		if (
+			result.id !== binding.child.registryId ||
+			result.exitCode !== 0 ||
+			result.aborted ||
+			result.error ||
+			!result.extractedToolData?.yield?.some(value => isRecord(value) && value.status === "success")
+		)
+			return;
+		if (!output || result.outputPath !== output.path)
+			throw new Error("Native task completion has no validated output artifact");
+		await child.sessionManager.flush();
+		await assertNativeTaskOutput(binding, artifactsDir, output);
+		const childBranch = child.sessionManager.getBranch();
+		const preparation = childBranch
+			.map(readPreparationRecord)
+			.filter(record => record?.taskBindingId === binding.call.bindingId);
+		const anchorIds = new Set(preparation.map(record => record!.anchorEntryId));
+		const yielded = childBranch.filter(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolName === "yield" &&
+				!entry.message.isError &&
+				isRecord(entry.message.details) &&
+				entry.message.details.status === "success",
+		);
+		if (anchorIds.size !== 1 || yielded.length !== 1 || !child.sessionManager.getLeafId())
+			throw new Error("Native task completion has no unique durable original input/yield");
+		const payloadJson = serializeNativeTaskResult(this.#buildResultPayload(result, projectAgentsDir, durationMs, ""));
+		return recordReady({
+			version: 1,
+			producer,
+			processingProtocol: TASK_RESULT_PROCESSING_PROTOCOL,
+			call: { ...binding.call },
+			contractSha256: binding.contractSha256,
+			child: {
+				sessionId: binding.child.sessionId,
+				initEntryId: binding.child.initEntryId,
+				promptEntryId: [...anchorIds][0],
+				leafId: child.sessionManager.getLeafId()!,
+				branchSha256: taskRecoveryHash(childBranch),
+				entriesSha256: taskRecoveryHash(child.sessionManager.getEntries()),
+				fileSha256: new Bun.CryptoHasher("sha256")
+					.update(await Bun.file(binding.child.sessionFile).bytes())
+					.digest("hex"),
+				yieldResultEntryId: yielded[0].id,
+			},
+			output: { ...output },
+			payloadJson,
+			payloadSha256: taskRecoveryHash(payloadJson),
+		});
+	}
+
 	/** Spawn a fresh subagent and run it to completion. */
 	async #runSpawn(
 		toolCallId: string,
@@ -1443,6 +1511,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const assignment = (params.task ?? "").trim();
 		const context = this.#isBatchEnabled() ? params.context?.trim() || undefined : undefined;
 		let latestProgress: AgentProgress | undefined;
+		let originalReady: NativeTaskResultReadyCheckpoint | undefined;
 		try {
 			const recoveryEligible =
 				!detached &&
@@ -1459,10 +1528,29 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 								supportsTaskRecoveryAgent(this.session, policy.effectiveAgent) &&
 								!policy.planMode &&
 								!policy.isIsolated
-									? this.session.captureTaskCall?.(toolCallId, effectiveTaskArguments(params))
+									? this.session.captureTaskCall?.(toolCallId, effectiveTaskArguments(params), signal)
 									: undefined,
 						}
 					: {}),
+				onNativeResult: async (capture, binding, child, result, output, artifactsDir, projectAgentsDir) => {
+					if (!capture.completion) throw new Error("Original native result has no completion owner");
+					if (!artifactsDir) throw new Error("Original task output directory is unavailable");
+					originalReady = await this.#certifyNativeTaskResult(
+						binding,
+						child,
+						result,
+						output,
+						artifactsDir,
+						"original-sync-task-v1",
+						projectAgentsDir,
+						Date.now() - startTime,
+						capture.completion.recordNativeResult,
+					);
+					if (originalReady)
+						capture.completion.setCompletionGuard(
+							nativeTaskCompletionGuard(binding, artifactsDir, originalReady),
+						);
+				},
 				session: this.session,
 				invocationKind: "task",
 				assignment,
@@ -1498,6 +1586,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					});
 				},
 			});
+			if (originalReady) return nativeTaskResultPayload(originalReady);
 			return this.#buildResultPayload(
 				execution.result,
 				execution.policy.discovery.projectAgentsDir,
@@ -1657,60 +1746,18 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		let completion: NativeTaskResultReadyCheckpoint | undefined;
 		const result = await runPersistedTask({
 			onNativeResult: async (result, output) => {
-				if (
-					result.id !== binding.child.registryId ||
-					result.exitCode !== 0 ||
-					result.aborted ||
-					result.error ||
-					!result.extractedToolData?.yield?.some(value => isRecord(value) && value.status === "success")
-				)
-					return;
-				if (!output || result.outputPath !== output.path)
-					throw new Error("Native task completion has no validated output artifact");
-				await child.sessionManager.flush();
-				await assertNativeTaskOutput(binding, artifactsDir, output);
-				const childBranch = child.sessionManager.getBranch();
-				const preparation = childBranch
-					.map(readPreparationRecord)
-					.filter(record => record?.taskBindingId === binding.call.bindingId);
-				const anchorIds = new Set(preparation.map(record => record!.anchorEntryId));
-				const yielded = childBranch.filter(
-					entry =>
-						entry.type === "message" &&
-						entry.message.role === "toolResult" &&
-						entry.message.toolName === "yield" &&
-						!entry.message.isError &&
-						isRecord(entry.message.details) &&
-						entry.message.details.status === "success",
+				completion = await this.#certifyNativeTaskResult(
+					binding,
+					child,
+					result,
+					output,
+					artifactsDir,
+					"recovered-sync-task-v1",
+					policy.discovery.projectAgentsDir,
+					Date.now() - startTime,
+					request.recordNativeResultReady,
 				);
-				if (anchorIds.size !== 1 || yielded.length !== 1 || !child.sessionManager.getLeafId())
-					throw new Error("Native task completion has no unique durable original input/yield");
-				const payloadJson = serializeNativeTaskResult(
-					this.#buildResultPayload(result, policy.discovery.projectAgentsDir, Date.now() - startTime, ""),
-				);
-				completion = await request.recordNativeResultReady({
-					version: 1,
-					producer: "recovered-sync-task-v1",
-					processingProtocol: TASK_RESULT_PROCESSING_PROTOCOL,
-					call: { ...binding.call },
-					contractSha256: binding.contractSha256,
-					child: {
-						sessionId: binding.child.sessionId,
-						initEntryId: binding.child.initEntryId,
-						promptEntryId: [...anchorIds][0],
-						leafId: child.sessionManager.getLeafId()!,
-						branchSha256: taskRecoveryHash(childBranch),
-						entriesSha256: taskRecoveryHash(child.sessionManager.getEntries()),
-						fileSha256: new Bun.CryptoHasher("sha256")
-							.update(await Bun.file(binding.child.sessionFile).bytes())
-							.digest("hex"),
-						yieldResultEntryId: yielded[0].id,
-					},
-					output: { ...output },
-					payloadJson,
-					payloadSha256: taskRecoveryHash(payloadJson),
-				});
-				request.setCompletionGuard(nativeTaskCompletionGuard(binding, artifactsDir, completion));
+				if (completion) request.setCompletionGuard(nativeTaskCompletionGuard(binding, artifactsDir, completion));
 			},
 			session: child,
 			binding,

@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import type { ToolCallEventResult } from "@oh-my-pi/pi-coding-agent/extensibility/shared-events";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
 import { WORK_CONTRACT_SHA256, type Candidate, type WorkClient } from "@oh-my-pi/pi-work-client";
@@ -81,6 +82,7 @@ describe("execution recovery identity guards", () => {
 		data: ContinuationIdentity & { status: "pending" | "queued"; at: string };
 	};
 	type InjectedEntry = {
+		attribution?: "agent" | "user";
 		id?: string;
 		type: "custom_message";
 		customType: "work-execute";
@@ -119,11 +121,14 @@ describe("execution recovery identity guards", () => {
 			candidate: undefined as Candidate | undefined,
 		};
 		const attempts: AttemptBinding[] = [];
-		const entries: Array<OutboxEntry | InjectedEntry> = [];
+		const entries: Array<OutboxEntry | InjectedEntry | { id: string; type: "message"; message: {
+			role: "assistant"; content: Array<{type:"toolCall";id:string;name:string;arguments:Record<string,unknown>}>;
+		} }> = [];
 		const sent: Array<{ customType?: string; details?: { executionContinuation?: ContinuationIdentity } }> = [];
 		const notices: string[] = [];
 		const continuations: PersistedTurnContinuationRequest[] = [];
 		const handlers: Array<(event: unknown, ctx: ExtensionContext) => Promise<void>> = [];
+		const taskHandlers: Array<(event: unknown, ctx: ExtensionContext) => Promise<unknown>> = [];
 		const issue = { id: item.work_id, key: "OMP-246", title: "Recovery", project: "Bookends" };
 		const reserve = vi.fn(async () => {
 			exec.grant.grant_version++;
@@ -151,7 +156,7 @@ describe("execution recovery identity guards", () => {
 		const pi = {
 			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			registerTool: () => {}, registerCommand: () => {}, registerFlag: () => {}, registerMessageRenderer: () => {},
-			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<void>) => { if (event === "session_start") handlers.push(handler); },
+			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<void>) => { if (event === "session_start") handlers.push(handler); if(event === "tool_call") taskHandlers.push(handler); },
 			getSessionId: () => sessionId,
 			requestPersistedTurnContinuation: (request: PersistedTurnContinuationRequest) => { continuations.push(request); return { status: "scheduled" }; },
 			sendMessage: (message: typeof sent[number]) => sent.push(message),
@@ -168,6 +173,12 @@ describe("execution recovery identity guards", () => {
 		entries.push({ type: "custom", customType: "work-now-execute-outbox", data: { ...intent, status: "queued", at: new Date().toISOString() } });
 		return {
 			intent, entries, sent, reserve, notices, attempts, item, exec, continuations,
+			backend,
+			taskCall: async (origin?: {sessionId:string;promptEntryId:string}) => {
+				let result: ToolCallEventResult | undefined;
+				for(const handler of taskHandlers) result = await handler({type:"tool_call",toolName:"task",toolCallId:"original-task",input:{},taskResultOrigin:origin},ctx) as ToolCallEventResult | undefined;
+				return result;
+			},
 			setHead: (value: string) => { head = value; },
 			start: async () => {
 				if (!handlers.length) throw new Error("workflow host did not register startup recovery");
@@ -201,6 +212,35 @@ describe("execution recovery identity guards", () => {
 		expect(await fixture.continuations[0].validateDispatch()).toEqual({ ok: true });
 		fixture.exec.grant.state = "canceled";
 		expect(await fixture.continuations[0].validateDispatch()).toMatchObject({ ok: false });
+	});
+
+	test("original task authority requires the actual agent execution prompt and revalidates before processing",async()=>{
+		const f = await recoveryFixture();
+		const prompt: InjectedEntry = {id:"original-prompt",type:"custom_message",customType:"work-execute",attribution:"agent",details:{executionContinuation:f.intent}};
+		f.entries.push(prompt,{id:"original-assistant",type:"message",message:{role:"assistant",content:[{type:"toolCall",id:"original-task",name:"task",arguments:{}}]}});
+		expect(await f.taskCall()).toBeUndefined();
+		prompt.attribution = "user";
+		expect(await f.taskCall({sessionId:f.intent.sessionId,promptEntryId:"original-prompt"})).toBeUndefined();
+		prompt.attribution = "agent";
+		const result = await f.taskCall({sessionId:f.intent.sessionId,promptEntryId:"original-prompt"});
+		if(!result?.taskResultAuthority) throw new Error("Matching execution prompt did not provide an authority validator");
+		const actual = {sessionId:f.intent.sessionId,promptEntryId:"original-prompt",assistantEntryId:"original-assistant",toolCallId:"original-task"};
+		expect(await result.taskResultAuthority(actual)).toEqual({ok:true});
+		expect(await result.taskResultAuthority({...actual,assistantEntryId:"foreign-assistant"})).toMatchObject({ok:false});
+		f.exec.grant.state = "canceled";
+		expect(await result.taskResultAuthority(actual)).toMatchObject({ok:false});
+		expect(f.reserve).not.toHaveBeenCalled();
+	});
+
+	test("original task authority refuses an unreadable pending execution journal",async()=>{
+		const f = await recoveryFixture();
+		f.entries.push({id:"original-prompt",type:"custom_message",customType:"work-execute",attribution:"agent",details:{executionContinuation:f.intent}},
+			{id:"original-assistant",type:"message",message:{role:"assistant",content:[{type:"toolCall",id:"original-task",name:"task",arguments:{}}]}});
+		const result = await f.taskCall({sessionId:f.intent.sessionId,promptEntryId:"original-prompt"});
+		if(!result?.taskResultAuthority) throw new Error("Authority validator unavailable");
+		f.backend.getPendingExecutionClaims = async()=>{throw new Error("Pending journal unreadable");};
+		expect(await result.taskResultAuthority({sessionId:f.intent.sessionId,promptEntryId:"original-prompt",assistantEntryId:"original-assistant",toolCallId:"original-task"})).toMatchObject({ok:false});
+		expect(f.reserve).not.toHaveBeenCalled();
 	});
 
 	test("duplicate active-branch continuation identity refuses instead of resuming either copy", async () => {

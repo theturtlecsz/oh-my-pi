@@ -21,6 +21,7 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("AgentSession tree navigation e
 		observeTreePreparation = false;
 		treePreparationStarted = Promise.withResolvers<void>();
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => observeTreePreparation && eventType === "session_before_tree"),
 			emit: vi.fn().mockImplementation(async () => {
 				treePreparationStarted.resolve();

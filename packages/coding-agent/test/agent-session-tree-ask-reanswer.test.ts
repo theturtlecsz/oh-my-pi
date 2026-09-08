@@ -365,6 +365,7 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 	it("(h) a reanswer completion summarizes the abandoned branch including the replaced answer", async () => {
 		const capturedEntryIds: string[][] = [];
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_before_tree"),
 			emit: vi.fn(async (event: { type: string; preparation?: { entriesToSummarize: Array<{ id: string }> } }) => {
 				if (event.type === "session_before_tree" && event.preparation) {

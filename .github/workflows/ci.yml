@@ -1153,4 +1153,13 @@ jobs:
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/provider-*.json
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/authority-*.json
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/task-completed-output-*.md
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/first-run-*.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/first-run-*.jsonl
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/first-run-*.stderr
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/first-run-*.md
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/*.partial.bin
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/*.reader-error.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/*.read-error.bin
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/test_first_run_completed_child*/attempt-*/runtime/home/.omp/logs/omp.*.log
+              include-hidden-files: true
               if-no-files-found: warn

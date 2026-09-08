@@ -184,6 +184,7 @@ describe("AgentSession.branchFromBtw", () => {
 	it("honors session_before_branch cancellation without creating a branch", async () => {
 		const emit = vi.fn(async () => ({ cancel: true }));
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_before_branch"),
 			emit,
 		} as unknown as ExtensionRunner;
@@ -211,6 +212,7 @@ describe("AgentSession.branchFromBtw", () => {
 		const hookStarted = Promise.withResolvers<void>();
 		const hookRelease = Promise.withResolvers<void>();
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_before_branch"),
 			emit: vi.fn(async () => {
 				hookStarted.resolve();
@@ -255,6 +257,7 @@ describe("AgentSession.branchFromBtw", () => {
 
 	it("syncs promoted /btw messages into live context even when hooks skip conversation restore", async () => {
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_before_branch"),
 			emit: vi.fn(async () => ({ skipConversationRestore: true })),
 		} as unknown as ExtensionRunner;
@@ -378,6 +381,7 @@ describe("AgentSession.branchFromBtw", () => {
 	it("refuses when post-prompt work starts a turn while a branch hook is pending", async () => {
 		const hookRelease = Promise.withResolvers<void>();
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_before_branch"),
 			emit: vi.fn(async () => {
 				await hookRelease.promise;

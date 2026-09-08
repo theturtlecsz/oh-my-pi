@@ -93,6 +93,7 @@ describe("session_stop block continuation — idle recap resilience (#4323)", ()
 			convertToLlm,
 		});
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn(() => false),

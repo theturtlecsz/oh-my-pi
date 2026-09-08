@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added read-only core assistant snapshot provenance for integrations that bind tool authorization to one invocation.
+
 ## [18.0.5] - 2026-08-25
 
 ### Fixed

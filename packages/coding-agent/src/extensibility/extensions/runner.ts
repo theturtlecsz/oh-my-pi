@@ -1,6 +1,7 @@
 /**
  * Extension runner - executes extensions and manages their lifecycle.
  */
+
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
 	AgentMessage,
@@ -19,6 +20,7 @@ import type { MemoryRuntimeContext } from "../../memory-backend";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { AsyncJobSnapshot } from "../../session/agent-session";
 import type { SessionManager } from "../../session/session-manager";
+import type { TaskResultProcessingGate } from "../../task/recovery";
 import { addFileDeleteFallback, addFileWriteFallback } from "../../tools/file-write-fallback";
 import type { BranchHandler, NavigateTreeHandler, NewSessionHandler } from "../session-handler-types";
 import { ManagedTimers } from "./managed-timers";
@@ -645,6 +647,16 @@ export class ExtensionRunner {
 	 */
 	get sessionId(): string {
 		return this.sessionManager.getSessionId();
+	}
+
+	#taskResultGate: ((id: string) => TaskResultProcessingGate | undefined) | undefined;
+
+	setTaskResultProcessingGate(resolve: (id: string) => TaskResultProcessingGate | undefined): void {
+		this.#taskResultGate = resolve;
+	}
+
+	async enterTaskResultProcessing(toolName: string, id: string): Promise<void> {
+		if (toolName === "task") await this.#taskResultGate?.(id)?.enter();
 	}
 
 	#toolDispatchGuard: ((signal?: AbortSignal) => Promise<() => void> | undefined) | undefined;
@@ -1529,13 +1541,14 @@ export class ExtensionRunner {
 			this.settings?.get("extensionHandlers.toolCallTimeoutMs") ?? extensionHandlerTimeoutMs,
 		);
 		let result: ToolCallEventResult | undefined;
+		let authority: ToolCallEventResult["taskResultAuthority"];
 
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get("tool_call");
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				const handlerResult = await this.#runHandlerWithTimeout(
+				const handlerResult = (await this.#runHandlerWithTimeout(
 					handler,
 					event,
 					ctx,
@@ -1549,12 +1562,26 @@ export class ExtensionRunner {
 								: `Extension ${ext.path} failed: ${message}`,
 					}),
 					signal,
-				);
+				)) as ToolCallEventResult | undefined;
 
 				if (handlerResult) {
+					if (handlerResult.taskResultAuthority !== undefined) {
+						if (
+							event.toolName !== "task" ||
+							!event.taskResultOrigin ||
+							typeof handlerResult.taskResultAuthority !== "function"
+						)
+							return {
+								block: true,
+								reason: "Task result authority requires a core task origin and runtime validator",
+							};
+						if (authority)
+							return { block: true, reason: "Multiple task result authority validators are ambiguous" };
+						authority = handlerResult.taskResultAuthority;
+					}
 					result = handlerResult;
 					if (result.block) {
-						return result;
+						return { block: true, reason: result.reason };
 					}
 				}
 			}
@@ -1563,7 +1590,7 @@ export class ExtensionRunner {
 		if (signal?.aborted) {
 			return { block: true, reason: `Tool execution was cancelled while an extension handler was pending` };
 		}
-		return result;
+		return authority ? { ...result, taskResultAuthority: authority } : result;
 	}
 
 	async emitUserBash(event: UserBashEvent): Promise<UserBashEventResult | undefined> {

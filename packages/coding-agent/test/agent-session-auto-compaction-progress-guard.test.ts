@@ -71,6 +71,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		// while returning the same short-circuit result without compiling a
 		// temporary extension for every test.
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: (type: string) => compactHookEnabled && type === "session_before_compact",
 			emit: async (event: { type: string; preparation?: CompactionPreparation }) => {
 				if (event.type !== "session_before_compact" || !event.preparation) return undefined;

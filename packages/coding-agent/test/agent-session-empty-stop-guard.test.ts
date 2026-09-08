@@ -418,6 +418,7 @@ describe("AgentSession empty stop guard", () => {
 		const finalMessageEndEntered = Promise.withResolvers<void>();
 		let assistantMessageEnds = 0;
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === "message_end"),
 			emitBeforeAgentStart: vi.fn(async () => undefined),
 			emit: vi.fn(async (event: { type: string; message?: AgentMessage }) => {

@@ -370,6 +370,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			};
 		}
 
+		await this.runner.enterTaskResultProcessing(this.tool.name, toolCallId);
 		return this.processResult(toolCallId, effectiveParams, result, context, executionError);
 	}
 

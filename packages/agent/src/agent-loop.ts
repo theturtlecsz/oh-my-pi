@@ -375,8 +375,15 @@ function snapshotAssistantContentBlock(block: AssistantContentBlock): AssistantC
 	}
 }
 
+const assistantSnapshotOrigins = new WeakMap<AssistantMessage, AssistantMessage>();
+
+/** Read-only identity of a genuine core snapshot lineage; ordinary object copies are unregistered. */
+export function assistantSnapshotOrigin(message: AssistantMessage): AssistantMessage | undefined {
+	return assistantSnapshotOrigins.get(message);
+}
+
 function snapshotAssistantMessage(message: AssistantMessage): AssistantMessage {
-	return {
+	const snapshot: AssistantMessage = {
 		...message,
 		content: message.content.map(snapshotAssistantContentBlock),
 		usage: {
@@ -386,6 +393,8 @@ function snapshotAssistantMessage(message: AssistantMessage): AssistantMessage {
 		disabledFeatures: message.disabledFeatures ? [...message.disabledFeatures] : undefined,
 		toolCallAbortMessages: message.toolCallAbortMessages ? { ...message.toolCallAbortMessages } : undefined,
 	};
+	assistantSnapshotOrigins.set(snapshot, assistantSnapshotOrigins.get(message) ?? snapshot);
+	return snapshot;
 }
 
 /**

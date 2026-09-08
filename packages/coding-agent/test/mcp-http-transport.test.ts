@@ -17,12 +17,12 @@ afterEach(() => {
 	server = null;
 });
 
-async function connectedTransport(): Promise<HttpTransport> {
+async function connectedTransport(timeout = REQUEST_TIMEOUT_MS): Promise<HttpTransport> {
 	if (!server) throw new Error("Test server was not started");
 	const transport = new HttpTransport({
 		type: "http",
 		url: `http://127.0.0.1:${server.port}/mcp`,
-		timeout: REQUEST_TIMEOUT_MS,
+		timeout,
 	});
 	await transport.connect();
 	return transport;
@@ -425,7 +425,10 @@ describe("MCP Streamable HTTP GET listener resumption", () => {
 				);
 			},
 		});
-		const transport = await connectedTransport();
+		// The 50ms request-abort fixtures impose a separate 12ms SSE startup
+		// deadline. This case exercises resumption; bound the entire exchange
+		// with the guard below instead of racing connection setup against it.
+		const transport = await connectedTransport(0);
 		const notifications: string[] = [];
 		let closed = false;
 		const secondNotification = Promise.withResolvers<void>();
@@ -437,13 +440,18 @@ describe("MCP Streamable HTTP GET listener resumption", () => {
 			closed = true;
 		};
 
-		await transport.startSSEListener();
-		await withPendingGuard(secondNotification.promise, "resumed notification");
+		try {
+			await withPendingGuard(
+				transport.startSSEListener().then(() => secondNotification.promise),
+				"resumed notification",
+			);
 
-		expect(notifications).toEqual(["notifications/first", "notifications/second"]);
-		expect(observed.lastEventIds).toEqual([null, "poll-1"]);
-		// The resume replaced the manager-level reconnect: no close fired.
-		expect(closed).toBe(false);
-		await transport.close();
+			expect(notifications).toEqual(["notifications/first", "notifications/second"]);
+			expect(observed.lastEventIds).toEqual([null, "poll-1"]);
+			// The resume replaced the manager-level reconnect: no close fired.
+			expect(closed).toBe(false);
+		} finally {
+			await transport.close();
+		}
 	});
 });

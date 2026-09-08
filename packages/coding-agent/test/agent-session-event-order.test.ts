@@ -85,6 +85,7 @@ describe("AgentSession subscriber event order", () => {
 		// extension await and overtake the start without subscriber-order
 		// serialization.
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn(async () => {
 				for (let hop = 0; hop < 25; hop++) await Promise.resolve();
 			}),

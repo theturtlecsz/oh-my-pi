@@ -392,6 +392,7 @@ describe("AgentSession retry delay cap", () => {
 		// Partial ExtensionRunner double — same pattern as sibling agent-session tests;
 		// only emit surfaces used on the auto-retry path are implemented.
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: async (event: { type: string; willContinue?: boolean }) => {
 				extensionEmits.push({ type: event.type, willContinue: event.willContinue });
 			},

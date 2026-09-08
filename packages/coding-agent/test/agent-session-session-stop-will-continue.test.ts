@@ -75,6 +75,7 @@ describe("AgentSession session_stop willContinue", () => {
 		// Partial ExtensionRunner double — same pattern as sibling agent-session tests;
 		// only the emit surfaces used on the session_stop continuation path are implemented.
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: async (event: { type: string; willContinue?: boolean }) => {
 				extensionEmits.push({ type: event.type, willContinue: event.willContinue });
 			},

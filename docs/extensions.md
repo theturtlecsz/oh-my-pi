@@ -240,6 +240,29 @@ Legacy completed children and ordinary first-run completion without this
 certificate remain ineligible. Extensions cannot create the certificate or
 replace its core provenance through result details. No new RPC command is added.
 
+For eligible original first-run tasks, a `tool_call` handler can return an optional
+runtime-only `taskResultAuthority` validator. Core supplies `taskResultOrigin`
+with `sessionId` and `promptEntryId` only for its own agent-origin preparation and
+a single task call. Match that origin to your application's execution authority;
+an active grant alone must not authorize an owner-authored prompt. The validator
+receives `{ sessionId, promptEntryId, assistantEntryId, toolCallId }` and returns
+`Promise<{ ok: true } | { ok: false; reason: string }>`.
+
+The runtime retains this callback for the exact core assistant invocation and
+activates it only inside approved native execution. Missing validators retain
+ordinary task behavior. Multiple validators, lost invocation identity, or a
+present validator's failure refuse certification rather than silently reverting
+to ordinary result processing. The callback is checked again at native execution,
+processing and durable delivery boundaries, alongside local ownership guards.
+It cannot be supplied through model arguments, RPC data or persisted metadata.
+
+A successfully certified original task writes `original-sync-task-v1` readiness
+before its completion lifecycle event; resumed tasks retain
+`recovered-sync-task-v1`. Both use the same processing-start claim and original
+parent-result receipt. Output and result hooks receive a fresh copy of the saved
+native payload. A crash before processing can reuse that payload without child
+replay; a retained processing claim without the parent result still refuses.
+
 ## 2) Handler context (`ExtensionContext`)
 
 Handlers and tool `execute` receive `ctx` with:

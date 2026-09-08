@@ -58,6 +58,7 @@ describe("AgentSession payload-rejection 413 handling", () => {
 		},
 	): Promise<void> {
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: (type: string) => type === "session_before_compact",
 			emit: async (event: { type: string; preparation?: CompactionPreparation }) => {
 				if (event.type !== "session_before_compact" || !event.preparation) return undefined;

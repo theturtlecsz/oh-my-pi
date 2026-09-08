@@ -1631,6 +1631,24 @@ export function createWorkflowHost(cfg: HostConfig) {
 			return undefined;
 		}
 
+		async function validateBoundExecutionAuthority(ctx: ExtensionContext, intent: ExecutionOutboxEntry): Promise<{ok: true} | {ok: false; reason: string}> {
+			try {
+				await backend.getPendingExecutionClaims?.();
+			} catch (error) {
+				return { ok: false, reason: `Recovery blocked by unreadable claim: ${String(error)}` };
+			}
+			const fresh = await backend.getExecution(intent.grantId);
+			if (!fresh || fresh.grant.grant_id !== intent.grantId || fresh.grant.state !== "active" || Date.parse(fresh.grant.expires_at) <= Date.now() || !fresh.activeItem) return { ok: false, reason: "Execution authority is no longer active" };
+			const mismatch = executionIntentMismatch(intent, fresh);
+			if (mismatch) return { ok: false, reason: mismatch };
+			const checked = await validateExecutionRecoveryPreflight(ctx, backend, fresh, "active");
+			if (!checked.ok) return { ok: false, reason: checked.reason };
+			const dispatchAuthority = await backend.getExecution(intent.grantId);
+			if (!dispatchAuthority || dispatchAuthority.grant.grant_id !== intent.grantId || dispatchAuthority.grant.state !== "active" || Date.parse(dispatchAuthority.grant.expires_at) <= Date.now() || dispatchAuthority.grant.judge_sha256 !== checked.tcb.judgeSha256 || !dispatchAuthority.activeItem) return { ok: false, reason: "Execution authority changed during recovery preflight" };
+			const dispatchMismatch = executionIntentMismatch(intent, dispatchAuthority);
+			return dispatchMismatch ? { ok: false, reason: dispatchMismatch } : { ok: true };
+		}
+
 		async function deliverExecutionMessage(
 			grantId: string,
 			preReservationVersion: number,
@@ -2041,23 +2059,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 											entryId: persisted.entryId,
 											expectedLeafId: sessionCtx.sessionManager.getLeafId()!,
 											onRefused: notifyRefusal,
-											validateDispatch: async () => {
-												try {
-													await backend.getPendingExecutionClaims?.();
-												} catch (error) {
-													return { ok: false, reason: `Recovery blocked by unreadable claim: ${String(error)}` };
-												}
-												const fresh = await backend.getExecution(persisted.intent.grantId);
-												if (!fresh || fresh.grant.grant_id !== persisted.intent.grantId || fresh.grant.state !== "active" || Date.parse(fresh.grant.expires_at) <= Date.now() || !fresh.activeItem) return { ok: false, reason: "Execution authority is no longer active" };
-												const mismatch = executionIntentMismatch(persisted.intent, fresh);
-												if (mismatch) return { ok: false, reason: mismatch };
-												const checked = await validateExecutionRecoveryPreflight(sessionCtx, backend, fresh, "active");
-												if (!checked.ok) return { ok: false, reason: checked.reason };
-												const dispatchAuthority = await backend.getExecution(persisted.intent.grantId);
-												if (!dispatchAuthority || dispatchAuthority.grant.grant_id !== persisted.intent.grantId || dispatchAuthority.grant.state !== "active" || Date.parse(dispatchAuthority.grant.expires_at) <= Date.now() || dispatchAuthority.grant.judge_sha256 !== checked.tcb.judgeSha256 || !dispatchAuthority.activeItem) return { ok: false, reason: "Execution authority changed during recovery preflight" };
-												const dispatchMismatch = executionIntentMismatch(persisted.intent, dispatchAuthority);
-												return dispatchMismatch ? { ok: false, reason: dispatchMismatch } : { ok: true };
-											},
+											validateDispatch: () => validateBoundExecutionAuthority(sessionCtx, persisted.intent),
 										});
 										if (result.status === "refused") notifyRefusal(result);
 									} else if (pendingOutbox) {
@@ -2298,6 +2300,29 @@ export function createWorkflowHost(cfg: HostConfig) {
 						reason: "Intake questions must contain exactly one decision per dialog.",
 					};
 				}
+			}
+			if (event.toolName === "task" && event.taskResultOrigin) {
+				const origin = event.taskResultOrigin;
+				const entry = ctx.sessionManager.getBranch().find(candidate => candidate.id === origin.promptEntryId);
+				if (origin.sessionId !== ctx.sessionManager.getSessionId() || entry?.type !== "custom_message" ||
+					entry.customType !== `${TOOL_NAME}-execute` || entry.attribution !== "agent") return undefined;
+				const identity = (entry.details as {executionContinuation?: ExecutionOutboxEntry} | undefined)?.executionContinuation;
+				if (!identity?.grantId || !identity.messageId || identity.sessionId !== origin.sessionId) return undefined;
+				const intent = Object.freeze({...identity});
+				const expected = Object.freeze({...origin, toolCallId: event.toolCallId});
+				return {taskResultAuthority: async (actual: {sessionId: string; promptEntryId: string; assistantEntryId: string; toolCallId: string}) => {
+					if (actual.sessionId !== expected.sessionId || actual.promptEntryId !== expected.promptEntryId || actual.toolCallId !== expected.toolCallId)
+						return {ok: false as const, reason: "Task result authority belongs to another core invocation"};
+					const branch = ctx.sessionManager.getBranch();
+					const current = branch.find(candidate => candidate.id === expected.promptEntryId);
+					const assistant = branch.find(candidate => candidate.id === actual.assistantEntryId);
+					if (current?.type !== "custom_message" || current.customType !== `${TOOL_NAME}-execute` || current.attribution !== "agent" ||
+						JSON.stringify((current.details as {executionContinuation?: ExecutionOutboxEntry} | undefined)?.executionContinuation) !== JSON.stringify(intent) ||
+						assistant?.type !== "message" || assistant.message.role !== "assistant" ||
+						!assistant.message.content.some(part => part.type === "toolCall" && part.id === expected.toolCallId && part.name === "task"))
+						return {ok: false as const, reason: "Original execution prompt or task call changed"};
+					return validateBoundExecutionAuthority(ctx, intent);
+				}};
 			}
 			return undefined;
 		});
