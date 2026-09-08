@@ -307,6 +307,7 @@ class RpcProcess:
         self.stop_requested = threading.Event()
         self.stop_record: dict | None = None
         self.reader_error: str | None = None
+        self.ordinary_eof = False
         self._raw_tail = b""
         self._raw_frames: list[dict] = []
         self._drain_requested = threading.Event()
@@ -326,9 +327,11 @@ class RpcProcess:
                     captured.write(line)
                     captured.flush()
                     self.events.put(line)
-        except (OSError, ValueError):
+            self.ordinary_eof = True
+        except (OSError, ValueError) as error:
             # Process cleanup may close stdout while this reader observes EOF.
-            pass
+            # Retain failure so a joined thread is not mistaken for clean capture.
+            self.reader_error = repr(error)
         finally:
             self.events.put(None)
 

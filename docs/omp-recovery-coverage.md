@@ -251,3 +251,22 @@ Cached delivery must retain the original result/wire pair and avoid child replay
 CI retains first-run cut/restart journals, byte-reader diagnostics and disposable
 runtime process logs. Fresh installed qualification and exact-head delivery gates
 remain separate from source tests and from full S2.2 acceptance.
+
+## Child read completed before the next response
+
+The [child-read reproduction plan](omp-child-read-recovery-plan.md) holds the
+actual next child-main response after one successful native read call/result is
+durable. R1 was an observer miss: it called a byte-reader-only API in ordinary
+reader mode after the kill, before restart or complete cut validation. Ordinary
+reader EOF/error accounting and strict post-death checks corrected that observer.
+
+R2 against qualified runtime `0bdaa5cf22` reached the verified cut, killed the
+shared CLI once and resumed the same parent/child identities twice. The held
+request contained the original read pair and had sent zero response bytes through
+death; no yield, native-ready, parent claim/result or unresolved tool existed.
+Both restarts refused retained child history, with zero provider requests/results
+and unchanged observed service/Git effects. The automatic recovery assertion
+remains one real failure; R1 remains a separate miss. This proves the bounded
+native-read/request witness, not that every asynchronous hook had settled or that
+arbitrary completed-looking histories are safe to replay. No production remedy
+or full S2.2 acceptance is implied.
