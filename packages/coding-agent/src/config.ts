@@ -3,9 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, getConfigAgentDirName, getProjectDir } from "@oh-my-pi/pi-utils";
 import { resolveClaudePaths } from "./config/claude-paths";
+import { getDiscoveryCwd } from "./config/discovery-root";
 import { expandTilde } from "./tools/path-utils";
 
 export * from "./config/config-file";
+export * from "./config/discovery-root";
 
 const priorityList = [
 	{ dir: CONFIG_DIR_NAME, globalAgentDir: getConfigAgentDirName },
@@ -141,7 +143,7 @@ export function getConfigDirs(subpath: string, options: GetConfigDirsOptions = {
 	// Project-level directories
 	if (project) {
 		for (const { base, name } of PROJECT_CONFIG_BASES) {
-			const resolvedPath = path.resolve(cwd, base, subpath);
+			const resolvedPath = path.resolve(getDiscoveryCwd(cwd), base, subpath);
 			if (!existingOnly || fs.existsSync(resolvedPath)) {
 				results.push({ path: resolvedPath, source: name, level: "project" });
 			}
@@ -215,7 +217,7 @@ export function findAllNearestProjectConfigDirs(subpath: string, cwd: string = g
 	const results: ConfigDirEntry[] = [];
 	const foundBases = new Set<string>();
 
-	let currentDir = cwd;
+	let currentDir = getDiscoveryCwd(cwd);
 
 	while (foundBases.size < PROJECT_CONFIG_BASES.length) {
 		for (const { base, name } of PROJECT_CONFIG_BASES) {
@@ -230,6 +232,7 @@ export function findAllNearestProjectConfigDirs(subpath: string, cwd: string = g
 			} catch {}
 		}
 
+		if (process.env.OMP_DISCOVERY_CWD) break;
 		const parentDir = path.dirname(currentDir);
 		if (parentDir === currentDir) break;
 		currentDir = parentDir;

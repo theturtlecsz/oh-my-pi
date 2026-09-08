@@ -22,7 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { isProviderEnabled } from "../capability";
-import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
+import { findAllNearestProjectConfigDirs, getConfigDirs, getDiscoveryCwd } from "../config";
 import { listClaudePluginRoots } from "../discovery/helpers";
 import { listOmpExtensionRoots } from "../discovery/omp-extension-roots";
 import { loadBundledAgents, parseAgent } from "./agents";
@@ -68,7 +68,7 @@ async function loadAgentsFromDir(dir: string, source: AgentSource): Promise<Agen
  * @param cwd - Current working directory for project agent discovery
  */
 export async function discoverAgents(cwd: string, home: string = os.homedir()): Promise<DiscoveryResult> {
-	const resolvedCwd = path.resolve(cwd);
+	const resolvedCwd = path.resolve(getDiscoveryCwd(cwd));
 
 	const userDirs = getConfigDirs("agents", { project: false })
 		.filter(entry => entry.source === TASK_AGENT_CONFIG_SOURCE)

@@ -1279,7 +1279,10 @@ describe("merge confirmation gating (OMP-212)", () => {
 		// Create candidate commit in another clone/branch and push to remote main
 		const pusher = makeRepo("main");
 		git(pusher, "remote", "add", "origin", remote);
-		git(pusher, "pull", "-q", "origin", "main");
+		// Independent fixture commits can have different timestamps and therefore
+		// unrelated histories. Start the pusher from the actual remote commit.
+		git(pusher, "fetch", "-q", "origin", "main");
+		git(pusher, "checkout", "-q", "-B", "main", "FETCH_HEAD");
 		fs.writeFileSync(path.join(pusher, "advanced.txt"), "advanced\n");
 		git(pusher, "add", "--", "advanced.txt");
 		git(pusher, "commit", "-q", "-m", "advanced");

@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 
+import { getDiscoveryCwd } from "../config/discovery-root";
 import type { Settings } from "../config/settings";
 import { clearCache as clearFsCache, findRepoRoot, cacheStats as fsCacheStats, invalidate as invalidateFs } from "./fs";
 import type {
@@ -262,9 +263,9 @@ export async function loadCapability<T>(
 		throw new Error(`Unknown capability: "${capabilityId}"`);
 	}
 
-	const cwd = options.cwd ?? getProjectDir();
+	const cwd = getDiscoveryCwd(options.cwd ?? getProjectDir());
 	const home = os.homedir();
-	const repoRoot = await findRepoRoot(cwd);
+	const repoRoot = process.env.OMP_DISCOVERY_CWD ? cwd : await findRepoRoot(cwd);
 	const ctx: LoadContext = { cwd, home, repoRoot };
 	const providers = filterProviders(capability, options);
 

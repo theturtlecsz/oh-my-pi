@@ -5,7 +5,7 @@ path	scope	state	head_blob	behavior	classification
 .gitattributes	shared	modified	1a2c75c61837	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes	retained
 .github/actionlint.yaml	shared	modified	ea44d87d978b	fix(ci): route non-PR jobs to self-hosted rust runner and fix postgres integration test paths	retained
 .github/copilot-instructions.md	fork-only	added	f3bd524ff165	docs: record caveman mode rules and session-system merge note	retained
-.github/workflows/ci.yml	shared	modified	f2903d663f32	session candidate: OMP-209; ci: add .github/workflows/** to push and pull_request paths; ci: remove trailing comment from ci.yml; ci: trigger push event workflow run via ssh; ci: add native_addons and native-artifacts to work_ledger_postgres job	retained
+.github/workflows/ci.yml	shared	modified	58a5690966eb	session candidate: OMP-209; ci: add .github/workflows/** to push and pull_request paths; ci: remove trailing comment from ci.yml; ci: trigger push event workflow run via ssh; ci: add native_addons and native-artifacts to work_ledger_postgres job; OMP-249: retain full installed qualification manifest and JUnit evidence	retained
 .github/workflows/upstream-watch.yml	fork-only	added	ae701bba2667	OMP-229 weekly upstream discovery workflow: finds newest stable release, resolves immutable commit, refreshes tracked review issue	retained
 .gitignore	shared	modified	9d4cbea998bc	session candidate: OMP-108; session candidate: OMP-47; session-system v1: canonical home for the Linear/omp session system	retained
 .windsurf/rules/caveman.md	fork-only	added	6d18ef51bc64	docs: record caveman mode rules and session-system merge note	retained
@@ -82,7 +82,10 @@ data/linear-export/f6cba355-c75a-4235-8888-13cb6b2ecd32/privacy-report-b38b66b41
 data/linear-export/f6cba355-c75a-4235-8888-13cb6b2ecd32/scope-report-1c517d9a6496b70fec59735c949396b26ed50138425bd110574f477bb155e414.json.gpg	fork-only	added	b79edaebb245	fix(session): HOME-149 audit remediation	retained
 data/linear-export/f6cba355-c75a-4235-8888-13cb6b2ecd32/source-hashes-08826c0c8248bb5048b78068a1f6d5823a68c9dcda3d1350d624632c8a1dace1.json.gpg	fork-only	added	1ce4e03bf8e3	fix(session): HOME-149 audit remediation	retained
 data/linear-export/finalize/report-124891316e3bbaef0358ec60242a12e8352b42aad964d5748e39833db6c8f4f8.json.gpg	fork-only	added	18accd265bcb	fix(session): HOME-149 audit remediation	retained
+docs/bookends-open-work-review.md	fork-only	added	2c380582980a	Complete open Bookends item review, dependency reconciliation, and stabilization scope gaps	retained
 docs/extensions.md	shared	modified	222564cd9533	session candidate: OMP-108	retained
+docs/installation-isolation.md	fork-only	added	cd0255b80678	OMP-249 installation boundary, ledger reconciliation, qualification limits, and operator promotion/rollback	retained
+docs/omp-stabilization-plan.md	fork-only	added	a2afadfadd9c	OMP-249 ordered stabilization checkpoints and repeatable session handoff using WorkService authority	retained
 docs/upstream-18.0.6-changelog.tsv	fork-only	added	ec9a00c04da9	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-matrix.tsv	fork-only	added	0b52aac14438	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-sources.tsv	fork-only	added	a3afa2e62165	feat(omp-156): pre-merge inventory oracle and safe update driver	retained
@@ -90,10 +93,10 @@ docs/upstream-18.0.6-upgrade.md	fork-only	added	a765c7ef8538	docs(omp-156): fina
 docs/upstream-baseline.json	fork-only	added	b801fa8f9b70	OMP-229 accepted-upstream-baseline record: pins 18.0.6 review commits, version range, and record files for the standing guardrail	retained
 docs/upstream-guardrail.md	fork-only	added	08d795433d76	OMP-229 standing guardrail procedure: weekly discovery, inventory rule, upstream-update review, guarded updater, baseline advancement	retained
 docs/work-ledger-operations.md	fork-only	added	8aadc1e3405e	session candidate: OMP-108; session candidate: HOME-149; fix(cutover): resolve final audit findings; fix(work-ledger): finalize cutover remediation; feat(work-ledger): implement controlled Linear cutover (HOME-148)	retained
-docs/workflow-production-readiness.md	fork-only	added	273a8e184cbc	session candidate: OMP-251	retained
-infra/work-ledger/install.sh	fork-only	added	aa38c49c4c28	session candidate: OMP-108; feat(work-ledger): implement controlled Linear cutover (HOME-148); feat(work-ledger): cutover authority, OAuth exporter credential, atomic activation (HOME-148); feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147); feat(work-ledger): PostgreSQL Work Ledger with Linear export and import (HOME-143, HOME-144, HOME-145, HOME-146)	retained
+docs/workflow-production-readiness.md	fork-only	added	c636e4b89fdf	session candidate: OMP-251	retained
+infra/work-ledger/install.sh	fork-only	added	d1511e297fa4	session candidate: OMP-108; feat(work-ledger): implement controlled Linear cutover (HOME-148); feat(work-ledger): cutover authority, OAuth exporter credential, atomic activation (HOME-148); feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147); feat(work-ledger): PostgreSQL Work Ledger with Linear export and import (HOME-143, HOME-144, HOME-145, HOME-146); OMP-249: render-only requires isolated explicit output and refuses live unit aliases and shared output inodes	retained
 infra/work-ledger/linear-import-map.json	fork-only	added	57a83dfb72b5	feat(work-ledger): implement controlled Linear cutover (HOME-148); feat(work-ledger): cutover authority, OAuth exporter credential, atomic activation (HOME-148)	retained
-package.json	shared	modified	5e24fe71c4de	fix(ci): pass --extra dev to work-ledger integration pytest invocation; fix(ci): route non-PR jobs to self-hosted rust runner and fix postgres integration test paths; feat(omp-156): pre-merge inventory oracle and safe update driver; session candidate: OMP-47; session candidate: OMP-21	retained
+package.json	shared	modified	655450c86982	fix(ci): pass --extra dev to work-ledger integration pytest invocation; fix(ci): route non-PR jobs to self-hosted rust runner and fix postgres integration test paths; feat(omp-156): pre-merge inventory oracle and safe update driver; session candidate: OMP-47; session candidate: OMP-21	retained
 packages/ai/CHANGELOG.md	shared	modified	c23b8d5f3ff1	fix(ai): accept thinking-only Gemini Cloud Code Assist responses instead of treating silence as failure (HOME-120)	retained
 packages/ai/test/context-overflow.test.ts	shared	modified	33ae87b86a99	test: reconcile context-overflow, kitty DA1, and system-prompt-dedup tests after v17.3.2 merge	retained
 packages/ai/test/google-empty-response-retry.test.ts	shared	modified	947a7a8f0445	test(ai): reconcile thinking-only silence tests with fork policy after v17.3.2 merge (HOME-123); fix(ai): accept thinking-only Gemini Cloud Code Assist responses instead of treating silence as failure (HOME-120)	retained
@@ -107,16 +110,25 @@ packages/catalog/test/build.test.ts	shared	modified	5ad56a3d8ec0	fix(catalog): c
 packages/catalog/test/long-context-pricing.test.ts	shared	modified	a483dc6a8b32	test(omp-156): re-pin catalog data tests to the accepted generation	retained
 packages/catalog/test/minimax-bundled-catalog.test.ts	shared	modified	31a89ae83bbe	test(omp-156): re-pin catalog data tests to the accepted generation	retained
 packages/catalog/test/variant-collapse.test.ts	shared	modified	6d4fe57be427	style(omp-156): biome formatting for verifier and re-fitted tests; fix(catalog): clamp Gemini Flash minimal thinking for Cloud Code Assist	retained
-packages/coding-agent/CHANGELOG.md	shared	modified	adf7a7b65e23	session candidate: OMP-108; session candidate: OMP-89; feat(coding-agent): inline setStatus placement beside path segment (HOME-130); feat(coding-agent): cancellable plan_approved extension event (HOME-122); feat(coding-agent): expose taskDepth on ExtensionContext to distinguish main session from subagents (HOME-120)	retained
+packages/coding-agent/CHANGELOG.md	shared	modified	dabe4d1b70a0	session candidate: OMP-108; session candidate: OMP-89; feat(coding-agent): inline setStatus placement beside path segment (HOME-130); feat(coding-agent): cancellable plan_approved extension event (HOME-122); feat(coding-agent): expose taskDepth on ExtensionContext to distinguish main session from subagents (HOME-120)	retained
 packages/coding-agent/src/advisor/advise-tool.ts	shared	modified	8cc4f14c5a9d	session candidate: OMP-47	retained
 packages/coding-agent/src/advisor/runtime.ts	shared	modified	bb9c21470861	session candidate: OMP-127; session candidate: OMP-107; session candidate: OMP-47	retained
+packages/coding-agent/src/advisor/watchdog.ts	shared	modified	613c115b4bfa	OMP-249 host-selected discovery root excludes candidate and ancestor Advisor configuration	retained
+packages/coding-agent/src/capability/index.ts	shared	modified	76756a3cf5e9	OMP-249 capability discovery uses host-selected root with bounded ancestor traversal	retained
 packages/coding-agent/src/cli/gc-cli.ts	shared	modified	ec2759628e76	fix(gc): restrict per-cwd retention to existing working directories; fix: slim session workflow loadout and isolate test execution (OMP-166)	retained
-packages/coding-agent/src/config/settings.ts	shared	modified	c95ad0d578dc	ci: repair red main baseline (OMP-217); session candidate: OMP-172	retained
+packages/coding-agent/src/config.ts	shared	modified	4bc15a622234	OMP-249 shared configuration lookup separates runtime configuration from tool workspace	retained
+packages/coding-agent/src/config/discovery-root.ts	fork-only	added	7c6f9f9638c2	OMP-249 optional host-selected configuration root; protected by discovery-root behavioral tests	retained
+packages/coding-agent/src/config/prompt-templates.ts	shared	modified	78a69275b7cf	OMP-249 prompt templates respect admitted runtime configuration root	retained
+packages/coding-agent/src/config/settings.ts	shared	modified	d97d8b907349	ci: repair red main baseline (OMP-217); session candidate: OMP-172	retained
+packages/coding-agent/src/dap/config.ts	shared	modified	a21a7fd2f3ed	OMP-249 debugger configuration uses admitted root while program workspace resolution is preserved	retained
+packages/coding-agent/src/discovery/contained-path.ts	shared	modified	80e5e0be72fb	OMP-249 reuse lexical containment for installation and package-boundary checks	retained
+packages/coding-agent/src/discovery/helpers.ts	shared	modified	33aa6b846294	OMP-249 plugin registry lookup cannot escape host-selected configuration root	retained
 packages/coding-agent/src/extensibility/extensions/loader.ts	shared	modified	54992bea2627	session candidate: OMP-47	retained
 packages/coding-agent/src/extensibility/extensions/runner.ts	shared	modified	3c2ebbf7903a	session candidate: OMP-108; session candidate: OMP-47; feat(coding-agent): cancellable plan_approved extension event (HOME-122); feat(coding-agent): expose taskDepth on ExtensionContext to distinguish main session from subagents (HOME-120)	retained
 packages/coding-agent/src/extensibility/extensions/types.ts	shared	modified	593fe0ed9cf3	session candidate: OMP-108; session candidate: OMP-107; session candidate: OMP-47; feat(coding-agent): inline setStatus placement beside path segment (HOME-130); feat(coding-agent): cancellable plan_approved extension event (HOME-122)	retained
 packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.ts	shared	modified	b847212111e6	session candidate: OMP-89	retained
 packages/coding-agent/src/index.ts	shared	modified	fcf482a7cf46	session candidate: OMP-107; session candidate: OMP-69	retained
+packages/coding-agent/src/lsp/config.ts	shared	modified	3b5e5a1839e5	OMP-249 language-server configuration uses admitted root while workspace marker detection is preserved	retained
 packages/coding-agent/src/modes/acp/acp-agent.ts	shared	modified	8174a231c382	session candidate: OMP-47; feat(coding-agent): cancellable plan_approved extension event (HOME-122)	retained
 packages/coding-agent/src/modes/components/status-line/component.ts	shared	modified	46bf80faa457	feat(coding-agent): inline setStatus placement beside path segment (HOME-130)	retained
 packages/coding-agent/src/modes/controllers/extension-ui-controller.ts	shared	modified	8fe76974c649	session candidate: OMP-213; session candidate: OMP-47; feat(coding-agent): inline setStatus placement beside path segment (HOME-130)	retained
@@ -127,8 +139,9 @@ packages/coding-agent/src/sdk.ts	shared	modified	6d208ff9c21c	feat(coding-agent)
 packages/coding-agent/src/session/agent-session.ts	shared	modified	abee39744747	session candidate: OMP-176; session candidate: OMP-107; style(session): fix biome format drift in agent-session.ts (introduced by 43f7536fda); fix(session): restore drained nextTurn batch on post-splice generation bails (OMP-71); session candidate: OMP-69	retained
 packages/coding-agent/src/session/extension-delivery.ts	fork-only	added	54aea8fde589	session candidate: OMP-107; session candidate: OMP-47	retained
 packages/coding-agent/src/session/session-advisors.ts	shared	modified	b60f4383c58f	session candidate: OMP-47	retained
+packages/coding-agent/src/task/discovery.ts	shared	modified	ebb3269d35d5	OMP-249 auditor and task-agent discovery stays independent of candidate configuration	retained
 packages/coding-agent/src/task/executor.ts	shared	modified	3f8906890e69	session candidate: OMP-47	retained
-packages/coding-agent/src/utils/git.ts	shared	modified	1fefc8c4c596	session candidate: OMP-127	retained
+packages/coding-agent/src/utils/git.ts	shared	modified	2e99b7ffc39b	session candidate: OMP-127	retained
 packages/coding-agent/test/acp-agent.test.ts	shared	modified	54ff82363d68	feat(coding-agent): cancellable plan_approved extension event (HOME-122)	retained
 packages/coding-agent/test/advisor/advisor.test.ts	shared	modified	2e906243011b	session candidate: OMP-47	retained
 packages/coding-agent/test/agent-session-advisor-suppression.test.ts	shared	modified	fce9891476c3	style(omp-156): biome formatting for verifier and re-fitted tests; session candidate: OMP-127	retained
@@ -136,11 +149,13 @@ packages/coding-agent/test/agent-session-async-delivery.test.ts	shared	modified	
 packages/coding-agent/test/agent-session-before-agent-start-attribution.test.ts	shared	modified	c33e02944d0f	session candidate: OMP-69	retained
 packages/coding-agent/test/agent-session-plan-mode-convergence.test.ts	shared	modified	920ed7a11bb8	session candidate: OMP-147; session candidate: OMP-127	retained
 packages/coding-agent/test/config/settings-backup-on-rewrite.test.ts	fork-only	added	fd1a138ab69b	session candidate: OMP-173; session candidate: OMP-172	retained
+packages/coding-agent/test/discovery-root.test.ts	fork-only	added	190a6034057b	OMP-249 executable configuration isolation and unchanged workspace/ordinary-discovery contracts	retained
 packages/coding-agent/test/discovery/claude-plugins.test.ts	shared	modified	fd3906bdc11c	test(omp-156): isolate plugin-precedence discovery test from the real HOME	retained
 packages/coding-agent/test/export-html-template.test.ts	shared	modified	49060d7e18a6	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; test(omp-156): derive HTML export template expectation from source composition	retained
 packages/coding-agent/test/extensibility/legacy-pi-cjs-classification.test.ts	shared	modified	dd1e8bc48c31	fork change (describe)	retained
 packages/coding-agent/test/extensibility/legacy-pi-inplace-load.test.ts	shared	modified	20b2f1397c8f	session candidate: OMP-89	retained
 packages/coding-agent/test/extensions-runner.test.ts	shared	modified	b3782f12fe42	session candidate: OMP-108	retained
+packages/coding-agent/test/fixtures/discovery-root-probe.ts	fork-only	added	0524001e765c	OMP-249 real child-process discovery and file-tool probe	retained
 packages/coding-agent/test/gc-cli.test.ts	shared	modified	72d2defdf2ad	ci: repair red main baseline (OMP-217); fix: slim session workflow loadout and isolate test execution (OMP-166)	retained
 packages/coding-agent/test/git-active-context.test.ts	shared	modified	668de1ccdb2b	session candidate: OMP-127	retained
 packages/coding-agent/test/interactive-mode-plan-review.test.ts	shared	modified	35fa09735639	feat(coding-agent): cancellable plan_approved extension event (HOME-122)	retained
@@ -238,7 +253,8 @@ python/omp-work/src/omp_work/v1/store.py	fork-only	added	00a08606a50c	session ca
 python/omp-work/tests/pg_native.py	fork-only	added	ffa7d539ed74	session candidate: OMP-180; feat(work-ledger): cutover authority, OAuth exporter credential, atomic activation (HOME-148); feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147)	retained
 python/omp-work/tests/test_contract.py	fork-only	added	589f5c83548f	session candidate: OMP-180; session candidate: OMP-147; session candidate: OMP-108; session candidate: OMP-99; session candidate: OMP-67	retained
 python/omp-work/tests/test_cutover.py	fork-only	added	a972604b3e52	session candidate: OMP-180; session candidate: OMP-108; session candidate: HOME-149; feat(work-ledger): implement controlled Linear cutover (HOME-148); feat(work-ledger): cutover authority, OAuth exporter credential, atomic activation (HOME-148)	retained
-python/omp-work/tests/test_install_script.py	fork-only	added	253f000722e8	session candidate: OMP-180; session candidate: OMP-108	retained
+python/omp-work/tests/test_install_script.py	fork-only	added	af27eefa6a49	session candidate: OMP-180; session candidate: OMP-108; OMP-249: prove render-only refusal preserves live units for omitted, direct, XDG, symlink, and hardlink destinations	retained
+python/omp-work/tests/test_installed_runtime_isolation.py	fork-only	added	811e92fc79ce	OMP-249 installed CLI/noneditable service isolation with disposable PostgreSQL and corrupted-artifact refusal	retained
 python/omp-work/tests/test_linear_import.py	fork-only	added	ef1577266c06	session candidate: OMP-180; session candidate: HOME-149; feat(work-ledger): cutover authority, OAuth exporter credential, atomic activation (HOME-148); feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147); feat(work-ledger): PostgreSQL Work Ledger with Linear export and import (HOME-143, HOME-144, HOME-145, HOME-146)	retained
 python/omp-work/tests/test_postgres_operations.py	fork-only	added	6b7208f2338b	ci: repair red main baseline (OMP-217); session candidate: OMP-182; session candidate: OMP-180; session candidate: OMP-140; session candidate: OMP-89	retained
 python/omp-work/tests/test_service_readiness.py	fork-only	added	fd031006006a	session candidate: OMP-251	retained
@@ -266,7 +282,7 @@ session-system/agents/AGENTS.md	fork-only	added	5a77fc6607cf	session candidate: 
 session-system/agents/auditor.md	fork-only	added	b776e425d1f5	session candidate: OMP-179; fix(session): OMP-11 audit gate remediation; fix(work-ledger): finalize cutover remediation; session close: HOME-137; session close: HOME-135	retained
 session-system/agents/omp-AGENTS.md	fork-only	added	6f5aaccafe21	session candidate: OMP-180; session candidate: OMP-168; fix: slim session workflow loadout and isolate test execution (OMP-166); session candidate: OMP-140; session candidate: OMP-89	retained
 session-system/extensions/model-bookends.ts	fork-only	added	bbeaff23cbdf	session candidate: OMP-168; session candidate: OMP-141; fix(workflow): adopt post-freeze OMP-106 drift + overlap-refusal tests (OMP-116, OMP-118); session candidate: OMP-65; session candidate: OMP-47	retained
-session-system/extensions/work-now.ts	fork-only	added	e9805af1f5ff	session candidate: OMP-147; session candidate: OMP-47; session candidate: HOME-149; feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147)	retained
+session-system/extensions/work-now.ts	fork-only	added	d445eaae7f83	session candidate: OMP-147; session candidate: OMP-47; session candidate: HOME-149; feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147)	retained
 session-system/extensions/workflow/audit-tcb.ts	fork-only	added	8dbf87de9b79	session candidate: OMP-180	retained
 session-system/extensions/workflow/auditor-runner.ts	fork-only	added	121bbadad2dd	session candidate: OMP-176; session candidate: OMP-179; session candidate: OMP-173; session candidate: OMP-167; session candidate: OMP-168	retained
 session-system/extensions/workflow/backend.ts	fork-only	added	c4b5dd56f0f7	session candidate: OMP-180; docs(workflow): align sealed audit task contract; session candidate: OMP-174; session candidate: OMP-167; session candidate: OMP-168	retained
@@ -276,7 +292,7 @@ session-system/extensions/workflow/confirm.ts	fork-only	added	83c0d984c281	sessi
 session-system/extensions/workflow/digest-prompt.md	fork-only	added	d0f79a3426e3	feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147)	retained
 session-system/extensions/workflow/execute-prompt.md	fork-only	added	aaafbd64f026	session candidate: OMP-223; session candidate: OMP-220; session candidate: OMP-218; session candidate: OMP-184; session candidate: OMP-180	retained
 session-system/extensions/workflow/git.ts	fork-only	added	1d7120d2f072	session candidate: OMP-213; session candidate: OMP-220; session candidate: OMP-218; session candidate: OMP-212; feat(workflow): support zero-path execution plans and contract OMP-194	retained
-session-system/extensions/workflow/host.ts	fork-only	added	a5af8b53a69a	session candidate: OMP-223; session candidate: OMP-213; session candidate: OMP-220; session candidate: OMP-218; session candidate: OMP-212	retained
+session-system/extensions/workflow/host.ts	fork-only	added	40fd0eeeadc6	session candidate: OMP-223; session candidate: OMP-213; session candidate: OMP-220; session candidate: OMP-218; session candidate: OMP-212	retained
 session-system/extensions/workflow/kind-description.md	fork-only	added	0ed1ab86ffc7	session candidate: OMP-47; feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147)	retained
 session-system/extensions/workflow/lock-refusal.md	fork-only	added	0cdc7a464b2c	session candidate: OMP-140; feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147)	retained
 session-system/extensions/workflow/pending-ops.ts	fork-only	added	efdb2709af9d	session candidate: OMP-180; session candidate: OMP-108; feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147)	retained
@@ -300,6 +316,12 @@ session-system/prompts/archive/PROMPT-session-system-v2.md	fork-only	added	99833
 session-system/prompts/archive/PROMPT-session-verdict-drain.md	fork-only	added	025a4a84e236	fork change (describe)	retained
 session-system/refresh-natives.sh	fork-only	added	7fb123020f61	feat(omp-157): atomic native refresh and live-mapping upgrade fence; feat(session-system): native refresh gate in update loop (stale drop-in alarm)	retained
 session-system/rules/work-plan.md	fork-only	added	451860819c8d	docs(omp-157): state mapping carve-out rule factually; feat(omp-157): atomic native refresh and live-mapping upgrade fence; session candidate: OMP-140; session candidate: OMP-23; session candidate: HOME-149	retained
+session-system/runtime/manifest.ts	fork-only	added	8880950e5b5e	OMP-249 installed-byte, symlink, shared-inode, interpreter, and manifest verification	retained
+session-system/runtime/omp.sh	fork-only	added	a57f252aa5a2	OMP-249 pinned launcher excludes ambient Bun and dotenv configuration before startup	retained
+session-system/runtime/python-identity.py	fork-only	added	bb034518d148	OMP-249 noneditable installed-service and interpreter identity probe	retained
+session-system/runtime/run.ts	fork-only	added	d39d26579bfd	OMP-249 exact installation launch with separate state/config and explicit service port	retained
+session-system/runtime/stage.ts	fork-only	added	3c2c71fb57a0	OMP-249 clean commit source-installation staging; no activation or live service mutation	retained
+session-system/runtime/tsconfig.json	fork-only	added	d233f9e9e03b	OMP-249 runtime staging and launcher typecheck coverage	retained
 session-system/skills/caveman-commit/README.md	fork-only	added	d5aee0139500	HOME-110: home remaining 11 live skills in session-system (install.sh places them; vibe-check embedded .git stripped)	retained
 session-system/skills/caveman-commit/SKILL.md	fork-only	added	b9999e354867	HOME-110: home remaining 11 live skills in session-system (install.sh places them; vibe-check embedded .git stripped)	retained
 session-system/skills/caveman-compress/README.md	fork-only	added	4aa149a3e4ee	HOME-110: home remaining 11 live skills in session-system (install.sh places them; vibe-check embedded .git stripped)	retained
@@ -385,11 +407,11 @@ session-system/skills/whatsmissing/SKILL.md	fork-only	added	49fe16f8b7e8	fork ch
 session-system/skills/wiz-ccr-creator/SKILL.md	fork-only	added	8f74bcae17eb	HOME-110: home remaining 11 live skills in session-system (install.sh places them; vibe-check embedded .git stripped)	retained
 session-system/skills/wiz-ccr-creator/references/ccr_reference.md	fork-only	added	e4450248ff9d	HOME-110: home remaining 11 live skills in session-system (install.sh places them; vibe-check embedded .git stripped)	retained
 session-system/skills/wiz-mcp/SKILL.md	fork-only	added	5b85753da5f4	HOME-110: home remaining 11 live skills in session-system (install.sh places them; vibe-check embedded .git stripped)	retained
-session-system/tests/auditor-runner.test.ts	fork-only	added	fb449a82ae42	session candidate: OMP-223; session candidate: OMP-213; session candidate: OMP-220; session candidate: OMP-212; session candidate: OMP-192	retained
+session-system/tests/auditor-runner.test.ts	fork-only	added	e12064673b06	session candidate: OMP-223; session candidate: OMP-213; session candidate: OMP-220; session candidate: OMP-212; session candidate: OMP-192	retained
 session-system/tests/checkpoint-delivery.test.ts	fork-only	added	fc637e476062	fix(workflow): adopt post-freeze OMP-106 drift + overlap-refusal tests (OMP-116, OMP-118); session candidate: OMP-106	retained
 session-system/tests/closeout-boundary.test.ts	fork-only	added	2c0b57a08fdc	session candidate: HOME-149; session close: HOME-130; HOME-116: commit live session rules — scope refusals, closeout lock, checkpoint contract (+tests)	retained
 session-system/tests/closeout-lock.test.ts	fork-only	added	218547110645	session candidate: OMP-172; session candidate: OMP-140; session candidate: OMP-108; fix(session): HOME-149 audit remediation; session candidate: HOME-149	retained
-session-system/tests/commit-step.test.ts	fork-only	added	8a282d750069	session candidate: OMP-213; session candidate: OMP-220; session candidate: OMP-218; session candidate: OMP-212; feat(workflow): support zero-path execution plans and contract OMP-194	retained
+session-system/tests/commit-step.test.ts	fork-only	added	610b5d074ce1	session candidate: OMP-213; session candidate: OMP-220; session candidate: OMP-218; session candidate: OMP-212; feat(workflow): support zero-path execution plans and contract OMP-194	retained
 session-system/tests/execute-cycle-smoke.ts	fork-only	added	90f34f39d1c2	session candidate: OMP-223; session candidate: OMP-213; session candidate: OMP-188; session candidate: OMP-195; feat(workflow): support zero-path execution plans and contract OMP-194	retained
 session-system/tests/execution-halt.test.ts	fork-only	added	359e94a45411	session candidate: OMP-251	retained
 session-system/tests/extension-load.test.ts	fork-only	added	c27f5da76f98	session candidate: OMP-25; session candidate: HOME-149; feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147); feat(session-system): fork tests + update loop after subtree merge	retained
@@ -410,6 +432,7 @@ session-system/tests/pending-ops.test.ts	fork-only	added	f1775ecde6f7	session ca
 session-system/tests/refresh-natives.test.ts	fork-only	added	3bee56a31e48	feat(omp-157): atomic native refresh and live-mapping upgrade fence	retained
 session-system/tests/revise-work.test.ts	fork-only	added	d7c0367a938d	session candidate: OMP-245	retained
 session-system/tests/rider-batch.test.ts	fork-only	added	28203aa59300	session candidate: OMP-106; session candidate: OMP-89	retained
+session-system/tests/runtime-stage.test.ts	fork-only	added	9cc651df0b49	OMP-249 failed-stage isolation and installed-artifact tamper/link/inode regression coverage	retained
 session-system/tests/same-session-sections.test.ts	fork-only	added	d00f7c054b35	session candidate: OMP-127	retained
 session-system/tests/scope-enforcement.test.ts	fork-only	added	089acdb39619	session candidate: OMP-172; session candidate: HOME-149; HOME-116: commit live session rules — scope refusals, closeout lock, checkpoint contract (+tests)	retained
 session-system/tests/session-ledger.test.ts	fork-only	added	dfb6d9976a70	session candidate: OMP-172; session candidate: OMP-108; session candidate: OMP-107; session candidate: OMP-69	retained
