@@ -1147,4 +1147,8 @@ jobs:
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/before-session.jsonl
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/controller-*.rpc.jsonl
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/controller-*.stderr
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/task-recovery-evidence.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/task-*.jsonl
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/task-*.stderr
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/provider-*.json
               if-no-files-found: warn

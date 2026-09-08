@@ -33,6 +33,7 @@ import type { ContextUsage } from "../extensibility/extensions/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
 import type { SecretObfuscator } from "../secrets/obfuscator";
+import type { BoundTaskRecoveryRequest, PersistedTaskBindingV1, RecoveredTaskResult } from "../task/recovery";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { XdevState } from "../tools/xdev";
 import type { CodexAutoRedeemCoordinator } from "./codex-auto-reset";
@@ -120,6 +121,10 @@ export interface InitialRetryFallbackState {
 
 /** Dependencies and initial state used to construct an AgentSession. */
 export interface AgentSessionConfig {
+	assertSynchronousTaskPolicy?: (binding: PersistedTaskBindingV1) => void;
+	validateSynchronousTaskPolicy?: (binding: PersistedTaskBindingV1) => Promise<void>;
+	/** SDK bridge to the currently active native task tool; never re-executes task. */
+	recoverSynchronousTask?: (request: BoundTaskRecoveryRequest) => Promise<RecoveredTaskResult>;
 	agent: Agent;
 	/** Shared with the provider stream wrapper: current Codex Code Mode tool exposure snapshot for turn metadata. */
 	codeModeState?: { namespacesInfo?: unknown };
@@ -290,6 +295,8 @@ export interface AgentSessionConfig {
 
 /** Options for AgentSession.prompt(). */
 export interface PromptOptions {
+	/** Internal native-task association, validated against reverse session_init identity. */
+	taskBindingId?: string;
 	/** Whether to expand file-based prompt templates (default: true). */
 	expandPromptTemplates?: boolean;
 	/** Image attachments. */
@@ -446,6 +453,7 @@ export interface PersistedTurnRefusal {
 
 /** Resume only this active-branch entry, without adding another prompt. */
 export interface PersistedTurnContinuationRequest {
+	recoverSynchronousTask?: true;
 	sessionId: string;
 	entryId: string;
 	expectedLeafId: string;

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import shutil
 import signal
+import subprocess
 import threading
 import time
 from collections.abc import Generator
@@ -32,6 +34,8 @@ from omp_work.operations.config import OperationsConfig
 from pg_native import native_postgres, seed_authority
 from psycopg.rows import dict_row
 
+TaskFault = Literal["child-request", "repeated-child-request", "parent-result"]
+
 
 class RecoveryProvider:
     """Pause a real HTTP request after production review returned its tool result."""
@@ -39,8 +43,9 @@ class RecoveryProvider:
     def __init__(
         self,
         root: Path,
-        checkpoint: Literal["review", "resume", "persisted"],
+        checkpoint: Literal["review", "resume", "persisted", "task-active"],
         progress: bool = False,
+        task_fault: TaskFault = "child-request",
     ):
         self.root = root
         self.progress = progress
@@ -55,14 +60,121 @@ class RecoveryProvider:
         self.restarting = False
         self.error: str | None = None
         self.recovery_calls = 0
+        self.request_lock = threading.Lock()
+        self.request_observations: list[dict] = []
+        self.child_held = threading.Event()
+        self.child_recovered = threading.Event()
+        self.task_calls = 0
+        self.task_fault = task_fault
+        self.restart_generation = 0
+        self.restarted_child_held = threading.Event()
+        self.parent_result_held = threading.Event()
+        self.child_read_content: object | None = None
+        self.task_assignment = (
+            (Path(__file__).parent / "fixtures/task-active-assignment.md").read_text()
+            if checkpoint == "task-active"
+            else ""
+        )
+
+    def record_request(self, request: dict) -> int:
+        with self.request_lock:
+            self.calls.append(request)
+            ordinal = len(self.calls)
+            self.request_observations.append(
+                {
+                    "ordinal": ordinal,
+                    "model": request.get("model"),
+                    "arrivedAt": time.time(),
+                    "afterRestart": self.restarting,
+                    "restartGeneration": self.restart_generation,
+                    "responseStarted": False,
+                    "responseBytesWritten": 0,
+                }
+            )
+            (self.root / f"provider-{ordinal}.json").write_text(json.dumps(request))
+            self.save_request_observations()
+            return ordinal
+
+    def save_request_observations(self) -> None:
+        (self.root / "provider-observations.json").write_text(
+            json.dumps(self.request_observations, indent=2)
+        )
 
     def respond(self, request: dict) -> dict:
-        self.calls.append(request)
-        (self.root / f"provider-{len(self.calls)}.json").write_text(json.dumps(request))
+        # A task may itself have work tools. Route by its explicitly configured
+        # model before parent/auxiliary handling, including after restart.
+        if self.checkpoint == "task-active" and request.get("model") == "local-task":
+            if self.restarting:
+                if (
+                    self.task_fault == "repeated-child-request"
+                    and self.restart_generation == 1
+                ):
+                    self.restarted_child_held.set()
+                    self.release.wait(300)
+                    return {"content": "Disconnected held recovery request."}
+                self.child_recovered.set()
+                results = [
+                    message
+                    for message in request.get("messages", [])
+                    if message.get("role") == "tool"
+                ]
+                if not results:
+                    name, arguments, call_id = (
+                        "read",
+                        {"path": "result.txt"},
+                        "task-child-read",
+                    )
+                else:
+                    self.child_read_content = results[-1].get("content")
+                    name, arguments, call_id = (
+                        "yield",
+                        {
+                            "result": {
+                                "data": {
+                                    "path": "result.txt",
+                                    "observed": results[-1].get("content"),
+                                }
+                            }
+                        },
+                        "task-child-yield",
+                    )
+                return {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": json.dumps(arguments),
+                            },
+                        }
+                    ]
+                }
+            self.child_held.set()
+            self.release.wait(300)
+            return {
+                "content": "Disconnected pre-kill child response released for fixture cleanup."
+            }
         tools = request.get("tools", [])
         if not any(tool.get("function", {}).get("name") == "work" for tool in tools):
             return {"content": "Recovery fixture"}
         if self.restarting:
+            if self.checkpoint == "task-active":
+                results = [
+                    message
+                    for message in request.get("messages", [])
+                    if message.get("role") == "tool"
+                    and message.get("tool_call_id") == "task-active-call"
+                ]
+                if len(results) != 1:
+                    self.error = (
+                        f"Parent resumed without original task result: {results}"
+                    )
+                if self.task_fault == "parent-result" and self.restart_generation == 1:
+                    self.parent_result_held.set()
+                    self.release.wait(300)
+                    return {"content": "Disconnected parent result request."}
             self.recovery_calls += 1
             self.recovered.set()
             if self.progress:
@@ -98,6 +210,38 @@ class RecoveryProvider:
                     self.error = str(results[-1])
                 self.progressed.set()
             return {"content": "Recovery continuation observed."}
+        if self.checkpoint == "task-active":
+            results = [
+                message
+                for message in request.get("messages", [])
+                if message.get("role") == "tool"
+            ]
+            if results or self.task_calls:
+                self.error = (
+                    f"Task did not enter held child boundary: {json.dumps(results)}"
+                )
+                self.barrier.set()
+                return {"content": "Task fixture setup failed."}
+            self.task_calls += 1
+            return {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "task-active-call",
+                        "type": "function",
+                        "function": {
+                            "name": "task",
+                            "arguments": json.dumps(
+                                {
+                                    "name": "RecoveryTask",
+                                    "agent": "task",
+                                    "task": self.task_assignment,
+                                }
+                            ),
+                        },
+                    }
+                ]
+            }
         if self.checkpoint in ("resume", "persisted"):
             self.barrier.set()
             self.release.wait(60)
@@ -182,6 +326,7 @@ class RecoveryProvider:
                 request = json.loads(
                     self.rfile.read(int(self.headers["Content-Length"]))
                 )
+                ordinal = provider.record_request(request)
                 delta = provider.respond(request)
                 packet = {
                     "id": "recovery-response",
@@ -206,11 +351,24 @@ class RecoveryProvider:
                     f"data: {json.dumps(packet)}\n\ndata: {json.dumps(finish)}\n\ndata: [DONE]\n\n"
                 ).encode()
                 try:
+                    with provider.request_lock:
+                        provider.request_observations[ordinal - 1][
+                            "responseStarted"
+                        ] = True
+                        provider.request_observations[ordinal - 1][
+                            "responseStartedAt"
+                        ] = time.time()
+                        provider.save_request_observations()
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
+                    with provider.request_lock:
+                        provider.request_observations[ordinal - 1][
+                            "responseBytesWritten"
+                        ] = len(data)
+                        provider.save_request_observations()
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
@@ -241,12 +399,910 @@ def execution_message_count(entries: list[dict]) -> int:
     )
 
 
+def read_complete_session(path: Path) -> list[dict]:
+    """Read only complete system-written JSONL records while a process appends."""
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        return []
+    complete, separator, _tail = raw.rpartition("\n")
+    if not separator:
+        return []
+    return [json.loads(line) for line in complete.splitlines() if line]
+
+
+def process_group_snapshot(group_id: int) -> list[dict]:
+    """Observe Linux processes; task registry IDs are never treated as PIDs."""
+    processes: list[dict] = []
+    for directory in Path("/proc").iterdir():
+        if not directory.name.isdigit():
+            continue
+        try:
+            fields = (directory / "stat").read_text().rsplit(")", 1)[1].split()
+            if int(fields[2]) != group_id:
+                continue
+            record = {
+                "pid": int(directory.name),
+                "state": fields[0],
+                "parentPid": int(fields[1]),
+                "processGroupId": int(fields[2]),
+                "processSessionId": int(fields[3]),
+                "startTicks": fields[19],
+                "argv": (directory / "cmdline")
+                .read_bytes()
+                .decode(errors="replace")
+                .rstrip("\x00")
+                .split("\x00"),
+            }
+            for link in ("exe", "cwd"):
+                try:
+                    record[link] = os.readlink(directory / link)
+                except OSError:
+                    record[link] = None
+            processes.append(record)
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+    return sorted(processes, key=lambda process: process["pid"])
+
+
+def durable_session_branch(entries: list[dict]) -> list[dict]:
+    """Walk the leaf SessionManager reconstructs from complete on-disk entries."""
+    physical = entries[1:] if entries and entries[0].get("type") == "title" else entries
+    if not physical:
+        return []
+    assert physical[0].get("type") == "session", "Journal has no session header"
+    indexed = physical[1:]
+    by_id = {}
+    for entry in indexed:
+        assert entry.get("type") not in ("session", "title"), (
+            "Unexpected journal header"
+        )
+        entry_id = entry.get("id")
+        assert isinstance(entry_id, str) and entry_id not in by_id, (
+            "Missing or duplicate journal entry ID"
+        )
+        by_id[entry_id] = entry
+    branch = []
+    seen = set()
+    leaf = indexed[-1]["id"] if indexed else None
+    while leaf is not None:
+        assert leaf not in seen, "Durable journal branch contains a cycle"
+        assert leaf in by_id, "Durable journal branch has a missing parent"
+        seen.add(leaf)
+        entry = by_id[leaf]
+        branch.append(entry)
+        leaf = entry["parentId"]
+    return list(reversed(branch))
+
+
+def task_preparation_records(
+    entries: list[dict], binding: dict, *, require_complete_suffix: bool = False
+) -> list[dict]:
+    """Validate production-owned membership without classifying context by text."""
+    entries = durable_session_branch(entries)
+    records = [
+        entry["data"]
+        for entry in entries
+        if entry.get("type") == "custom"
+        and entry.get("customType") == "prompt-preparation"
+        and entry.get("data", {}).get("taskBindingId") == binding["call"]["bindingId"]
+    ]
+    assert records, "Child has no durable core preparation association"
+    by_id = {entry["id"]: entry for entry in entries if "id" in entry}
+    anchors = {record["anchorEntryId"] for record in records}
+    assert len(anchors) == 1, "Recovery injected a replacement child assignment"
+    anchor_id = next(iter(anchors))
+    anchor = by_id[anchor_id]
+    assert anchor["type"] == "message" and anchor["message"]["role"] == "user"
+    assert anchor["message"]["attribution"] == "agent"
+    batches = set()
+    members = set()
+    positions = {
+        entry["id"]: index for index, entry in enumerate(entries) if "id" in entry
+    }
+    for record in records:
+        assert record["version"] == 1
+        assert record["sessionId"] == binding["child"]["sessionId"]
+        assert record["batchId"] not in batches
+        batches.add(record["batchId"])
+        receipt = next(
+            entry
+            for entry in entries
+            if entry.get("customType") == "prompt-preparation"
+            and entry.get("data") == record
+        )
+        ancestors = set()
+        parent_id = receipt.get("parentId")
+        while parent_id is not None:
+            assert parent_id not in ancestors, "Preparation branch contains a cycle"
+            ancestors.add(parent_id)
+            parent_id = by_id[parent_id].get("parentId")
+        assert anchor_id in ancestors
+        for member_id in record["preparationEntryIds"]:
+            assert member_id != anchor_id and member_id not in members
+            members.add(member_id)
+            assert member_id in ancestors, (
+                "Preparation receipt references another branch"
+            )
+            member = by_id[member_id]
+            assert positions[member_id] > positions[anchor_id]
+            assert (
+                member.get("attribution", member.get("message", {}).get("attribution"))
+                == "agent"
+            )
+    if require_complete_suffix:
+        conversation_suffix = {
+            entry["id"]
+            for entry in entries[positions[anchor_id] + 1 :]
+            if entry.get("type") in ("message", "custom_message")
+        }
+        assert conversation_suffix == members, (
+            "Held child has conversation outside core preparation membership"
+        )
+    return records
+
+
+def require_task_binding(
+    parent: list[dict], child: list[dict], child_snapshot: dict
+) -> dict:
+    bindings = [
+        entry
+        for entry in parent
+        if entry.get("type") == "custom"
+        and entry.get("customType") == "task-run-binding"
+    ]
+    assert len(bindings) == 1, "Original call must have one production-written binding"
+    parent_branch = durable_session_branch(parent)
+    child_branch = durable_session_branch(child)
+    assert bindings[0] in parent_branch, "Task binding is outside durable parent branch"
+    binding = bindings[0]["data"]
+    assert binding["version"] == 1 and binding["mode"] == "sync-flat"
+    canonical = json.dumps(
+        binding["contract"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    assert (
+        hashlib.sha256(b"omp-task-recovery-v1\0" + canonical.encode()).hexdigest()
+        == binding["contractSha256"]
+    )
+    call = binding["call"]
+    parent_header = next(entry for entry in parent if entry.get("type") == "session")
+    assert call["sessionId"] == parent_header["id"]
+    assistant = next(
+        entry for entry in parent_branch if entry.get("id") == call["assistantEntryId"]
+    )
+    calls = [
+        part
+        for part in assistant["message"]["content"]
+        if part.get("type") == "toolCall"
+    ]
+    assert (
+        len(calls) == 1
+        and calls[0]["id"] == call["toolCallId"] == child_snapshot["parentToolCallId"]
+    )
+    assert calls[0]["name"] == "task"
+    raw_args = calls[0]["arguments"]
+    assert set(raw_args) == {"name", "agent", "task"}
+    effective_args = {key: raw_args[key].strip() for key in ("name", "agent", "task")}
+    assert binding["contract"]["args"] == effective_args
+    args_json = json.dumps(
+        effective_args, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    assert (
+        call["argumentsSha256"]
+        == hashlib.sha256(b"omp-task-recovery-v1\0" + args_json.encode()).hexdigest()
+    )
+    prompt = next(
+        entry for entry in parent_branch if entry.get("id") == call["promptEntryId"]
+    )
+    assert (
+        parent_branch.index(prompt)
+        < parent_branch.index(assistant)
+        < parent_branch.index(bindings[0])
+    ), "Prompt, assistant and binding are not ordered on durable ancestry"
+    assert prompt["type"] == "custom_message" and prompt["customType"] == "work-execute"
+    assert any(
+        entry.get("customType") == "prompt-preparation"
+        and entry.get("data", {}).get("anchorEntryId") == prompt["id"]
+        and entry["data"]["sessionId"] == call["sessionId"]
+        for entry in parent_branch
+    ), "Parent binding lacks core prompt provenance"
+    child_header = next(entry for entry in child if entry.get("type") == "session")
+    init = next(entry for entry in child_branch if entry.get("type") == "session_init")
+    assert binding["child"]["registryId"] == child_snapshot["id"] == "RecoveryTask"
+    assert binding["child"]["sessionId"] == child_header["id"]
+    assert Path(binding["child"]["sessionFile"]) == Path(child_snapshot["sessionFile"])
+    assert binding["child"]["initEntryId"] == init["id"]
+    assert init["taskCall"] == call
+    initialization_fields = (
+        "systemPrompt",
+        "task",
+        "tools",
+        "agent",
+        "modelRole",
+        "resolvedModel",
+        "readOnly",
+        "outputSchema",
+        "outputSchemaMode",
+        "restrictToolNames",
+        "spawns",
+        "readSummarize",
+        "advisor",
+    )
+    assert binding["contract"]["initialization"] == {
+        key: init[key] for key in initialization_fields if key in init
+    }
+    assert binding["contract"]["runtime"]["model"] == {
+        "provider": "qualification",
+        "api": "openai-completions",
+        "id": "local-task",
+    }
+    task_preparation_records(child, binding)
+    return binding
+
+
+def capture_task_active_recovery(
+    *,
+    release: InstalledRelease,
+    tmp_path: Path,
+    repository: Path,
+    remote: Path,
+    state: Path,
+    env: dict[str, str],
+    client: httpx.Client,
+    workspace_id: str,
+    setup: dict,
+    provider: RecoveryProvider,
+    cli: subprocess.Popen,
+    rpc: RpcProcess,
+    initial: dict[str, object],
+    service_pid: int,
+) -> None:
+    """Fault observer for real synchronous task execution; no runtime repair writes."""
+    evidence: dict = {
+        "checkpoint": "task-active",
+        "taskFault": provider.task_fault,
+        "release": str(release.root),
+        "manifest": release.digest,
+        "launcherPid": cli.pid,
+        "barrierReached": False,
+    }
+    evidence_file = tmp_path / "task-recovery-evidence.json"
+
+    def save() -> None:
+        evidence_file.write_text(json.dumps(evidence, indent=2))
+
+    def get_view(url: str) -> dict:
+        response = client.get(url)
+        response.raise_for_status()
+        return response.json()
+
+    execution_url = f"/v1/workspaces/{workspace_id}/execution/{provider.key}"
+    workflow_url = f"/v1/work-items/{provider.key}/workflow"
+    execution_workspace = Path(setup["workspace"]["path"])
+
+    def effects() -> dict:
+        return {
+            "head": _run(
+                ["git", "rev-parse", "HEAD"], execution_workspace, env
+            ).strip(),
+            "dirtyPaths": _run(
+                ["git", "status", "--porcelain"], execution_workspace, env
+            ),
+            "result": (execution_workspace / "result.txt").read_text(),
+            "remoteRefs": _run(["git", "show-ref"], remote, env),
+        }
+
+    deadline = time.monotonic() + 40
+    while not provider.child_held.wait(0.05) and time.monotonic() < deadline:
+        if provider.error:
+            break
+    evidence["setupError"] = provider.error
+    evidence["initialRpcState"] = initial
+    evidence["executionBeforeBarrier"] = get_view(execution_url)
+    evidence["subagentsAtBarrier"] = rpc.request("get_subagents")
+    save()
+    assert provider.error is None, provider.error
+    assert provider.child_held.is_set(), (
+        "Actual child provider request never reached the task-active barrier"
+    )
+
+    current = rpc.request("get_state")
+    parent_path = Path(str(current["sessionFile"]))
+    evidence["parentRpcState"] = current
+    evidence["parentSessionFile"] = str(parent_path)
+    assert current["sessionId"] == initial["sessionId"]
+    assert current["isStreaming"] is True
+    task_tools = [
+        tool for tool in current.get("dumpTools", []) if tool["name"] == "task"
+    ]
+    assert len(task_tools) == 1, (
+        "Installed parent did not advertise the actual task tool"
+    )
+    task_properties = task_tools[0]["parameters"]["properties"]
+    assert "task" in task_properties and "tasks" not in task_properties, task_properties
+    evidence["taskTool"] = task_tools[0]
+
+    snapshots = evidence["subagentsAtBarrier"]["subagents"]
+    assert len(snapshots) == 1, snapshots
+    child = snapshots[0]
+    assert child["status"] == "running", child
+    assert child["agent"] == "task" and child["agentSource"] == "bundled", child
+    assert child["id"] == "RecoveryTask", (
+        "Unexpected fresh task allocation or role override"
+    )
+    child_path = Path(child["sessionFile"])
+    call_id = child["parentToolCallId"]
+    assert call_id, "Live lifecycle did not bind child to original parent tool call"
+    evidence["childSnapshot"] = child
+
+    deadline = time.monotonic() + 10
+    while True:
+        parent_entries = read_complete_session(parent_path)
+        child_entries = read_complete_session(child_path)
+        parent_calls = [
+            part
+            for entry in parent_entries
+            if entry.get("type") == "message"
+            and entry.get("message", {}).get("role") == "assistant"
+            for part in entry["message"].get("content", [])
+            if part.get("type") == "toolCall" and part.get("id") == call_id
+        ]
+        starts = [
+            entry
+            for entry in parent_entries
+            if entry.get("type") == "custom"
+            and entry.get("customType") == "tool_execution_start"
+            and entry.get("data", {}).get("toolCallId") == call_id
+        ]
+        inits = [
+            entry for entry in child_entries if entry.get("type") == "session_init"
+        ]
+        task_messages = [
+            entry
+            for entry in child_entries
+            if entry.get("type") == "message"
+            and entry.get("message", {}).get("role") in ("user", "developer")
+            and provider.task_assignment.strip()
+            in json.dumps(entry["message"], ensure_ascii=False).replace("\\n", "\n")
+        ]
+        has_binding = any(
+            entry.get("customType") == "task-run-binding" for entry in parent_entries
+        )
+        has_preparation = any(
+            entry.get("customType") == "prompt-preparation" for entry in child_entries
+        )
+        if (
+            parent_calls
+            and starts
+            and inits
+            and task_messages
+            and has_binding
+            and has_preparation
+        ) or time.monotonic() >= deadline:
+            break
+        time.sleep(0.05)
+    shutil.copyfile(parent_path, tmp_path / "task-parent-before.jsonl")
+    if child_path.exists():
+        shutil.copyfile(child_path, tmp_path / "task-child-before.jsonl")
+    evidence["parentToolCalls"] = parent_calls
+    evidence["parentToolStarts"] = starts
+    evidence["childSessionInit"] = inits
+    save()
+    assert len(parent_calls) == 1 and parent_calls[0]["name"] == "task", parent_calls
+    assert parent_calls[0]["arguments"] == {
+        "name": "RecoveryTask",
+        "agent": "task",
+        "task": provider.task_assignment,
+    }
+    assert len(starts) == 1, "Parent task execution-start was not durable"
+    assert not any(
+        entry.get("type") == "message"
+        and entry.get("message", {}).get("role") == "toolResult"
+        and entry["message"].get("toolCallId") == call_id
+        for entry in parent_entries
+    )
+    assert not any(
+        entry.get("type") == "message"
+        and entry.get("message", {}).get("role") == "assistant"
+        and entry["message"].get("stopReason") == "stop"
+        for entry in parent_entries
+    )
+    assert len(inits) == 1 and task_messages, (
+        "Child initialization and assignment were not persisted"
+    )
+    child_headers = [entry for entry in child_entries if entry.get("type") == "session"]
+    assert len(child_headers) == 1
+    child_header = child_headers[0]
+    assert child_header["id"] != current["sessionId"]
+    assert Path(child_header["cwd"]).resolve() == execution_workspace.resolve()
+    assert inits[0]["agent"] == "task"
+    assert inits[0]["modelRole"] == "task"
+    assert inits[0]["resolvedModel"] == "qualification/local-task"
+    assert "yield" in inits[0]["tools"]
+    assert "spawns" in inits[0]
+    binding = require_task_binding(parent_entries, child_entries, child)
+    original_preparation = task_preparation_records(
+        child_entries, binding, require_complete_suffix=True
+    )
+    evidence["taskBinding"] = binding
+    evidence["originalPreparation"] = original_preparation
+    assert not any(
+        entry.get("type") == "message"
+        and entry.get("message", {}).get("role") in ("assistant", "toolResult")
+        or entry.get("type") == "custom"
+        and entry.get("customType") == "tool_execution_start"
+        for entry in child_entries
+    )
+    child_requests = [
+        row for row in provider.request_observations if row["model"] == "local-task"
+    ]
+    assert len(child_requests) == 1 and child_requests[0]["responseStarted"] is False
+    child_request = provider.calls[child_requests[0]["ordinal"] - 1]
+    assert provider.task_assignment.strip() in json.dumps(
+        child_request, ensure_ascii=False
+    ).replace("\\n", "\n")
+    assert any(
+        tool.get("function", {}).get("name") == "yield"
+        for tool in child_request.get("tools", [])
+    )
+
+    before_execution = get_view(execution_url)
+    before_workflow = get_view(workflow_url)
+    bound_messages = [
+        entry
+        for entry in parent_entries
+        if entry.get("type") == "custom_message"
+        and entry.get("customType") == "work-execute"
+    ]
+    assert len(bound_messages) == 1
+    intent = bound_messages[0]["details"]["executionContinuation"]
+    active = before_execution["active_item"]
+    assert before_execution["grant"]["state"] == "active"
+    assert intent["grantId"] == before_execution["grant"]["grant_id"]
+    assert intent["postVersion"] == before_execution["grant"]["grant_version"]
+    assert intent["sessionId"] == current["sessionId"]
+    assert intent["workId"] == active["work_id"]
+    assert intent["revisionId"] == (
+        active["criteria_revision_id"] or active["claimed_revision_id"]
+    )
+    assert before_execution == evidence["executionBeforeBarrier"]
+    assert before_workflow["item"]["candidate"] is None
+    assert before_workflow["close_attempts"] == []
+    delivered = {
+        row["event_id"]
+        for row in before_workflow.get("checkpoint_deliveries", [])
+        if row["status"] == "delivered"
+    }
+    assert not any(
+        row["requires_delivery"] and row["event_id"] not in delivered
+        for row in before_workflow.get("close_attempt_events", [])
+    )
+    pending_records = []
+    for claim_path in sorted(
+        (state / "config/omp-work/pending-operations").glob("*.json")
+    ):
+        claim = json.loads(claim_path.read_text())
+        pending_records.append({"file": str(claim_path), "record": claim})
+    evidence["pendingOperationRecordsBefore"] = pending_records
+    save()
+    assert all(
+        record["record"].get("result") is not None for record in pending_records
+    ), "An unresolved setup mutation would confound task recovery"
+    before_effects = effects()
+    assert before_effects["result"] == "before\n" and before_effects["dirtyPaths"] == ""
+    evidence.update(
+        {
+            "intentEntry": bound_messages[0],
+            "beforeExecution": before_execution,
+            "beforeWorkflow": before_workflow,
+            "beforeEffects": before_effects,
+            "providerObservationsBefore": [
+                dict(row) for row in provider.request_observations
+            ],
+            "kills": [],
+            "restarts": [],
+        }
+    )
+
+    def kill_host(process: subprocess.Popen, label: str) -> None:
+        group_id = os.getpgid(process.pid)
+        topology = process_group_snapshot(group_id)
+        hosts = [
+            row
+            for row in topology
+            if str(release.root / "source/packages/coding-agent/src/cli.ts")
+            in row["argv"]
+        ]
+        assert len(hosts) == 1, topology
+        host = hosts[0]
+        assert host["pid"] != process.pid and host["parentPid"] == process.pid
+        assert group_id == process.pid
+        postgres_pid = int(
+            (tmp_path / "postgres/pgdata/postmaster.pid").read_text().splitlines()[0]
+        )
+        outsiders = [service_pid, os.getpid(), postgres_pid]
+        assert all(os.getpgid(pid) != group_id for pid in outsiders)
+        record = {
+            "label": label,
+            "launcherPid": process.pid,
+            "processGroupId": group_id,
+            "cliPidHostingParentAndChildSessions": host["pid"],
+            "topologyBefore": topology,
+            "outsideGroup": outsiders,
+            "signal": "SIGKILL",
+            "killedAt": time.time(),
+        }
+        evidence["kills"].append(record)
+        evidence["barrierReached"] = True
+        save()
+        os.killpg(group_id, signal.SIGKILL)
+        record["exitCode"] = process.wait(timeout=10)
+        assert record["exitCode"] == -signal.SIGKILL
+        deadline = time.monotonic() + 5
+        while True:
+            after_topology = process_group_snapshot(group_id)
+            alive = [
+                row
+                for row in after_topology
+                if row["pid"] == host["pid"]
+                and row["startTicks"] == host["startTicks"]
+                and row["state"] not in ("Z", "X")
+            ]
+            if not alive or time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        record["topologyAfterKill"] = after_topology
+        save()
+        assert not alive, "Actual CLI hosting the task survived group kill"
+
+    def original_results(entries: list[dict]) -> list[dict]:
+        return [
+            entry
+            for entry in entries
+            if entry.get("type") == "message"
+            and entry.get("message", {}).get("role") == "toolResult"
+            and entry["message"].get("toolCallId") == call_id
+        ]
+
+    def successful_result(entries: list[dict]) -> dict:
+        results = original_results(entries)
+        assert len(results) == 1 and not results[0]["message"].get("isError"), results
+        entry = results[0]
+        branch = durable_session_branch(entries)
+        assert entry in branch, "Original task result is outside durable parent branch"
+        binding_entry = next(
+            row for row in branch if row.get("customType") == "task-run-binding"
+        )
+        assert branch.index(binding_entry) < branch.index(entry), (
+            "Task result precedes original binding"
+        )
+        assert entry["taskResult"] == {
+            "bindingId": binding["call"]["bindingId"],
+            "contractSha256": binding["contractSha256"],
+            "toolCallId": call_id,
+            "childSessionId": binding["child"]["sessionId"],
+        }, "Parent result lost core binding after result processing"
+        native = entry["message"]["details"]["results"]
+        assert len(native) == 1 and native[0]["id"] == child["id"]
+        assert native[0]["agent"] == "task" and native[0]["agentSource"] == "bundled"
+        assert native[0]["exitCode"] == 0
+        assert provider.child_read_content is not None
+        assert "before" in str(provider.child_read_content)
+        assert json.loads(native[0]["output"]) == {
+            "path": "result.txt",
+            "observed": provider.child_read_content,
+        }, "Actual task result did not contain read-derived yield output"
+        return entry
+
+    def terminal_parent_answer(entries: list[dict]) -> dict | None:
+        results = original_results(entries)
+        assert len(results) <= 1, (
+            "Whole journal contains duplicate original task results"
+        )
+        branch = durable_session_branch(entries)
+        if not results or results[0] not in branch:
+            return None
+        result_index = branch.index(results[0])
+        return next(
+            (
+                entry
+                for entry in branch[result_index + 1 :]
+                if entry.get("type") == "message"
+                and entry.get("message", {}).get("role") == "assistant"
+                and entry["message"].get("stopReason") == "stop"
+            ),
+            None,
+        )
+
+    def assert_stable_state() -> None:
+        assert get_view(execution_url) == before_execution, (
+            "Task recovery changed execution authority"
+        )
+        assert get_view(workflow_url) == before_workflow, (
+            "Task recovery changed workflow effects"
+        )
+        assert effects() == before_effects, "Task recovery changed local/Git effects"
+
+    def assert_same_journals() -> tuple[list[dict], list[dict]]:
+        parent_now = read_complete_session(parent_path)
+        child_now = read_complete_session(child_path)
+        execution_messages = [
+            entry
+            for entry in parent_now
+            if entry.get("type") == "custom_message"
+            and entry.get("customType") == "work-execute"
+        ]
+        assert execution_messages == [bound_messages[0]], (
+            "Recovery duplicated or changed original execution prompt"
+        )
+        assert require_task_binding(parent_now, child_now, child) == binding
+        assert (
+            task_preparation_records(child_now, binding)[0] == original_preparation[0]
+        )
+        calls = [
+            part
+            for entry in parent_now
+            if entry.get("type") == "message"
+            and entry.get("message", {}).get("role") == "assistant"
+            for part in entry["message"].get("content", [])
+            if part.get("type") == "toolCall"
+        ]
+        assert calls == parent_calls, "Recovery issued a replacement parent task call"
+        starts_now = [
+            entry
+            for entry in parent_now
+            if entry.get("customType") == "tool_execution_start"
+            and entry.get("data", {}).get("toolCallId") == call_id
+        ]
+        assert starts_now == starts, "Recovery replayed original task tool start"
+        assert (
+            len(
+                [
+                    entry
+                    for entry in child_now
+                    if entry.get("type") == "message"
+                    and entry.get("message", {}).get("role") == "user"
+                ]
+            )
+            == 1
+        ), "Recovery appended a replacement child assignment"
+        assert_stable_state()
+        return parent_now, child_now
+
+    kill_host(cli, "initial-child-request")
+    provider.restarting = True
+    restart_args = (
+        "--mode",
+        "rpc",
+        "--session",
+        str(parent_path),
+        "--provider",
+        "qualification",
+        "--model",
+        "local-recovery",
+    )
+    recovery_restarts = 1 if provider.task_fault == "child-request" else 2
+    completed_result: dict | None = None
+    completed_child: list[dict] | None = None
+    completed_requests = 0
+    parent_result_child_requests = 0
+    for generation in range(1, recovery_restarts + 2):
+        provider.restart_generation = generation
+        restart_log = tmp_path / f"task-controller-restart-{generation}.stderr"
+        with _process(
+            release.command(state, repository, *restart_args),
+            repository,
+            env,
+            restart_log,
+        ) as restarted:
+            restarted_rpc = RpcProcess(restarted, restart_log)
+            restarted_state = restarted_rpc.request("get_state")
+            assert restarted_state["sessionId"] == current["sessionId"]
+            restart_record = {
+                "generation": generation,
+                "launcherPid": restarted.pid,
+                "state": restarted_state,
+            }
+            evidence["restarts"].append(restart_record)
+            save()
+
+            if generation == 1 and provider.task_fault == "repeated-child-request":
+                assert provider.restarted_child_held.wait(40), (
+                    "Restarted original child never reached held request"
+                )
+                deadline = time.monotonic() + 10
+                while True:
+                    child_now = read_complete_session(child_path)
+                    preparation = task_preparation_records(child_now, binding)
+                    if (
+                        len(preparation) > len(original_preparation)
+                        or time.monotonic() >= deadline
+                    ):
+                        break
+                    time.sleep(0.05)
+                assert len(preparation) > len(original_preparation), (
+                    "Fresh recovery preparation was not durable"
+                )
+                preparation = task_preparation_records(
+                    child_now, binding, require_complete_suffix=True
+                )
+                assert not any(
+                    entry.get("type") == "message"
+                    and entry.get("message", {}).get("role")
+                    in ("assistant", "toolResult")
+                    or entry.get("type") == "custom"
+                    and entry.get("customType") == "tool_execution_start"
+                    for entry in child_now
+                ), "Repeat-kill boundary already has child response/tool history"
+                observations = [
+                    row
+                    for row in provider.request_observations
+                    if row["model"] == "local-task"
+                    and row["restartGeneration"] == generation
+                ]
+                assert len(observations) == 1 and not observations[0]["responseStarted"]
+                assert observations[0]["responseBytesWritten"] == 0
+                parent_now, child_now = assert_same_journals()
+                assert not original_results(parent_now)
+                restart_record["freshPreparation"] = preparation
+                shutil.copyfile(
+                    child_path, tmp_path / "task-child-before-repeat-kill.jsonl"
+                )
+                shutil.copyfile(
+                    parent_path, tmp_path / "task-parent-before-repeat-kill.jsonl"
+                )
+                kill_host(restarted, "restarted-child-after-fresh-preparation")
+                continue
+
+            if generation == 1 and provider.task_fault == "parent-result":
+                assert provider.parent_result_held.wait(40), (
+                    "Parent never consumed original task result"
+                )
+                deadline = time.monotonic() + 10
+                while (
+                    not original_results(read_complete_session(parent_path))
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.05)
+                parent_now, child_now = assert_same_journals()
+                completed_result = successful_result(parent_now)
+                completed_child = child_now
+                parent_result_child_requests = len(
+                    [
+                        row
+                        for row in provider.request_observations
+                        if row["model"] == "local-task"
+                    ]
+                )
+                held_parent = [
+                    row
+                    for row in provider.request_observations
+                    if row["model"] == "local-recovery"
+                    and row["restartGeneration"] == generation
+                ]
+                assert len(held_parent) == 1
+                assert not held_parent[0]["responseStarted"]
+                assert held_parent[0]["responseBytesWritten"] == 0
+                assert not any(
+                    entry.get("type") == "message"
+                    and entry.get("message", {}).get("role") == "assistant"
+                    and entry["message"].get("stopReason") == "stop"
+                    for entry in parent_now
+                ), "Parent answer completed before result-persistence kill"
+                restart_record["durableResultBeforeKill"] = completed_result
+                restart_record["heldParentRequest"] = held_parent[0]
+                shutil.copyfile(
+                    parent_path, tmp_path / "task-parent-result-before-kill.jsonl"
+                )
+                shutil.copyfile(
+                    child_path, tmp_path / "task-child-completed-before-kill.jsonl"
+                )
+                kill_host(restarted, "parent-request-after-durable-task-result")
+                continue
+
+            if generation <= recovery_restarts:
+                deadline = time.monotonic() + 40
+                while True:
+                    parent_now = read_complete_session(parent_path)
+                    finished = terminal_parent_answer(parent_now) is not None
+                    if finished or time.monotonic() >= deadline or provider.error:
+                        break
+                    time.sleep(0.05)
+                assert provider.error is None, provider.error
+                assert finished, (
+                    f"Original parent never completed: {restart_log.read_text()[-6000:]}"
+                )
+                assert provider.child_recovered.is_set()
+                parent_now, child_now = assert_same_journals()
+                result = successful_result(parent_now)
+                if completed_result is not None:
+                    assert result == completed_result, (
+                        "Restart rewrote durable original parent result"
+                    )
+                    assert child_now == completed_child, (
+                        "Parent-result recovery modified child journal"
+                    )
+                    assert (
+                        len(
+                            [
+                                row
+                                for row in provider.request_observations
+                                if row["model"] == "local-task"
+                            ]
+                        )
+                        == parent_result_child_requests
+                    ), "Parent-result restart dispatched a child request"
+                read_results = [
+                    entry["message"]
+                    for entry in child_now
+                    if entry.get("type") == "message"
+                    and entry.get("message", {}).get("role") == "toolResult"
+                    and entry["message"].get("toolName") == "read"
+                ]
+                yield_results = [
+                    entry["message"]
+                    for entry in child_now
+                    if entry.get("type") == "message"
+                    and entry.get("message", {}).get("role") == "toolResult"
+                    and entry["message"].get("toolName") == "yield"
+                ]
+                assert len(read_results) == len(yield_results) == 1
+                assert not read_results[0].get("isError") and not yield_results[0].get(
+                    "isError"
+                )
+                assert read_results[0]["toolCallId"] == "task-child-read"
+                assert yield_results[0]["toolCallId"] == "task-child-yield"
+                completed_result, completed_child = result, child_now
+                completed_requests = len(provider.calls)
+            else:
+                # Startup has processed the durable terminal parent transcript.
+                # Observe a quiet interval to catch an incorrectly scheduled wake.
+                time.sleep(2)
+                parent_now, child_now = assert_same_journals()
+                assert successful_result(parent_now) == completed_result
+                assert terminal_parent_answer(parent_now) is not None
+                assert child_now == completed_child
+                assert len(provider.calls) == completed_requests, (
+                    "Completed task/parent replay dispatched another request"
+                )
+
+            roster = restarted_rpc.request("get_subagents")["subagents"]
+            assert all(row["id"] == child["id"] for row in roster), (
+                "Recovery allocated a replacement task"
+            )
+            assert len(roster) <= 1
+            end_state = restarted_rpc.request("get_state")
+            assert end_state["sessionId"] == current["sessionId"]
+            assert provider.task_calls == 1
+            restart_record.update(
+                {
+                    "endState": end_state,
+                    "subagents": roster,
+                    "originalResult": completed_result,
+                    "afterExecution": get_view(execution_url),
+                    "afterWorkflow": get_view(workflow_url),
+                    "afterEffects": effects(),
+                    "providerObservations": [
+                        dict(row) for row in provider.request_observations
+                    ],
+                }
+            )
+            shutil.copyfile(
+                parent_path, tmp_path / f"task-parent-after-{generation}.jsonl"
+            )
+            shutil.copyfile(
+                child_path, tmp_path / f"task-child-after-{generation}.jsonl"
+            )
+            save()
+
+
 def exercise_controller_recovery(
     release: InstalledRelease,
     tmp_path: Path,
-    checkpoint: Literal["review", "resume", "persisted"],
+    checkpoint: Literal["review", "resume", "persisted", "task-active"],
     *,
     progress: bool = False,
+    task_fault: TaskFault = "child-request",
 ) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -285,7 +1341,7 @@ def exercise_controller_recovery(
         port=pg_port,
     )
     base_url = f"http://127.0.0.1:{service_port}"
-    provider = RecoveryProvider(tmp_path, checkpoint, progress)
+    provider = RecoveryProvider(tmp_path, checkpoint, progress, task_fault)
     with native_postgres(tmp_path / "postgres", pg_port), provider.serve() as model_url:
         service_command("ops", "bootstrap")
         seed_authority(
@@ -337,6 +1393,15 @@ def exercise_controller_recovery(
         (agent_dir / "config.yml").write_text(
             "modelRoles:\n  audit: qualification/local-recovery\n  default: qualification/local-recovery\n  smol: qualification/local-recovery\nadvisor:\n  enabled: false\ntools:\n  xdev: false\n"
         )
+        if checkpoint == "task-active":
+            model_file = agent_dir / "models.yml"
+            model_config = json.loads(model_file.read_text())
+            models = model_config["providers"]["qualification"]["models"]
+            models.append({**models[0], "id": "local-task", "name": "Local task"})
+            model_file.write_text(json.dumps(model_config))
+            (agent_dir / "config.yml").write_text(
+                "modelRoles:\n  audit: qualification/local-recovery\n  default: qualification/local-recovery\n  smol: qualification/local-recovery\n  task: qualification/local-task\nadvisor:\n  enabled: false\nasync:\n  enabled: false\ntask:\n  batch: false\n  isolation:\n    mode: none\n  prewalk: false\n  maxRecursionDepth: 1\ntools:\n  xdev: false\n"
+            )
         service_log = tmp_path / "service.stderr"
         with _process(
             release.command(
@@ -422,6 +1487,24 @@ def exercise_controller_recovery(
                 ) as cli:
                     rpc = RpcProcess(cli, cli_log)
                     initial = rpc.request("get_state")
+                    if checkpoint == "task-active":
+                        capture_task_active_recovery(
+                            release=release,
+                            tmp_path=tmp_path,
+                            repository=repository,
+                            remote=remote,
+                            state=state,
+                            env=env,
+                            client=client,
+                            workspace_id=identity["workspace_id"],
+                            setup=setup,
+                            provider=provider,
+                            cli=cli,
+                            rpc=rpc,
+                            initial=initial,
+                            service_pid=service.pid,
+                        )
+                        return
                     assert provider.barrier.wait(60), (
                         f"Production review barrier not reached: {cli_log.read_text()[-6000:]}"
                     )
@@ -970,4 +2053,32 @@ def test_killed_persisted_turn_performs_one_real_criteria_seal(
     """Recovered model tool dispatch must advance real service state exactly once."""
     exercise_controller_recovery(
         installed_release, tmp_path, "persisted", progress=True
+    )
+
+
+def test_killed_controller_recovers_original_active_task(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Original synchronous task must progress after its shared CLI is killed."""
+    exercise_controller_recovery(installed_release, tmp_path, "task-active")
+
+
+def test_repeated_child_kill_preserves_original_task_preparation(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Fresh recovery preparation must keep the same child/input across another kill."""
+    exercise_controller_recovery(
+        installed_release,
+        tmp_path,
+        "task-active",
+        task_fault="repeated-child-request",
+    )
+
+
+def test_persisted_parent_task_result_resumes_without_child_dispatch(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """A durable original task result resumes parent without child dispatch/writes."""
+    exercise_controller_recovery(
+        installed_release, tmp_path, "task-active", task_fault="parent-result"
     )

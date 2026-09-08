@@ -57,6 +57,7 @@ export function createPersistedSubagentReviverFactory(
 ): PersistedSubagentReviverFactory {
 	const registry = AgentRegistry.global();
 	return async ref => {
+		let boundRecovery = ctx.session.isTaskRecoveryRevival(ref);
 		const sessionFile = ref.sessionFile;
 		if (!sessionFile) return undefined;
 		const peek = await SessionManager.peekSessionInit(sessionFile);
@@ -106,89 +107,122 @@ export function createPersistedSubagentReviverFactory(
 			const reopened = await SessionManager.open(sessionFile, undefined, undefined, {
 				suppressBreadcrumb: true,
 			});
-			const artifactManager = ctx.session.sessionManager.getArtifactManager();
-			if (artifactManager) reopened.adoptArtifactManager(artifactManager);
-			// A restricted persisted contract must not consult process-global MCP
-			// state: same-name MCP tools are untrusted capability sources.
-			const restrictToolNames = init.restrictToolNames === true;
-			const mcpManager = restrictToolNames ? undefined : MCPManager.instance();
-			const mcpProxyTools = mcpManager ? createMCPProxyTools(mcpManager) : [];
-			const { session } = await createAgentSession({
-				cwd: ctx.session.sessionManager.getCwd(),
-				authStorage: ctx.authStorage,
-				modelRegistry: ctx.modelRegistry,
-				...(persistedModelPattern ? { modelPattern: persistedModelPattern } : {}),
-				modelPatternAuthFallback: init.resolvedModel,
-				settings: subagentSettings,
-				sessionManager: reopened,
-				agentId: ref.id,
-				agentDisplayName: ref.displayName,
-				parentTaskPrefix: ref.id,
-				parentAgentId: ref.parentId,
-				expectedAgentRef: expectedRef,
-				taskDepth,
-				toolNames: init.tools,
-				outputSchema: init.outputSchema,
-				outputSchemaMode: init.outputSchemaMode,
-				restrictToolNames: restrictToolNames || undefined,
-				requireYieldTool: true,
-				systemPrompt: () => [init.systemPrompt],
-				// Old files predate persisted spawns: deny re-spawning rather than let
-				// createAgentSession default to wildcard ("*").
-				spawns: init.spawns ?? "",
-				hasUI: false,
-				enableLsp: restrictToolNames ? false : ctx.enableLsp,
-				...(restrictToolNames
-					? {
-							enableIrc: false,
-							enableMCP: false,
-							preloadedExtensionPaths: [],
-							preloadedCustomToolPaths: [],
+			let created: AgentSession | undefined;
+			try {
+				const artifactManager = ctx.session.sessionManager.getArtifactManager();
+				if (artifactManager) reopened.adoptArtifactManager(artifactManager);
+				// A restricted persisted contract must not consult process-global MCP
+				// state: same-name MCP tools are untrusted capability sources.
+				const restrictToolNames = init.restrictToolNames === true;
+				const mcpManager = restrictToolNames ? undefined : MCPManager.instance();
+				const mcpProxyTools = mcpManager ? createMCPProxyTools(mcpManager) : [];
+				const { session } = await createAgentSession({
+					disableInheritedAsyncJobs: boundRecovery,
+					prepareSessionBeforeAttach: child => {
+						created = child;
+						boundRecovery ||= ctx.session.isTaskRecoveryRevival(ref);
+						if (boundRecovery) ctx.session.installTaskRecoveryChild(expectedRef, child);
+					},
+					cwd: ctx.session.sessionManager.getCwd(),
+					authStorage: ctx.authStorage,
+					modelRegistry: ctx.modelRegistry,
+					...(persistedModelPattern ? { modelPattern: persistedModelPattern } : {}),
+					modelPatternAuthFallback: init.resolvedModel,
+					settings: subagentSettings,
+					sessionManager: reopened,
+					agentId: ref.id,
+					agentDisplayName: ref.displayName,
+					parentTaskPrefix: ref.id,
+					parentAgentId: ref.parentId,
+					expectedAgentRef: expectedRef,
+					taskDepth,
+					toolNames: init.tools,
+					outputSchema: init.outputSchema,
+					outputSchemaMode: init.outputSchemaMode,
+					restrictToolNames: restrictToolNames || undefined,
+					requireYieldTool: true,
+					systemPrompt: () => [init.systemPrompt],
+					// Old files predate persisted spawns: deny re-spawning rather than let
+					// createAgentSession default to wildcard ("*").
+					spawns: init.spawns ?? "",
+					hasUI: false,
+					enableLsp: restrictToolNames ? false : ctx.enableLsp,
+					...(restrictToolNames
+						? {
+								enableIrc: false,
+								enableMCP: false,
+								preloadedExtensionPaths: [],
+								preloadedCustomToolPaths: [],
+							}
+						: {
+								enableMCP: !mcpManager,
+								mcpManager,
+								customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
+							}),
+				});
+				// Clamp the active set to the persisted list: createAgentSession's
+				// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
+				// the original run didn't carry. Unknown/missing names are ignored.
+				await session.setActiveToolsByName([...init.tools, ...session.getMountedXdevToolNames()]);
+				// Wire the extension runtime exactly as the live executor does. Without
+				// this the runner stays pre-init, every action method throws
+				// `ExtensionRuntimeNotInitializedError`, and a `tool_call` handler that
+				// touches a runtime action trips the fail-closed gate in `emitToolCall`,
+				// blocking every tool — including the hidden `yield` — in the revived
+				// agent. `session_start` also re-runs so extensions restore per-session
+				// state (issue #8824).
+				if (boundRecovery) await ctx.session.validateTaskRecoveryChild(expectedRef, session);
+				await initializeExtensions(session, {
+					reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
+					reportRuntimeError: err =>
+						logger.error("Extension error", { path: err.extensionPath, error: err.error }),
+				});
+				// Cold revives must drive registry status themselves — createAgentSession
+				// doesn't wire this generically (the live path does it in the executor).
+				// The internal run-state signal precedes deferrable public `agent_end`,
+				// keeping idle-TTL ownership synchronized even while prompts unwind.
+				if (boundRecovery) await ctx.session.validateTaskRecoveryChild(expectedRef, session);
+				registry.syncSessionStatus(ref.id, session);
+				// Persisted files predate an agent-source field, so cold-revived frames
+				// report the runtime-neutral `user` source; name comes from the ref.
+				const wakeAgent: AgentDefinition = {
+					name: ref.displayName,
+					description: "",
+					systemPrompt: init.systemPrompt,
+					source: "user",
+				};
+				if (!boundRecovery)
+					attachIrcWakeTurnMonitor(session, {
+						id: ref.id,
+						agent: wakeAgent,
+						eventBus: ctx.eventBus,
+						sessionFile,
+						outputSchema: init.outputSchema,
+						outputSchemaMode: init.outputSchemaMode,
+						artifactsDir: ctx.session.sessionFile?.slice(0, -6),
+					});
+				return session;
+			} catch (error) {
+				try {
+					if (created) {
+						created.invalidateTaskRecovery("Cold task revival failed before dispatch");
+						if (registry.get(ref.id) === expectedRef && expectedRef.session === created) {
+							registry.detachSession(ref.id, created);
+							if (expectedRef.status !== "aborted") registry.setStatus(ref.id, "parked", expectedRef);
 						}
-					: {
-							enableMCP: !mcpManager,
-							mcpManager,
-							customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
-						}),
-			});
-			// Clamp the active set to the persisted list: createAgentSession's
-			// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
-			// the original run didn't carry. Unknown/missing names are ignored.
-			await session.setActiveToolsByName([...init.tools, ...session.getMountedXdevToolNames()]);
-			// Wire the extension runtime exactly as the live executor does. Without
-			// this the runner stays pre-init, every action method throws
-			// `ExtensionRuntimeNotInitializedError`, and a `tool_call` handler that
-			// touches a runtime action trips the fail-closed gate in `emitToolCall`,
-			// blocking every tool — including the hidden `yield` — in the revived
-			// agent. `session_start` also re-runs so extensions restore per-session
-			// state (issue #8824).
-			await initializeExtensions(session, {
-				reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
-				reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
-			});
-			// Cold revives must drive registry status themselves — createAgentSession
-			// doesn't wire this generically (the live path does it in the executor).
-			// The internal run-state signal precedes deferrable public `agent_end`,
-			// keeping idle-TTL ownership synchronized even while prompts unwind.
-			registry.syncSessionStatus(ref.id, session);
-			// Persisted files predate an agent-source field, so cold-revived frames
-			// report the runtime-neutral `user` source; name comes from the ref.
-			const wakeAgent: AgentDefinition = {
-				name: ref.displayName,
-				description: "",
-				systemPrompt: init.systemPrompt,
-				source: "user",
-			};
-			attachIrcWakeTurnMonitor(session, {
-				id: ref.id,
-				agent: wakeAgent,
-				eventBus: ctx.eventBus,
-				sessionFile,
-				outputSchema: init.outputSchema,
-				outputSchemaMode: init.outputSchemaMode,
-				artifactsDir: ctx.session.sessionFile?.slice(0, -6),
-			});
-			return session;
+						await created.dispose();
+					}
+				} catch (cleanupError) {
+					logger.warn("Failed to dispose rejected task revival", { error: String(cleanupError) });
+				} finally {
+					try {
+						await reopened.close();
+					} catch (closeError) {
+						logger.warn("Failed to close rejected task journal", { error: String(closeError) });
+					}
+				}
+				throw error;
+			}
 		};
 	};
 }

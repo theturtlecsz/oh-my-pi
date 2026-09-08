@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Fixed restart recovery for a bound synchronous task interrupted before its first response, preserving the original child session and parent task result.
 - Fixed automatic restart recovery for saved, unanswered execution prompts when no later conversation or tool activity exists.
 - Fixed execution recovery losing queued continuation prompts or rejecting its own frozen candidate after a controller restart.
 - Fixed the legacy pi extension loader misclassifying CommonJS modules served behind import-only package export conditions as ESM, which dropped their named exports at link time (e.g. `pi-bro`'s `defuddle/node` dependency).
