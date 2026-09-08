@@ -1294,6 +1294,23 @@ def capture_task_active_recovery(
                 child_path, tmp_path / f"task-child-after-{generation}.jsonl"
             )
             save()
+        if generation == recovery_restarts:
+            # The completed host's normal SIGTERM disposal can append session_exit
+            # to its child journal. Capture the quiet-restart baseline only after
+            # that process has exited; retain the earlier live-host snapshots.
+            assert restarted.poll() is not None
+            parent_after_dispose, completed_child = assert_same_journals()
+            assert successful_result(parent_after_dispose) == completed_result
+            assert terminal_parent_answer(parent_after_dispose) is not None
+            assert len(provider.calls) == completed_requests
+            baseline_path = tmp_path / "task-child-before-quiet-restart.jsonl"
+            shutil.copyfile(child_path, baseline_path)
+            restart_record["completedHostDisposal"] = {
+                "exitCode": restarted.returncode,
+                "childBaseline": str(baseline_path),
+                "childEntryCount": len(completed_child),
+            }
+            save()
 
 
 def exercise_controller_recovery(
