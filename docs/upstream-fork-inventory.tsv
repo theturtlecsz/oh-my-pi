@@ -168,6 +168,7 @@ packages/coding-agent/test/agent-session-plan-mode-convergence.test.ts	shared	mo
 packages/coding-agent/test/agent-session-task-recovery-guards.test.ts	fork-only	added	e6680c37d49a	OMP-246: Refuse revoked result attachment and preserve owner input across authority and policy races	retained
 packages/coding-agent/test/agent-session-task-recovery.test.ts	fork-only	added	040e1a6615aa	OMP-246: Real SDK task binding, cold replay, result reuse and refusal contracts; OMP-246: Require actual parent provider dispatch with original call/result pairing after cold replay	retained
 packages/coding-agent/test/config/settings-backup-on-rewrite.test.ts	fork-only	added	fd1a138ab69b	session candidate: OMP-173; session candidate: OMP-172	retained
+packages/coding-agent/test/cursor-exec.test.ts	shared	modified	719c84fe95d7	OMP-246: Preserve Cursor bridge edit/grep/approval contracts with required inert dispatch-guard fake	retained
 packages/coding-agent/test/discovery-root.test.ts	fork-only	added	190a6034057b	OMP-249 executable configuration isolation and unchanged workspace/ordinary-discovery contracts	retained
 packages/coding-agent/test/discovery/claude-plugins.test.ts	shared	modified	fd3906bdc11c	test(omp-156): isolate plugin-precedence discovery test from the real HOME	retained
 packages/coding-agent/test/export-html-template.test.ts	shared	modified	49060d7e18a6	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; test(omp-156): derive HTML export template expectation from source composition	retained
