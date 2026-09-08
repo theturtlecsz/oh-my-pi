@@ -270,3 +270,16 @@ remains one real failure; R1 remains a separate miss. This proves the bounded
 native-read/request witness, not that every asynchronous hook had settled or that
 arbitrary completed-looking histories are safe to replay. No production remedy
 or full S2.2 acceptance is implied.
+
+The [bounded continuation plan](omp-child-read-continuation-plan.md) admits a
+runtime certificate for one successful native local text read after tracked
+hooks and persistence settle. A separate processing-start record must precede
+response effects or cold SDK startup. Cold continuation reuses the original
+child and saved read result; unmarked history and incomplete claimed attempts
+remain refused. Scope is text-only `openai-completions` under one managed writer.
+Source verification passes 230 affected tests with 865 assertions and `bun check`.
+Actual SDK scenarios cover original readiness, same-manager cold startup,
+preserved read/result wire, hook and storage failures, and competing ownership.
+Independent producer and cold-recovery reviews found no remaining source blocker.
+Fresh twelve-case installed-process qualification remains pending; these component
+results do not establish full S2.2 acceptance.

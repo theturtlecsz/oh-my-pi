@@ -6,7 +6,9 @@ import { resolveAgentAdvisorSelection, resolveAgentPrewalkPattern } from "../con
 import { type AgentRef, getAgentTombstonePath } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
 import type { PromptOptions } from "../session/agent-session-types";
+import { TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
 import type { SessionEntry, SessionInitEntry } from "../session/session-entries";
+import type { SessionManager } from "../session/session-manager";
 import type { ToolSession } from "../tools";
 import { resolveAgentPrewalkDefault } from "./prewalk";
 import { repairTaskParams } from "./repair-args";
@@ -17,6 +19,54 @@ export const PROMPT_PREPARATION = "prompt-preparation";
 export const TASK_NATIVE_RESULT_READY = "task-native-result-ready";
 export const TASK_RESULT_PROCESSING_STARTED = "task-result-processing-started";
 export const TASK_RESULT_PROCESSING_PROTOCOL = "claim-before-parent-processing-v1";
+
+export const TASK_READ_CONTINUATION_READY = "task-read-continuation-ready";
+export const TASK_READ_CONTINUATION_STARTED = "task-read-continuation-started";
+export const TASK_READ_CONTINUATION_PROTOCOL = "bound-native-read-v1";
+
+export interface NativePlainReadProvenance {
+	readonly kind: "local-file-text";
+	readonly resolvedPath: string;
+	readonly fileSize: number;
+}
+
+export interface TaskReadContinuationReadyV1 {
+	version: 1;
+	protocol: typeof TASK_READ_CONTINUATION_PROTOCOL;
+	call: PersistedTaskCallRef;
+	contractSha256: string;
+	child: { sessionId: string; initEntryId: string; promptEntryId: string };
+	read: {
+		assistantEntryId: string;
+		startEntryId: string;
+		resultEntryId: string;
+		toolCallId: string;
+		arguments: { path: string };
+		native: NativePlainReadProvenance;
+		nativeResultSha256: string;
+		finalResultSha256: string;
+	};
+	prefix: { leafId: string; branchSha256: string; entriesSha256: string };
+	providerApi: "openai-completions";
+}
+
+export interface TaskReadContinuationCheckpoint {
+	entryId: string;
+	sha256: string;
+	record: TaskReadContinuationReadyV1;
+}
+
+export interface TaskReadContinuationStartedV1 {
+	version: 1;
+	protocol: typeof TASK_READ_CONTINUATION_PROTOCOL;
+	call: PersistedTaskCallRef;
+	contractSha256: string;
+	readyEntryId: string;
+	readySha256: string;
+	reason: "response" | "cold-resume";
+}
+
+export type NativeTaskReadObserver = (toolCallId: string, args: unknown, result: AgentToolResult<unknown>) => void;
 
 export interface PersistedTaskCallRef {
 	bindingId: string;
@@ -110,6 +160,310 @@ export type NativeTaskResultObserver = (
 	output: NativeTaskOutputIdentity | undefined,
 ) => Promise<void>;
 
+export interface TaskReadRequestFence {
+	beforePayload(): Promise<void>;
+	preparedPayload(payload: unknown): Promise<unknown>;
+	response(): Promise<void>;
+	check(): void;
+	failed(error: unknown): void;
+}
+
+export interface TaskReadNativeProof {
+	assistantEntryId: string;
+	toolCallId: string;
+	arguments: { path: string };
+	native: NativePlainReadProvenance;
+	nativeResultSha256: string;
+}
+
+export function buildTaskReadContinuationRecord(
+	entries: readonly SessionEntry[],
+	branch: readonly SessionEntry[],
+	binding: PersistedTaskBindingV1,
+	proof: TaskReadNativeProof,
+): TaskReadContinuationReadyV1 {
+	const preparations = branch
+		.map(readPreparationRecord)
+		.filter(record => record?.taskBindingId === binding.call.bindingId);
+	const anchors = new Set(preparations.map(record => record!.anchorEntryId));
+	if (anchors.size !== 1) throw new Error("Read continuation has no unique original preparation");
+	const promptEntryId = [...anchors][0];
+	const prepared = preparedEntryIds(branch, binding.child.sessionId, promptEntryId, binding.call.bindingId);
+	const assistant = branch.find(entry => entry.id === proof.assistantEntryId);
+	if (
+		assistant?.type !== "message" ||
+		assistant.message.role !== "assistant" ||
+		assistant.message.stopReason !== "toolUse"
+	)
+		throw new Error("Native read assistant is unavailable or unsuccessful");
+	const calls = assistant.message.content.filter(part => part.type === "toolCall");
+	if (
+		calls.length !== 1 ||
+		calls[0].id !== proof.toolCallId ||
+		calls[0].name !== "read" ||
+		taskRecoveryHash(calls[0].arguments) !== taskRecoveryHash(proof.arguments)
+	)
+		throw new Error("Read continuation assistant call differs from native invocation");
+	const starts = entries.filter(
+		entry => entry.type === "custom" && entry.customType === TOOL_EXECUTION_START_CUSTOM_TYPE,
+	);
+	const results = entries.filter(entry => entry.type === "message" && entry.message.role === "toolResult");
+	const start = starts[0];
+	const result = results[0];
+	if (
+		starts.length !== 1 ||
+		start?.type !== "custom" ||
+		!isRecord(start.data) ||
+		start.data.toolName !== "read" ||
+		start.data.toolCallId !== proof.toolCallId ||
+		results.length !== 1 ||
+		result?.type !== "message" ||
+		result.message.role !== "toolResult" ||
+		result.message.toolName !== "read" ||
+		result.message.toolCallId !== proof.toolCallId ||
+		result.message.isError ||
+		result.message.content.some(part => part.type !== "text")
+	)
+		throw new Error("Read continuation has unresolved, non-text, foreign, or failed tool history");
+	const allowed = new Set([promptEntryId, ...prepared, assistant.id, start.id, result.id]);
+	for (const entry of entries) {
+		if (!branch.some(current => current.id === entry.id))
+			throw new Error("Read continuation has discarded or off-branch history");
+		if (allowed.has(entry.id)) continue;
+		if (
+			entry.type === "session_init" &&
+			(entry.id !== binding.child.initEntryId ||
+				taskRecoveryHash(entry.taskCall) !== taskRecoveryHash(binding.call) ||
+				taskRecoveryHash(initializationContract(entry)) !== taskRecoveryHash(binding.contract.initialization))
+		)
+			throw new Error("Read continuation has duplicate or foreign child initialization");
+		if (entry.type === "custom" && entry.customType === PROMPT_PREPARATION) {
+			const record = readPreparationRecord(entry);
+			if (
+				!record ||
+				record.sessionId !== binding.child.sessionId ||
+				record.anchorEntryId !== promptEntryId ||
+				record.taskBindingId !== binding.call.bindingId ||
+				branch.indexOf(entry) >= branch.indexOf(assistant)
+			)
+				throw new Error("Read continuation has foreign or late preparation metadata");
+		}
+		if (
+			entry.type === "message" ||
+			entry.type === "custom_message" ||
+			entry.type === "compaction" ||
+			entry.type === "branch_summary" ||
+			entry.type === "reset_boundary" ||
+			(entry.type === "custom" && entry.customType !== PROMPT_PREPARATION)
+		)
+			throw new Error("Read continuation has additional conversation or effect history");
+	}
+	const leaf = branch.at(-1);
+	if (!leaf || branch.indexOf(assistant) >= branch.indexOf(result) || !branch.includes(start))
+		throw new Error("Read continuation branch ordering differs");
+	return {
+		version: 1,
+		protocol: TASK_READ_CONTINUATION_PROTOCOL,
+		call: { ...binding.call },
+		contractSha256: binding.contractSha256,
+		child: { sessionId: binding.child.sessionId, initEntryId: binding.child.initEntryId, promptEntryId },
+		read: {
+			...proof,
+			startEntryId: start.id,
+			resultEntryId: result.id,
+			finalResultSha256: taskRecoveryHash(result.message),
+		},
+		prefix: { leafId: leaf.id, branchSha256: taskRecoveryHash(branch), entriesSha256: taskRecoveryHash(entries) },
+		providerApi: "openai-completions",
+	};
+}
+
+export function hasTaskReadContinuationMarkers(entries: readonly SessionEntry[]): boolean {
+	return entries.some(
+		entry =>
+			entry.type === "custom" &&
+			(entry.customType === TASK_READ_CONTINUATION_READY || entry.customType === TASK_READ_CONTINUATION_STARTED),
+	);
+}
+
+export interface TaskReadContinuationClaim {
+	entryId: string;
+	record: TaskReadContinuationStartedV1;
+}
+export type TaskChildContinuation =
+	| { kind: "unanswered"; anchorEntryId: string }
+	| { kind: "read"; anchorEntryId: string; ready: TaskReadContinuationCheckpoint; claim?: TaskReadContinuationClaim };
+
+/** Pure shared classifier: only a runtime-marked read prefix admits progress beyond an unanswered input. */
+export function classifyTaskChildContinuation(
+	entries: readonly SessionEntry[],
+	branch: readonly SessionEntry[],
+	binding: PersistedTaskBindingV1,
+	ownedClaim?: TaskReadContinuationClaim,
+): TaskChildContinuation {
+	const init = branch.find(entry => entry.id === binding.child.initEntryId);
+	if (
+		init?.type !== "session_init" ||
+		taskRecoveryHash(init.taskCall) !== taskRecoveryHash(binding.call) ||
+		taskRecoveryHash(initializationContract(init)) !== taskRecoveryHash(binding.contract.initialization)
+	)
+		throw new Error("Task child initialization or reverse binding changed");
+	const records = branch.map(readPreparationRecord).filter(record => record?.taskBindingId === binding.call.bindingId);
+	const anchors = new Set(records.map(record => record!.anchorEntryId));
+	if (anchors.size !== 1) throw new Error("Task child has no unique core-bound original prompt");
+	const anchorEntryId = [...anchors][0];
+	const anchor = branch.find(entry => entry.id === anchorEntryId);
+	if (anchor?.type !== "message" || anchor.message.role !== "user" || anchor.message.attribution !== "agent")
+		throw new Error("Task child lacks its original agent input");
+	const prepared = preparedEntryIds(branch, binding.child.sessionId, anchorEntryId, binding.call.bindingId);
+	const markers = entries.filter(
+		entry =>
+			entry.type === "custom" &&
+			(entry.customType === TASK_READ_CONTINUATION_READY || entry.customType === TASK_READ_CONTINUATION_STARTED),
+	);
+	if (!markers.length) {
+		for (const entry of entries) {
+			if (entry.id === anchorEntryId || prepared.has(entry.id)) continue;
+			if (
+				entry.type === "message" ||
+				entry.type === "custom_message" ||
+				entry.type === "compaction" ||
+				entry.type === "branch_summary" ||
+				entry.type === "reset_boundary" ||
+				(entry.type === "custom" && entry.customType === TOOL_EXECUTION_START_CUSTOM_TYPE)
+			)
+				throw new Error(
+					"Child already has assistant/tool/effect history or unbound preparation; result-gap reconstruction is unsupported",
+				);
+		}
+		return { kind: "unanswered", anchorEntryId };
+	}
+	const readyEntries = markers.filter(
+		entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY,
+	);
+	const startedEntries = markers.filter(
+		entry => entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_STARTED,
+	);
+	if (readyEntries.length !== 1 || startedEntries.length > 1)
+		throw new Error("Read continuation has orphaned or conflicting retained markers");
+	const entry = readyEntries[0];
+	if (entry.type !== "custom" || !isRecord(entry.data)) throw new Error("Malformed read continuation ready");
+	const data = entry.data;
+	if (
+		data.version !== 1 ||
+		data.protocol !== TASK_READ_CONTINUATION_PROTOCOL ||
+		data.providerApi !== "openai-completions" ||
+		!isRecord(data.read) ||
+		!isRecord(data.read.arguments) ||
+		Object.keys(data.read.arguments).length !== 1 ||
+		typeof data.read.arguments.path !== "string" ||
+		!isRecord(data.read.native) ||
+		data.read.native.kind !== "local-file-text" ||
+		typeof data.read.native.resolvedPath !== "string" ||
+		!path.isAbsolute(data.read.native.resolvedPath) ||
+		typeof data.read.native.fileSize !== "number" ||
+		!Number.isSafeInteger(data.read.native.fileSize) ||
+		data.read.native.fileSize < 0 ||
+		typeof data.read.nativeResultSha256 !== "string" ||
+		!/^[a-f0-9]{64}$/.test(data.read.nativeResultSha256) ||
+		typeof data.read.assistantEntryId !== "string" ||
+		typeof data.read.toolCallId !== "string"
+	)
+		throw new Error("Malformed native read provenance");
+	if (data.read.native.resolvedPath !== path.resolve(binding.child.cwd, data.read.arguments.path))
+		throw new Error("Read native path differs from direct local arguments");
+	const index = entries.indexOf(entry);
+	const branchIndex = branch.findIndex(current => current.id === entry.id);
+	if (index < 0 || branchIndex < 0) throw new Error("Read checkpoint is outside active child branch");
+	const prefixEntries = entries.slice(0, index);
+	const prefixBranch = branch.slice(0, branchIndex);
+	const rebuilt = buildTaskReadContinuationRecord(prefixEntries, prefixBranch, binding, {
+		assistantEntryId: data.read.assistantEntryId,
+		toolCallId: data.read.toolCallId,
+		arguments: { path: data.read.arguments.path },
+		native: {
+			kind: "local-file-text",
+			resolvedPath: data.read.native.resolvedPath,
+			fileSize: data.read.native.fileSize,
+		},
+		nativeResultSha256: data.read.nativeResultSha256,
+	});
+	if (taskRecoveryHash(data) !== taskRecoveryHash(rebuilt) || entry.parentId !== rebuilt.prefix.leafId)
+		throw new Error("Read continuation prefix or result integrity changed");
+	const ready: TaskReadContinuationCheckpoint = {
+		entryId: entry.id,
+		sha256: taskRecoveryHash(rebuilt),
+		record: rebuilt,
+	};
+	let claim: TaskReadContinuationClaim | undefined;
+	if (startedEntries.length) {
+		const started = startedEntries[0];
+		if (
+			started.type !== "custom" ||
+			!isRecord(started.data) ||
+			started.data.version !== 1 ||
+			started.data.protocol !== TASK_READ_CONTINUATION_PROTOCOL ||
+			taskRecoveryHash(started.data.call) !== taskRecoveryHash(binding.call) ||
+			started.data.contractSha256 !== binding.contractSha256 ||
+			started.data.readyEntryId !== ready.entryId ||
+			started.data.readySha256 !== ready.sha256 ||
+			(started.data.reason !== "response" && started.data.reason !== "cold-resume") ||
+			started.parentId !== ready.entryId ||
+			!branch.some(current => current.id === started.id)
+		)
+			throw new Error("Malformed or detached read continuation processing claim");
+		claim = { entryId: started.id, record: started.data as unknown as TaskReadContinuationStartedV1 };
+		if (!ownedClaim || taskRecoveryHash(claim) !== taskRecoveryHash(ownedClaim))
+			throw new Error("task-read-continuation-started: prior response/startup processing is not replayable");
+	} else if (ownedClaim) throw new Error("Owned read continuation claim disappeared");
+	const suffix = entries.slice(index + 1);
+	if (suffix.some(current => current.id !== claim?.entryId) || branch.at(-1)?.id !== (claim?.entryId ?? ready.entryId))
+		throw new Error("Read continuation has later or discarded history");
+	return { kind: "read", anchorEntryId, ready, claim };
+}
+
+/** One managed writer owns this append; this is not a cross-manager or process lock. */
+export async function claimTaskReadContinuation(
+	manager: SessionManager,
+	binding: PersistedTaskBindingV1,
+	ready: TaskReadContinuationCheckpoint,
+	reason: "response" | "cold-resume",
+	validateAuthority: () => Promise<void>,
+	assertOwnership: () => void,
+	onAppend: (entryId: string) => void,
+): Promise<TaskReadContinuationClaim> {
+	assertOwnership();
+	await validateAuthority();
+	assertOwnership();
+	if (taskRecoveryHash(ready.record) !== ready.sha256) throw new Error("Read checkpoint snapshot integrity changed");
+	const classified = classifyTaskChildContinuation(manager.getEntries(), manager.getBranch(), binding);
+	if (
+		classified.kind !== "read" ||
+		classified.ready.entryId !== ready.entryId ||
+		classified.ready.sha256 !== ready.sha256
+	)
+		throw new Error("Read continuation changed before processing claim");
+	const record: TaskReadContinuationStartedV1 = {
+		version: 1,
+		protocol: TASK_READ_CONTINUATION_PROTOCOL,
+		call: { ...binding.call },
+		contractSha256: binding.contractSha256,
+		readyEntryId: ready.entryId,
+		readySha256: ready.sha256,
+		reason,
+	};
+	const entryId = manager.appendCustomEntry(TASK_READ_CONTINUATION_STARTED, record);
+	onAppend(entryId);
+	const entry = manager.getEntry(entryId);
+	if (!entry || entry.parentId !== ready.entryId || manager.getLeafId() !== entryId)
+		throw new Error("Read processing append lost its exact ready leaf");
+	await manager.flush();
+	await validateAuthority();
+	assertOwnership();
+	if (manager.getLeafId() !== entryId) throw new Error("Read processing claim lost its leaf during persistence");
+	return { entryId, record };
+}
+
 export interface NativeTaskResultReadyV1 {
 	version: 1;
 	producer: "recovered-sync-task-v1" | "original-sync-task-v1";
@@ -196,6 +550,7 @@ export interface BoundTaskRecoveryRequest {
 	validateAuthority(): Promise<void>;
 	setPolicyGuard(guard: () => Promise<void>): void;
 	validateChild(ref: AgentRef, session: AgentSession): Promise<void>;
+	prepareReadContinuation(ref: AgentRef, ready: TaskReadContinuationCheckpoint): void;
 	findNativeResultReady(): NativeTaskResultReadyCheckpoint | undefined;
 	recordNativeResultReady(record: NativeTaskResultReadyV1): Promise<NativeTaskResultReadyCheckpoint>;
 	claimResultProcessing(ready: NativeTaskResultReadyCheckpoint): Promise<TaskResultProcessingRef>;

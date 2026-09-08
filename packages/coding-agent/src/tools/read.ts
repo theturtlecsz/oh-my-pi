@@ -42,6 +42,7 @@ import {
 	truncateHeadBytes,
 	truncateLine,
 } from "../session/streaming-output";
+import type { NativePlainReadProvenance } from "../task/recovery";
 import { buildLineEntriesWithBlockContext, lineEntriesToPlainText } from "../utils/block-context";
 import { isCpuProfilePath, renderCpuProfile } from "../utils/cpuprofile";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
@@ -122,6 +123,13 @@ import { toolResult } from "./tool-result";
 import { xdevDocs, xdevListing } from "./xdev";
 
 export { readToolRenderer } from "./read-renderer";
+
+const nativePlainReads = new WeakMap<AgentToolResult<unknown>, NativePlainReadProvenance>();
+
+/** Native-only provenance; output/result hooks cannot establish it by adding details. */
+export function nativePlainReadProvenance(result: AgentToolResult<unknown>): NativePlainReadProvenance | undefined {
+	return nativePlainReads.get(result);
+}
 
 /** Largest profile (`*.sample.txt`, `*.cpuprofile`) converted to a bottleneck summary; bigger files read as plain text. */
 const MAX_PROFILE_SUMMARY_BYTES = 32 * 1024 * 1024;
@@ -1243,6 +1251,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const parsed = parseSel(localTarget.sel);
 
 		let absolutePath = resolveReadPath(localReadPath, this.session.cwd);
+		const requestedAbsolutePath = absolutePath;
+		let regularDirectFile = false;
 		let suffixResolution: { from: string; to: string } | undefined;
 
 		let isDirectory = false;
@@ -1251,6 +1261,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const stat = await Bun.file(absolutePath).stat();
 			fileSize = stat.size;
 			isDirectory = stat.isDirectory();
+			regularDirectFile = stat.isFile();
 		} catch (error) {
 			if (isNotFoundError(error)) {
 				// A documented semicolon list is explicit user scope, while suffix
@@ -1367,6 +1378,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 		}
 		// Read the file based on type
+		let nativePlainFile = false;
 		let content: Array<TextContent | ImageContent> | undefined;
 		let details: ReadToolDetails = {};
 		let sourcePath: string | undefined;
@@ -1572,6 +1584,16 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// never adds context: without line numbers the padding is
 					// indistinguishable from requested content, so `raw:31-31` must
 					// return line 31 and nothing else.
+					nativePlainFile =
+						regularDirectFile &&
+						absolutePath === requestedAbsolutePath &&
+						absolutePath === path.resolve(this.session.cwd, params.path) &&
+						parsed.kind === "none" &&
+						params.path === readPath &&
+						!suffixResolution &&
+						bridgePromise === undefined &&
+						!isRemoteMountPath(absolutePath) &&
+						!pathTargetsSsh(absolutePath);
 					const rawSelector = isRawSelector(parsed);
 					const requestedStart = offset ? Math.max(0, offset - 1) : 0;
 					const expandStart = !rawSelector && offset !== undefined && offset > 1;
@@ -1894,7 +1916,18 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (columnTruncated > 0) {
 			resultBuilder.limits({ columnMax: columnTruncated });
 		}
-		return resultBuilder.done();
+		const result = resultBuilder.done();
+		if (
+			nativePlainFile &&
+			!details.summary &&
+			!details.conflictCount &&
+			!truncationInfo &&
+			!columnTruncated &&
+			result.content.every(part => part.type === "text")
+		) {
+			nativePlainReads.set(result, Object.freeze({ kind: "local-file-text", resolvedPath: absolutePath, fileSize }));
+		}
+		return result;
 	}
 
 	/**

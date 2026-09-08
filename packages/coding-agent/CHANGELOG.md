@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- Resume workflow-bound synchronous tasks after a completed local text read when using `openai-completions`, without repeating the read.
+
 - Fixed recovery losing a completed first-run synchronous task when its execution authority is bound and parent result processing has not started.
 
 - Fixed recovery losing a completed resumed task before its result was saved to the parent session when result processing has not started.

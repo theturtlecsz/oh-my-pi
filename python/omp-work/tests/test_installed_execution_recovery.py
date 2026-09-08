@@ -77,6 +77,8 @@ class RecoveryProvider:
         self.child_held = threading.Event()
         self.child_read_held = threading.Event()
         self.child_read_cleanup_release: tuple[int, float] | None = None
+        self.read_resume_context: tuple[Path, dict, dict] | None = None
+        self.read_resume_boundary: dict | None = None
         self.child_recovered = threading.Event()
         self.task_calls = 0
         self.task_fault = task_fault
@@ -114,6 +116,89 @@ class RecoveryProvider:
         (self.root / "provider-observations.json").write_text(
             json.dumps(self.request_observations, indent=2)
         )
+
+    def observe_read_resume_claim(self, ordinal: int, request: dict) -> bool:
+        """Observe durable cold claim at first resumed MAIN HTTP, before response."""
+        if (
+            self.task_fault != "child-read-gap"
+            or not self.restarting
+            or not self.is_child_main_request(request)
+        ):
+            return True
+        with self.request_lock:
+            if self.read_resume_boundary is not None:
+                return self.error is None
+            observation = dict(self.request_observations[ordinal - 1])
+            boundary: dict = {
+                "request": observation,
+                "observedAt": time.time(),
+                "scope": "First resumed child MAIN HTTP arrival; not proof of claim before session_start hooks",
+            }
+            self.read_resume_boundary = boundary
+            try:
+                assert (
+                    observation["afterRestart"]
+                    and observation["restartGeneration"] == 1
+                )
+                assert (
+                    not observation["responseStarted"]
+                    and observation["responseBytesWritten"] == 0
+                )
+                assert self.read_resume_context is not None, (
+                    "Original read witness unavailable"
+                )
+                child_file, binding, ready = self.read_resume_context
+                raw = child_file.read_bytes()
+                snapshot = self.root / f"read-resume-request-{ordinal}-child.jsonl"
+                snapshot.write_bytes(raw)
+                boundary["childSnapshot"] = str(snapshot)
+                boundary["childSha256"] = hashlib.sha256(raw).hexdigest()
+                assert raw.endswith(b"\n"), (
+                    "Incomplete child journal at resumed HTTP arrival"
+                )
+                entries = [
+                    json.loads(line)
+                    for line in raw.decode("utf-8").splitlines()
+                    if line
+                ]
+                branch = durable_session_branch(entries)
+                ready_records = [
+                    entry
+                    for entry in entries
+                    if entry.get("customType") == "task-read-continuation-ready"
+                ]
+                claims = [
+                    entry
+                    for entry in entries
+                    if entry.get("customType") == "task-read-continuation-started"
+                ]
+                assert ready_records == [ready] and ready in branch
+                assert len(claims) == 1 and claims[0] in branch, (
+                    "Cold claim not durable before resumed MAIN request"
+                )
+                assert claims[0]["data"] == {
+                    "version": 1,
+                    "protocol": "bound-native-read-v1",
+                    "call": binding["call"],
+                    "contractSha256": binding["contractSha256"],
+                    "readyEntryId": ready["id"],
+                    "readySha256": task_recovery_hash(ready["data"]),
+                    "reason": "cold-resume",
+                }
+                assert branch.index(ready) < branch.index(claims[0])
+                assert child_file.read_bytes() == raw, (
+                    "Child changed while observing pre-response claim"
+                )
+                boundary["claim"] = claims[0]
+                boundary["claimSha256"] = task_recovery_hash(claims[0]["data"])
+                boundary["verifiedBeforeResponse"] = True
+            except (AssertionError, KeyError, TypeError, ValueError, OSError) as error:
+                self.error = f"Read-resume claim boundary failed: {error}"
+                boundary["error"] = self.error
+            (self.root / "read-resume-request-boundary.json").write_text(
+                json.dumps(boundary, indent=2)
+            )
+            return self.error is None
 
     @staticmethod
     def is_child_main_request(request: dict) -> bool:
@@ -380,6 +465,8 @@ class RecoveryProvider:
                     self.rfile.read(int(self.headers["Content-Length"]))
                 )
                 ordinal = provider.record_request(request)
+                if not provider.observe_read_resume_claim(ordinal, request):
+                    return
                 delta = provider.respond(request)
                 packet = {
                     "id": "recovery-response",
@@ -1421,6 +1508,16 @@ def capture_task_active_recovery(
             ]
             assert len(calls) == len(results) == 1
             read_call, read_entry = calls[0], results[0]
+            read_assistants = [
+                entry
+                for entry in branch
+                if entry.get("type") == "message"
+                and entry.get("message", {}).get("role") == "assistant"
+            ]
+            assert len(read_assistants) == 1, "Read prefix has another assistant turn"
+            read_assistant = read_assistants[0]
+            assert read_call in read_assistant["message"]["content"]
+            assert branch.index(read_assistant) < branch.index(read_entry)
             assert (
                 read_call["id"]
                 == read_entry["message"]["toolCallId"]
@@ -1441,6 +1538,78 @@ def capture_task_active_recovery(
             assert call_ids == {entry["message"]["toolCallId"] for entry in results}, (
                 "Child has an unresolved tool call"
             )
+            read_ready_records = result_records(
+                child_now, "task-read-continuation-ready"
+            )
+            assert len(read_ready_records) == 1, (
+                "Held read cut lacks unique runtime readiness"
+            )
+            read_ready_entry = read_ready_records[0]
+            assert read_ready_entry in branch
+            assert branch.index(read_entry) < branch.index(read_ready_entry)
+            prefix_branch = branch[: branch.index(read_ready_entry)]
+            retained_child_entries = [
+                entry
+                for entry in child_now
+                if entry.get("type") not in ("title", "session")
+            ]
+            prefix_entries = retained_child_entries[
+                : retained_child_entries.index(read_ready_entry)
+            ]
+            assert branch[-1] == read_ready_entry, (
+                "Child changed after read certification"
+            )
+            assert read_ready_entry["parentId"] == prefix_branch[-1]["id"]
+            # This fixture's native plain-file builder returns content/details;
+            # it has no truncation notice or result-hook rewrite to reverse.
+            native_result = {
+                "content": read_entry["message"]["content"],
+                "details": read_entry["message"]["details"],
+            }
+            assert not read_entry["message"].get("useless")
+            assert native_result["details"]["meta"] == {
+                "source": {
+                    "type": "path",
+                    "value": str((execution_workspace / "result.txt").resolve()),
+                }
+            }, "Plain read unexpectedly acquired spill/truncation/output notices"
+            assert read_ready_entry["data"] == {
+                "version": 1,
+                "protocol": "bound-native-read-v1",
+                "call": binding["call"],
+                "contractSha256": binding["contractSha256"],
+                "child": {
+                    "sessionId": binding["child"]["sessionId"],
+                    "initEntryId": binding["child"]["initEntryId"],
+                    "promptEntryId": original_preparation[0]["anchorEntryId"],
+                },
+                "read": {
+                    "assistantEntryId": read_assistant["id"],
+                    "startEntryId": child_read_starts[0]["id"],
+                    "resultEntryId": read_entry["id"],
+                    "toolCallId": read_call["id"],
+                    "arguments": read_call["arguments"],
+                    "native": {
+                        "kind": "local-file-text",
+                        "resolvedPath": str(
+                            (execution_workspace / "result.txt").resolve()
+                        ),
+                        "fileSize": (execution_workspace / "result.txt").stat().st_size,
+                    },
+                    "nativeResultSha256": task_recovery_hash(native_result),
+                    "finalResultSha256": task_recovery_hash(read_entry["message"]),
+                },
+                "prefix": {
+                    "leafId": prefix_branch[-1]["id"],
+                    "branchSha256": task_recovery_hash(prefix_branch),
+                    "entriesSha256": task_recovery_hash(prefix_entries),
+                },
+                "providerApi": "openai-completions",
+            }
+            assert not result_records(child_now, "task-read-continuation-started"), (
+                "Read response processing already started before held cut"
+            )
+            read_preparation = result_records(child_now, "prompt-preparation")
             held = [
                 row
                 for row in provider.request_observations
@@ -1510,8 +1679,14 @@ def capture_task_active_recovery(
             evidence["childReadWitness"] = {
                 "binding": binding,
                 "readCall": read_call,
+                "readAssistant": read_assistant,
                 "readResult": read_entry,
                 "readStart": child_read_starts[0],
+                "readContinuationReady": read_ready_entry,
+                "readContinuationReadySha256": task_recovery_hash(
+                    read_ready_entry["data"]
+                ),
+                "readContinuationStartedAbsentAcrossRetainedHistory": True,
                 "heldRequest": held_request,
                 "wireRequest": wire,
                 "parentSha256": hashlib.sha256(parent_bytes).hexdigest(),
@@ -1520,6 +1695,7 @@ def capture_task_active_recovery(
                 "workflow": get_view(workflow_url),
                 "effects": effects(),
             }
+            provider.read_resume_context = (child_path, binding, read_ready_entry)
             save()
             kill_host(cli, "original-child-post-read-response", qualified=False)
             rpc.reader.join(timeout=5)
@@ -1547,6 +1723,12 @@ def capture_task_active_recovery(
                 read_complete_session(parent_path), "task-result-processing-started"
             )
             assert not original_results(read_complete_session(parent_path))
+            assert result_records(
+                read_complete_session(child_path), "task-read-continuation-ready"
+            ) == [read_ready_entry]
+            assert not result_records(
+                read_complete_session(child_path), "task-read-continuation-started"
+            )
             with provider.request_lock:
                 after_death_hold = dict(
                     provider.request_observations[held_request["ordinal"] - 1]
@@ -1632,6 +1814,12 @@ def capture_task_active_recovery(
                 parent_now, child_now = assert_same_journals()
                 assert provider.error is None, provider.error
                 branch = durable_session_branch(child_now)
+                assert result_records(child_now, "task-read-continuation-ready") == [
+                    read_ready_entry
+                ], "Recovery changed original read readiness"
+                assert (
+                    result_records(child_now, "prompt-preparation") == read_preparation
+                ), "Read continuation appended another preparation batch"
                 child_calls = [
                     part
                     for entry in child_now
@@ -1672,6 +1860,40 @@ def capture_task_active_recovery(
                     else None
                 )
                 if finished and not outcomes:
+                    read_started = result_records(
+                        child_now, "task-read-continuation-started"
+                    )
+                    assert len(read_started) == 1 and read_started[0] in branch
+                    request_boundary = provider.read_resume_boundary
+                    assert (
+                        request_boundary is not None
+                        and request_boundary.get("verifiedBeforeResponse") is True
+                    ), "No verified cold claim at first resumed child MAIN HTTP arrival"
+                    assert request_boundary["claim"] == read_started[0]
+                    assert not request_boundary["request"]["responseStarted"]
+                    assert request_boundary["request"]["responseBytesWritten"] == 0
+                    assert read_started[0]["data"] == {
+                        "version": 1,
+                        "protocol": "bound-native-read-v1",
+                        "call": binding["call"],
+                        "contractSha256": binding["contractSha256"],
+                        "readyEntryId": read_ready_entry["id"],
+                        "readySha256": task_recovery_hash(read_ready_entry["data"]),
+                        "reason": "cold-resume",
+                    }
+                    assert branch.index(read_ready_entry) < branch.index(
+                        read_started[0]
+                    )
+                    yield_starts = [
+                        entry
+                        for entry in child_now
+                        if entry.get("customType") == "tool_execution_start"
+                        and entry.get("data", {}).get("toolName") == "yield"
+                    ]
+                    assert len(yield_starts) == 1 and yield_starts[0] in branch
+                    assert branch.index(read_started[0]) < branch.index(
+                        yield_starts[0]
+                    ), "Yield dispatch preceded durable cold-resume claim"
                     assert_parent_wire(requests)
                     yields = [
                         entry
@@ -1699,6 +1921,11 @@ def capture_task_active_recovery(
                     "topology": process_group_snapshot(os.getpgid(restarted.pid)),
                     "parentCompleted": finished,
                     "originalResult": result,
+                    "readContinuationReady": read_ready_entry,
+                    "readContinuationStarted": result_records(
+                        child_now, "task-read-continuation-started"
+                    ),
+                    "readResumeRequestBoundary": provider.read_resume_boundary,
                     "refusals": notifications,
                     "providerObservations": requests,
                     "subagents": roster,

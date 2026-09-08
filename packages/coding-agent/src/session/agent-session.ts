@@ -181,7 +181,8 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
-import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
+import { AgentLifecycleManager } from "../registry/agent-lifecycle";
+import { type AgentRef, AgentRegistry, getAgentTombstonePath } from "../registry/agent-registry";
 import {
 	deobfuscateAgentMessages,
 	deobfuscateAssistantContent,
@@ -192,8 +193,13 @@ import {
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import {
 	type BoundTaskDriverControls,
+	buildTaskReadContinuationRecord,
+	claimTaskReadContinuation,
+	classifyTaskChildContinuation,
 	effectiveTaskArguments,
+	hasTaskReadContinuationMarkers,
 	initializationContract,
+	type NativePlainReadProvenance,
 	type NativeTaskResultReadyCheckpoint,
 	type NativeTaskResultReadyV1,
 	type OriginalTaskCompletionCapture,
@@ -206,10 +212,15 @@ import {
 	readPreparationRecord,
 	readTaskBinding,
 	TASK_NATIVE_RESULT_READY,
+	TASK_READ_CONTINUATION_READY,
+	TASK_READ_CONTINUATION_STARTED,
 	TASK_RESULT_PROCESSING_PROTOCOL,
 	TASK_RESULT_PROCESSING_STARTED,
 	TASK_RUN_BINDING,
 	type TaskCallCapture,
+	type TaskReadContinuationCheckpoint,
+	type TaskReadContinuationClaim,
+	type TaskReadRequestFence,
 	type TaskRecoveryContract,
 	type TaskResultProcessingGate,
 	type TaskResultProcessingRef,
@@ -234,6 +245,7 @@ import { releaseTabsForOwner } from "../tools/browser/tab-supervisor";
 import type { CheckpointState, CompletedRewindState } from "../tools/checkpoint";
 import { releaseComputerSessionsForOwner } from "../tools/computer/supervisor";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
+import { nativePlainReadProvenance } from "../tools/read";
 import {
 	buildResolveReminderMessage,
 	isPreviewResolutionToolCall,
@@ -379,6 +391,7 @@ import { getRestorableSessionModels } from "./session-context";
 import { formatSessionDumpText } from "./session-dump-format";
 import type { BranchSummaryEntry, NewSessionOptions } from "./session-entries";
 import { SessionHandoff, type SessionHandoffHost } from "./session-handoff";
+import { loadSessionFile } from "./session-loader";
 import {
 	COMPACTION_CHECK_NONE,
 	createCodexCompactionContext as createMaintenanceCodexCompactionContext,
@@ -514,7 +527,16 @@ interface BoundTaskCall {
 	binding?: PersistedTaskBindingV1;
 	original?: OriginalTaskResultAttempt;
 }
+interface TaskReadRevivalPreparation {
+	ref: AgentRef;
+	ready: TaskReadContinuationCheckpoint;
+	manager?: SessionManager;
+	pending?: Promise<void>;
+	claim?: TaskReadContinuationClaim;
+	expectedLeaf: string;
+}
 interface ParentTaskRecoveryScope {
+	readPreparation?: TaskReadRevivalPreparation;
 	original?: OriginalTaskResultAttempt;
 	validateCompletion?: () => Promise<() => void>;
 	assertCompletionFiles?: () => void;
@@ -537,7 +559,28 @@ interface ParentTaskRecoveryScope {
 	assertOwnership(): void;
 	releaseChild?: () => void;
 }
+interface TaskReadCandidate {
+	assistant: AssistantMessage;
+	toolCallId: string;
+	arguments?: { path: string };
+	native?: NativePlainReadProvenance;
+	nativeResultSha256?: string;
+	turnEnd: Promise<void>;
+	resolveTurnEnd(): void;
+	turnEndSeen: boolean;
+	request?: object;
+	responsePending?: boolean;
+	responseGateActive?: boolean;
+	responseEvents?: Promise<void>;
+	ready?: TaskReadContinuationCheckpoint;
+	claim?: TaskReadContinuationClaim;
+	claiming?: Promise<void>;
+	expectedLeaf?: string;
+}
 interface ChildTaskRecoveryScope {
+	read?: TaskReadCandidate;
+	readFailure?: string;
+	readProtocolEntered?: boolean;
 	initialBatch?: PromptPreparationBatch;
 	initialLeaf?: string;
 	initialMessages?: readonly AgentMessage[];
@@ -2241,7 +2284,9 @@ export class AgentSession {
 		const args = summarizeToolArguments(event.args);
 		if (args) data.args = args;
 		if (event.intent) data.intent = event.intent;
-		this.sessionManager.appendCustomEntry(TOOL_EXECUTION_START_CUSTOM_TYPE, data);
+		const entryId = this.sessionManager.appendCustomEntry(TOOL_EXECUTION_START_CUSTOM_TYPE, data);
+		if (this.#childTaskRecovery?.read?.toolCallId === event.toolCallId && event.toolName === "read")
+			this.#advanceTaskReadLease(entryId);
 	}
 
 	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
@@ -2294,11 +2339,14 @@ export class AgentSession {
 	#queuedExtensionEvents: Promise<void> = Promise.resolve();
 
 	#queueExtensionEvent(event: AgentSessionEvent): Promise<void> {
+		const scope = this.#childTaskRecovery;
 		const emit = async () => {
 			await this.#emitExtensionEvent(event);
 		};
 		const queued = this.#queuedExtensionEvents.then(emit, emit);
-		this.#queuedExtensionEvents = queued.catch(() => {});
+		this.#queuedExtensionEvents = queued.catch(error => {
+			if (scope) this.#noteTaskReadFailure(scope, error);
+		});
 		return queued;
 	}
 
@@ -2382,8 +2430,56 @@ export class AgentSession {
 	 * event/persistence pipeline during teardown.
 	 */
 	#handleAgentEvent = (event: AgentEvent): Promise<void> => {
-		const processing = this.#dispatchAgentEvent(event);
+		const reading = this.#childTaskRecovery;
+		const read = reading?.read;
+		const originalReadTurn =
+			read &&
+			event.type === "turn_end" &&
+			event.message.role === "assistant" &&
+			assistantSnapshotOrigin(read.assistant) !== undefined &&
+			assistantSnapshotOrigin(event.message) === assistantSnapshotOrigin(read.assistant) &&
+			event.toolResults.some(result => result.toolCallId === read.toolCallId);
+		const needsReadClaim =
+			reading &&
+			read?.ready &&
+			!originalReadTurn &&
+			(!read.claim || read.responsePending || read.responseGateActive) &&
+			(event.type === "message_start" ||
+				event.type === "message_update" ||
+				event.type === "message_end" ||
+				event.type === "turn_end" ||
+				event.type === "agent_end");
+		let processing: Promise<void>;
+		if (needsReadClaim) {
+			read.responseGateActive = true;
+			const slot = event.type === "message_end" ? this.#createMessageEndPersistenceSlot(event.message) : undefined;
+			processing = (read.responseEvents ?? Promise.resolve())
+				.then(async () => {
+					await this.#allowTaskReadResponse(reading, read);
+					await this.#dispatchAgentEvent(event, slot);
+				})
+				.finally(() => {
+					slot?.release();
+					if (event.type === "agent_end") read.responseGateActive = false;
+				});
+			read.responseEvents = processing.catch(() => {});
+		} else processing = this.#dispatchAgentEvent(event);
 		this.#inFlightEventHandlers.add(processing);
+		const childScope = this.#childTaskRecovery;
+		if (childScope) {
+			void processing.catch(error => this.#noteTaskReadFailure(childScope, error));
+			const read = childScope.read;
+			if (
+				read &&
+				event.type === "turn_end" &&
+				event.message.role === "assistant" &&
+				assistantSnapshotOrigin(event.message) === assistantSnapshotOrigin(read.assistant) &&
+				event.toolResults.some(result => result.toolCallId === read.toolCallId)
+			) {
+				read.turnEndSeen = true;
+				void processing.finally(read.resolveTurnEnd).catch(() => {});
+			}
+		}
 		void processing.finally(() => this.#inFlightEventHandlers.delete(processing)).catch(() => {});
 		return processing;
 	};
@@ -2391,12 +2487,14 @@ export class AgentSession {
 	/**
 	 * Await every in-flight event handler (and any it chains into) so a late
 	 * message/entry append cannot land after the caller clears session memory.
-	 * The agent must already be idle — otherwise new events keep arriving and
-	 * this never drains.
+	 * The caller must stop new event production: either the agent is idle, or
+	 * its exact main request is paused before transport dispatch.
 	 */
-	async #drainInFlightEventHandlers(): Promise<void> {
+	async #drainInFlightEventHandlers(signal?: AbortSignal): Promise<void> {
 		while (this.#inFlightEventHandlers.size > 0) {
-			await Promise.allSettled([...this.#inFlightEventHandlers]);
+			const pending = Promise.allSettled([...this.#inFlightEventHandlers]);
+			if (signal) await untilAborted(signal, pending);
+			else await pending;
 		}
 	}
 
@@ -2414,7 +2512,7 @@ export class AgentSession {
 	 * `#postPromptTasksPromise` is set the moment `#emit` invokes this handler, so
 	 * the recovery wait always sees the in-flight handler and blocks until it — and
 	 * everything it schedules — settles. */
-	#dispatchAgentEvent = async (event: AgentEvent): Promise<void> => {
+	#dispatchAgentEvent = async (event: AgentEvent, readSlot?: MessageEndPersistenceSlot): Promise<void> => {
 		if (event.type === "tool_execution_end" && this.#isTerminalYieldToolResult(event)) {
 			const alreadyTerminated = this.#synchronouslyTerminatedYieldToolCallIds.delete(event.toolCallId);
 			if (!alreadyTerminated) {
@@ -2424,7 +2522,7 @@ export class AgentSession {
 			}
 		}
 		if (event.type !== "agent_end") {
-			const processing = this.#processAgentEvent(event);
+			const processing = this.#processAgentEvent(event, readSlot);
 			if ((event.type === "message_start" || event.type === "message_end") && isAdvisorCard(event.message)) {
 				this.#advisors.trackCardEvent(processing);
 			}
@@ -2433,7 +2531,7 @@ export class AgentSession {
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#trackPostPromptTask(promise);
 		try {
-			await this.#processAgentEvent(event);
+			await this.#processAgentEvent(event, readSlot);
 		} finally {
 			resolve();
 		}
@@ -2442,6 +2540,7 @@ export class AgentSession {
 	#recordPreparedMessage(message: AgentMessage, entryId: string): void {
 		this.#persistedEntryByMessage.set(message, entryId);
 		const batch = this.#promptPreparationByMessage.get(message);
+		if (this.#ownsTaskReadMessage(message)) this.#advanceTaskReadLease(entryId);
 		if (!batch || batch.complete || batch.sessionId !== this.sessionId || batch.generation !== this.#promptGeneration)
 			return;
 		const initialChild = this.#childTaskRecovery;
@@ -2463,6 +2562,7 @@ export class AgentSession {
 			...(batch.taskBindingId ? { taskBindingId: batch.taskBindingId } : {}),
 		};
 		const preparedEntryId = this.sessionManager.appendCustomEntry(PROMPT_PREPARATION, record);
+		if (this.#ownsTaskReadMessage(message)) this.#advanceTaskReadLease(preparedEntryId);
 		if (initialChild?.parent.original && batch === initialChild.initialBatch) {
 			const preparedEntry = this.sessionManager.getEntry(preparedEntryId);
 			if (
@@ -2673,6 +2773,327 @@ export class AgentSession {
 			if (attempt) this.#failOriginalTaskAttempt(attempt, error);
 			throw error;
 		}
+	}
+
+	#advanceTaskReadLease(entryId: string): void {
+		const scope = this.#childTaskRecovery;
+		const read = scope?.read;
+		if (!scope || !read || read.ready || read.claim) return;
+		if (read.expectedLeaf === entryId) return;
+		const entry = this.sessionManager.getEntry(entryId);
+		if (!entry || entry.parentId !== read.expectedLeaf || this.sessionManager.getLeafId() !== entryId) {
+			const error = new Error("Native read lost its exact pre-hook journal lease");
+			this.#noteTaskReadFailure(scope, error);
+			throw error;
+		}
+		read.expectedLeaf = entryId;
+	}
+
+	#ownsTaskReadMessage(message: AgentMessage): boolean {
+		const scope = this.#childTaskRecovery;
+		const read = scope?.read;
+		if (!scope || !read || read.ready || read.claim) return false;
+		if (message.role === "assistant")
+			return assistantSnapshotOrigin(message) === assistantSnapshotOrigin(read.assistant);
+		if (message.role === "toolResult") return message.toolName === "read" && message.toolCallId === read.toolCallId;
+		const batch = this.#promptPreparationByMessage.get(message);
+		return (
+			!!batch &&
+			batch.taskBindingId === scope.parent.binding.call.bindingId &&
+			(batch === scope.initialBatch || batch.anchorEntryId === scope.anchorEntryId)
+		);
+	}
+
+	#noteTaskReadFailure(scope: ChildTaskRecoveryScope, error: unknown): void {
+		scope.readFailure ??= String(error);
+		if (scope.readProtocolEntered && this.#childTaskRecovery === scope)
+			this.invalidateTaskRecovery(scope.readFailure);
+	}
+
+	observeNativeTaskRead(toolCallId: string, args: unknown, result: AgentToolResult<unknown>): void {
+		const scope = this.#childTaskRecovery;
+		const read = scope?.read;
+		if (!scope || !read || read.toolCallId !== toolCallId || read.native || this.model?.api !== "openai-completions")
+			return;
+		const native = nativePlainReadProvenance(result);
+		if (
+			!native ||
+			!isRecord(args) ||
+			Object.keys(args).length !== 1 ||
+			typeof args.path !== "string" ||
+			result.isError
+		)
+			return;
+		scope.readProtocolEntered = true;
+		try {
+			this.#assertTaskReadOwner(scope, read);
+		} catch (error) {
+			this.#noteTaskReadFailure(scope, error);
+			throw error;
+		}
+		read.arguments = { path: args.path };
+		read.native = Object.freeze({ ...native });
+		read.nativeResultSha256 = taskRecoveryHash(result);
+	}
+
+	#assertTaskReadOwner(scope: ChildTaskRecoveryScope, read: TaskReadCandidate): void {
+		if (this.#childTaskRecovery !== scope || scope.read !== read)
+			throw new Error("Original read continuation owner changed");
+		if (scope.readFailure) throw new Error(scope.readFailure);
+		this.#checkTaskRecoveryDriver();
+		scope.parent.assertOwnership();
+		if (
+			(!read.claim || read.responsePending) &&
+			read.expectedLeaf &&
+			this.sessionManager.getLeafId() !== read.expectedLeaf
+		)
+			throw new Error("Read continuation lost its exact journal leaf");
+	}
+
+	async #claimTaskRead(
+		scope: ChildTaskRecoveryScope,
+		read: TaskReadCandidate,
+		reason: "response" | "cold-resume",
+	): Promise<void> {
+		if (read.claiming) return read.claiming;
+		read.claiming = (async () => {
+			this.#assertTaskReadOwner(scope, read);
+			if (!read.ready) throw new Error("Read response has no durable native checkpoint");
+			read.claim = await claimTaskReadContinuation(
+				this.sessionManager,
+				scope.parent.binding,
+				read.ready,
+				reason,
+				scope.parent.validateAuthority,
+				() => this.#assertTaskReadOwner(scope, read),
+				id => {
+					read.expectedLeaf = id;
+				},
+			);
+		})().catch(error => {
+			this.#noteTaskReadFailure(scope, error);
+			throw error;
+		});
+		return read.claiming;
+	}
+
+	async #allowTaskReadResponse(scope: ChildTaskRecoveryScope, read: TaskReadCandidate): Promise<void> {
+		this.#assertTaskReadOwner(scope, read);
+		await this.#claimTaskRead(scope, read, "response");
+		await scope.parent.validateAuthority();
+		this.#assertTaskReadOwner(scope, read);
+		read.responsePending = false;
+	}
+
+	createTaskReadRequest(model: Model, context: Context, signal?: AbortSignal): TaskReadRequestFence | undefined {
+		const scope = this.#childTaskRecovery;
+		const read = scope?.read;
+		if (
+			!scope ||
+			!read?.native ||
+			!read.arguments ||
+			!read.nativeResultSha256 ||
+			(read.claim && !read.responsePending)
+		)
+			return undefined;
+		if (
+			model.api !== "openai-completions" ||
+			this.settings.get("externalThinking") ||
+			context.messages.some(message =>
+				!Array.isArray(message.content)
+					? typeof message.content !== "string"
+					: message.content.some(
+							part => part.type !== "text" && part.type !== "thinking" && part.type !== "toolCall",
+						),
+			)
+		) {
+			if (read.claim) {
+				const error = new Error("Claimed read continuation requires text-only supported provider context");
+				this.#noteTaskReadFailure(scope, error);
+				throw error;
+			}
+			return undefined;
+		}
+		if (read.request) {
+			const error = new Error("Another main request already owns read continuation");
+			this.#noteTaskReadFailure(scope, error);
+			throw error;
+		}
+		const request = {};
+		read.request = request;
+		read.responsePending = true;
+		scope.readProtocolEntered = true;
+		let payloadEntered = false;
+		const check = () => {
+			if (signal?.aborted) signal.throwIfAborted();
+			if (read.request !== request || this.model !== model)
+				throw new Error("Read continuation main request/model changed");
+			this.#assertTaskReadOwner(scope, read);
+		};
+		const failed = (error: unknown) => this.#noteTaskReadFailure(scope, error);
+		const response = async () => {
+			try {
+				check();
+				await this.#allowTaskReadResponse(scope, read);
+				check();
+			} catch (error) {
+				failed(error);
+				throw error;
+			}
+		};
+		return {
+			check,
+			failed,
+			response,
+			beforePayload: async () => {
+				try {
+					check();
+					if (payloadEntered && read.ready) await response();
+					payloadEntered = true;
+					check();
+				} catch (error) {
+					failed(error);
+					throw error;
+				}
+			},
+			preparedPayload: async payload => {
+				try {
+					check();
+					payload = JSON.parse(JSON.stringify(payload)) as unknown;
+					if (
+						!isRecord(payload) ||
+						!Array.isArray(payload.messages) ||
+						!Array.isArray(payload.tools) ||
+						payload.messages.some(
+							message =>
+								!isRecord(message) ||
+								(message.content !== null &&
+									message.content !== undefined &&
+									typeof message.content !== "string" &&
+									(!Array.isArray(message.content) ||
+										message.content.some(
+											part => !isRecord(part) || part.type !== "text" || typeof part.text !== "string",
+										))),
+						)
+					)
+						throw new Error("Read continuation requires a text-only main OpenAI completion payload");
+					await untilAborted(signal ?? scope.parent.signal, read.turnEnd);
+					const queuedTail = this.#queuedExtensionEvents;
+					await untilAborted(signal ?? scope.parent.signal, queuedTail);
+					await this.#drainInFlightEventHandlers(signal ?? scope.parent.signal);
+					await untilAborted(signal ?? scope.parent.signal, this.#messageEndPersistenceTail);
+					await this.sessionManager.flush();
+					check();
+					if (
+						!read.turnEndSeen ||
+						queuedTail !== this.#queuedExtensionEvents ||
+						this.#inFlightEventHandlers.size ||
+						this.#pendingMessageEndPersistence.size ||
+						this.#postPromptTasks.size ||
+						this.agent.hasQueuedMessages()
+					)
+						throw new Error("Read continuation has unsettled prior-step work");
+
+					let assistantId = read.ready?.record.read.assistantEntryId;
+					if (!assistantId) {
+						const assistant = this.messages.filter(
+							message =>
+								message.role === "assistant" &&
+								assistantSnapshotOrigin(message) === assistantSnapshotOrigin(read.assistant),
+						);
+						if (assistant.length !== 1) throw new Error("Native read assistant has ambiguous core provenance");
+						assistantId = this.#persistedEntryByMessage.get(assistant[0]);
+						if (!assistantId) throw new Error("Native read assistant is not durable");
+					} else this.#messageForPersistedEntry(assistantId);
+					const record =
+						read.ready?.record ??
+						buildTaskReadContinuationRecord(
+							this.sessionManager.getEntries(),
+							this.sessionManager.getBranch(),
+							scope.parent.binding,
+							{
+								assistantEntryId: assistantId,
+								toolCallId: read.toolCallId,
+								arguments: read.arguments!,
+								native: read.native!,
+								nativeResultSha256: read.nativeResultSha256!,
+							},
+						);
+					const wireCalls = payload.messages.flatMap(message =>
+						isRecord(message) && Array.isArray(message.tool_calls) ? message.tool_calls : [],
+					);
+					const wireResults = payload.messages.filter(message => isRecord(message) && message.role === "tool");
+					const result = this.sessionManager.getEntry(record.read.resultEntryId);
+					if (
+						payload.messages.some(
+							message =>
+								isRecord(message) &&
+								message.role !== "assistant" &&
+								Array.isArray(message.tool_calls) &&
+								message.tool_calls.length > 0,
+						) ||
+						payload.messages.findIndex(
+							message =>
+								isRecord(message) &&
+								message.role === "assistant" &&
+								Array.isArray(message.tool_calls) &&
+								message.tool_calls.some(call => isRecord(call) && call.id === read.toolCallId),
+						) >=
+							payload.messages.findIndex(
+								message =>
+									isRecord(message) && message.role === "tool" && message.tool_call_id === read.toolCallId,
+							) ||
+						wireCalls.length !== 1 ||
+						!isRecord(wireCalls[0]) ||
+						wireCalls[0].id !== read.toolCallId ||
+						!isRecord(wireCalls[0].function) ||
+						wireCalls[0].function.name !== "read" ||
+						typeof wireCalls[0].function.arguments !== "string" ||
+						taskRecoveryHash(JSON.parse(wireCalls[0].function.arguments)) !== taskRecoveryHash(read.arguments) ||
+						wireResults.length !== 1 ||
+						!isRecord(wireResults[0]) ||
+						wireResults[0].tool_call_id !== read.toolCallId ||
+						result?.type !== "message" ||
+						result.message.role !== "toolResult" ||
+						wireResults[0].content !==
+							result.message.content
+								.filter(part => part.type === "text")
+								.map(part => part.text)
+								.join("\n")
+								.toWellFormed()
+					)
+						throw new Error("Read continuation main payload lost original call/result pairing");
+					if (read.ready) {
+						await scope.parent.validateAuthority();
+						check();
+						return payload;
+					}
+					if (read.expectedLeaf !== record.prefix.leafId)
+						throw new Error("Read prefix changed during prior-step settlement");
+					await scope.parent.validateAuthority();
+					check();
+					if (
+						taskRecoveryHash(this.sessionManager.getEntries()) !== record.prefix.entriesSha256 ||
+						taskRecoveryHash(this.sessionManager.getBranch()) !== record.prefix.branchSha256
+					)
+						throw new Error("Read prefix changed before checkpoint persistence");
+					const snapshot = JSON.parse(JSON.stringify(record)) as typeof record;
+					const entryId = this.sessionManager.appendCustomEntry(TASK_READ_CONTINUATION_READY, snapshot);
+					const entry = this.sessionManager.getEntry(entryId);
+					if (!entry || entry.parentId !== read.expectedLeaf || this.sessionManager.getLeafId() !== entryId)
+						throw new Error("Read checkpoint lost its exact prior leaf");
+					read.expectedLeaf = entryId;
+					read.ready = { entryId, sha256: taskRecoveryHash(snapshot), record: snapshot };
+					await this.sessionManager.flush();
+					await scope.parent.validateAuthority();
+					check();
+					return payload;
+				} catch (error) {
+					failed(error);
+					throw error;
+				}
+			},
+		};
 	}
 
 	getTaskResultProcessingGate(toolCallId: string): TaskResultProcessingGate | undefined {
@@ -2916,6 +3337,7 @@ export class AgentSession {
 			generation: child.#promptGeneration,
 		};
 		child.#childTaskRecovery = scope;
+		const stopReadErrors = child.#extensionRunner?.onError(error => child.#noteTaskReadFailure(scope, error.error));
 		parent.child = child;
 		parent.ref = ref;
 		child.#extensionRunner?.setToolDispatchGuard(signal => child.#prepareBoundTaskDispatch(signal));
@@ -2927,6 +3349,7 @@ export class AgentSession {
 			if (child.agent.hasQueuedMessages()) child.#revokeTaskRecovery("Foreign input superseded original task");
 		});
 		parent.releaseChild = () => {
+			stopReadErrors?.();
 			scope.driverActive = false;
 			stopModel();
 			stopQueue();
@@ -3087,6 +3510,7 @@ export class AgentSession {
 				: undefined;
 		if (pendingOriginal) this.#assertOriginalTaskBootstrap(pendingOriginal);
 		const entryId = this.sessionManager.appendMessage(message, taskResult);
+		if (this.#ownsTaskReadMessage(message)) this.#advanceTaskReadLease(entryId);
 		if (pendingOriginal) {
 			const entry = this.sessionManager.getEntry(entryId);
 			if (!entry || entry.parentId !== pendingOriginal.bootstrapLeaf || this.sessionManager.getLeafId() !== entryId)
@@ -3322,7 +3746,7 @@ export class AgentSession {
 		return true;
 	}
 
-	#processAgentEvent = (event: AgentEvent): Promise<void> => {
+	#processAgentEvent = (event: AgentEvent, readSlot?: MessageEndPersistenceSlot): Promise<void> => {
 		const callId =
 			event.type === "tool_execution_end" && event.toolName === "task"
 				? event.toolCallId
@@ -3332,7 +3756,7 @@ export class AgentSession {
 					? event.message.toolCallId
 					: undefined;
 		const attempt = callId ? this.#boundTaskCalls.get(callId)?.original : undefined;
-		if (!attempt) return this.#processAgentEventNow(event);
+		if (!attempt) return this.#processAgentEventNow(event, undefined, readSlot);
 		// Register the persistence slot and this invocation's event order before any
 		// authority await, so turn-end persistence and later result events cannot overtake it.
 		const slot = event.type === "message_end" ? this.#createMessageEndPersistenceSlot(event.message) : undefined;
@@ -4855,6 +5279,24 @@ export class AgentSession {
 						scope.validatePolicy = guard;
 					},
 					validateChild: (ref, child) => this.validateTaskRecoveryChild(ref, child),
+					prepareReadContinuation: (ref, ready) => {
+						scope.assertOwnership();
+						if (
+							scope.readPreparation ||
+							scope.child ||
+							AgentRegistry.global().get(ref.id) !== ref ||
+							ref.status !== "parked" ||
+							ref.session ||
+							ref.id !== binding.child.registryId ||
+							ref.sessionFile !== binding.child.sessionFile
+						)
+							throw new Error("Read continuation cannot reserve the exact parked child");
+						scope.readPreparation = {
+							ref,
+							ready: JSON.parse(JSON.stringify(ready)) as TaskReadContinuationCheckpoint,
+							expectedLeaf: ready.entryId,
+						};
+					},
 					findNativeResultReady: () => {
 						scope.assertOwnership();
 						return taskResultRecoveryState(
@@ -4967,6 +5409,157 @@ export class AgentSession {
 		}
 	}
 
+	async #hasDurableTaskDelivery(ref: AgentRef, child: SessionManager): Promise<boolean> {
+		const file = this.sessionFile;
+		const sessionId = this.sessionId;
+		const parentScope = this.#activeTaskRecovery;
+		if (!file) return false;
+		const branch = this.sessionManager.getBranch();
+		const branchHash = taskRecoveryHash(branch);
+		const entries = this.sessionManager.getEntries();
+		const childEntries = child.getEntries();
+		const childHash = taskRecoveryHash(childEntries);
+		const childLeaf = child.getLeafId();
+		const childFile = child.getSessionFile();
+		const childCwd = child.getCwd();
+		const bindings = branch
+			.map(readTaskBinding)
+			.filter(
+				binding =>
+					binding?.child.registryId === ref.id &&
+					binding.child.sessionFile === ref.sessionFile &&
+					binding.child.sessionId === child.getSessionId() &&
+					binding.call.sessionId === sessionId,
+			);
+		if (bindings.length !== 1) return false;
+		const binding = bindings[0]!;
+		const expected = this.#taskResultRef(binding);
+		if (!expected.completion) return false;
+		const delivered = branch.filter(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolCallId === binding.call.toolCallId &&
+				!entry.message.isError &&
+				taskRecoveryHash(entry.taskResult) === taskRecoveryHash(expected),
+		);
+		if (delivered.length !== 1) return false;
+		const deliveryBranch = branch.slice(0, branch.indexOf(delivered[0]) + 1);
+		const complete = taskResultRecoveryState(entries, branch, binding).ready;
+		if (!complete) return false;
+		const completedIndex = childEntries.findIndex(entry => entry.id === complete.record.child.leafId);
+		if (completedIndex < 0) return false;
+		const completedEntries = childEntries.slice(0, completedIndex + 1);
+		if (
+			taskRecoveryHash(completedEntries) !== complete.record.child.entriesSha256 ||
+			taskRecoveryHash(child.getBranch(complete.record.child.leafId)) !== complete.record.child.branchSha256
+		)
+			return false;
+		const markers = childEntries.filter(
+			entry =>
+				entry.type === "custom" &&
+				(entry.customType === TASK_READ_CONTINUATION_READY || entry.customType === TASK_READ_CONTINUATION_STARTED),
+		);
+		if (
+			markers.some(
+				entry =>
+					entry.type !== "custom" ||
+					!isRecord(entry.data) ||
+					taskRecoveryHash(entry.data.call) !== taskRecoveryHash(binding.call) ||
+					entry.data.contractSha256 !== binding.contractSha256 ||
+					!completedEntries.some(done => done.id === entry.id),
+			)
+		)
+			return false;
+		const saved = await loadSessionFile(file);
+		if (
+			this.sessionFile !== file ||
+			this.sessionId !== sessionId ||
+			this.#activeTaskRecovery !== parentScope ||
+			taskRecoveryHash(this.sessionManager.getBranch()) !== branchHash ||
+			child.getLeafId() !== childLeaf ||
+			child.getSessionFile() !== childFile ||
+			child.getCwd() !== childCwd ||
+			fs.existsSync(getAgentTombstonePath(childFile!)) ||
+			taskRecoveryHash(child.getEntries()) !== childHash ||
+			AgentRegistry.global().get(ref.id) !== ref ||
+			ref.session ||
+			ref.status !== "parked" ||
+			saved.malformedRecords ||
+			!saved.entries.some(entry => entry.type === "session" && entry.id === sessionId)
+		)
+			return false;
+		const durable = new Map(saved.entries.map(entry => [entry.id, entry]));
+		return deliveryBranch.every(
+			entry => durable.has(entry.id) && taskRecoveryHash(durable.get(entry.id)) === taskRecoveryHash(entry),
+		);
+	}
+
+	/** Called only inside the coalesced cold reviver, after its sole open and before SDK/startup effects. */
+	async prepareTaskRecoveryRevival(ref: AgentRef, manager: SessionManager): Promise<void> {
+		const scope = this.#activeTaskRecovery;
+		if (!scope || !this.isTaskRecoveryRevival(ref)) {
+			if (!hasTaskReadContinuationMarkers(manager.getEntries())) return;
+			if (await this.#hasDurableTaskDelivery(ref, manager)) return;
+			throw new Error("Undelivered read continuation requires its exact bound recovery owner before startup");
+		}
+		if (scope.completedChildRef)
+			this.#revokeTaskRecovery("Completed task cannot be revived during cached result processing");
+		if (!AgentLifecycleManager.global().hasPendingRevival(ref.id, ref))
+			throw new Error("Read preparation requires the existing managed revival operation");
+		const prepared = scope.readPreparation;
+		if (!prepared) {
+			const classification = classifyTaskChildContinuation(manager.getEntries(), manager.getBranch(), scope.binding);
+			if (classification.kind === "read")
+				throw new Error("Read continuation was not reserved before managed revival");
+			return;
+		}
+		if (prepared.ref !== ref || (prepared.manager && prepared.manager !== manager))
+			throw new Error("Another manager owns bound read revival preparation");
+		if (prepared.pending) return prepared.pending;
+		prepared.manager = manager;
+		const check = () => {
+			if (
+				this.#activeTaskRecovery !== scope ||
+				!AgentLifecycleManager.global().hasPendingRevival(ref.id, ref) ||
+				scope.revoked ||
+				scope.signal.aborted ||
+				scope.child ||
+				prepared.manager !== manager ||
+				AgentRegistry.global().get(ref.id) !== ref ||
+				ref.status !== "parked" ||
+				ref.session ||
+				ref.sessionFile !== scope.binding.child.sessionFile ||
+				manager.getSessionId() !== scope.binding.child.sessionId ||
+				manager.getSessionFile() !== scope.binding.child.sessionFile ||
+				manager.getCwd() !== scope.binding.child.cwd ||
+				manager.getLeafId() !== prepared.expectedLeaf ||
+				fs.existsSync(getAgentTombstonePath(scope.binding.child.sessionFile))
+			)
+				throw new Error("Read revival lost parked ref, manager, path or journal lease");
+			scope.assertOwnership();
+		};
+		prepared.pending = (async () => {
+			check();
+			prepared.claim = await claimTaskReadContinuation(
+				manager,
+				scope.binding,
+				prepared.ready,
+				"cold-resume",
+				scope.validateAuthority,
+				check,
+				id => {
+					prepared.expectedLeaf = id;
+				},
+			);
+			check();
+		})().catch(error => {
+			if (this.#activeTaskRecovery === scope) this.invalidateTaskRecovery(String(error));
+			throw error;
+		});
+		return prepared.pending;
+	}
+
 	/** True only for the exact child selected by this parent's native recovery. */
 	isTaskRecoveryRevival(ref: AgentRef): boolean {
 		const scope = this.#activeTaskRecovery;
@@ -4994,6 +5587,13 @@ export class AgentSession {
 			throw new Error("Task revival no longer exclusively owns the original child");
 		if (child.sessionId !== parent.binding.child.sessionId || child.sessionFile !== parent.binding.child.sessionFile)
 			throw new Error("Revived task session identity differs");
+		if (
+			parent.readPreparation &&
+			(!parent.readPreparation.claim ||
+				parent.readPreparation.manager !== child.sessionManager ||
+				parent.readPreparation.ref !== ref)
+		)
+			throw new Error("Read continuation claim did not precede this exact SDK manager");
 		const scope: ChildTaskRecoveryScope = {
 			parent,
 			context: child.#taskRecoveryOwner,
@@ -5003,6 +5603,7 @@ export class AgentSession {
 			generation: child.#promptGeneration,
 		};
 		child.#childTaskRecovery = scope;
+		const stopReadErrors = child.#extensionRunner?.onError(error => child.#noteTaskReadFailure(scope, error.error));
 		child.#extensionRunner?.setToolDispatchGuard(signal => child.#prepareBoundTaskDispatch(signal));
 		parent.child = child;
 		parent.ref = ref;
@@ -5015,6 +5616,7 @@ export class AgentSession {
 				child.#revokeTaskRecovery("Foreign queued input arrived during bound task recovery");
 		});
 		parent.releaseChild = () => {
+			stopReadErrors?.();
 			scope.driverActive = false;
 			stopModel();
 			stopQueues();
@@ -5047,14 +5649,40 @@ export class AgentSession {
 			taskRecoveryHash(taskRuntimeContract(child)) !== taskRecoveryHash(scope.binding.contract.runtime)
 		)
 			throw new Error("Revived child model/tool/async/advisor contract differs");
-		const records = child.sessionManager
-			.getBranch()
-			.map(readPreparationRecord)
-			.filter(record => record?.taskBindingId === scope.binding.call.bindingId);
-		const anchors = new Set(records.map(record => record!.anchorEntryId));
-		if (anchors.size !== 1) throw new Error("Bound child has no unique original core-prepared input");
-		const anchor = [...anchors][0];
-		child.#classifyPersistedTurn(anchor, false, scope.binding);
+		const classification = classifyTaskChildContinuation(
+			child.sessionManager.getEntries(),
+			child.sessionManager.getBranch(),
+			scope.binding,
+			scope.readPreparation?.claim,
+		);
+		const anchor = classification.anchorEntryId;
+		if (classification.kind === "read") {
+			if (
+				!scope.readPreparation?.claim ||
+				scope.readPreparation.manager !== child.sessionManager ||
+				classification.ready.sha256 !== scope.readPreparation.ready.sha256
+			)
+				throw new Error("Revived read continuation lost its exact owned claim");
+			const assistant = child.#messageForPersistedEntry(classification.ready.record.read.assistantEntryId);
+			child.#messageForPersistedEntry(classification.ready.record.read.resultEntryId);
+			if (assistant.role !== "assistant") throw new Error("Read continuation assistant projection is unavailable");
+			child.#childTaskRecovery.readProtocolEntered = true;
+			child.#childTaskRecovery.read = {
+				assistant,
+				toolCallId: classification.ready.record.read.toolCallId,
+				arguments: classification.ready.record.read.arguments,
+				native: classification.ready.record.read.native,
+				nativeResultSha256: classification.ready.record.read.nativeResultSha256,
+				turnEnd: Promise.resolve(),
+				resolveTurnEnd: () => {},
+				turnEndSeen: true,
+				ready: classification.ready,
+				claim: scope.readPreparation.claim,
+				responsePending: true,
+				expectedLeaf: scope.readPreparation.claim.entryId,
+				claiming: Promise.resolve(),
+			};
+		} else child.#classifyPersistedTurn(anchor, false, scope.binding);
 		child.#childTaskRecovery.anchorEntryId = anchor;
 		child.#childTaskRecovery.tools = child.agent.state.tools.map(tool => ({ tool, execute: tool.execute }));
 	}
@@ -5083,6 +5711,7 @@ export class AgentSession {
 	): void {
 		const scope = this.#childTaskRecovery;
 		if (!scope) return;
+		if (scope.readProtocolEntered && scope.readFailure) this.#revokeTaskRecovery(scope.readFailure);
 		if (!scope.driverActive || scope.context.getStore() !== scope.token)
 			this.#revokeTaskRecovery("No original task driver owns dispatch");
 		if (signal?.aborted) signal.throwIfAborted();
@@ -5126,6 +5755,16 @@ export class AgentSession {
 			)
 				this.#revokeTaskRecovery("Original task provider context differs from its core initial preparation");
 			initial = true;
+		}
+		if (scope.read?.claim && scope.read.responsePending) {
+			if (this.sessionManager.getLeafId() !== scope.read.expectedLeaf)
+				throw new Error("Claimed read prefix changed before response dispatch");
+			classifyTaskChildContinuation(
+				this.sessionManager.getEntries(),
+				this.sessionManager.getBranch(),
+				scope.parent.binding,
+				scope.read.claim,
+			);
 		}
 		const branch = this.sessionManager.getBranch();
 		const initIndex = branch.findIndex(entry => entry.id === scope.parent.binding.child.initEntryId);
@@ -5327,6 +5966,29 @@ export class AgentSession {
 		try {
 			return await scope.context.run(scope.token, async () => {
 				this.#checkTaskRecoveryDriver();
+				if (scope.read?.claim) {
+					const controls = this.#boundTaskDriverControls(scope);
+					return run(async () => {
+						this.#beginInFlight();
+						try {
+							await scope.parent.validateAuthority();
+							this.#checkTaskRecoveryDriver();
+							this.#messageForPersistedEntry(scope.read!.ready!.record.read.assistantEntryId);
+							this.#messageForPersistedEntry(scope.read!.ready!.record.read.resultEntryId);
+							classifyTaskChildContinuation(
+								this.sessionManager.getEntries(),
+								this.sessionManager.getBranch(),
+								binding,
+								scope.read!.claim,
+							);
+							if (scope.parent.readPreparation?.manager !== this.sessionManager)
+								throw new Error("Read continuation manager changed before dispatch");
+							await this.agent.continue(scope.parent.signal);
+						} finally {
+							this.#endInFlight();
+						}
+					}, controls);
+				}
 				const records = this.sessionManager
 					.getBranch()
 					.map(readPreparationRecord)
@@ -5576,6 +6238,24 @@ export class AgentSession {
 	 * execution still emit there).
 	 */
 	async #beforeToolCall(ctx: BeforeToolCallContext, signal?: AbortSignal): Promise<BeforeToolCallResult | undefined> {
+		const childScope = this.#childTaskRecovery;
+		if (
+			childScope &&
+			!childScope.read &&
+			ctx.tool.name === "read" &&
+			this.model?.api === "openai-completions" &&
+			ctx.assistantMessage.content.filter(part => part.type === "toolCall").length === 1
+		) {
+			const turnEnd = Promise.withResolvers<void>();
+			childScope.read = {
+				assistant: ctx.assistantMessage,
+				toolCallId: ctx.toolCall.id,
+				turnEnd: turnEnd.promise,
+				resolveTurnEnd: turnEnd.resolve,
+				turnEndSeen: false,
+				expectedLeaf: this.sessionManager.getLeafId() ?? undefined,
+			};
+		}
 		const runner = this.#extensionRunner;
 		if (!runner?.hasHandlers("tool_call")) return undefined;
 		const metadata = ctx.toolCall.providerMetadata;

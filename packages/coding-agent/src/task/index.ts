@@ -49,7 +49,6 @@ import { hasResolvableTranscript } from "../internal-urls/registry-helpers";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
 import { ensurePersistedRoster } from "../registry/persisted-agents";
-import { TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
 import { SessionManager } from "../session/session-manager";
 import { type DiscoveryResult, discoverAgents } from "./discovery";
 import { runPersistedTask } from "./executor";
@@ -60,6 +59,7 @@ import {
 	assertNativeTaskOutput,
 	assertTaskChildPath,
 	type BoundTaskRecoveryRequest,
+	classifyTaskChildContinuation,
 	effectiveTaskArguments,
 	initializationContract,
 	type NativeRecoveredTaskResult,
@@ -74,6 +74,7 @@ import {
 	serializeNativeTaskResult,
 	supportsTaskRecoveryAgent,
 	TASK_RESULT_PROCESSING_PROTOCOL,
+	type TaskChildContinuation,
 	taskRecoveryHash,
 	taskRecoveryPolicy,
 } from "./recovery";
@@ -1665,6 +1666,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			request.setCompletionGuard(nativeTaskCompletionGuard(binding, artifactsDir, ready));
 			await request.validateAuthority();
 		}
+		let childContinuation: TaskChildContinuation | undefined;
 		const original = await SessionManager.open(binding.child.sessionFile, undefined, undefined, {
 			suppressBreadcrumb: true,
 		});
@@ -1687,7 +1689,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			const anchor = original.getEntry(anchorId);
 			if (anchor?.type !== "message" || anchor.message.role !== "user" || anchor.message.attribution !== "agent")
 				throw new Error("Task recovery input is not the original agent-authored user prompt");
-			const prepared = preparedEntryIds(branch, binding.child.sessionId, anchorId, binding.call.bindingId);
+			preparedEntryIds(branch, binding.child.sessionId, anchorId, binding.call.bindingId);
 			if (ready) {
 				const completed = ready.record.child;
 				const yielded = original.getEntry(completed.yieldResultEntryId);
@@ -1708,21 +1710,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				await request.validateAuthority();
 				return { result: nativeTaskResultPayload(ready), completion: ready };
 			}
-			// A branch rewind cannot turn previously executed child tools into an unanswered task.
-			for (const entry of original.getEntries()) {
-				if (entry.id === anchorId || prepared.has(entry.id)) continue;
-				if (
-					entry.type === "message" ||
-					entry.type === "custom_message" ||
-					entry.type === "compaction" ||
-					entry.type === "branch_summary" ||
-					entry.type === "reset_boundary" ||
-					(entry.type === "custom" && entry.customType === TOOL_EXECUTION_START_CUSTOM_TYPE)
-				)
-					throw new Error(
-						"Child already has assistant/tool/effect history or unbound preparation; result-gap reconstruction is unsupported",
-					);
-			}
+			childContinuation = classifyTaskChildContinuation(original.getEntries(), branch, binding);
 		} finally {
 			await original.close();
 		}
@@ -1732,7 +1720,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const expected = registry.get(binding.child.registryId);
 		if (expected?.status !== "parked" || expected.session || expected.sessionFile !== binding.child.sessionFile)
 			throw new Error("Original child is missing, terminal, or owned by competing execution");
-		const child = await AgentLifecycleManager.global().ensureLive(binding.child.registryId);
+		const lifecycle = AgentLifecycleManager.global();
+		if (childContinuation?.kind === "read") {
+			if (lifecycle.hasPendingRevival(binding.child.registryId, expected))
+				throw new Error("Read continuation conflicts with an existing child revival");
+			request.prepareReadContinuation(expected, childContinuation.ready);
+		}
+		const child = await lifecycle.ensureLive(binding.child.registryId);
 		if (
 			registry.get(binding.child.registryId) !== expected ||
 			registry.get(binding.child.registryId)?.session !== child ||

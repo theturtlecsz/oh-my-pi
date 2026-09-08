@@ -17,7 +17,7 @@ import { getDefault, type Settings } from "../config/settings";
 import { formatGroupedDiagnosticMessages } from "../lsp/utils";
 import type { Theme } from "../modes/theme/theme";
 import { type OutputSummary, type TruncationResult, truncateMiddle, truncateTail } from "../session/streaming-output";
-import type { TaskResultProcessingGate } from "../task/recovery";
+import type { NativeTaskReadObserver, TaskResultProcessingGate } from "../task/recovery";
 import { formatBytes, wrapBrackets } from "./render-utils";
 import { renderError } from "./tool-errors";
 
@@ -606,6 +606,7 @@ function appendOutputNotice(
 
 const kUnwrappedExecute = Symbol("OutputMeta.UnwrappedExecute");
 const kTaskResultGate = Symbol("OutputMeta.TaskResultGate");
+const kNativeReadObserver = Symbol("OutputMeta.NativeReadObserver");
 
 // =============================================================================
 // Centralized artifact spill for large tool results
@@ -856,6 +857,7 @@ async function wrappedExecute(
 	this: AgentTool & {
 		[kUnwrappedExecute]: AgentToolExecFn;
 		[kTaskResultGate]?: (id: string) => TaskResultProcessingGate | undefined;
+		[kNativeReadObserver]?: NativeTaskReadObserver;
 	},
 	toolCallId: string,
 	params: any,
@@ -868,6 +870,7 @@ async function wrappedExecute(
 	try {
 		const result = await originalExecute.call(this, toolCallId, params, signal, onUpdate, context);
 
+		this[kNativeReadObserver]?.(toolCallId, params, result);
 		await this[kTaskResultGate]?.(toolCallId)?.enter();
 		return await processToolResultOutput(result, this.name, context);
 	} catch (e) {
@@ -884,6 +887,7 @@ async function wrappedExecute(
 export function wrapToolWithMetaNotice<T extends AgentTool<any, any, any>>(
 	tool: T,
 	taskResultGate?: (id: string) => TaskResultProcessingGate | undefined,
+	nativeReadObserver?: NativeTaskReadObserver,
 ): T {
 	if (kUnwrappedExecute in tool) {
 		return tool;
@@ -893,6 +897,7 @@ export function wrapToolWithMetaNotice<T extends AgentTool<any, any, any>>(
 
 	return Object.defineProperties(tool, {
 		[kTaskResultGate]: { value: taskResultGate, configurable: true },
+		[kNativeReadObserver]: { value: nativeReadObserver, configurable: true },
 		[kUnwrappedExecute]: {
 			value: originalExecute,
 			enumerable: false,
