@@ -65,6 +65,7 @@ function passthroughRunner(seen: string[] = []): ExtensionRunner {
 		},
 		emitToolResult: async () => undefined,
 		prepareToolDispatchGuard: () => undefined,
+		enterTaskResultProcessing: async () => {},
 	} as unknown as ExtensionRunner;
 }
 

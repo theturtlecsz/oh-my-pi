@@ -117,6 +117,7 @@ describe("AgentSession todo reminder async-job deferral", () => {
 		manager = new AsyncJobManager({});
 		gates = [];
 		extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),

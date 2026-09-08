@@ -225,6 +225,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		const messageEndEntered = Promise.withResolvers<void>();
 		const nextProviderCall = Promise.withResolvers<void>();
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === "message_end"),
 			emitBeforeAgentStart: vi.fn(async () => undefined),
 			emit: vi.fn(async (event: { type: string; message?: AgentMessage }) => {
@@ -279,6 +280,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 	it("persists a tool result when its message_end listener rejects below the mid-run threshold", async () => {
 		let rejected = false;
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === "message_end"),
 			emitBeforeAgentStart: vi.fn(async () => undefined),
 			emit: vi.fn(async (event: { type: string; message?: AgentMessage }) => {
@@ -315,6 +317,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		};
 		let interceptedToolResult = false;
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === "message_end"),
 			emitBeforeAgentStart: vi.fn(async () => undefined),
 			emit: vi.fn(async (event: { type: string; message?: AgentMessage }) => {
@@ -388,6 +391,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		const messageEndEntered = Promise.withResolvers<void>();
 		const turnEndEntered = Promise.withResolvers<void>();
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === "message_end" || eventType === "turn_end"),
 			emitBeforeAgentStart: vi.fn(async () => undefined),
 			emit: vi.fn(async (event: { type: string; message?: AgentMessage }) => {
@@ -492,6 +496,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		const handlerEntered = Promise.withResolvers<void>();
 		const nextProviderCall = Promise.withResolvers<void>();
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			hasHandlers: vi.fn((eventType: string) => eventType === handlerType),
 			emitBeforeAgentStart: vi.fn(async () => undefined),
 			emit: vi.fn(async (event: { type: string }) => {

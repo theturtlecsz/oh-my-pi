@@ -103,6 +103,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		}> = [];
 		const eventOrder: string[] = [];
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn(event => {
 				eventOrder.push(event.type);
 				return Promise.resolve(undefined);
@@ -170,6 +171,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		});
 		let stopCount = 0;
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
@@ -220,6 +222,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		const settleReached = Promise.withResolvers<void>();
 		const emitSessionStop = vi.fn().mockResolvedValue(undefined);
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
@@ -340,6 +343,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			convertToLlm,
 		});
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
@@ -369,6 +373,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			convertToLlm,
 		});
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
@@ -398,6 +403,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			convertToLlm,
 		});
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
@@ -428,6 +434,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		});
 		let stopCount = 0;
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
@@ -475,6 +482,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			convertToLlm,
 		});
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
@@ -583,6 +591,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		});
 		const { promise: extensionGate, resolve: releaseExtension } = Promise.withResolvers<void>();
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn((event: { type: string }) =>
 				event.type === "agent_end" ? extensionGate : Promise.resolve(undefined),
 			),
@@ -1781,6 +1790,7 @@ describe("AgentSession TTSR resume gate", () => {
 		});
 
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),

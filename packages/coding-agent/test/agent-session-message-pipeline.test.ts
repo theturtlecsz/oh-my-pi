@@ -796,6 +796,7 @@ describe("AgentSession message pipeline", () => {
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: {} as never,
 			extensionRunner: {
+				setTaskResultProcessingGate: () => {},
 				hasHandlers: () => true,
 				emit: extensionEmit,
 			} as never,

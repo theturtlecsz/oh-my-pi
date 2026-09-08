@@ -167,17 +167,38 @@ packages/coding-agent/src/tools/index.ts	shared	modified	7b0bce2dc074	OMP-246: B
 packages/coding-agent/src/tools/output-meta.ts	shared	modified	1a12b62e59ec	OMP-246: Share output processing for real recovered results with original error mapping; OMP-246: Require original task processing claim before metadata and spill handling	retained
 packages/coding-agent/src/utils/git.ts	shared	modified	2e99b7ffc39b	session candidate: OMP-127	retained
 packages/coding-agent/test/acp-agent.test.ts	shared	modified	54ff82363d68	feat(coding-agent): cancellable plan_approved extension event (HOME-122)	retained
+packages/coding-agent/test/advisor-toggle.test.ts	shared	modified	462dc7e687cd	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/advisor/advisor.test.ts	shared	modified	2e906243011b	session candidate: OMP-47	retained
-packages/coding-agent/test/agent-session-advisor-suppression.test.ts	shared	modified	fce9891476c3	style(omp-156): biome formatting for verifier and re-fitted tests; session candidate: OMP-127	retained
+packages/coding-agent/test/agent-session-advisor-suppression.test.ts	shared	modified	1b8da49d5fd4	style(omp-156): biome formatting for verifier and re-fitted tests; session candidate: OMP-127; OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/agent-session-async-delivery.test.ts	shared	modified	983fd09814b9	session candidate: OMP-147; session candidate: OMP-107	retained
-packages/coding-agent/test/agent-session-before-agent-start-attribution.test.ts	shared	modified	c33e02944d0f	session candidate: OMP-69	retained
+packages/coding-agent/test/agent-session-auto-compaction-progress-guard.test.ts	shared	modified	e4335359908c	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-bash-session-ownership.test.ts	shared	modified	002b90a91831	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-before-agent-start-attribution.test.ts	shared	modified	35075283177b	session candidate: OMP-69; OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-before-agent-start-prompt-override.test.ts	shared	modified	01c386efb5b1	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-btw-branch.test.ts	shared	modified	da63269f7131	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-concurrent.test.ts	shared	modified	718b455d1711	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-empty-stop-guard.test.ts	shared	modified	95403c21d709	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-event-order.test.ts	shared	modified	7bdea7dd6771	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-goal-midrun-compaction.test.ts	shared	modified	d030aee4a5aa	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-handoff.test.ts	shared	modified	cd2f0e427dca	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-message-pipeline.test.ts	shared	modified	e83afb9ebc3f	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-payload-rejection-413.test.ts	shared	modified	a1c2e2f48f9c	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/agent-session-persisted-turn.test.ts	fork-only	added	ed1dfadd8af5	Real session recovery guards for persisted entry identity, owner input, authority, lifecycle and print clients	retained
+packages/coding-agent/test/agent-session-plan-compact-hook-instructions.test.ts	shared	modified	051ab48c2669	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/agent-session-plan-mode-convergence.test.ts	shared	modified	920ed7a11bb8	session candidate: OMP-147; session candidate: OMP-127	retained
+packages/coding-agent/test/agent-session-retry-cap.test.ts	shared	modified	8bf41dd5ee4c	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-retry-fallback.test.ts	shared	modified	35276c57ac89	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-session-stop-will-continue.test.ts	shared	modified	bcabefaa8ec4	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/agent-session-task-recovery-guards.test.ts	fork-only	added	e6680c37d49a	OMP-246: Refuse revoked result attachment and preserve owner input across authority and policy races	retained
 packages/coding-agent/test/agent-session-task-recovery.test.ts	fork-only	added	8f88cc39c2a4	OMP-246: Real SDK task binding, cold replay, result reuse and refusal contracts; OMP-246: Require actual parent provider dispatch with original call/result pairing after cold replay; OMP-246: Real native cached result, effect-once processing and failure/race regressions; OMP-246: Exercise real original completion, cached delivery, owner queues and failure races	retained
+packages/coding-agent/test/agent-session-todo-reminder-async-jobs.test.ts	shared	modified	bd98283fcc23	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-tool-rebuild-skip.test.ts	shared	modified	ca0eb4d19415	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-tree-ask-reanswer.test.ts	shared	modified	b81d00b27e66	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-tree-navigation.test.ts	shared	modified	d2f774e85b33	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/agent-session-user-shortcut-hooks.test.ts	shared	modified	5882b0f777de	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/completed-task-result-contract.test.ts	fork-only	added	9d45c6c8db9e	OMP-246: Persisted ready/claim parsing, immutable copies and branch/discard refusal	retained
 packages/coding-agent/test/config/settings-backup-on-rewrite.test.ts	fork-only	added	fd1a138ab69b	session candidate: OMP-173; session candidate: OMP-172	retained
-packages/coding-agent/test/cursor-exec.test.ts	shared	modified	719c84fe95d7	OMP-246: Preserve Cursor bridge edit/grep/approval contracts with required inert dispatch-guard fake	retained
+packages/coding-agent/test/cursor-exec.test.ts	shared	modified	a41675735f0c	OMP-246: Preserve Cursor bridge edit/grep/approval contracts with required inert dispatch-guard fake; OMP-246 CI: Model required task result processing entry in unqualified bridge runner fake	retained
 packages/coding-agent/test/discovery-root.test.ts	fork-only	added	190a6034057b	OMP-249 executable configuration isolation and unchanged workspace/ordinary-discovery contracts	retained
 packages/coding-agent/test/discovery/claude-plugins.test.ts	shared	modified	fd3906bdc11c	test(omp-156): isolate plugin-precedence discovery test from the real HOME	retained
 packages/coding-agent/test/export-html-template.test.ts	shared	modified	49060d7e18a6	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; test(omp-156): derive HTML export template expectation from source composition	retained
@@ -188,9 +209,11 @@ packages/coding-agent/test/extensions-runner.test.ts	shared	modified	b3782f12fe4
 packages/coding-agent/test/fixtures/discovery-root-probe.ts	fork-only	added	0524001e765c	OMP-249 real child-process discovery and file-tool probe	retained
 packages/coding-agent/test/fixtures/task-recovery-owner-resume.md	fork-only	added	47d329f7db5f	OMP-246: Static distinct owner input for main-provider continuation contracts	retained
 packages/coding-agent/test/gc-cli.test.ts	shared	modified	72d2defdf2ad	ci: repair red main baseline (OMP-217); fix: slim session workflow loadout and isolate test execution (OMP-166)	retained
+packages/coding-agent/test/getalltools-toolinfo.test.ts	shared	modified	f4375f73e6c9	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/git-active-context.test.ts	shared	modified	668de1ccdb2b	session candidate: OMP-127	retained
 packages/coding-agent/test/interactive-mode-plan-review.test.ts	shared	modified	35fa09735639	feat(coding-agent): cancellable plan_approved extension event (HOME-122)	retained
 packages/coding-agent/test/marketplace/project-scope.test.ts	shared	modified	aa6a69ca0922	session candidate: OMP-127	retained
+packages/coding-agent/test/mcp-http-transport.test.ts	shared	modified	0d57e9bcfdc6	OMP-246 CI: Bound automatic SSE resumption with the existing external guard instead of an incidental startup deadline	retained
 packages/coding-agent/test/mcp-incremental-connect.test.ts	shared	modified	a3a679be42e2	ci: repair red main baseline (OMP-217)	retained
 packages/coding-agent/test/modes/noninteractive-dispose.test.ts	shared	modified	05e5c056b402	OMP-246: Keep disposal regression compatible with required session idle waiting	retained
 packages/coding-agent/test/modes/warp-events.test.ts	shared	modified	88712d3731da	session candidate: OMP-108	retained
@@ -200,6 +223,7 @@ packages/coding-agent/test/rpc-client.restart.test.ts	shared	modified	b6b9d694b2
 packages/coding-agent/test/rpc-stdin-lock.test.ts	shared	modified	c5e90fe4df3e	session candidate: OMP-127	retained
 packages/coding-agent/test/rpc.test.ts	shared	modified	78e8e5580f04	session candidate: OMP-127	retained
 packages/coding-agent/test/sdk-mcp-instructions.test.ts	shared	modified	90f6738569ff	session candidate: OMP-147	retained
+packages/coding-agent/test/session-stop-continuation-recap.test.ts	shared	modified	0d1dfeda9381	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/silent-abort-print-mode.test.ts	shared	modified	1dff55b2148b	fork change (describe); OMP-246: Model required idle waiting without weakening aborted output assertions	retained
 packages/coding-agent/test/status-line-overflow.test.ts	shared	modified	6d7cece1a768	feat(coding-agent): inline setStatus placement beside path segment (HOME-130)	retained
 packages/coding-agent/test/system-prompt-dedup.test.ts	shared	modified	841401f536db	test: reconcile context-overflow, kitty DA1, and system-prompt-dedup tests after v17.3.2 merge	retained

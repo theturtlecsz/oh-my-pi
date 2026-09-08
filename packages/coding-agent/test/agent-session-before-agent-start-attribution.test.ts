@@ -45,6 +45,7 @@ describe("AgentSession before_agent_start attribution fallback", () => {
 			],
 		});
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emitBeforeAgentStart,
 			emit: vi.fn().mockResolvedValue(undefined),
 		} as unknown as ExtensionRunner;
@@ -178,6 +179,7 @@ describe("AgentSession before_agent_start attribution fallback", () => {
 			return undefined;
 		});
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emitBeforeAgentStart,
 			emit: vi.fn().mockResolvedValue(undefined),
 		} as unknown as ExtensionRunner;
@@ -246,6 +248,7 @@ describe("AgentSession before_agent_start attribution fallback", () => {
 			return undefined;
 		});
 		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
 			emitBeforeAgentStart,
 			emit: vi.fn().mockResolvedValue(undefined),
 		} as unknown as ExtensionRunner;
