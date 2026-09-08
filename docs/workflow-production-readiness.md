@@ -113,3 +113,6 @@ agent framework would not remove these obligations.
 The first source-installation staging and qualification procedure is documented
 in [Installation isolation](installation-isolation.md). It does not activate a
 release, migrate the live ledger, or mark ledger acceptance satisfied.
+
+The [recovery coverage map](omp-recovery-coverage.md) identifies existing tests,
+their process boundaries, and the missing Phase 2 failure reproductions.

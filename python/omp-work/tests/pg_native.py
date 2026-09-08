@@ -20,8 +20,7 @@ import psycopg
 @contextlib.contextmanager
 def native_postgres(root: Path, port: int) -> Generator[None]:
     data_dir = root / "pgdata"
-    sock_dir = root / "pgsock"
-    sock_dir.mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["initdb", "-D", str(data_dir), "-U", "postgres", "-A", "trust", "-E", "UTF8"],
         check=True,
@@ -36,7 +35,9 @@ def native_postgres(root: Path, port: int) -> Generator[None]:
             str(root / "postgres.log"),
             "-w",
             "-o",
-            f"-p {port} -k {sock_dir} -c listen_addresses=127.0.0.1",
+            # All fixture clients use loopback TCP. Disable unused Unix sockets
+            # so long or space-containing pytest paths cannot break startup.
+            f"-p {port} -c unix_socket_directories= -c listen_addresses=127.0.0.1",
             "start",
         ],
         check=True,

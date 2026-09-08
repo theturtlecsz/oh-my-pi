@@ -103,7 +103,22 @@ import {
 import { registerSessionLedger } from "./session-ledger";
 import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
-import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Candidate, type CloseAttempt, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView } from "@oh-my-pi/pi-work-client";
+
+type ReviewAttemptIdentity = Partial<Pick<CloseAttempt, "revision_id" | "candidate_id" | "candidate_sha256" | "candidate_commit">>;
+type ReviewCandidateIdentity = Pick<Candidate, "candidate_id" | "candidate_sha256" | "commit_sha">;
+
+function matchesReviewCandidate(
+	attempt: ReviewAttemptIdentity | undefined,
+	candidate: ReviewCandidateIdentity | null | undefined,
+	revisionId: string | undefined,
+): boolean {
+	return Boolean(attempt && candidate?.candidate_id && candidate.candidate_sha256 && candidate.commit_sha && revisionId
+		&& attempt.revision_id === revisionId
+		&& attempt.candidate_id === candidate.candidate_id
+		&& attempt.candidate_sha256 === candidate.candidate_sha256
+		&& attempt.candidate_commit === candidate.commit_sha);
+}
 
 /** Tool actions — the canonical action set for the `work` tool. */
 export type CanonicalAction =
@@ -1591,11 +1606,23 @@ export function createWorkflowHost(cfg: HostConfig) {
 		});
 		interface ExecutionOutboxEntry {
 			grantId: string;
+			sessionId?: string;
+			workId?: string;
+			revisionId?: string;
 			preReservationVersion: number;
 			postVersion: number;
 			messageId: string;
-			status: "pending" | "delivered";
+			status: "pending" | "queued" | "delivered";
 			at: string;
+		}
+
+		function executionIntentMismatch(entry: ExecutionOutboxEntry, current: ExecutionSnapshot): string | undefined {
+			if (entry.postVersion !== current.grant.grant_version) return "continuation version differs from the authoritative grant";
+			if (entry.sessionId && entry.sessionId !== pi.getSessionId()) return "continuation belongs to another session";
+			if (entry.workId && entry.workId !== current.activeItem?.work_id) return "continuation belongs to another work item";
+			const revisionId = current.activeItem?.criteria_revision_id ?? current.activeItem?.claimed_revision_id;
+			if (entry.revisionId && entry.revisionId !== revisionId) return "continuation belongs to another work revision";
+			return undefined;
 		}
 
 		async function deliverExecutionMessage(
@@ -1617,6 +1644,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				|| current.grant.grant_id !== grantId
 				|| current.grant.state !== "active"
 				|| !current.activeItem
+				|| current.grant.grant_version !== postVersion
 			) {
 				return false;
 			}
@@ -1626,17 +1654,20 @@ export function createWorkflowHost(cfg: HostConfig) {
 					replayEntry.grantId !== grantId
 					|| replayEntry.preReservationVersion !== preReservationVersion
 					|| replayEntry.postVersion !== postVersion
-					|| replayEntry.status !== "pending"
+					|| executionIntentMismatch(replayEntry, current) !== undefined
 				)
 			) {
 				return false;
 			}
 
-			const pendingEntry: ExecutionOutboxEntry = replayEntry ?? {
+			const pendingEntry: ExecutionOutboxEntry = {
 				grantId,
+				sessionId: pi.getSessionId(),
+				workId: current.activeItem.work_id,
+				revisionId: current.activeItem.criteria_revision_id ?? current.activeItem.claimed_revision_id,
 				preReservationVersion,
 				postVersion,
-				messageId: randomUUID(),
+				messageId: replayEntry?.messageId ?? randomUUID(),
 				status: "pending",
 				at: new Date().toISOString(),
 			};
@@ -1648,17 +1679,21 @@ export function createWorkflowHost(cfg: HostConfig) {
 			pi.sendMessage({
 				customType: `${TOOL_NAME}-execute`,
 				content: prompt.render(executePromptTemplate, { key: issueKey }),
+				details: { executionContinuation: pendingEntry },
 			}, { deliverAs: "nextTurn", triggerTurn: true });
 
+			// Enqueue is volatile. Only the matching custom_message in a disk-loaded
+			// session proves injection on restart; neither this marker nor an
+			// in-memory delivery receipt proves transcript persistence or consumption.
 			try {
 				pi.appendEntry(`${cfg.entryType}-execute-outbox`, {
 					...pendingEntry,
-					status: "delivered",
+					status: "queued",
 					at: new Date().toISOString(),
 				});
 			} catch (error) {
 				try {
-					ctx?.ui?.notify?.(`Warning: failed to persist outbox delivery ack (${String(error)})`, "warning");
+					ctx?.ui?.notify?.(`Warning: failed to persist outbox enqueue record (${String(error)})`, "warning");
 				} catch {}
 			}
 			return true;
@@ -1740,7 +1775,17 @@ export function createWorkflowHost(cfg: HostConfig) {
 				return { ok: false, reason: "active unfinished blockers present" };
 			}
 			let expectedHead: string | undefined;
-			if (["reviewing", "remediating"].includes(exec.activeItem.phase) && item.candidate?.commit_sha) {
+			// Review can freeze and begin its attempt before checkpoint delivery
+			// advances the item phase. Accept only this grant's bound candidate in
+			// that window, never an unrelated finalized candidate or arbitrary HEAD.
+			const ownPendingReview = exec.activeItem.phase === "executing" && item.candidate?.kind === "final"
+				&& (workflow.close_attempts ?? []).some(attempt =>
+					LIVE_ATTEMPT_STATES[attempt.state] === true
+					&& attempt.authorization_kind === "execution"
+					&& attempt.execution_grant_id === exec.grant.grant_id
+					&& attempt.work_id === item.work_id
+					&& matchesReviewCandidate(attempt, item.candidate, item.revision.revision_id));
+			if ((["reviewing", "remediating"].includes(exec.activeItem.phase) || ownPendingReview) && item.candidate?.commit_sha) {
 				expectedHead = item.candidate.commit_sha;
 			} else {
 				expectedHead = exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline;
@@ -1770,24 +1815,24 @@ export function createWorkflowHost(cfg: HostConfig) {
 			resetConfirmations({ resetShared: ownerSession(ctx) });
 			await loadCache();
 			models = ctx.models;
-			const outboxStatus = new Map<string, "pending" | "delivered">();
+			const outboxEntries = new Map<string, ExecutionOutboxEntry>();
+			const persistedContinuations = new Map<string, ExecutionOutboxEntry>();
 			const pendingOutboxEntries: ExecutionOutboxEntry[] = [];
 			const deliveredPreReservations = new Set<string>();
 			const deliveredPostVersions = new Set<string>();
 
 			try {
 				for (const entry of ctx.sessionManager.getBranch()) {
+					if (entry.type === "custom_message" && entry.customType === `${TOOL_NAME}-execute`) {
+						const details = entry.details as { executionContinuation?: ExecutionOutboxEntry } | undefined;
+						const identity = details?.executionContinuation;
+						if (identity?.messageId && identity.grantId) persistedContinuations.set(identity.messageId, identity);
+					}
 					if (entry.type === "custom" && "customType" in entry) {
 						if (entry.customType === `${cfg.entryType}-execute-outbox`) {
 							const data = ("data" in entry ? entry.data : undefined) as ExecutionOutboxEntry | undefined;
 							if (data?.grantId && data.messageId) {
-								outboxStatus.set(data.messageId, data.status);
-								if (data.status === "delivered") {
-									deliveredPreReservations.add(`${data.grantId}:${data.preReservationVersion}`);
-									deliveredPostVersions.add(`${data.grantId}:${data.postVersion}`);
-								} else if (data.status === "pending") {
-									pendingOutboxEntries.push(data);
-								}
+								outboxEntries.set(data.messageId, data);
 							}
 						} else if (entry.customType === `${cfg.entryType}-execute` || entry.customType === `${TOOL_NAME}-execute`) {
 							const data = ("data" in entry ? entry.data : undefined) as { grantId?: string; preReservationVersion?: number; newVersion?: number } | undefined;
@@ -1799,6 +1844,24 @@ export function createWorkflowHost(cfg: HostConfig) {
 					}
 				}
 			} catch {}
+			for (const data of outboxEntries.values()) {
+				const injected = persistedContinuations.get(data.messageId);
+				const matches = injected?.grantId === data.grantId
+					&& injected.preReservationVersion === data.preReservationVersion
+					&& injected.postVersion === data.postVersion
+					&& (!data.sessionId || injected.sessionId === data.sessionId)
+					&& (!data.workId || injected.workId === data.workId)
+					&& (!data.revisionId || injected.revisionId === data.revisionId);
+				// Preserve historical unbound acknowledgements; their missing message
+				// identity cannot be retroactively upgraded into proof of injection.
+				const legacyDelivered = data.status === "delivered" && !data.sessionId && !data.workId && !data.revisionId;
+				if (matches || legacyDelivered) {
+					deliveredPreReservations.add(`${data.grantId}:${data.preReservationVersion}`);
+					deliveredPostVersions.add(`${data.grantId}:${data.postVersion}`);
+				} else {
+					pendingOutboxEntries.push(data);
+				}
+			}
 			// session entry wins over cache for NOW restore (survives cache loss)
 			try {
 				for (const entry of ctx.sessionManager.getBranch()) {
@@ -1938,8 +2001,15 @@ export function createWorkflowHost(cfg: HostConfig) {
 								const preflight = await validateExecutionRecoveryPreflight(sessionCtx, backend, exec, "active");
 								if (preflight.ok) {
 									const curVersion = exec.grant.grant_version;
+									const mismatchedIntent = [...outboxEntries.values()].find(entry =>
+										entry.grantId === exec.grant.grant_id && entry.postVersion >= curVersion
+										&& executionIntentMismatch(entry, exec) !== undefined);
+									if (mismatchedIntent) {
+										sessionCtx.ui.notify(`Execution recovery skipped: ${executionIntentMismatch(mismatchedIntent, exec)}`, "warning");
+										return;
+									}
 									const pendingOutbox = pendingOutboxEntries.find(
-										e => e.grantId === exec.grant.grant_id && outboxStatus.get(e.messageId) === "pending",
+										e => e.grantId === exec.grant.grant_id && e.postVersion >= curVersion,
 									);
 									if (pendingOutbox) {
 										await deliverExecutionMessage(
@@ -3932,11 +4002,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const staleCheckAttempt = liveAttempt ? (wfView?.close_attempts ?? []).find(row => row.attempt_id === liveAttempt.attemptId) : undefined;
 							const staleCheckCandidate = wfView?.item?.candidate;
 							const staleCheckRevisionId = wfView?.item?.revision?.revision_id ?? wfView?.item?.current_revision_id;
-							const attemptMatchesItem = !!(staleCheckAttempt && staleCheckCandidate
-								&& staleCheckAttempt.revision_id === staleCheckRevisionId
-								&& staleCheckAttempt.candidate_id === staleCheckCandidate.candidate_id
-								&& staleCheckAttempt.candidate_sha256 === staleCheckCandidate.candidate_sha256
-								&& staleCheckAttempt.candidate_commit === staleCheckCandidate.commit_sha);
+							const attemptMatchesItem = matchesReviewCandidate(staleCheckAttempt, staleCheckCandidate, staleCheckRevisionId);
 
 							const runAuditAndSettle = async (attemptId: string, pushReceiptId: string, hasManifest: boolean, candidateCommit?: string) => {
 								if (!hasManifest) {

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { WORK_CONTRACT_SHA256, type WorkClient } from "@oh-my-pi/pi-work-client";
+import { WORK_CONTRACT_SHA256, type Candidate, type WorkClient } from "@oh-my-pi/pi-work-client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { z } from "zod";
@@ -63,6 +63,164 @@ beforeEach(() => {
 		stopReason: "stop",
 		content: [{ type: "text", text: "OK" }],
 	} as never);
+});
+
+describe("execution recovery identity guards", () => {
+	type ContinuationIdentity = {
+		grantId: string;
+		sessionId: string;
+		workId: string;
+		revisionId: string;
+		preReservationVersion: number;
+		postVersion: number;
+		messageId: string;
+	};
+	type OutboxEntry = {
+		type: "custom";
+		customType: "work-now-execute-outbox";
+		data: ContinuationIdentity & { status: "pending" | "queued"; at: string };
+	};
+	type InjectedEntry = {
+		type: "custom_message";
+		customType: "work-execute";
+		details: { executionContinuation: ContinuationIdentity };
+	};
+	type AttemptBinding = {
+		attempt_id: string;
+		work_id: string;
+		execution_grant_id: string;
+		authorization_kind: "execution";
+		revision_id: string;
+		candidate_id: string;
+		candidate_sha256: string;
+		candidate_commit: string;
+		state: string;
+	};
+
+	async function recoveryFixture() {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "recovery-bindings-"));
+		fixtureCaches.push(cwd);
+		const sessionId = "recovery-binding-session";
+		const baseline = "1".repeat(40);
+		let head = baseline;
+		const exec = makeSnapshot("active", "single", [{ position: 0, work_id: "work-recovery", phase: "executing" }]);
+		exec.grant.grant_version = 2;
+		exec.activeItem!.initial_git_baseline = baseline;
+		exec.activeItem!.current_git_baseline = baseline;
+		exec.activeItem!.criteria_revision_id = "criteria-revision";
+		exec.activeItem!.project_id = null;
+		const item = {
+			work_id: "work-recovery",
+			state: "IN_PROGRESS",
+			project_id: null,
+			revision: { revision_id: "criteria-revision" },
+			candidate: undefined as Candidate | undefined,
+		};
+		const attempts: AttemptBinding[] = [];
+		const entries: Array<OutboxEntry | InjectedEntry> = [];
+		const sent: Array<{ customType?: string; details?: { executionContinuation?: ContinuationIdentity } }> = [];
+		const notices: string[] = [];
+		const handlers: Array<(event: unknown, ctx: ExtensionContext) => Promise<void>> = [];
+		const issue = { id: item.work_id, key: "OMP-246", title: "Recovery", project: "Bookends" };
+		const reserve = vi.fn(async () => {
+			exec.grant.grant_version++;
+			return exec;
+		});
+		const backend = {
+			cacheFile: temporaryCacheFile(), markerFile: ".work-project", evidenceKinds: ["verification", "closeout"], scopeFix: "",
+			getExecution: async () => exec,
+			findIssue: async () => issue,
+			currentNow: async () => issue,
+			pendingDeliveries: async () => [],
+			getPendingExecutionClaims: async () => [],
+			setExecutionState: reserve,
+			workClient: {
+				healthReady: async () => ({ service_fingerprint: "recovery-fixture-service" }),
+				workItem: async () => item,
+				workflow: async () => ({ item, relations: [], close_attempts: attempts }),
+			},
+		} as unknown as WorkflowBackend;
+		const ctx = {
+			cwd, taskDepth: 0,
+			sessionManager: { getBranch: () => entries, getCwd: () => cwd, getSessionId: () => sessionId },
+			ui: { notify: (text: string) => notices.push(text), theme: { fg: (_color: string, text: string) => text }, setStatus: () => {} },
+		} as unknown as ExtensionContext;
+		const pi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			registerTool: () => {}, registerCommand: () => {}, registerFlag: () => {}, registerMessageRenderer: () => {},
+			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<void>) => { if (event === "session_start") handlers.push(handler); },
+			getSessionId: () => sessionId,
+			sendMessage: (message: typeof sent[number]) => sent.push(message),
+			appendEntry: () => {}, zod: z,
+		} as unknown as ExtensionAPI;
+		createWorkflowHost({ backend, teamNoun: "the ledger", entryType: "work-now", acceptEntry: () => true, executionWorkspaceManager: identityExecutionWorkspaceManager })(pi);
+		exec.grant.judge_sha256 = (await computeAuditTcb(ctx, backend.workClient!)).judgeSha256;
+		vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+		vi.spyOn(gitModule, "headCommit").mockImplementation(() => head);
+		const intent: ContinuationIdentity = {
+			grantId: exec.grant.grant_id, sessionId, workId: item.work_id, revisionId: item.revision.revision_id,
+			preReservationVersion: 1, postVersion: 2, messageId: "queued-recovery",
+		};
+		entries.push({ type: "custom", customType: "work-now-execute-outbox", data: { ...intent, status: "queued", at: new Date().toISOString() } });
+		return {
+			intent, entries, sent, reserve, notices, attempts, item, exec,
+			setHead: (value: string) => { head = value; },
+			start: async () => {
+				if (!handlers.length) throw new Error("workflow host did not register startup recovery");
+				for (const handler of handlers) await handler({}, ctx);
+			},
+		};
+	}
+
+	test.each([
+		["foreign session", { sessionId: "another-session" }],
+		["different work item", { workId: "another-item" }],
+		["stale revision", { revisionId: "claimed-revision-before-criteria" }],
+		["future reservation", { postVersion: 3 }],
+	] as const)("queued intent with %s starts no turn or reservation", async (_name, changed) => {
+		const fixture = await recoveryFixture();
+		const queued = fixture.entries[0] as OutboxEntry;
+		Object.assign(queued.data, changed);
+		await fixture.start();
+		expect(fixture.sent.filter(message => message.customType === "work-execute")).toHaveLength(0);
+		expect(fixture.reserve).not.toHaveBeenCalled();
+	});
+
+	test("a different item's persisted message cannot suppress the current queued intent", async () => {
+		const fixture = await recoveryFixture();
+		fixture.entries.push({ type: "custom_message", customType: "work-execute", details: { executionContinuation: { ...fixture.intent, workId: "other-item" } } });
+		await fixture.start();
+		const deliveries = fixture.sent.filter(message => message.customType === "work-execute");
+		expect(deliveries).toHaveLength(1);
+		expect(deliveries[0]?.details?.executionContinuation?.messageId).toBe(fixture.intent.messageId);
+		expect(fixture.reserve).not.toHaveBeenCalled();
+	});
+
+	test.each([
+		["another grant", { execution_grant_id: "foreign-grant" }],
+		["another revision", { revision_id: "foreign-revision" }],
+		["another candidate", { candidate_id: "foreign-candidate" }],
+		["changed candidate bytes", { candidate_sha256: "f".repeat(64) }],
+		["another commit", { candidate_commit: "e".repeat(40) }],
+		["terminal attempt", { state: "completed" }],
+	] as const)("an executing candidate bound to %s cannot authorize recovery at its HEAD", async (_name, changed) => {
+		const fixture = await recoveryFixture();
+		const commit = "2".repeat(40);
+		fixture.item.candidate = {
+			candidate_id: "candidate-recovery", work_id: fixture.item.work_id, revision_id: fixture.item.revision.revision_id,
+			candidate_sha256: "c".repeat(64), commit_sha: commit, kind: "final", allocated_at: new Date().toISOString(),
+		};
+		fixture.setHead(commit);
+		fixture.attempts.push({
+			attempt_id: "attempt-recovery", work_id: fixture.item.work_id, execution_grant_id: fixture.exec.grant.grant_id,
+			authorization_kind: "execution", revision_id: fixture.item.revision.revision_id, candidate_id: fixture.item.candidate.candidate_id,
+			candidate_sha256: fixture.item.candidate.candidate_sha256, candidate_commit: commit, state: "active", ...changed,
+		});
+		await fixture.start();
+		expect(fixture.sent.filter(message => message.customType === "work-execute")).toHaveLength(0);
+		expect(fixture.reserve).not.toHaveBeenCalled();
+		expect(fixture.notices.some(notice => notice.includes("HEAD commit mismatch"))).toBe(true);
+	});
 });
 
 const makeSnapshot = (
@@ -589,10 +747,13 @@ describe("native auditor runner (OMP-168)", () => {
 		);
 		type OutboxData = {
 			grantId: string;
+			sessionId: string;
+			workId: string;
+			revisionId: string;
 			preReservationVersion: number;
 			postVersion: number;
 			messageId: string;
-			status: "pending" | "delivered";
+			status: "pending" | "queued" | "delivered";
 			at: string;
 		};
 		const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<unknown>>>();
@@ -791,6 +952,9 @@ describe("native auditor runner (OMP-168)", () => {
 				customType: "work-now-execute-outbox",
 				data: {
 					grantId: exec.grant.grant_id,
+					sessionId: "pause-notice-session",
+					workId,
+					revisionId,
 					preReservationVersion: 0,
 					postVersion: exec.grant.grant_version,
 					messageId,
@@ -806,7 +970,7 @@ describe("native auditor runner (OMP-168)", () => {
 			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(1);
 			expect(appendedRecords.filter(record =>
 				record.customType === "work-now-execute-outbox"
-				&& record.data?.status === "delivered"
+				&& record.data?.status === "queued"
 				&& record.data?.messageId === "active-replay"
 			)).toHaveLength(1);
 			expect(appendedRecords.filter(record =>
@@ -1811,6 +1975,9 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			customType: "work-now-execute-outbox",
 			data: {
 				grantId: exec.grant.grant_id,
+				sessionId: "recovery-relocation-session",
+				workId: "OMP-213",
+				revisionId: "rev-1",
 				preReservationVersion: 0,
 				postVersion: exec.grant.grant_version,
 				messageId: "recovery-relocation",
@@ -2837,6 +3004,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		const appendedEntries: string[] = [];
 		const fakePi = {
 			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			getSessionId: () => "checkpoint-recovery-session",
 			zod: z,
 			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
 				if (spec.name === "work") registeredExecute = spec.execute;
