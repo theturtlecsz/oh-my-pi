@@ -4,6 +4,7 @@ import { vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as managedGit from "@oh-my-pi/pi-coding-agent/utils/git";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { type CustomEntry, type CustomMessageEntry, type CustomMessagePayload, type PersistedTurnContinuationRequest, type PersistedTurnContinuationResult, type SessionEntry, type SessionMessageEntry, ExtensionRunner, loadExtensions, normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent";
 import { checkProspectiveContract } from "../../extensions/workflow/config";
@@ -11,7 +12,7 @@ import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import { createWorkBackend } from "../../extensions/workflow/work";
 import { loadBearer, loadWorkConfig } from "../../extensions/workflow/config";
-import { dirtyPaths, freezeCandidateCommit } from "../../extensions/workflow/git";
+import { dirtyPaths, executionPrimaryRoot, freezeCandidateCommit, rangeDiffSha256 } from "../../extensions/workflow/git";
 import { createWorkflowHost } from "../../extensions/workflow/host";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
@@ -27,6 +28,7 @@ if (!probe || !scenario) {
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 const extDir = process.env.OMP_WORK_SMOKE_EXT_DIR ?? path.join(repoRoot, "session-system/extensions");
 let subprocessCount = 0;
+const auditRepositoryChecks: Array<{ repository: string; startCommit: string; finalCommit: string; diffSha256: string }> = [];
 const NEEDS_FIX_REPORT = "VERDICT: NEEDS_FIX\n\nFINDINGS\n- [major] AC-1 src/smoke_feat.ts:1 evidence: feat is false; impact: broken; minimal fix: set to true\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
 const PASS_REPORT = "VERDICT: PASS\n\nFINDINGS\n(none)\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
 const BLOCKED_REPORT = "VERDICT: BLOCKED\n\nFINDINGS\n- [blocker] AC-1 blocked on external dependency\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
@@ -38,7 +40,18 @@ vi.spyOn(ai, "completeSimple").mockResolvedValue({
 	content: [{ type: "text", text: "OK" }],
 } as never);
 
-vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: any) => {
+vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+	// The report stays scripted; repository and sealed Git-range usability are real.
+	const manifest = options.task.match(/^Final diff\nMode: git-range-sha256\nRepository: ([^\n]+)\nStart commit: ([a-f0-9]{40,64})\nFinal commit: ([a-f0-9]{40,64})\nSHA-256: ([a-f0-9]{64})$/m);
+	if (!manifest) throw new Error("Scripted audit received no sealed Git-range manifest");
+	const [, repository, startCommit, finalCommit, diffSha256] = manifest;
+	if (!path.isAbsolute(repository) || repository !== await executionPrimaryRoot(ownerProbe))
+		throw new Error(`Sealed audit repository is not the canonical absolute primary: ${repository}`);
+	if ((await managedGit.commitDetails(repository, startCommit)).sha !== startCommit ||
+		(await managedGit.commitDetails(repository, finalCommit)).sha !== finalCommit ||
+		rangeDiffSha256(repository, startCommit, finalCommit) !== diffSha256)
+		throw new Error("Sealed audit Git objects or diff do not match the repository manifest");
+	auditRepositoryChecks.push({ repository, startCommit, finalCommit, diffSha256 });
 	subprocessCount++;
 	const report = (scenario === "judge-freeze" || scenario === "judge-resume") ? PASS_REPORT : subprocessCount === 1 ? (scenario === "blocked" ? BLOCKED_REPORT : NEEDS_FIX_REPORT) : PASS_REPORT;
 	const wrapped = JSON.stringify({ report });
@@ -55,7 +68,7 @@ vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: any
 		durationMs: 100,
 		tokens: 300,
 		requests: 1,
-	} as any;
+	};
 });
 
 const loaded = await loadExtensions(["work-now.ts", "model-bookends.ts"].map(file => path.join(extDir, file)), probe);
@@ -983,6 +996,7 @@ if (scenario === "dirty") {
 	out.uiCalls = uiCalls;
 }
 const shutdownWorkspace = probe;
+out.auditRepositoryChecks = auditRepositoryChecks;
 out.uiCalls ??= uiCalls;
 if (fs.existsSync(shutdownWorkspace)) {
 	out.executionBranch ??= Bun.spawnSync(["git", "branch", "--show-current"], { cwd: shutdownWorkspace }).stdout.toString().trim();

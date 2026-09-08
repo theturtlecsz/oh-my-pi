@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import type { ToolCallEventResult } from "@oh-my-pi/pi-coding-agent/extensibility/shared-events";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { WORK_CONTRACT_SHA256, type Candidate, type WorkClient } from "@oh-my-pi/pi-work-client";
+import { WORK_CONTRACT_SHA256, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope } from "@oh-my-pi/pi-work-client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { z } from "zod";
@@ -13,13 +13,14 @@ import { AgentSession, SessionManager, Settings, type ExtensionAPI, type Extensi
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
+import * as managedGit from "@oh-my-pi/pi-coding-agent/utils/git";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { applyExtensionNewSessionSetup } from "../../packages/coding-agent/src/modes/controllers/extension-ui-controller";
 import { prepareNativeAuditRunner } from "../extensions/workflow/auditor-runner";
 import type { WorkflowBackend } from "../extensions/workflow/backend";
 import { createWorkflowHost } from "../extensions/workflow/host";
-import type { CloseAttemptSnapshot, ExecutionItemPhase, ExecutionSnapshot } from "../extensions/workflow/backend";
+import type { CloseAttemptSnapshot, CloseAttemptSession, ExecutionItemPhase, ExecutionSnapshot } from "../extensions/workflow/backend";
 import {
 	confirmWrite,
 	RECEIPT_TTL_MS,
@@ -321,7 +322,7 @@ const makeSnapshot = (
 			grant_id: "ad5c45a7-1234-5678-9abc-def012345678",
 			workspace_id: "ws-1",
 			owner_id: "owner-1",
-			repository: "oh-my-pi",
+			repository: "/tmp/oh-my-pi",
 			remote_ref: "refs/heads/main",
 			state,
 			mode,
@@ -728,7 +729,7 @@ describe("native auditor runner (OMP-168)", () => {
 				getExecutionCallCount++;
 				const effectiveState = getExecutionCallCount % 2 === 1 ? "active" : grantState;
 				return {
-					grant: { grant_id: "grant-1", grant_version: 1, state: effectiveState, terminal_reason: terminalReason, judge_sha256: mockJudge },
+					grant: { grant_id: "grant-1", grant_version: 1, state: effectiveState, terminal_reason: terminalReason, judge_sha256: mockJudge, repository: path.resolve(import.meta.dir, "../..") },
 					items: [{ position: 0, work_id: "work-1", phase: "executing", plan_stamp: { paths: [] } }],
 					activeItem: { position: 0, work_id: "work-1", phase: "executing", plan_stamp: { paths: [] }, close_attempts_started: 0 },
 				};
@@ -2288,23 +2289,6 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 	});
 });
 
-describe("service refresh during autonomous execution review (OMP-199)", () => {
-	const defaultAuditor: AgentDefinition = {
-		name: "auditor",
-		description: "Auditor agent",
-		systemPrompt: "Audit prompt",
-		model: ["@audit"],
-		output: { properties: { report: { type: "string" } } },
-		source: "bundled",
-	};
-
-	function mockDiscovery(agent: AgentDefinition = defaultAuditor) {
-		return vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
-			agents: [agent],
-			projectAgentsDir: null,
-		});
-	}
-
 	function makeTempRepo(): { dir: string; cacheFile: string; headSha: string; cleanup: () => void } {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "service-refresh-test-"));
 		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "service-refresh-cache-"));
@@ -2330,6 +2314,23 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 				fs.rmSync(cacheDir, { recursive: true, force: true });
 			},
 		};
+	}
+
+describe("service refresh during autonomous execution review (OMP-199)", () => {
+	const defaultAuditor: AgentDefinition = {
+		name: "auditor",
+		description: "Auditor agent",
+		systemPrompt: "Audit prompt",
+		model: ["@audit"],
+		output: { properties: { report: { type: "string" } } },
+		source: "bundled",
+	};
+
+	function mockDiscovery(agent: AgentDefinition = defaultAuditor) {
+		return vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
+			agents: [agent],
+			projectAgentsDir: null,
+		});
 	}
 
 	afterEach(() => {
@@ -3435,7 +3436,19 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 		}
 	});
 
-	test("binds dedicated execution branch ref and confirms completion on default branch master", async () => {
+	test("linked-worktree admission seals primary repository through audit and master completion", async () => {
+		const repo = makeTempRepo();
+		fixtureCaches.push(repo.dir, path.resolve(os.homedir(), ".omp", "agent", repo.cacheFile, ".."));
+		const linked = `${repo.dir}-linked`;
+		fixtureCaches.push(linked);
+		await managedGit.branch.create(repo.dir, "execution/omp-212", repo.headSha);
+		await managedGit.worktree.add(repo.dir, linked, "execution/omp-212");
+		await Bun.write(path.join(linked, "test.txt"), "candidate only on managed execution branch\n");
+		await managedGit.stage.files(linked, ["test.txt"]);
+		await managedGit.commit(linked, "Create isolated audit candidate");
+		const candidate = await managedGit.head.sha(linked);
+		if (!candidate) throw new Error("Linked candidate commit missing");
+		const inputCwd = path.join(linked, "python/omp-work/src");
 		const registeredCommands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
 		let registeredExecuteTool: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: (update: unknown) => void, ctx: ExtensionContext) => Promise<{ content: Array<{ type: "text"; text: string }> }>) | undefined;
 		const fakePi = {
@@ -3458,6 +3471,8 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 		let capturedRemoteRef: string | undefined;
 		let verifyMergeCalledWith: { remoteRef: string; defaultBranch?: string } | undefined;
 		let completedItemCalled = false;
+		let pushRepository: unknown;
+		let attemptRepository: string | undefined;
 
 		const mockExec: ExecutionSnapshot = {
 			grant: {
@@ -3528,8 +3543,9 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			issueDetail: async () => ({ key: "OMP-212", attemptSnapshot: undefined }),
 			workflowState: async () => ({ open_blockers: [] }),
 			getFocusVersion: async () => 1,
-			beginExecution: async (input: { remoteRef: string; judgeSha256?: string }) => {
+			beginExecution: async (input: { provenance: ExecutionProvenanceEnvelope; remoteRef: string; judgeSha256?: string }) => {
 				capturedRemoteRef = input.remoteRef;
+				mockExec.grant.repository = input.provenance.repository;
 				mockExec.grant.remote_ref = input.remoteRef;
 				if (input.judgeSha256) mockExec.grant.judge_sha256 = input.judgeSha256;
 				return mockExec;
@@ -3540,10 +3556,16 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 				candidate_sha256: "cand-sha",
 				commit_sha: "2".repeat(40),
 			}),
-			appendEvidence: async () => ({ receipt_id: "receipt-master" }),
-			beginCloseAttempt: async () => ({ status: "applied", attemptId: "att-master", event: { requiresDelivery: false } }),
+			appendEvidence: async (_issue: unknown, kind: string, _body: string, metadata: { repository?: string }) => {
+				if (kind === "push") pushRepository = metadata.repository;
+				return { receipt_id: "receipt-master" };
+			},
+			beginCloseAttempt: async (_issue: unknown, session: CloseAttemptSession) => {
+				attemptRepository = session.repository;
+				return { status: "applied", attemptId: "att-master", event: { requiresDelivery: false } };
+			},
 			sealAuditManifest: async () => ({ status: "applied" }),
-			sealedAuditTask: async () => ({ taskSha256: "task-sha", taskBody: "task body" }),
+			sealedAuditTask: async () => ({ taskSha256: "task-sha", taskBody: JSON.stringify({ repository: attemptRepository, start: repo.headSha, final: candidate }) }),
 			reserveAuditorLaunch: async () => ({ status: "reserved", launchId: "launch-master" }),
 			settleAuditorLaunch: async () => ({ verdict: "PASS", event: { renderedText: "PASS" } }),
 			recordCloseoutReview: async () => ({ status: "applied" }),
@@ -3600,7 +3622,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			teamNoun: "the ledger",
 			entryType: "work-now",
 			acceptEntry: () => true,
-			executionWorkspaceManager: identityExecutionWorkspaceManager,
+			executionWorkspaceManager: { ...identityExecutionWorkspaceManager, primaryRoot: gitModule.executionPrimaryRoot },
 		})(fakePi);
 
 		const handler = registeredCommands.get("execute");
@@ -3656,7 +3678,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 
 		try {
 			const fakeCtx = {
-				cwd: "/tmp/repo",
+				cwd: inputCwd,
 				taskDepth: 0,
 				sessionManager: { getBranch: () => [] },
 				models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
@@ -3681,6 +3703,13 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 				defaultBranch: "refs/heads/master",
 			});
 			expect(completedItemCalled).toBe(true);
+			const sealed = JSON.parse(runSubprocessSpy.mock.calls[0][0].task) as { repository: string; start: string; final: string };
+			const canonicalRepository = await fs.promises.realpath(repo.dir);
+			expect({ admission: mockExec.grant.repository, push: pushRepository, attempt: attemptRepository, auditor: sealed.repository }).toEqual({ admission: canonicalRepository, push: canonicalRepository, attempt: canonicalRepository, auditor: canonicalRepository });
+			expect(await managedGit.head.sha(sealed.repository)).toBe(repo.headSha);
+			expect((await managedGit.commitDetails(sealed.repository, sealed.start)).sha).toBe(repo.headSha);
+			expect((await managedGit.commitDetails(sealed.repository, sealed.final)).sha).toBe(candidate);
+			expect(await managedGit.diff(sealed.repository, { base: sealed.start, head: sealed.final })).toContain("+candidate only on managed execution branch");
 		} finally {
 			dirtySpy.mockRestore();
 			headSpy.mockRestore();

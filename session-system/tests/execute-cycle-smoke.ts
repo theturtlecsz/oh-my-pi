@@ -322,14 +322,17 @@ if (args[0] === "api") {
 	assert.ok(String(singleOut.review1).includes("NEEDS_FIX"), `first review yields NEEDS_FIX; got: ${singleOut.review1}`);
 	assert.ok(String(singleOut.review2).includes("Execution grant completed") || String(singleOut.review2).includes("delivered and closed"), `execution completed on second review; got: ${singleOut.review2}`);
 	assert.equal(singleOut.workspaceExistsAfterShutdown, false, "completed grant removes managed worktree on shutdown");
-	// OMP-185: the execution close attempt (the auditor manifest's repository
-	// input) must carry the absolute worktree, not the basename identity.
+	// The grant and auditor manifest retain the canonical absolute primary repository.
 	const execAttemptRepoRes = Bun.spawnSync(["psql", "-h", "127.0.0.1", "-p", String(pgPort), "-U", "postgres", "-d", "omp_work", "-t", "-A", "-c", "SELECT repository FROM omp_work.close_attempts WHERE authorization_kind='execution'"], {
 		env: { ...process.env, PGPASSWORD: pgSecret },
 	});
 	const execAttemptRepos = execAttemptRepoRes.stdout.toString().trim().split("\n").filter(Boolean);
 	assert.ok(execAttemptRepos.length >= 1, "execution close attempts recorded");
-	for (const attemptRepo of execAttemptRepos) assert.equal(attemptRepo, "repo", "execution close attempt repository is the canonical grant repository");
+	const canonicalRepository = await fs.promises.realpath(probe);
+	for (const attemptRepo of execAttemptRepos) assert.equal(attemptRepo, canonicalRepository, "execution close attempt repository is the canonical grant repository");
+	const auditRepositoryChecks = singleOut.auditRepositoryChecks as Array<{ repository: string; startCommit: string; finalCommit: string; diffSha256: string }>;
+	assert.equal(auditRepositoryChecks.length, 2, "both scripted audit attempts verify their sealed Git range before returning a report");
+	for (const check of auditRepositoryChecks) assert.equal(check.repository, canonicalRepository, "auditor opened the exact sealed primary repository");
 	// Prompt-shaped seal (no work param, mismatched derived proposal) must seal
 	// the stored criteria verbatim and surface them to the session.
 	assert.ok(
@@ -1717,6 +1720,8 @@ if (args[0] === "api") {
 	const nonMainCase = await createAndStartDisposableGrant("non-main", "release/omp-180-smoke");
 	const grantNonMainId = nonMainCase.startOut.exec?.grant?.grant_id;
 	const nonMainJudgeSha = nonMainCase.startOut.exec?.grant?.judge_sha256;
+	const nonMainRepository = nonMainCase.startOut.exec?.grant?.repository;
+	assert.equal(nonMainRepository, canonicalRepository, "non-main grant retains the absolute primary repository");
 	assert.equal(nonMainCase.startOut.exec?.grant?.remote_ref, "refs/heads/release/omp-180-smoke", "grant binds non-main branch");
 	// 1. Seal criteria
 	const sealNonMain = await (await fetch(`${baseUrl}/v1/commands`, {
@@ -1861,7 +1866,7 @@ if (args[0] === "api") {
 					owner_session_id: "smoke-non-main",
 					owner_session_started_at: new Date().toISOString(),
 					owner_session_start_commit: headCommit,
-					repository: "repo",
+					repository: nonMainRepository,
 					diff_sha256: "0".repeat(64),
 					starting_dirty_paths: [],
 					authorization_kind: "execution",
@@ -1969,7 +1974,7 @@ if (args[0] === "api") {
 	// 6. Negative probe: push receipt with wrong remote_ref fails completion
 	const wrongPushId = crypto.randomUUID();
 	const wrongPushPayload = {
-		repository: "repo",
+		repository: nonMainRepository,
 		remote_url: remote,
 		remote_ref: "refs/heads/wrong",
 		prior_tip: headCommit,
@@ -2058,7 +2063,7 @@ if (args[0] === "api") {
 			},
 		],
 		delivery: {
-			repository: "repo",
+			repository: nonMainRepository,
 			remote_url: pushOutcome.remoteUrl ?? remote,
 			remote_ref: remoteRef ?? "refs/heads/release/omp-180-smoke",
 			candidate_commit: headCommit,
@@ -2092,7 +2097,7 @@ if (args[0] === "api") {
 	assert.ok(badNonMainComplete.error?.diagnostics?.[0]?.includes("push receipt remote_ref mismatch"), "diagnostics cite remote_ref mismatch");
 	const correctPushId = crypto.randomUUID();
 	const correctPushPayload = {
-		repository: "repo",
+		repository: nonMainRepository,
 		remote_url: pushOutcome.remoteUrl ?? remote,
 		remote_ref: pushOutcome.remoteRef,
 		prior_tip: pushOutcome.priorTip ?? headCommit,
@@ -2628,7 +2633,7 @@ if (args[0] === "api") {
 						owner_session_id: "smoke-budget",
 						owner_session_started_at: new Date().toISOString(),
 						owner_session_start_commit: budgetBaseline,
-						repository: "repo",
+						repository: budgetCase.startOut.exec?.grant?.repository,
 						diff_sha256: "0".repeat(64),
 						starting_dirty_paths: [],
 						authorization_kind: "execution",
@@ -2730,7 +2735,7 @@ if (args[0] === "api") {
 					owner_session_id: "smoke-budget",
 					owner_session_started_at: new Date().toISOString(),
 					owner_session_start_commit: budgetBaseline,
-					repository: "repo",
+					repository: budgetCase.startOut.exec?.grant?.repository,
 					diff_sha256: "0".repeat(64),
 					starting_dirty_paths: [],
 					authorization_kind: "execution",

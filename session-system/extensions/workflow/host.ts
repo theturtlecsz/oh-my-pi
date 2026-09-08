@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process";
 import { type Dirent, existsSync, readFileSync } from "node:fs";
 import { lstat, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { type AuthStorage, completeSimple } from "@oh-my-pi/pi-ai";
 import {
 	Container,
@@ -150,6 +150,7 @@ const ACTIONS = [
 	"get_execution", "seal_execution_criteria", "stamp_execution_plan", "begin_execution_review", "stop_execution",
 ] as const;
 const ACTION_ENUM: [string, ...string[]] = [...ACTIONS];
+const LEGACY_EXECUTION_REPOSITORY_REFUSAL = "execution grant repository must be an absolute path; legacy relative repository identities cannot be reviewed or resumed";
 const LIVE_ATTEMPT_STATES: Record<string, true> = {
 	active: true,
 	audit_ready: true,
@@ -844,6 +845,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		exec: ExecutionSnapshot,
 		key: string,
 	): Promise<ExtensionContext> {
+		if (!isAbsolute(exec.grant.repository)) throw new Error(LEGACY_EXECUTION_REPOSITORY_REFUSAL);
 		const baseline = exec.activeItem?.current_git_baseline ?? exec.activeItem?.initial_git_baseline;
 		if (!baseline) throw new Error("execution workspace baseline is missing");
 		const workspace = await executionWorkspaceManager.ensure(
@@ -1732,6 +1734,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if (exec.grant.state !== expectedState) {
 				return { ok: false, reason: `grant state is ${exec.grant.state}, expected ${expectedState}` };
 			}
+			if (!isAbsolute(exec.grant.repository)) return { ok: false, reason: LEGACY_EXECUTION_REPOSITORY_REFUSAL };
 			if (!exec.activeItem) {
 				return { ok: false, reason: "no active item on execution grant" };
 			}
@@ -2783,6 +2786,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 						ctx.ui.notify("No execution grant found to resume", "error");
 						return;
 					}
+					if (exec.grant.state !== "paused") {
+						ctx.ui.notify(`Cannot resume: grant state is ${exec.grant.state}, expected paused`, "error");
+						return;
+					}
+					if (!isAbsolute(exec.grant.repository)) {
+						ctx.ui.notify(`Cannot resume: ${LEGACY_EXECUTION_REPOSITORY_REFUSAL}`, "error");
+						return;
+					}
 					const resolvedKey = await resolveAnchorKey(backend, exec, key);
 					const baseline = exec.activeItem?.current_git_baseline ?? exec.activeItem?.initial_git_baseline;
 					if (!resolvedKey || !baseline) {
@@ -2974,7 +2985,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					owner_session_id: pi.getSessionId() ?? randomUUID(),
 					normalized_command: `/execute ${trimmed}`,
 					workspace_id: backend.workspaceId,
-					repository: basename(primaryRoot),
+					repository: primaryRoot,
 					nonce: randomUUID(),
 					issued_at: new Date().toISOString(),
 				};
@@ -3899,6 +3910,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							}
 							let exec = await backend.getExecution(params.work);
 							if (!exec || exec.grant.state !== "active") return deny("no active execution grant");
+							if (!isAbsolute(exec.grant.repository)) return deny(LEGACY_EXECUTION_REPOSITORY_REFUSAL);
 							if (!exec.activeItem || !["executing", "remediating", "reviewing"].includes(exec.activeItem.phase)) {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected executing, remediating, or reviewing`);
 							}

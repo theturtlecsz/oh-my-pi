@@ -299,8 +299,15 @@ unsupported histories continue ordinarily without certification. Original
 preparation guards and entered-protocol failures remain strict. The affected
 recovery/classifier/provenance suites pass 108 tests with 601 assertions and
 package `bun check` passes; independent targeted review cleared the correction.
-Corrected-source installed qualification remains separate from the initial
-twelve-case pass. Neither result establishes complete S2.2 acceptance.
+Corrected source `4e1fc98bd3cda52f96b15e4ddc4f6c2386c1956b` subsequently
+passed all twelve installed cases with zero failures, errors or skips in
+373.119 seconds, using manifest
+`f9e190b84a23e125929c359a2b2de8c1838fd4f076fc111698e8fcce3be17ee4`.
+Independent checks verified 256 preserved raw artifacts and all 44,822 release
+files. Production and harness hashes remained unchanged; the harness's editable
+Python build regenerated two packaging metadata files, which are recorded
+separately from the immutable release. Neither installed result establishes
+complete S2.2 acceptance or live activation.
 
 PR #26 CI also exposed an existing broker-idle fixture startup race. The fixture
 now retains project presence until its authenticated client starts a controlled
@@ -309,3 +316,28 @@ and that releasing the child allows idle shutdown. The original 100 ms grace
 remains unchanged. A controlled 150 ms authentication delay reproduces the old
 failure and passes with the correction; 20 repeated runs and the three related
 launch tests pass. No broker production behavior changed.
+
+## Audit repository identity (OMP-264)
+
+The admission regression exposed a repository basename propagating unchanged
+from a new execution grant through push evidence, the close attempt and the
+sealed auditor task. New grants now seal the already canonical absolute primary
+repository root. The linked-worktree/subdirectory test distinguishes that root
+from execution cwd and verifies that all four consumers retain the same identity.
+
+Relative legacy execution grants refuse before review effects, explicit resume
+relocation, startup recovery relocation or persisted-turn dispatch. Existing
+terminal handling takes precedence, and stop/cancel remains available. No legacy
+grant is normalized, rebound, revived or rewritten. Manual owner `/summary`
+authority and existing pending-checkpoint delivery replay are unchanged.
+
+The execution smoke verifies sealed Git start/final objects and their diff using
+the actual repository before returning each scripted audit verdict. This proves
+repository usability and identity binding, not model audit quality. Direct
+WorkService fixtures retaining relative repository labels remain unchanged;
+this is a host admission/recovery correction, not a new global service policy.
+Focused host/legacy verification passes 82 tests with 407 assertions; root and
+runtime checks and the full PostgreSQL execution smoke pass. Independent review
+cleared the source after fixing a test expectation to use the canonical primary
+root under symlinked temporary directories; that reproduction also passes.
+Exact-head CI, installed qualification and any live activation remain separate.
