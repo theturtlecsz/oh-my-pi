@@ -82,9 +82,10 @@ data/linear-export/f6cba355-c75a-4235-8888-13cb6b2ecd32/privacy-report-b38b66b41
 data/linear-export/f6cba355-c75a-4235-8888-13cb6b2ecd32/scope-report-1c517d9a6496b70fec59735c949396b26ed50138425bd110574f477bb155e414.json.gpg	fork-only	added	b79edaebb245	fix(session): HOME-149 audit remediation	retained
 data/linear-export/f6cba355-c75a-4235-8888-13cb6b2ecd32/source-hashes-08826c0c8248bb5048b78068a1f6d5823a68c9dcda3d1350d624632c8a1dace1.json.gpg	fork-only	added	1ce4e03bf8e3	fix(session): HOME-149 audit remediation	retained
 data/linear-export/finalize/report-124891316e3bbaef0358ec60242a12e8352b42aad964d5748e39833db6c8f4f8.json.gpg	fork-only	added	18accd265bcb	fix(session): HOME-149 audit remediation	retained
+docs/bookends-open-work-review.md	fork-only	added	2c380582980a	Complete open Bookends item review, dependency reconciliation, and stabilization scope gaps	retained
 docs/extensions.md	shared	modified	222564cd9533	session candidate: OMP-108	retained
 docs/installation-isolation.md	fork-only	added	83e44dc95c20	OMP-249 installation boundary, ledger reconciliation, qualification limits, and operator promotion/rollback	retained
-docs/omp-stabilization-plan.md	fork-only	added	1b7ce23a3332	OMP-249 ordered stabilization checkpoints and repeatable session handoff using WorkService authority	retained
+docs/omp-stabilization-plan.md	fork-only	added	a2afadfadd9c	OMP-249 ordered stabilization checkpoints and repeatable session handoff using WorkService authority	retained
 docs/upstream-18.0.6-changelog.tsv	fork-only	added	ec9a00c04da9	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-matrix.tsv	fork-only	added	0b52aac14438	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-sources.tsv	fork-only	added	a3afa2e62165	feat(omp-156): pre-merge inventory oracle and safe update driver	retained

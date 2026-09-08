@@ -7,6 +7,9 @@ evidence, and leaves one exact next action. A phase may take several sessions.
 
 **Start with phase 1. Do not deploy PR #20 while CI is red.**
 
+The [complete open-work review](bookends-open-work-review.md) accounts for all 23
+open Bookends items as of 8 September 2026, including dependencies and gaps.
+
 ## What you do each session
 
 Paste this into the coding agent:
@@ -59,6 +62,8 @@ Before stopping:
 
 - [ ] S1.1 Reconcile delivered fixes and current ledger scope. Preserve OMP-245,
   OMP-247, OMP-251, OMP-261, and OMP-229 as delivered; do not implement them again.
+  Reconcile historical OMP-203/214/217 claims with current evidence and delivered
+  OMP-209/210/211/212; an old issue description is not a current failure report.
 - [ ] S1.2 Record OMP-249's bounded scope, acceptance criteria, exact plan, and
   current PR/evidence. Existing description and deployment prerequisites stay.
 - [ ] S1.3 Fix every failing PR #20 check. Reproduce the failure under CI's Bun
@@ -78,6 +83,7 @@ Exit: reviewed code and exact installation evidence; no live cutover assumed.
 
 Use one admitted release and disposable state. One writer owns critical state
 changes. An independent reviewer may work in parallel.
+Use single-item execution; `/execute --queue` waits for OMP-219 qualification.
 
 - [ ] S2.1 Map each failure below to an existing executable test. Add only missing
   whole-process coverage; scripted model responses must not replace session or
@@ -94,6 +100,12 @@ changes. An independent reviewer may work in parallel.
 - [ ] S2.8 Reproduce OMP-262 plan-stamp inconsistency and OMP-264 relative audit
   paths before admitting their fixes. Preserve write-outcome and path identity.
 - [ ] S2.9 Require these journeys in CI and record actual process/effect evidence.
+- [ ] S2.10 Reproduce the admission/recovery discrepancy for completed or canceled
+  predecessors. Resume must not refuse solely because their historical edges
+  remain active. Fix state handling under OMP-233/246, not by deleting history.
+- [ ] S2.11 Perform OMP-248's delayed required-loader reproduction through
+  `before_agent_start`; record omission/retry/warning behavior before implementing
+  degradation visibility or claiming complete instruction loading.
 
 Exit: defined failures recover correctly or stop clearly, without manual repair.
 
@@ -110,7 +122,8 @@ or assume that delivery proves every remaining evidence requirement.
 - [ ] S3.3 Bind audit to immutable candidate and independent reviewer; changed
   candidates invalidate the applicable evidence.
 - [ ] S3.4 Test changed PR heads/checks and distinguish reviewed tree, candidate
-  commit, merge commit, and installed artifact identities.
+  commit, merge commit, and installed artifact identities. Include OMP-214's
+  still-open installed completion-refusal evidence before any historical cleanup.
 - [ ] S3.5 Exercise the real acceptance route. Never manufacture audit receipts,
   owner command references, or direct database updates to get past a blocker.
 
@@ -122,6 +135,8 @@ Exit: service-enforced evidence matches actual results and the admitted candidat
   pinned model/effort/tool/Advisor/Observer configuration, disposable repositories,
   proposed model budget, and any disposable GitHub target. Obtain required authority
   before paid or external-effect trials.
+  Keep single-item execution and model routing fixed. Preserve OMP-241's candidate
+  for separately qualified routing work; do not mix it into a running trial streak.
 - [ ] S4.2 Run deterministic known-good and deliberately bad cases separately.
 - [ ] S4.3 Complete 20 consecutive accepted trials without unplanned workflow
   repair. Normal review/remediation is allowed; reconstructing grants is not.
@@ -129,7 +144,9 @@ Exit: service-enforced evidence matches actual results and the admitted candidat
   recovery correctness, and cost per accepted task. A failed trial becomes a
   reproducible regression before restarting the acceptance streak.
 - [ ] S4.5 Run the same boundary corpus on a selected upstream integration
-  candidate; a clean merge and current inventory alone are insufficient.
+  candidate; a clean merge and current inventory alone are insufficient. This is
+  separate from completing OMP-230's guarded upstream incorporation; reuse
+  OMP-229's guardrail and OMP-228's preserved integration work.
 
 Exit: initial adoption evidence, not statistical proof of universal reliability.
 Harbor OMP-250 and paid comparisons OMP-252 remain separate optional work.
@@ -138,6 +155,9 @@ Harbor OMP-250 and paid comparisons OMP-252 remain separate optional work.
 
 - [ ] S5.1 Resolve current deployment prerequisites; name exact approved payload,
   installation, config, migration compatibility, and last-known-good fallback.
+  Explicitly resolve open OMP-243, canceled/absorbed OMP-244, and delivered OMP-251.
+  A smaller first payload requires an explicit disposition; isolation tests do
+  not silently satisfy the original instruction/wording deployment requirement.
 - [ ] S5.2 Prepare backups, restore evidence, service units, and rollback procedure.
   Use the existing interactive owner approval for contract/schema changes.
 - [ ] S5.3 Owner authorizes a cutover window. Drain/stop affected work, preserve
