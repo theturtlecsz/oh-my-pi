@@ -5,7 +5,7 @@ import * as ai from "@oh-my-pi/pi-ai";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
+import { type CustomMessagePayload, ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
 import { checkProspectiveContract } from "../../extensions/workflow/config";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -92,9 +92,11 @@ const extension = extensions[0];
 if (!extension) throw new Error("work-now extension did not load");
 const fableModel = { id: "claude-fable-5", provider: "anthropic", name: "Claude Fable 5", api: "anthropic-messages" };
 const uiCalls: string[] = [];
-const sentMessages: unknown[] = [];
+const sentMessages: CustomMessagePayload[] = [];
 let modelTurnCount = 0;
-const sessionId = `smoke-exec-${scenario}`;
+// Restart scenarios reopen the same fake session branch, so identity must
+// survive the change from start-only to recovery.
+const sessionId = `smoke-exec-${ownerProbe}`;
 const sessionBranchFile = path.join(path.dirname(ownerProbe), ".smoke-session-branch.json");
 const getBranch = () => {
 	try {
@@ -107,6 +109,13 @@ const appendEntry = (customType: string, data: unknown) => {
 	const list = getBranch();
 	list.push({ type: "custom", customType, data });
 	fs.writeFileSync(sessionBranchFile, JSON.stringify(list));
+};
+const persistSentMessages = () => {
+	// Fake transport injection after the handler yields. Installed recovery
+	// tests exercise actual AgentSession delivery and disk persistence.
+	const branch = getBranch();
+	for (const message of sentMessages) branch.push({ ...message, type: "custom_message" });
+	fs.writeFileSync(sessionBranchFile, JSON.stringify(branch));
 };
 const fakeSessionManager = {
 	getCwd: () => probe,
@@ -142,7 +151,7 @@ runner.initialize(
 		setModel: async () => true,
 		getThinkingLevel: () => "high",
 		setThinkingLevel: () => {},
-		sendMessage: (message: unknown) => {
+		sendMessage: (message: CustomMessagePayload) => {
 			sentMessages.push(message);
 		},
 	} as never,
@@ -175,6 +184,9 @@ const tool = extension.tools.get("work");
 if (!tool) throw new Error("work tool missing");
 
 await runner.emit({ type: "session_start" } as never);
+if (scenario === "recovery") {
+	persistSentMessages();
+}
 const cmdCtx = runner.createCommandContext();
 
 const pendingTurnDeliveries: Array<() => void> = [];
@@ -543,6 +555,7 @@ if (scenario === "dirty") {
 	const executeCmd = extension.commands.get("execute");
 	if (!executeCmd) throw new Error("execute command missing");
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	persistSentMessages();
 	out.exec = JSON.parse(await execute({ action: "get_execution" }));
 	out.uiCalls = uiCalls;
 } else if (scenario === "recovery") {

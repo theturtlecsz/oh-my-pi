@@ -1335,7 +1335,7 @@ if (args[0] === "api") {
 	// 1. Happy Path Recovery
 	const happy = await createAndStartDisposableGrant("happy");
 	const happyOut1 = runHarness("recovery", happy.item.key);
-	assert.equal((happyOut1.sentMessages as unknown[])?.length, 1, "happy path recovery sends exactly one turn");
+	assert.equal((happyOut1.sentMessages as unknown[])?.length, 1, `happy path recovery sends exactly one turn: ${JSON.stringify(happyOut1.uiCalls)}`);
 	assert.equal(happyOut1.exec?.grant?.continuations_scheduled, 1, "continuations_scheduled incremented to 1");
 	assert.equal(happyOut1.exec?.grant?.grant_version, 2, "grant_version incremented to 2");
 	const happyOut2 = runHarness("recovery", happy.item.key);
