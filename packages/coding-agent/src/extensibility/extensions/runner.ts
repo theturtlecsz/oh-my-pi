@@ -674,6 +674,13 @@ export class ExtensionRunner {
 		this.runtime.getSessionName = actions.getSessionName;
 		this.runtime.setSessionName = actions.setSessionName;
 		this.runtime.getSessionId = actions.getSessionId ?? (() => this.sessionManager.getSessionId());
+		this.runtime.requestPersistedTurnContinuation =
+			actions.requestPersistedTurnContinuation ??
+			(() => ({
+				status: "refused",
+				code: "unavailable",
+				reason: "Persisted turn continuation unavailable: this host registered no dispatcher",
+			}));
 		this.runtime.deliverMessage =
 			actions.deliverMessage ??
 			(() => Promise.reject(new Error("deliverMessage unavailable: this host registered no delivery dispatcher")));
@@ -1311,6 +1318,11 @@ export class ExtensionRunner {
 			registrationScope.closed = true;
 		}
 		if (handlerResult === EXTENSION_HANDLER_ABORTED) return undefined;
+		if (
+			event.type === "session_start" &&
+			(handlerFailure || handlerResult === EXTENSION_HANDLER_TIMEOUT || handlerResult === EXTENSION_HANDLER_ABORTED)
+		)
+			this.#sessionStartFailed = true;
 		if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
 			const error = `handler timed out after ${timeoutMs}ms`;
 			logger.warn("Extension handler timed out", {
@@ -1340,7 +1352,31 @@ export class ExtensionRunner {
 		return handlerResult as TResult | undefined;
 	}
 
+	#sessionStart = Promise.withResolvers<boolean>();
+	#sessionStartFailed = false;
+	#sessionStartEmitted = false;
+
+	/** Resolves only after all startup handlers and their registrations have finished. */
+	waitForSessionStart(): Promise<boolean> {
+		return this.#sessionStart.promise;
+	}
+
 	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
+		if (event.type !== "session_start") return this.#emitEvent(event);
+		if (this.#sessionStartEmitted) this.#sessionStart = Promise.withResolvers<boolean>();
+		this.#sessionStartEmitted = true;
+		this.#sessionStartFailed = false;
+		try {
+			return await this.#emitEvent(event);
+		} catch (error) {
+			this.#sessionStartFailed = true;
+			throw error;
+		} finally {
+			this.#sessionStart.resolve(!this.#sessionStartFailed);
+		}
+	}
+
+	async #emitEvent<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
 		// Defer the per-event context allocation (and the Promise.race/Bun.sleep
 		// timeout machinery) to the first matching handler. Streaming sessions emit
 		// message_update / tool_execution_* per delta with usually no extension

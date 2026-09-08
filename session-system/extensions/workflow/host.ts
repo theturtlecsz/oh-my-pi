@@ -814,7 +814,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 	): Promise<ExtensionCommandContext> {
 		const currentCwd = contextCwd(ctx);
 		if (resolve(currentCwd) === resolve(workspace.path)) {
-			return { ...ctx, cwd: currentCwd };
+			return withRelocatedCwd(ctx, currentCwd);
 		}
 		executionRelocationInProgress = true;
 		try {
@@ -827,10 +827,16 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if (resolve(relocatedCwd) !== resolve(workspace.path)) {
 				throw new Error(`execution workspace relocation did not take effect: ${relocatedCwd}`);
 			}
-			return { ...ctx, cwd: relocatedCwd };
+			return withRelocatedCwd(ctx, relocatedCwd);
 		} finally {
 			executionRelocationInProgress = false;
 		}
+	}
+
+	function withRelocatedCwd<T extends ExtensionContext>(ctx: T, cwd: string): T {
+		// Runner handler contexts inherit session/runtime fields. Spreading them
+		// loses those fields; an own descriptor also handles getter-only cwd.
+		return Object.create(ctx, { cwd: { value: cwd, enumerable: true, configurable: true } });
 	}
 
 	async function relocateRecoveredExecutionSession(
@@ -871,7 +877,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 		state.executionWorkspace = { ...workspace, key };
 		persistSession();
 		await saveCache();
-		return { ...ctx, cwd: relocatedCwd };
+		return withRelocatedCwd(ctx, relocatedCwd);
 	}
 	function persistSession() {
 		piRef.appendEntry(cfg.entryType, {
@@ -1816,7 +1822,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 			await loadCache();
 			models = ctx.models;
 			const outboxEntries = new Map<string, ExecutionOutboxEntry>();
-			const persistedContinuations = new Map<string, ExecutionOutboxEntry>();
+			const persistedContinuations = new Map<string, { entryId: string; identity: ExecutionOutboxEntry }>();
+			const conflictingPersistedIds = new Set<string>();
+			const persistedIntents: Array<{ entryId: string; intent: ExecutionOutboxEntry }> = [];
 			const pendingOutboxEntries: ExecutionOutboxEntry[] = [];
 			const deliveredPreReservations = new Set<string>();
 			const deliveredPostVersions = new Set<string>();
@@ -1826,7 +1834,10 @@ export function createWorkflowHost(cfg: HostConfig) {
 					if (entry.type === "custom_message" && entry.customType === `${TOOL_NAME}-execute`) {
 						const details = entry.details as { executionContinuation?: ExecutionOutboxEntry } | undefined;
 						const identity = details?.executionContinuation;
-						if (identity?.messageId && identity.grantId) persistedContinuations.set(identity.messageId, identity);
+						if (identity?.messageId && identity.grantId) {
+							if (persistedContinuations.has(identity.messageId)) conflictingPersistedIds.add(identity.messageId);
+							persistedContinuations.set(identity.messageId, { entryId: entry.id, identity });
+						}
 					}
 					if (entry.type === "custom" && "customType" in entry) {
 						if (entry.customType === `${cfg.entryType}-execute-outbox`) {
@@ -1845,7 +1856,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 				}
 			} catch {}
 			for (const data of outboxEntries.values()) {
-				const injected = persistedContinuations.get(data.messageId);
+				const persisted = persistedContinuations.get(data.messageId);
+				const injected = persisted?.identity;
 				const matches = injected?.grantId === data.grantId
 					&& injected.preReservationVersion === data.preReservationVersion
 					&& injected.postVersion === data.postVersion
@@ -1855,6 +1867,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 				// Preserve historical unbound acknowledgements; their missing message
 				// identity cannot be retroactively upgraded into proof of injection.
 				const legacyDelivered = data.status === "delivered" && !data.sessionId && !data.workId && !data.revisionId;
+				if (matches && persisted && data.sessionId && data.workId && data.revisionId) {
+					persistedIntents.push({ entryId: persisted.entryId, intent: data });
+				}
 				if (matches || legacyDelivered) {
 					deliveredPreReservations.add(`${data.grantId}:${data.preReservationVersion}`);
 					deliveredPostVersions.add(`${data.grantId}:${data.postVersion}`);
@@ -2008,10 +2023,43 @@ export function createWorkflowHost(cfg: HostConfig) {
 										sessionCtx.ui.notify(`Execution recovery skipped: ${executionIntentMismatch(mismatchedIntent, exec)}`, "warning");
 										return;
 									}
+									if ([...outboxEntries.values()].some(entry => entry.grantId === exec.grant.grant_id && entry.postVersion === curVersion && conflictingPersistedIds.has(entry.messageId))) {
+										sessionCtx.ui.notify("Execution recovery skipped: continuation identity appears in multiple active-branch messages", "warning");
+										return;
+									}
 									const pendingOutbox = pendingOutboxEntries.find(
 										e => e.grantId === exec.grant.grant_id && e.postVersion >= curVersion,
 									);
-									if (pendingOutbox) {
+									const persisted = persistedIntents.find(({ intent }) => intent.grantId === exec.grant.grant_id && intent.postVersion === curVersion);
+									if (persisted) {
+										const notifyRefusal = (refusal: { code: string; reason: string }) => {
+											sessionCtx.ui.notify(`Execution recovery skipped: ${refusal.reason}`, refusal.code === "turn-settled" ? "info" : "warning");
+										};
+										const result = pi.requestPersistedTurnContinuation({
+											sessionId: persisted.intent.sessionId!,
+											entryId: persisted.entryId,
+											expectedLeafId: sessionCtx.sessionManager.getLeafId()!,
+											onRefused: notifyRefusal,
+											validateDispatch: async () => {
+												try {
+													await backend.getPendingExecutionClaims?.();
+												} catch (error) {
+													return { ok: false, reason: `Recovery blocked by unreadable claim: ${String(error)}` };
+												}
+												const fresh = await backend.getExecution(persisted.intent.grantId);
+												if (!fresh || fresh.grant.grant_id !== persisted.intent.grantId || fresh.grant.state !== "active" || Date.parse(fresh.grant.expires_at) <= Date.now() || !fresh.activeItem) return { ok: false, reason: "Execution authority is no longer active" };
+												const mismatch = executionIntentMismatch(persisted.intent, fresh);
+												if (mismatch) return { ok: false, reason: mismatch };
+												const checked = await validateExecutionRecoveryPreflight(sessionCtx, backend, fresh, "active");
+												if (!checked.ok) return { ok: false, reason: checked.reason };
+												const dispatchAuthority = await backend.getExecution(persisted.intent.grantId);
+												if (!dispatchAuthority || dispatchAuthority.grant.grant_id !== persisted.intent.grantId || dispatchAuthority.grant.state !== "active" || Date.parse(dispatchAuthority.grant.expires_at) <= Date.now() || dispatchAuthority.grant.judge_sha256 !== checked.tcb.judgeSha256 || !dispatchAuthority.activeItem) return { ok: false, reason: "Execution authority changed during recovery preflight" };
+												const dispatchMismatch = executionIntentMismatch(persisted.intent, dispatchAuthority);
+												return dispatchMismatch ? { ok: false, reason: dispatchMismatch } : { ok: true };
+											},
+										});
+										if (result.status === "refused") notifyRefusal(result);
+									} else if (pendingOutbox) {
 										await deliverExecutionMessage(
 											exec.grant.grant_id,
 											pendingOutbox.preReservationVersion,

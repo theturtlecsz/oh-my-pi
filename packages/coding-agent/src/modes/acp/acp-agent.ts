@@ -2577,6 +2577,7 @@ export class AcpAgent implements Agent {
 				getSessionName: () => record.session.sessionManager.getSessionName(),
 				getSessionId: () => record.session.sessionManager.getSessionId(),
 				deliverMessage: message => record.session.queueExtensionDelivery(message),
+				requestPersistedTurnContinuation: request => record.session.requestPersistedTurnContinuation(request),
 				setSessionName: async name => {
 					await record.session.sessionManager.setSessionName(name, "user");
 				},

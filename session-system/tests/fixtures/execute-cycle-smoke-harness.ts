@@ -5,7 +5,7 @@ import * as ai from "@oh-my-pi/pi-ai";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { type CustomMessagePayload, ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent";
+import { type CustomEntry, type CustomMessageEntry, type CustomMessagePayload, type PersistedTurnContinuationRequest, type PersistedTurnContinuationResult, type SessionEntry, type SessionMessageEntry, ExtensionRunner, loadExtensions, normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent";
 import { checkProspectiveContract } from "../../extensions/workflow/config";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -15,7 +15,7 @@ import { dirtyPaths, freezeCandidateCommit } from "../../extensions/workflow/git
 import { createWorkflowHost } from "../../extensions/workflow/host";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 
-const scenario = process.argv[3] as "single" | "dirty" | "foreign-lane" | "queue" | "contract-pause" | "start-only" | "recovery" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue" | "stale-attempt" | "zero-change-remediation";
+const scenario = process.argv[3] as "single" | "dirty" | "foreign-lane" | "queue" | "contract-pause" | "start-only" | "recovery" | "recovery-new-session" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue" | "stale-attempt" | "zero-change-remediation";
 const ownerProbe = process.argv[2];
 let probe = ownerProbe;
 const workKeyArg = process.argv[4];
@@ -96,30 +96,41 @@ const sentMessages: CustomMessagePayload[] = [];
 let modelTurnCount = 0;
 // Restart scenarios reopen the same fake session branch, so identity must
 // survive the change from start-only to recovery.
-const sessionId = `smoke-exec-${ownerProbe}`;
-const sessionBranchFile = path.join(path.dirname(ownerProbe), ".smoke-session-branch.json");
-const getBranch = () => {
+const isRecovery = scenario === "recovery" || scenario === "recovery-new-session";
+const sessionSuffix = scenario === "recovery-new-session" ? "-fresh" : "";
+const sessionId = `smoke-exec-${ownerProbe}${sessionSuffix}`;
+const sessionBranchFile = path.join(path.dirname(ownerProbe), `.smoke-session-branch${sessionSuffix}.json`);
+const getBranch = (): SessionEntry[] => {
 	try {
 		return JSON.parse(fs.readFileSync(sessionBranchFile, "utf8"));
 	} catch {
 		return [];
 	}
 };
-const appendEntry = (customType: string, data: unknown) => {
-	const list = getBranch();
-	list.push({ type: "custom", customType, data });
-	fs.writeFileSync(sessionBranchFile, JSON.stringify(list));
-};
-const persistSentMessages = () => {
-	// Fake transport injection after the handler yields. Installed recovery
-	// tests exercise actual AgentSession delivery and disk persistence.
+type SimulatedEntry = Omit<CustomEntry, "id" | "parentId" | "timestamp"> | Omit<CustomMessageEntry, "id" | "parentId" | "timestamp"> | Omit<SessionMessageEntry, "id" | "parentId" | "timestamp">;
+const appendSimulatedEntry = (entry: SimulatedEntry): string => {
 	const branch = getBranch();
-	for (const message of sentMessages) branch.push({ ...message, type: "custom_message" });
+	const id = crypto.randomUUID();
+	branch.push({ ...entry, id, parentId: branch.at(-1)?.id ?? null, timestamp: new Date().toISOString() });
 	fs.writeFileSync(sessionBranchFile, JSON.stringify(branch));
+	return id;
+};
+const appendEntry = (customType: string, data: unknown) => appendSimulatedEntry({ type: "custom", customType, data });
+let persistedSentCount = 0;
+const persistSentMessages = (settle = false) => {
+	// Explicit simulated injection after the handler yields. This JSON file
+	// substitutes for SessionManager; installed tests own durability proof.
+	for (const message of sentMessages.slice(persistedSentCount)) {
+		const entryId = appendSimulatedEntry({ ...normalizeCustomMessagePayload(message), type: "custom_message" });
+		if (settle && message.customType === "work-execute") settleSimulatedTurn(entryId, "injected");
+	}
+	persistedSentCount = sentMessages.length;
 };
 const fakeSessionManager = {
 	getCwd: () => probe,
 	getBranch,
+	getEntry: (id: string) => getBranch().find(entry => entry.id === id),
+	getLeafId: () => getBranch().at(-1)?.id ?? null,
 	getSessionId: () => sessionId,
 	getSessionName: () => undefined,
 	taskDepth: 0,
@@ -127,6 +138,54 @@ const fakeSessionManager = {
 		probe = path.resolve(cwd);
 	},
 };
+
+// A service/host smoke substitutes a controller. These are simulated model
+// turns and transcript settlements, never provider requests or effect receipts.
+const simulatedControllerTurns: Array<{ entryId: string; source: "persisted" | "injected" }> = [];
+const continuationDecisions: Array<{ entryId: string; result: PersistedTurnContinuationResult }> = [];
+let pendingContinuation: PersistedTurnContinuationRequest | undefined;
+function settleSimulatedTurn(entryId: string, source: "persisted" | "injected"): void {
+	simulatedControllerTurns.push({ entryId, source });
+	appendSimulatedEntry({ type: "message", message: {
+		role: "assistant", content: [{ type: "text", text: "Simulated controller turn settled; no provider executed." }],
+		api: "anthropic-messages", provider: "anthropic", model: fableModel.id, stopReason: "stop", timestamp: Date.now(),
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+	} });
+}
+function scheduleSimulatedContinuation(request: PersistedTurnContinuationRequest): PersistedTurnContinuationResult {
+	const branch = getBranch();
+	const anchorIndex = branch.findIndex(entry => entry.id === request.entryId);
+	const suffix = branch.slice(anchorIndex + 1);
+	let result: PersistedTurnContinuationResult;
+	if (request.sessionId !== sessionId || request.expectedLeafId !== fakeSessionManager.getLeafId() || anchorIndex < 0) {
+		result = { status: "refused", code: "stale-identity", reason: "Simulated session identity or active branch differs" };
+	} else if (suffix.some(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "stop")) {
+		result = { status: "refused", code: "turn-settled", reason: "Simulated persisted turn already settled" };
+	} else if (suffix.some(entry => entry.type === "message" || entry.type === "custom_message")) {
+		result = { status: "refused", code: "unsafe-suffix", reason: "Simulated turn has unsupported conversation suffix" };
+	} else if (pendingContinuation) {
+		result = pendingContinuation.entryId === request.entryId ? { status: "alreadyScheduled" } : { status: "refused", code: "conflicting-request", reason: "Another simulated continuation is pending" };
+	} else {
+		pendingContinuation = { ...request };
+		result = { status: "scheduled" };
+	}
+	continuationDecisions.push({ entryId: request.entryId, result });
+	return result;
+}
+async function flushSimulatedStartupTurns(): Promise<void> {
+	// Requests return promptly from the real session_start hook. Only this
+	// explicit post-lifecycle pump performs simulated dispatch and settlement.
+	if (!(await runner.waitForSessionStart())) throw new Error("Smoke startup lifecycle failed");
+	const request = pendingContinuation;
+	pendingContinuation = undefined;
+	if (request) {
+		const authority = await request.validateDispatch();
+		if (!authority.ok) request.onRefused?.({ code: "authority-refused", reason: authority.reason });
+		else if (request.sessionId !== sessionId || request.expectedLeafId !== fakeSessionManager.getLeafId()) request.onRefused?.({ code: "stale-identity", reason: "Simulated branch changed before dispatch" });
+		else settleSimulatedTurn(request.entryId, "persisted");
+	}
+	persistSentMessages(true);
+}
 const runner = new ExtensionRunner(
 	extensions,
 	loaded.runtime,
@@ -143,6 +202,7 @@ runner.initialize(
 	{
 		appendEntry,
 		getSessionId: () => sessionId,
+		requestPersistedTurnContinuation: scheduleSimulatedContinuation,
 		// Faithful to AgentSession.queueExtensionDelivery (OMP-97): the promise
 		// settles only after the current turn yields - i.e. after the tool
 		// handler returns. Awaiting it INSIDE a tool handler deadlocks; execute()
@@ -184,9 +244,7 @@ const tool = extension.tools.get("work");
 if (!tool) throw new Error("work tool missing");
 
 await runner.emit({ type: "session_start" } as never);
-if (scenario === "recovery") {
-	persistSentMessages();
-}
+if (isRecovery) await flushSimulatedStartupTurns();
 const cmdCtx = runner.createCommandContext();
 
 const pendingTurnDeliveries: Array<() => void> = [];
@@ -557,8 +615,11 @@ if (scenario === "dirty") {
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
 	persistSentMessages();
 	out.exec = JSON.parse(await execute({ action: "get_execution" }));
+	out.initialExecutionEntryId = getBranch().findLast(entry => entry.type === "custom_message" && entry.customType === "work-execute")?.id;
 	out.uiCalls = uiCalls;
-} else if (scenario === "recovery") {
+} else if (isRecovery) {
+	out.simulatedControllerTurns = simulatedControllerTurns;
+	out.continuationDecisions = continuationDecisions;
 	out.sentMessages = sentMessages;
 	out.modelTurnCount = modelTurnCount;
 	out.uiCalls = uiCalls;

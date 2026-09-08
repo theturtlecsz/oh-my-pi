@@ -63,6 +63,10 @@ import type { MemoryRuntimeContext } from "../../memory-backend";
 import type { CustomEditor } from "../../modes/components/custom-editor";
 import type { Theme } from "../../modes/theme/theme";
 import type { AsyncJobSnapshot } from "../../session/agent-session";
+import type {
+	PersistedTurnContinuationRequest,
+	PersistedTurnContinuationResult,
+} from "../../session/agent-session-types";
 import type { CompactMode } from "../../session/compact-modes";
 import type { CustomMessage, CustomMessagePayload } from "../../session/messages";
 import type { ReadonlySessionManager, SessionManager } from "../../session/session-manager";
@@ -1521,6 +1525,7 @@ export interface ExtensionAPI {
 	 * attested — never fire-and-forget sendMessage.
 	 */
 	deliverMessage(message: ExtensionDeliveryPayload): Promise<void>;
+	requestPersistedTurnContinuation(request: PersistedTurnContinuationRequest): PersistedTurnContinuationResult;
 
 	// =========================================================================
 	// Provider Registration
@@ -1755,6 +1760,7 @@ export interface ExtensionActions {
 	setSessionName: (name: string) => Promise<void>;
 	getSessionId?: () => string;
 	deliverMessage?: DeliverMessageHandler;
+	requestPersistedTurnContinuation?: (request: PersistedTurnContinuationRequest) => PersistedTurnContinuationResult;
 }
 
 /** Actions for ExtensionContext (ctx.* in event handlers). */
@@ -1790,6 +1796,7 @@ export interface ExtensionRuntime extends ExtensionRuntimeState, ExtensionAction
 	setServiceTier: SetServiceTierHandler;
 	getSessionId: () => string;
 	deliverMessage: DeliverMessageHandler;
+	requestPersistedTurnContinuation: (request: PersistedTurnContinuationRequest) => PersistedTurnContinuationResult;
 }
 
 /** Loaded extension with all registered items. */

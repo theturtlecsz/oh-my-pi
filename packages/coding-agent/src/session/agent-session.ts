@@ -96,6 +96,7 @@ import {
 	prompt,
 	Snowflake,
 	stringProperty,
+	untilAborted,
 	withTimeout,
 } from "@oh-my-pi/pi-utils";
 import { type AdvisorConfig, type AdvisorRuntimeStatus, loadAdvisorTranscriptCosts } from "../advisor";
@@ -233,6 +234,9 @@ import type {
 	FreshSessionResult,
 	HandoffResult,
 	ModelCycleResult,
+	PersistedTurnContinuationRequest,
+	PersistedTurnContinuationResult,
+	PersistedTurnRefusal,
 	Prewalk,
 	PromptOptions,
 	ResetSessionContextResult,
@@ -280,6 +284,7 @@ import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
 import {
 	collectPendingToolCalls,
 	createInterruptedTurnAbortMessage,
+	describePendingToolCalls,
 	SESSION_EXIT_CUSTOM_TYPE,
 	type SessionExitData,
 	summarizeToolArguments,
@@ -677,6 +682,7 @@ export class AgentSession {
 	// Cursor exec, TUI listeners) is held back. Without this, a client that resumes
 	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
 	#promptGeneration = 0;
+	#persistedTurnRequest: (PersistedTurnContinuationRequest & { generation: number }) | undefined;
 	#promptSequence = 0;
 	#skippedPostTurnSpeculationCompletion: Promise<void> | undefined;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
@@ -3329,6 +3335,230 @@ export class AgentSession {
 		options?.onSkip?.(reason);
 	}
 
+	/** Schedule a cold continuation of an existing durable prompt, never reinject it. */
+	requestPersistedTurnContinuation(request: PersistedTurnContinuationRequest): PersistedTurnContinuationResult {
+		request = { ...request };
+		const pending = this.#persistedTurnRequest;
+		if (pending) {
+			return pending.generation === this.#promptGeneration &&
+				pending.sessionId === request.sessionId &&
+				pending.entryId === request.entryId &&
+				pending.expectedLeafId === request.expectedLeafId
+				? { status: "alreadyScheduled" }
+				: {
+						status: "refused",
+						code: "conflicting-request",
+						reason: "Another persisted turn owns continuation scheduling",
+					};
+		}
+		const runner = this.#extensionRunner;
+		if (!runner)
+			return { status: "refused", code: "unavailable", reason: "No extension startup lifecycle is available" };
+		const generation = this.#promptGeneration;
+		const context = [...this.messages];
+		const localRefusal = (preparing = false): PersistedTurnRefusal | undefined => {
+			if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
+				return {
+					code: "unavailable",
+					reason: "Client must own agent-initiated turns through its prompt lifecycle",
+				};
+			}
+			if (
+				this.#isDisposed ||
+				this.#abortInProgress ||
+				this.isAborting ||
+				this.isCompacting ||
+				this.isGeneratingHandoff ||
+				this.isRetrying ||
+				this.agent.state.isStreaming ||
+				this.#promptInFlightCount > (preparing ? 1 : 0)
+			) {
+				return {
+					code: "session-unavailable",
+					reason: "Session is busy, aborting, retrying, disposing, or in maintenance",
+				};
+			}
+			if (
+				request.sessionId !== this.sessionId ||
+				this.#extensionRunner !== runner ||
+				generation !== this.#promptGeneration ||
+				request.expectedLeafId !== this.sessionManager.getLeafId() ||
+				context.length !== this.messages.length ||
+				context.some((message, index) => message !== this.messages[index])
+			) {
+				return {
+					code: "stale-identity",
+					reason: "Session, active leaf, prompt generation, or restored context changed",
+				};
+			}
+			if (this.agent.hasQueuedMessages() || this.#pendingNextTurnMessages.some(isUserQueuedMessage)) {
+				return { code: "queued-input", reason: "Queued input takes precedence over persisted turn recovery" };
+			}
+			return this.#classifyPersistedTurn(request.entryId);
+		};
+		const refusal = localRefusal();
+		if (refusal) return { status: "refused", ...refusal };
+		const message = this.messages.at(-1);
+		if (message?.role !== "custom")
+			return {
+				status: "refused",
+				code: "missing-anchor",
+				reason: "Persisted prompt is absent from active model context",
+			};
+		const expandedText =
+			typeof message.content === "string"
+				? message.content
+				: message.content
+						.filter(part => part.type === "text")
+						.map(part => part.text)
+						.join("\n");
+		const scheduledRequest = { ...request, generation };
+		this.#persistedTurnRequest = scheduledRequest;
+		const refuse = (reason: PersistedTurnRefusal) => {
+			logger.warn("Persisted turn continuation refused", { entryId: request.entryId, ...reason });
+			request.onRefused?.(reason);
+		};
+		this.#schedulePostPromptTask(
+			async signal => {
+				let reported = false;
+				const report = (reason: PersistedTurnRefusal) => {
+					reported = true;
+					refuse(reason);
+				};
+				try {
+					if (!(await untilAborted(signal, runner.waitForSessionStart()))) {
+						report({ code: "startup-incomplete", reason: "Extension startup did not finish successfully" });
+						return;
+					}
+					const before = localRefusal();
+					if (before) {
+						report(before);
+						return;
+					}
+					try {
+						await this.sessionManager.flush();
+						if (!this.sessionManager.isSessionOnDisk()) throw new Error("Session has no durable journal");
+					} catch (error) {
+						report({ code: "persistence-failed", reason: String(error) });
+						return;
+					}
+					const afterFlush = localRefusal();
+					if (afterFlush) {
+						report(afterFlush);
+						return;
+					}
+					const canDispatch = (preparedMessages: readonly AgentMessage[]): boolean => {
+						if (preparedMessages.some(isUserQueuedMessage)) {
+							report({ code: "queued-input", reason: "Owner input arrived during prompt preparation" });
+							return false;
+						}
+						const stale = localRefusal(true);
+						if (signal.aborted || stale) {
+							report(stale ?? { code: "session-unavailable", reason: "Continuation aborted before dispatch" });
+							return false;
+						}
+						return true;
+					};
+					const dispatched = await this.#promptWithMessage(message, expandedText, {
+						skipPostPromptRecoveryWait: true,
+						existingEntry: {
+							signal,
+							canDispatch,
+							beforeDispatch: async preparedMessages => {
+								if (!canDispatch(preparedMessages)) return false;
+								try {
+									await this.sessionManager.flush();
+								} catch (error) {
+									report({ code: "persistence-failed", reason: String(error) });
+									return false;
+								}
+								const authority = await request.validateDispatch();
+								if (!authority.ok) {
+									report({ code: "authority-refused", reason: authority.reason });
+									return false;
+								}
+								return canDispatch(preparedMessages);
+							},
+						},
+					});
+					if (!dispatched && !reported)
+						report({ code: "dispatch-failed", reason: "Prompt preparation declined continuation" });
+				} catch (error) {
+					report({ code: "dispatch-failed", reason: String(error) });
+				} finally {
+					if (this.#persistedTurnRequest === scheduledRequest) this.#persistedTurnRequest = undefined;
+				}
+			},
+			{
+				generation,
+				onSkip: reason => {
+					if (this.#persistedTurnRequest === scheduledRequest) this.#persistedTurnRequest = undefined;
+					refuse({ code: "stale-identity", reason });
+				},
+			},
+		);
+		return { status: "scheduled" };
+	}
+
+	#classifyPersistedTurn(entryId: string): PersistedTurnRefusal | undefined {
+		const branch = this.sessionManager.getBranch();
+		const anchorIndex = branch.findIndex(entry => entry.id === entryId);
+		const anchor = branch[anchorIndex];
+		if (anchor?.type !== "custom_message" || anchor.attribution !== "agent") {
+			return { code: "missing-anchor", reason: "Expected agent prompt is not on the active branch" };
+		}
+		const pending = describePendingToolCalls(branch);
+		if (pending) return { code: "pending-tools", reason: pending };
+		const suffix = branch.slice(anchorIndex + 1);
+		const conversation = suffix.filter(entry => entry.type === "message" || entry.type === "custom_message");
+		if (
+			conversation.some(
+				entry =>
+					(entry.type === "message" && entry.message.role === "user") ||
+					(entry.type === "custom_message" &&
+						(entry.attribution !== "agent" || entry.customType === anchor.customType)),
+			)
+		) {
+			return {
+				code: "unsafe-suffix",
+				reason: "A later owner turn or another assignment conflicts with the persisted turn",
+			};
+		}
+		const last = conversation.at(-1);
+		if (
+			last?.type === "message" &&
+			last.message.role === "assistant" &&
+			last.message.stopReason === "stop" &&
+			!last.message.content.some(part => part.type === "toolCall")
+		) {
+			return {
+				code: "turn-settled",
+				reason: "Persisted conversation turn already settled; workflow progress must be read from its owner",
+			};
+		}
+		if (
+			conversation.length > 0 ||
+			suffix.some(
+				entry => entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "reset_boundary",
+			)
+		) {
+			return {
+				code: "unsafe-suffix",
+				reason: "Later conversation or context reset prevents safe no-tool continuation",
+			};
+		}
+		const tail = this.messages.at(-1);
+		if (
+			tail?.role !== "custom" ||
+			tail.customType !== anchor.customType ||
+			tail.timestamp !== Date.parse(anchor.timestamp) ||
+			JSON.stringify(tail.content) !== JSON.stringify(anchor.content)
+		) {
+			return { code: "missing-anchor", reason: "Persisted prompt is missing or changed in active model context" };
+		}
+		return undefined;
+	}
+
 	#scheduleAgentContinue(options?: ScheduledAgentContinueOptions): void {
 		this.#schedulePostPromptTask(
 			async signal => {
@@ -5783,6 +6013,11 @@ export class AgentSession {
 			prependMessages?: AgentMessage[];
 			skipPostPromptRecoveryWait?: boolean;
 			acceptTerminalEmptyStop?: boolean;
+			existingEntry?: {
+				signal: AbortSignal;
+				beforeDispatch: (preparedMessages: readonly AgentMessage[]) => Promise<boolean>;
+				canDispatch: (preparedMessages: readonly AgentMessage[]) => boolean;
+			};
 		},
 	): Promise<boolean> {
 		// Returns false when the prompt was dropped before reaching the agent —
@@ -5872,7 +6107,7 @@ export class AgentSession {
 			// but consume it only after before_agent_start determines whether the
 			// final provider prompt still carries the base xd:// catalog.
 			const xdevMountNoticeIndex = messages.length;
-			messages.push(message);
+			if (!options?.existingEntry) messages.push(message);
 			// Queued nextTurn messages land directly after the active user message
 			// even though the drain itself runs after before_agent_start below.
 			const nextTurnInsertIndex = messages.length;
@@ -6006,6 +6241,18 @@ export class AgentSession {
 				return false;
 			}
 
+			if (options?.existingEntry) {
+				try {
+					if (!(await options.existingEntry.beforeDispatch(messages))) {
+						restoreDrainedNextTurn();
+						return false;
+					}
+				} catch (error) {
+					restoreDrainedNextTurn();
+					throw error;
+				}
+			}
+
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
 			const nonMessageTokens = computeNonMessageTokens(this, this.agent.tokenizer);
 			const contextWindow = this.model?.contextWindow ?? 0;
@@ -6028,11 +6275,19 @@ export class AgentSession {
 			// nothing delivered, so the retry skipped re-injection and the executor
 			// lost the approved plan (issue #4094). The compaction-success resets
 			// (issue #1246) still clear it for re-injection on the next turn.
-			if (planReferenceMessage) {
-				this.#planReferenceSent = true;
-			}
 			try {
-				await this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions);
+				// No await may separate this ownership check from agent dispatch.
+				if (options?.existingEntry && !options.existingEntry.canDispatch(messages)) {
+					restoreDrainedNextTurn();
+					return false;
+				}
+				if (planReferenceMessage) this.#planReferenceSent = true;
+				if (options?.existingEntry) {
+					if (messages.length === 0) await this.agent.continue(options.existingEntry.signal);
+					else await this.agent.prompt(messages, agentPromptOptions);
+				} else {
+					await this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions);
+				}
 			} finally {
 				this.#stats.setPendingSnapshot(undefined);
 			}

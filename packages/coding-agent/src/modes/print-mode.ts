@@ -116,8 +116,17 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 			writeStdoutLine(`${JSON.stringify(header)}\n`);
 		}
 	}
+	// Always subscribe to enable session persistence via _handleAgentEvent
+	session.subscribe(event => {
+		// In JSON mode, output all events
+		if (mode === "json") {
+			writeStdoutLine(`${JSON.stringify(printableEvent(event))}\n`);
+		}
+	});
+
 	// Set up extensions for print mode (no UI, no command context)
 	await initializeExtensions(session, {
+		allowPersistedTurnContinuation: initialMessage === undefined && messages.length === 0,
 		mode: mode === "json" ? "json" : "print",
 		reportSendError: (action, err) => {
 			process.stderr.write(
@@ -149,14 +158,6 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		);
 	}
 
-	// Always subscribe to enable session persistence via _handleAgentEvent
-	session.subscribe(event => {
-		// In JSON mode, output all events
-		if (mode === "json") {
-			writeStdoutLine(`${JSON.stringify(printableEvent(event))}\n`);
-		}
-	});
-
 	let wroteTextWorkingIndicator = false;
 	const writeTextWorkingIndicator = (): void => {
 		if (mode !== "text" || wroteTextWorkingIndicator) return;
@@ -177,6 +178,9 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		if (mode === "text") session.setTextOutputCommitted(false);
 		await logger.time("print:prompt:next", () => session.prompt(message));
 	}
+
+	// Startup recovery is tracked work even when no explicit prompt was supplied.
+	await session.waitForIdle();
 
 	// From this point onward a late blocker must be recorded without starting a
 	// primary turn whose response print mode would never emit.

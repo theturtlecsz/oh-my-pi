@@ -1236,6 +1236,7 @@ if (args[0] === "api") {
 		recoverySeq++;
 		fs.rmSync(path.join(probe, "python"), { recursive: true, force: true });
 		fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
+		fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch-fresh.json"), { force: true });
 		Bun.spawnSync(["git", "clean", "-fdx"], { cwd: probe });
 		Bun.spawnSync(["git", "checkout", "main"], { cwd: probe });
 		Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
@@ -1335,13 +1336,31 @@ if (args[0] === "api") {
 	// 1. Happy Path Recovery
 	const happy = await createAndStartDisposableGrant("happy");
 	const happyOut1 = runHarness("recovery", happy.item.key);
-	assert.equal((happyOut1.sentMessages as unknown[])?.length, 1, `happy path recovery sends exactly one turn: ${JSON.stringify(happyOut1.uiCalls)}`);
-	assert.equal(happyOut1.exec?.grant?.continuations_scheduled, 1, "continuations_scheduled incremented to 1");
-	assert.equal(happyOut1.exec?.grant?.grant_version, 2, "grant_version incremented to 2");
+	assert.equal((happyOut1.sentMessages as unknown[])?.length, 0, `persisted recovery reinjects no message: ${JSON.stringify(happyOut1.uiCalls)}`);
+	assert.deepEqual(happyOut1.simulatedControllerTurns, [{ entryId: happy.startOut.initialExecutionEntryId, source: "persisted" }], `same persisted entry wakes once in the simulated controller: ${JSON.stringify(happyOut1.uiCalls)}`);
+	assert.equal(happyOut1.exec?.grant?.continuations_scheduled, 0, "resuming an existing turn spends no new reservation");
+	assert.equal(happyOut1.exec?.grant?.grant_version, 1, "resuming an existing turn preserves grant version");
 	const happyOut2 = runHarness("recovery", happy.item.key);
-	assert.equal((happyOut2.sentMessages as unknown[])?.length, 0, "duplicate replay sends zero turns");
+	assert.equal((happyOut2.sentMessages as unknown[])?.length, 0, "settled replay injects zero messages");
+	assert.deepEqual(happyOut2.simulatedControllerTurns, [], "settled replay starts no simulated turn");
+	assert.equal(happyOut2.exec?.grant?.continuations_scheduled, 0, "settled replay spends no reservation");
 	const happyFinalExec = happyOut2.exec ?? happyOut1.exec;
 	await cancelGrant(happyFinalExec?.grant?.grant_id, happyFinalExec?.grant?.grant_version, happyFinalExec?.grant?.judge_sha256);
+
+	// A distinct controller session has no persisted turn to resume. It must
+	// reserve a new continuation; repeated startup of that session must not.
+	const freshSessionCase = await createAndStartDisposableGrant("fresh-session");
+	const freshSessionOut = runHarness("recovery-new-session", freshSessionCase.item.key);
+	assert.equal((freshSessionOut.sentMessages as unknown[])?.length, 1, "a new controller session injects one newly reserved continuation");
+	assert.equal((freshSessionOut.simulatedControllerTurns as Array<{ source: string }>)?.[0]?.source, "injected", "new continuation drives one simulated turn");
+	assert.equal((freshSessionOut.simulatedControllerTurns as unknown[])?.length, 1, "new continuation wakes once");
+	assert.equal(freshSessionOut.exec?.grant?.continuations_scheduled, 1, "new continuation spends one reservation");
+	assert.equal(freshSessionOut.exec?.grant?.grant_version, 2, "new reservation advances grant version");
+	const freshSessionAgain = runHarness("recovery-new-session", freshSessionCase.item.key);
+	assert.equal((freshSessionAgain.sentMessages as unknown[])?.length, 0, "settled new-session turn is not reinjected");
+	assert.deepEqual(freshSessionAgain.simulatedControllerTurns, [], "settled new-session turn is not repeated");
+	assert.equal(freshSessionAgain.exec?.grant?.continuations_scheduled, 1, "settled new-session turn spends no second reservation");
+	await cancelGrant(freshSessionAgain.exec?.grant?.grant_id, freshSessionAgain.exec?.grant?.grant_version, freshSessionAgain.exec?.grant?.judge_sha256);
 
 	// 1b. Crash-after-commit-before-append: journaled set_execution_state claim exists on disk
 	const crashCase = await createAndStartDisposableGrant("crash-gap");
@@ -1395,11 +1414,13 @@ if (args[0] === "api") {
 
 	const recoveryCrash1 = runHarness("recovery", crashCase.item.key);
 	assert.equal((recoveryCrash1.sentMessages as unknown[])?.length, 1, "recovery delivers the un-appended turn");
+	assert.equal((recoveryCrash1.simulatedControllerTurns as unknown[])?.length, 1, "committed-claim replay drives one simulated turn");
 	assert.equal(recoveryCrash1.exec?.grant?.continuations_scheduled, 1, "continuations_scheduled remained 1");
 	assert.equal(recoveryCrash1.exec?.grant?.grant_version, 2, "grant_version remained 2");
 
 	const recoveryCrash2 = runHarness("recovery", crashCase.item.key);
 	assert.equal((recoveryCrash2.sentMessages as unknown[])?.length, 0, "duplicate replay sends zero turns");
+	assert.deepEqual(recoveryCrash2.simulatedControllerTurns, [], "settled committed-claim replay starts no simulated turn");
 	fs.rmSync(crashClaimPath, { force: true });
 	await cancelGrant(crashGrantId, 2, crashJudgeSha);
 
@@ -1408,7 +1429,8 @@ if (args[0] === "api") {
 	const corruptClaimPath = path.join(pendingDir, "corrupt-claim.json");
 	fs.writeFileSync(corruptClaimPath, "corrupt json{");
 	const recoveryCorrupt = runHarness("recovery", corruptCase.item.key);
-	assert.equal((recoveryCorrupt.sentMessages as unknown[])?.length, 0, "corrupt claim blocks recovery");
+	assert.equal((recoveryCorrupt.sentMessages as unknown[])?.length, 0, "corrupt claim blocks recovery injection");
+	assert.deepEqual(recoveryCorrupt.simulatedControllerTurns, [], "corrupt claim blocks simulated recovery dispatch");
 	assert.ok(
 		(recoveryCorrupt.uiCalls as string[])?.some(c => c.includes("Recovery blocked by unreadable claim") && c.includes("corrupt-claim.json")),
 		"refusal names the unreadable claim scan",
@@ -1422,7 +1444,8 @@ if (args[0] === "api") {
 	const dirtyCase = await createAndStartDisposableGrant("dirty");
 	fs.writeFileSync(path.join(probe, "drift-dirt.txt"), "dirt\n");
 	const recoveryDirt = runHarness("recovery", dirtyCase.item.key);
-	assert.equal((recoveryDirt.sentMessages as unknown[])?.length, 1, "owner dirt stays outside execution recovery");
+	assert.equal((recoveryDirt.sentMessages as unknown[])?.length, 0, "owner dirt recovery does not reinject the persisted message");
+	assert.equal((recoveryDirt.simulatedControllerTurns as unknown[])?.length, 1, "owner dirt stays outside execution recovery");
 	assert.equal(fs.readFileSync(path.join(probe, "drift-dirt.txt"), "utf8"), "dirt\n", "owner dirt remains untouched");
 	fs.rmSync(path.join(probe, "drift-dirt.txt"), { force: true });
 	await cancelGrant(recoveryDirt.exec?.grant?.grant_id, recoveryDirt.exec?.grant?.grant_version, recoveryDirt.exec?.grant?.judge_sha256);
@@ -1431,7 +1454,8 @@ if (args[0] === "api") {
 	Bun.spawnSync(["git", "add", "drift-head.txt"], { cwd: probe });
 	Bun.spawnSync(["git", "commit", "-m", "drift head"], { cwd: probe });
 	const recoveryHead = runHarness("recovery", headCase.item.key);
-	assert.equal((recoveryHead.sentMessages as unknown[])?.length, 1, "owner HEAD drift stays outside execution recovery");
+	assert.equal((recoveryHead.sentMessages as unknown[])?.length, 0, "owner HEAD recovery does not reinject the persisted message");
+	assert.equal((recoveryHead.simulatedControllerTurns as unknown[])?.length, 1, "owner HEAD drift stays outside execution recovery");
 	Bun.spawnSync(["git", "reset", "--hard", headCommit], { cwd: probe });
 	await cancelGrant(recoveryHead.exec?.grant?.grant_id, recoveryHead.exec?.grant?.grant_version, recoveryHead.exec?.grant?.judge_sha256);
 
@@ -1479,6 +1503,7 @@ if (args[0] === "api") {
 	assert.equal(reviseRes.result?.type, "revise_work", "revision applied");
 	const recoveryRev = runHarness("recovery", revCase.item.key);
 	assert.equal((recoveryRev.sentMessages as unknown[])?.length, 0, "changed revision sends zero turns");
+	assert.deepEqual(recoveryRev.simulatedControllerTurns, [], "recoveryRev refusal starts no simulated turn");
 	await cancelGrant(revCase.startOut.exec?.grant?.grant_id, revCase.startOut.exec?.grant?.grant_version, revCase.startOut.exec?.grant?.judge_sha256);
 
 	// 4b. Drift Probe: Project drift sends zero turns
@@ -1488,6 +1513,7 @@ if (args[0] === "api") {
 	psql(`UPDATE omp_work.work_items SET project_id='${proj2Id}' WHERE work_id='${projCase.item.work_id}';`);
 	const recoveryProj = runHarness("recovery", projCase.item.key);
 	assert.equal((recoveryProj.sentMessages as unknown[])?.length, 0, "project drift sends zero turns");
+	assert.deepEqual(recoveryProj.simulatedControllerTurns, [], "recoveryProj refusal starts no simulated turn");
 	await cancelGrant(projCase.startOut.exec?.grant?.grant_id, projCase.startOut.exec?.grant?.grant_version, projCase.startOut.exec?.grant?.judge_sha256);
 
 	// 4c. Drift Probe: Projectless-to-project drift sends zero turns
@@ -1522,6 +1548,7 @@ if (args[0] === "api") {
 	psql(`UPDATE omp_work.work_items SET project_id='${proj2Id}' WHERE work_id='${nullProjItem.work_id}';`);
 	const recoveryNullProj = runHarness("recovery", nullProjItem.key);
 	assert.equal((recoveryNullProj.sentMessages as unknown[])?.length, 0, "null-to-project drift sends zero turns");
+	assert.deepEqual(recoveryNullProj.simulatedControllerTurns, [], "recoveryNullProj refusal starts no simulated turn");
 	assert.equal(recoveryNullProj.exec?.grant?.grant_version, nullProjStartOut.exec?.grant?.grant_version, "grant version unchanged on null-to-project drift");
 	assert.equal(recoveryNullProj.exec?.grant?.continuations_scheduled, nullProjStartOut.exec?.grant?.continuations_scheduled, "continuations_scheduled unchanged on null-to-project drift");
 	assert.ok(
@@ -1583,11 +1610,13 @@ if (args[0] === "api") {
 	})).json();
 	const recoveryBlocker = runHarness("recovery", blockerCase.item.key);
 	assert.equal((recoveryBlocker.sentMessages as unknown[])?.length, 0, "active blocker sends zero turns");
+	assert.deepEqual(recoveryBlocker.simulatedControllerTurns, [], "recoveryBlocker refusal starts no simulated turn");
 	await cancelGrant(blockerCase.startOut.exec?.grant?.grant_id, blockerCase.startOut.exec?.grant?.grant_version, blockerCase.startOut.exec?.grant?.judge_sha256);
 	// 6. Drift Probe: Missing yield-assembly source sends zero turns through recovery
 	const yieldCase = await createAndStartDisposableGrant("yield");
 	const recoveryMissingYield = runHarness("recovery", yieldCase.item.key, { OMP_WORK_SMOKE_MISSING_YIELD: "1" });
 	assert.equal((recoveryMissingYield.sentMessages as unknown[])?.length, 0, "missing yield-assembly sends zero turns");
+	assert.deepEqual(recoveryMissingYield.simulatedControllerTurns, [], "recoveryMissingYield refusal starts no simulated turn");
 	await cancelGrant(yieldCase.startOut.exec?.grant?.grant_id, yieldCase.startOut.exec?.grant?.grant_version, yieldCase.startOut.exec?.grant?.judge_sha256);
 	// 7. Continuation Cap Exhaustion: Schedule up to max_continuations (8) then fresh-process recovery while active at cap triggers terminalization
 	const capBatch = await (await fetch(`${baseUrl}/v1/commands`, {
@@ -1668,6 +1697,7 @@ if (args[0] === "api") {
 	// closing notice (work-execution-status) — never a continuation turn.
 	const capMessages = (recoveryCap.sentMessages ?? []) as Array<{ customType?: string; content?: string }>;
 	assert.equal(capMessages.length, 1, "recovery while active at cap sends exactly the terminal notice");
+	assert.deepEqual(recoveryCap.simulatedControllerTurns, [], "exhausted new-continuation budget starts no simulated turn");
 	assert.equal(capMessages[0]?.customType, "work-execution-status", "cap terminalization notice is work-execution-status");
 	assert.ok(capMessages[0]?.content?.includes("Execution grant stopped (max_continuations_exceeded)"), "notice names the cap terminal reason");
 	assert.ok(capMessages[0]?.content?.includes("Grant is terminal; resume is impossible."), "notice states terminality");

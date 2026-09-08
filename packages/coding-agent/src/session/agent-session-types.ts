@@ -424,3 +424,37 @@ export interface ResetSessionContextResult {
 
 /** Queued user content restored to the editor. */
 export type RestoredQueuedMessage = { text: string; images?: ImageContent[] };
+
+/** A refusal to resume an existing durable turn; never a consumption receipt. */
+export interface PersistedTurnRefusal {
+	code:
+		| "unavailable"
+		| "startup-incomplete"
+		| "session-unavailable"
+		| "stale-identity"
+		| "conflicting-request"
+		| "queued-input"
+		| "missing-anchor"
+		| "unsafe-suffix"
+		| "pending-tools"
+		| "turn-settled"
+		| "persistence-failed"
+		| "authority-refused"
+		| "dispatch-failed";
+	reason: string;
+}
+
+/** Resume only this active-branch entry, without adding another prompt. */
+export interface PersistedTurnContinuationRequest {
+	sessionId: string;
+	entryId: string;
+	expectedLeafId: string;
+	/** Re-read the effect owner's authority after preparation, immediately before dispatch. */
+	validateDispatch: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+	/** Reports a refusal discovered after scheduling, including preparation failures. */
+	onRefused?: (refusal: PersistedTurnRefusal) => void;
+}
+
+export type PersistedTurnContinuationResult =
+	| { status: "scheduled" | "alreadyScheduled" }
+	| ({ status: "refused" } & PersistedTurnRefusal);

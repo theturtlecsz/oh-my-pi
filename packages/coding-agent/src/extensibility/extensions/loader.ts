@@ -27,6 +27,10 @@ import type { ExecOptions } from "../../exec/exec";
 import { execCommand } from "../../exec/exec";
 // Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
 import * as PiCodingAgent from "../../index";
+import type {
+	PersistedTurnContinuationRequest,
+	PersistedTurnContinuationResult,
+} from "../../session/agent-session-types";
 import type { CustomMessagePayload } from "../../session/messages";
 import type { FileDeleteFallbackHandler, FileWriteFallbackHandler } from "../../tools/file-write-fallback";
 import { EventBus } from "../../utils/event-bus";
@@ -147,6 +151,10 @@ export class ExtensionRuntime implements IExtensionRuntime {
 
 	getSessionId(): string {
 		throw new ExtensionRuntimeNotInitializedError();
+	}
+
+	requestPersistedTurnContinuation(): PersistedTurnContinuationResult {
+		return { status: "refused", code: "unavailable", reason: "Extension runtime is not initialized" };
 	}
 
 	deliverMessage(): Promise<void> {
@@ -335,6 +343,10 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 
 	getSessionId(): string {
 		return this.runtime.getSessionId();
+	}
+
+	requestPersistedTurnContinuation(request: PersistedTurnContinuationRequest): PersistedTurnContinuationResult {
+		return this.runtime.requestPersistedTurnContinuation(request);
 	}
 
 	deliverMessage(message: ExtensionDeliveryPayload): Promise<void> {

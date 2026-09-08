@@ -48,6 +48,7 @@ function createFlushHarness(): FlushHarness {
 			await promptReleased;
 			return true;
 		},
+		waitForIdle: async () => {},
 		prepareForHeadlessAdvisorDrain: () => {
 			advisorDrainPrepared = true;
 		},

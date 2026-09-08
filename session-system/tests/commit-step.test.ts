@@ -1443,13 +1443,19 @@ describe("admission rebase-check (OMP-220)", () => {
 		expect(upToDate.ok).toBe(true);
 
 		// Another clone advances the remote default tip.
-		const pusher = makeRepo("main");
-		git(pusher, "remote", "add", "origin", remote);
-		git(pusher, "pull", "-q", "origin", "main");
+		// Independent seed commits only match when their timestamps match.
+		// Clone the shared history instead of relying on same-second commits.
+		const pusher = path.join(tempRoot, `pusher-${repoSeq++}`);
+		const clone = Bun.spawnSync(["git", "clone", "-q", remote, pusher]);
+		expect(clone.exitCode, clone.stderr.toString()).toBe(0);
+		git(pusher, "config", "user.email", "test@example.com");
+		git(pusher, "config", "user.name", "Test");
 		fs.writeFileSync(path.join(pusher, "advanced.txt"), "advanced\n");
 		git(pusher, "add", "--", "advanced.txt");
 		git(pusher, "commit", "-q", "-m", "advanced");
-		git(pusher, "push", "-q", "origin", "HEAD:refs/heads/main");
+		const push = Bun.spawnSync(["git", "push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: pusher });
+		expect(push.exitCode, push.stderr.toString()).toBe(0);
+		expect(git(pusher, "rev-parse", "HEAD")).not.toBe(git(repo, "rev-parse", "HEAD"));
 
 		const behind = ensureUpToDateWithDefault(repo, "refs/heads/main");
 		expect(behind.ok).toBe(false);
