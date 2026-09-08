@@ -1121,13 +1121,15 @@ jobs:
                 --uv "$(command -v uv)" --python "$installed_python" \
                 --native "$GITHUB_WORKSPACE/packages/natives/native/pi_natives.linux-x64-baseline.node" \
                 --native "$GITHUB_WORKSPACE/packages/natives/native/pi_natives.linux-x64-modern.node"
-         - name: Qualify installed CLI and WorkService isolation
+         - name: Qualify installed isolation and controller recovery
            run: |
               manifest_sha=$(sha256sum "$RUNNER_TEMP/omp-installed-runtime/manifest.json")
               OMP_INSTALLED_RELEASE="$RUNNER_TEMP/omp-installed-runtime" \
               OMP_INSTALLED_MANIFEST_SHA256="${manifest_sha%% *}" \
               uv run --project python/omp-work --extra dev pytest \
                 python/omp-work/tests/test_installed_runtime_isolation.py \
+                python/omp-work/tests/test_installed_execution_recovery.py \
+                --basetemp="$RUNNER_TEMP/omp-installed-runtime-test-state" \
                 --junitxml="$RUNNER_TEMP/omp-installed-runtime-tests.xml"
          - name: Preserve installed qualification evidence
            if: ${{ always() }}
@@ -1137,4 +1139,12 @@ jobs:
               path: |
                  ${{ runner.temp }}/omp-installed-runtime/manifest.json
                  ${{ runner.temp }}/omp-installed-runtime-tests.xml
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/recovery-evidence.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/recovery-refusals.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/before-execution.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/after-execution.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/before-workflow.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/before-session.jsonl
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/controller-*.rpc.jsonl
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/controller-*.stderr
               if-no-files-found: warn

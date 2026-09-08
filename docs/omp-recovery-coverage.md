@@ -31,7 +31,7 @@ The commands below identify executable coverage, not results from this inventory
 | **S2.2:** killing and restarting between stages resumes the same authorized progress | `execute-cycle-smoke.ts` recovery scenarios beginning near line 1334: happy recovery, duplicate recovery, corrupt claim, dirty worktree, HEAD/revision/project drift, exhausted continuation budget. `auditor-runner.test.ts`: `session_start relocates an active grant before recovery delivery (OMP-213)` and `execution delivery checkpoint race and crash-retry use one guarded continuation`. Commands **E**, **H**. | Kill a real controller/worker at named stages, restart the same persisted session, and observe continuation consumption or a precise refusal. Existing smoke counts captured `sendMessage` calls rather than messages consumed by AgentSession. It does not execute the original lost-message window. |
 | **S2.3:** a ledger commit followed by a lost response reconciles exactly once | `pending-ops.test.ts`: `resolved create claim survives delivery ack and identical create reuses stored result with one POST`; unresolved claim retention. `test_workflow_service.py`: `test_receipt_idempotency_exact_retry_returns_original_row`, `test_completion_evidence_idempotency_and_claim_race`. Execution smoke's `crash-gap` scenario, near line 1347, writes a synthetic resolved claim after a successful command. Commands **P**, **W**, **E**. | Forward a real client command to the actual service, withhold its committed response, kill the issuing process, and recover from the client-written unresolved journal. Assert the same operation is replayed and the same service transition/receipt returned. Do not write a replacement pending-operation file in the test. |
 | **S2.4:** a successful push/merge with a lost response is discovered before retry, with no duplicate effect | `commit-step.test.ts`: `pushCandidate pushes the exact frozen commit and repeated checks stay idempotent`, containment and diverged-remote refusal against real local bare Git remotes. `git-reliability.test.ts`: unchanged audited head merges; a changed head after precheck is refused. The latter uses a local `gh` fixture. Commands **G**. | Kill the calling process after a real remote effect but before its acknowledgement; restart and prove remote inspection, exact candidate identity, and one effect. Local bare Git can prove push behavior. A local GitHub simulator does not establish GitHub API recovery; any disposable GitHub trial needs its separately recorded authority. |
-| **S2.5:** queued work delivered after cancellation starts no new work or effect | `auditor-runner.test.ts`: guarded continuation race, `session_stop with dead execution grant or terminal work emits no continuation`, dead-grant startup cleanup. Execution smoke covers cancellation/terminal recovery. `session/yield-queue.test.ts` drops stale entries at injection. Commands **H**, **E**, **Y**. | Hold an actual continuation between durable intent, queueing, injection, and consumption; cancel through WorkService; release it or restart. Assert no new provider request, task subprocess, tool effect, or grant transition from the stale work. Host tests checking before enqueue do not cover cancellation after enqueue. |
+| **S2.5:** queued work delivered after cancellation starts no new work or effect | `auditor-runner.test.ts`: guarded continuation race, `session_stop with dead execution grant or terminal work emits no continuation`, dead-grant startup cleanup. Execution smoke covers cancellation/terminal recovery. `session/yield-queue.test.ts` drops stale entries at injection. Commands **H**, **E**, **Y**. | Hold an actual continuation between durable intent, queueing, injection, and consumption; cancel through WorkService; release it or restart. Assert no new provider request, task session, tool effect, or grant transition from the stale work. Host tests checking before enqueue do not cover cancellation after enqueue. |
 | **S2.6:** broken auditor discovery leaves stop/cancel usable and prevents review success | `execution-halt.test.ts` has owner-interjection pause, cancel, `stop_execution`, and resume refusal with unavailable auditor. `auditor-runner.test.ts` covers missing role/schema/credentials and failed preflight before reservation. Commands **H**. | Exercise those actions in an installed controller with a disposable, deliberately incompatible auditor configuration. Observe terminal/paused service state and zero successful audit/launch. Keep the admitted release immutable; do not corrupt the live auditor. |
 | **S2.7:** incompatible runtime/service versions fail precisely; trusted-runtime changes need fresh applicable authority; terminal grants remain terminal | `test_workflow_service.py`: contract mismatch handshake; stale-service read/write split; `test_execution_grant_pause_resume_and_terminal_judge_drift`; service-refresh stale-source/drift matrix; pre-review replan and stale-service pause/stop. `test_service_readiness.py` tests readiness without masking database failure. Runtime-stage tests refuse Bun mismatch, changed Python identity, and invalid manifest content. Installed isolation tests refuse a corrupted disposable release. Commands **W**, **R**, **I**. | Combine actual incompatible installed host/service processes with an existing grant. Prove exact refusal, unchanged terminal grants, and fresh authority where required. Existing service-refresh test constructs a new in-process service object for its restart step. Isolation qualification is not grant recovery qualification. |
 | **S2.8:** OMP-262's plan-stamp result matches its persisted write outcome; OMP-264 audit repository identity remains usable | `auditor-runner.test.ts` tests replan in executing phase and dirty-path refusal. Service tests cover replan, candidate collision and stale evidence. No identified test runs OMP-262's exact manual-plan → execution-stamp-without-active-grant sequence. OMP-264's source path is present: admission stores `basename(primaryRoot)` and execution closeout forwards `exec.grant.repository`. Commands **H**, **W** are adjacent coverage only. | Reproduce both separately before changing code. For OMP-262 compare returned result and live workflow candidate/receipt before and after the stray stamp. For OMP-264 run the real audit path from the sealed repository identity; current fake auditor reports never execute its `git -C` instruction. Do not infer either checkpoint passed from source inspection. |
@@ -71,7 +71,7 @@ bun test session-system/tests/runtime-stage.test.ts
 uv run --project python/omp-work --extra dev pytest python/omp-work/tests/test_service_readiness.py -q
 
 # I — after setting OMP_INSTALLED_RELEASE and OMP_INSTALLED_MANIFEST_SHA256
-OMP_WORK_POSTGRES_INTEGRATION=1 uv run --project python/omp-work --extra dev pytest python/omp-work/tests/test_installed_runtime_isolation.py -q
+OMP_WORK_POSTGRES_INTEGRATION=1 uv run --project python/omp-work --extra dev pytest python/omp-work/tests/test_installed_runtime_isolation.py python/omp-work/tests/test_installed_execution_recovery.py -q
 
 # L — prompt refresh/hook components, not the delayed-loader reproduction
 bun test packages/coding-agent/test/sdk-context-file-refresh.test.ts packages/coding-agent/test/agent-session-before-agent-start-attribution.test.ts
@@ -106,7 +106,7 @@ The first new whole-process fixture should reuse these existing seams:
 2. Run the installed CLI in RPC mode with a real persisted session, replacing
    the isolation test's `--no-session`. Resume the same session file and runtime
    state after SIGKILL. Retain the actual AgentSession, SessionManager, workflow
-   host, operation journal, scheduler and task subprocess implementation.
+   host, operation journal, scheduler and task-session implementation.
 3. Place a loopback HTTP response barrier between the configured WorkClient and
    the real disposable WorkService. Forward the actual command, observe its
    committed response and operation ID, withhold response bytes, then kill the
@@ -122,8 +122,9 @@ The first new whole-process fixture should reuse these existing seams:
    protocol server as transport input, with request/output capture. It must not
    replace session or worker machinery, directly invoke host actions in place
    of real dispatch, or manufacture auditor acceptance. Keep provider-readiness
-   and paid canary claims separate. A test that never starts the actual task
-   subprocess cannot claim worker-process recovery.
+   and paid canary claims separate. Task sessions currently run in-process despite the `runSubprocess` name.
+   Crash coverage must start a real task session and kill the shared process;
+   it cannot claim independent worker-process isolation.
 
 Additional fault points belong to their later checkpoints: queue/injection
 barriers for cancellation, a local Git receive boundary for push response loss,
@@ -151,3 +152,24 @@ IDs, session/grant/item/revision identities, barrier observations, signal and
 exit status, service operation/receipt identities, preserved output, and effect
 counts. Assertions read runtime results or files the system wrote, never source
 text. A missing prerequisite is an explicit non-pass, not a qualified skip.
+
+The [S2.2 implementation plan](omp-recovery-s22-plan.md) bounds the first real
+controller reproduction and subsequent stage/worker coverage.
+
+## First controller regressions
+
+`test_installed_execution_recovery.py` now contains two actual SIGKILL/restart
+cases: queued resume during a held provider request, and a frozen candidate
+awaiting review checkpoint continuation. Raw RPC capture distinguishes a recovery
+preflight refusal from missing delivery. The original review-path baseline hits
+the HEAD gate first; only the unchanged-HEAD pause/resume case isolates outbox
+suppression. No phase, candidate or journal state is rewritten to force the cases.
+
+New continuation records distinguish volatile `queued` state from a matching
+persisted custom-message identity. Restart validates session, work, revision and
+reservation before replay and uses that identity to avoid duplicate injection.
+Historical unbound `delivered` records retain compatibility behavior; their
+missing identity cannot retroactively prove delivery. Persisted-but-unconsumed
+turns and actual task-worker termination remain separate, unfinished S2.2
+boundaries. These two controller cases do not establish exactly-once effects
+across every crash window or complete OMP-246 acceptance.

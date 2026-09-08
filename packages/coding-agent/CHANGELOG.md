@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Fixed execution recovery losing queued continuation prompts or rejecting its own frozen candidate after a controller restart.
 - Fixed the legacy pi extension loader misclassifying CommonJS modules served behind import-only package export conditions as ESM, which dropped their named exports at link time (e.g. `pi-bro`'s `defuddle/node` dependency).
 - Fixed `/skill:summary` bypassing the pre-stream closeout authorization used by `/summary`, which made candidate confirmation fail and then falsely reported that the owner had not entered `/summary`.
 ## [18.0.6] - 2026-08-26

@@ -122,7 +122,8 @@ bun run test:session:execute
 OMP_INSTALLED_RELEASE=/absolute/releases/candidate-id \
 OMP_INSTALLED_MANIFEST_SHA256=MANIFEST_SHA256 \
 uv run --project python/omp-work --extra dev pytest \
-  python/omp-work/tests/test_installed_runtime_isolation.py
+  python/omp-work/tests/test_installed_runtime_isolation.py \
+  python/omp-work/tests/test_installed_execution_recovery.py
 ```
 
 The installed test starts real CLI and installed WorkService processes with
@@ -130,9 +131,16 @@ disposable PostgreSQL. It compares resident and fresh CLI behavior after
 candidate edits and configuration poisoning, and rejects an altered artifact.
 Missing installation inputs produce explicit pytest skips; skips do not qualify
 a release. Required promotion automation must supply both inputs and reject skips.
-CI retains the full installation manifest and installed-test JUnit report in its
+CI retains the full installation manifest, installed-test JUnit report, and
+controller fault/effect evidence in its
 `installed-runtime-qualification` artifact, including available evidence on failed
 runs. A manifest alone or an absent/skipped test report does not qualify a release.
+
+Two controller recovery cases cover queued resume and the finalized-candidate
+review boundary using actual persisted sessions, SIGKILL/restart, local provider
+transport, disposable WorkService, and local Git effects. They do not qualify
+task-worker death, persisted-but-unconsumed turns, or every recovery boundary;
+see the [recovery coverage map](omp-recovery-coverage.md).
 
 Existing halt, replay, canceled-grant, merge-head, and completion-evidence tests
 remain part of the workflow suites. The execution smoke is now an explicit CI
