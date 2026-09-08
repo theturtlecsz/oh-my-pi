@@ -281,5 +281,11 @@ Source verification passes 230 affected tests with 865 assertions and `bun check
 Actual SDK scenarios cover original readiness, same-manager cold startup,
 preserved read/result wire, hook and storage failures, and competing ownership.
 Independent producer and cold-recovery reviews found no remaining source blocker.
-Fresh twelve-case installed-process qualification remains pending; these component
-results do not establish full S2.2 acceptance.
+The immutable runtime from `31bfecedf45bee9489717fdd4da3206a47f04996`, manifest
+`9a2878f8972839fae18ba895a5f3caa438a15acca4a81223f76a1eaef85c4943`,
+passed all twelve installed-process cases with zero failures, errors or skips
+(368.479 seconds). The new case kills the shared CLI after read readiness while
+the next response is held, then checks the durable cold claim at the first
+resumed child request, original call/result delivery and a quiet later restart.
+Source and installed evidence retain separate identities. Full S2.2 acceptance,
+required CI delivery and live activation remain separate gates.
