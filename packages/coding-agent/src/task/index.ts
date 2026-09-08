@@ -16,7 +16,7 @@
 import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { $env, logger, prompt } from "@oh-my-pi/pi-utils";
+import { $env, isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "..";
 import type { Theme } from "../modes/theme/theme";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
@@ -24,7 +24,7 @@ import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "tex
 import taskAsyncContractTemplate from "../prompts/tools/task-async-contract.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { TASK_EFFORTS, type TaskEffort } from "../thinking";
-import { truncateForPrompt } from "../tools/approval";
+import { resolveApproval, truncateForPrompt } from "../tools/approval";
 import { isIrcEnabled } from "../tools/hub";
 import { formatBytes, formatDuration } from "../tools/render-utils";
 import { isReadOnlyAgent } from "./read-only-policy";
@@ -44,14 +44,36 @@ import {
 import "../tools/review";
 import type { AsyncJobManager } from "../async";
 import { hasResolvableTranscript } from "../internal-urls/registry-helpers";
+import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
+import { ensurePersistedRoster } from "../registry/persisted-agents";
+import { TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
+import { SessionManager } from "../session/session-manager";
 import { type DiscoveryResult, discoverAgents } from "./discovery";
+import { runPersistedTask } from "./executor";
 import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimitAllSettled, Semaphore } from "./parallel";
+import {
+	assertTaskChildPath,
+	type BoundTaskRecoveryRequest,
+	effectiveTaskArguments,
+	initializationContract,
+	type PersistedTaskBindingV1,
+	preparedEntryIds,
+	readPreparationRecord,
+	supportsTaskRecoveryAgent,
+	taskRecoveryHash,
+	taskRecoveryPolicy,
+} from "./recovery";
 import { renderResult, renderCall as renderTaskCall } from "./render";
 import { repairTaskParams } from "./repair-args";
-import { resolveEffectiveSubagentPolicy, runStructuredSubagent, StructuredSubagentError } from "./structured-subagent";
+import {
+	type EffectiveSubagentPolicy,
+	resolveEffectiveSubagentPolicy,
+	runStructuredSubagent,
+	StructuredSubagentError,
+} from "./structured-subagent";
 
 function renderSubagentUserPrompt(assignment: string): string {
 	return prompt.render(subagentUserPromptTemplate, {
@@ -1415,7 +1437,25 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const context = this.#isBatchEnabled() ? params.context?.trim() || undefined : undefined;
 		let latestProgress: AgentProgress | undefined;
 		try {
+			const recoveryEligible =
+				!detached &&
+				!this.#isBatchEnabled() &&
+				this.session.settings.get("async.enabled") === false &&
+				this.session.settings.get("task.isolation.mode") === "none" &&
+				params.isolated !== true;
 			const execution = await runStructuredSubagent({
+				...(recoveryEligible
+					? {
+							recoveryArgs: effectiveTaskArguments(params),
+							recoveryRawAssignment: params.task,
+							captureTaskCall: async (policy: EffectiveSubagentPolicy) =>
+								supportsTaskRecoveryAgent(this.session, policy.effectiveAgent) &&
+								!policy.planMode &&
+								!policy.isIsolated
+									? this.session.captureTaskCall?.(toolCallId, effectiveTaskArguments(params))
+									: undefined,
+						}
+					: {}),
 				session: this.session,
 				invocationKind: "task",
 				assignment,
@@ -1469,6 +1509,133 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				},
 			};
 		}
+	}
+
+	/** Recover one already allocated child; never calls execute or allocates a task id. */
+	assertRecoveryPolicy(binding: PersistedTaskBindingV1): void {
+		if (taskRecoveryHash(taskRecoveryPolicy(this.session)) !== taskRecoveryHash(binding.contract.policy))
+			throw new Error("Loaded native task approval/spawn policy changed");
+	}
+
+	async validateRecoveryPolicy(binding: PersistedTaskBindingV1): Promise<void> {
+		const params = effectiveTaskArguments(binding.contract.args);
+		await this.session.settings.reloadFromDisk();
+		if (
+			binding.mode !== "sync-flat" ||
+			binding.contract.agent.name !== "task" ||
+			binding.contract.agent.source !== "bundled" ||
+			params.agent !== "task" ||
+			params.isolated === true ||
+			binding.contract.initialization.advisor ||
+			taskRecoveryHash(taskRecoveryPolicy(this.session)) !== taskRecoveryHash(binding.contract.policy)
+		)
+			throw new Error("Current task mode, approval, spawn, or model policy differs from the bound call");
+		const policy = await this.#resolveSpawnPreflight(params);
+		if (
+			policy.agent.name !== "task" ||
+			policy.agent.source !== "bundled" ||
+			policy.isIsolated ||
+			policy.planMode ||
+			taskRecoveryHash(policy.effectiveAgent) !== taskRecoveryHash(binding.contract.agent) ||
+			taskRecoveryHash(policy.schema.schema ?? null) !==
+				taskRecoveryHash(binding.contract.initialization.outputSchema ?? null)
+		)
+			throw new Error("Current bundled task role or effective schema differs from original invocation");
+		const approval = resolveApproval(
+			this,
+			params,
+			this.session.getToolContext?.()?.autoApprove ? "yolo" : this.session.settings.get("tools.approvalMode"),
+			this.session.settings.get("tools.approval"),
+		);
+		if (approval.policy === "deny") throw new Error("Task recovery is denied by current tool policy");
+	}
+
+	async recoverPersistedCall(request: BoundTaskRecoveryRequest): Promise<AgentToolResult<TaskToolDetails>> {
+		const { binding } = request;
+		const params = effectiveTaskArguments(binding.contract.args);
+		const validatePolicy = () => this.validateRecoveryPolicy(binding);
+		request.setPolicyGuard(validatePolicy);
+		await request.validateAuthority();
+		const artifactsDir = this.session.getArtifactsDir?.();
+		if (!artifactsDir) throw new Error("Original parent task artifact root is unavailable");
+		await assertTaskChildPath(binding, artifactsDir, this.session.cwd);
+		const original = await SessionManager.open(binding.child.sessionFile, undefined, undefined, {
+			suppressBreadcrumb: true,
+		});
+		try {
+			const init = original.getEntry(binding.child.initEntryId);
+			if (
+				original.getSessionId() !== binding.child.sessionId ||
+				init?.type !== "session_init" ||
+				taskRecoveryHash(init.taskCall) !== taskRecoveryHash(binding.call) ||
+				taskRecoveryHash(initializationContract(init)) !== taskRecoveryHash(binding.contract.initialization)
+			)
+				throw new Error("Original task child initialization or reverse parent join is missing or changed");
+			const branch = original.getBranch();
+			const records = branch
+				.map(readPreparationRecord)
+				.filter(record => record?.taskBindingId === binding.call.bindingId);
+			const anchors = new Set(records.map(record => record!.anchorEntryId));
+			if (anchors.size !== 1) throw new Error("Task child has no unique core-bound original prompt");
+			const anchorId = [...anchors][0];
+			const anchor = original.getEntry(anchorId);
+			if (anchor?.type !== "message" || anchor.message.role !== "user" || anchor.message.attribution !== "agent")
+				throw new Error("Task recovery input is not the original agent-authored user prompt");
+			const prepared = preparedEntryIds(branch, binding.child.sessionId, anchorId, binding.call.bindingId);
+			for (const entry of branch) {
+				if (entry.id === anchorId || prepared.has(entry.id)) continue;
+				if (
+					entry.type === "message" ||
+					entry.type === "custom_message" ||
+					entry.type === "compaction" ||
+					entry.type === "branch_summary" ||
+					entry.type === "reset_boundary" ||
+					(entry.type === "custom" && entry.customType === TOOL_EXECUTION_START_CUSTOM_TYPE)
+				)
+					throw new Error(
+						"Child already has assistant/tool/effect history or unbound preparation; result-gap reconstruction is unsupported",
+					);
+			}
+		} finally {
+			await original.close();
+		}
+		await request.validateAuthority();
+		const registry = AgentRegistry.global();
+		await ensurePersistedRoster(registry, this.session.getSessionFile());
+		const expected = registry.get(binding.child.registryId);
+		if (expected?.status !== "parked" || expected.session || expected.sessionFile !== binding.child.sessionFile)
+			throw new Error("Original child is missing, terminal, or owned by competing execution");
+		const child = await AgentLifecycleManager.global().ensureLive(binding.child.registryId);
+		if (
+			registry.get(binding.child.registryId) !== expected ||
+			registry.get(binding.child.registryId)?.session !== child ||
+			child.sessionId !== binding.child.sessionId ||
+			child.sessionFile !== binding.child.sessionFile
+		)
+			throw new Error("Original child registry/session generation changed during revival");
+		await request.validateChild(expected, child);
+		const policy = await this.#resolveSpawnPreflight(params);
+		const startTime = Date.now();
+		const result = await runPersistedTask({
+			session: child,
+			binding,
+			signal: request.signal,
+			eventBus: this.session.eventBus,
+			artifactsDir,
+			maxRuntimeMs: this.session.settings.get("task.maxRuntimeMs"),
+			outputSchemaSource: policy.schema.source,
+		});
+		await child.sessionManager.flush();
+		await request.validateAuthority();
+		if (
+			result.id !== binding.child.registryId ||
+			result.exitCode !== 0 ||
+			result.aborted ||
+			result.error ||
+			!result.extractedToolData?.yield?.some(value => isRecord(value) && value.status === "success")
+		)
+			throw new Error("Original child did not complete through a real successful yield");
+		return this.#buildResultPayload(result, policy.discovery.projectAgentsDir, Date.now() - startTime, "");
 	}
 
 	/** Build the tool result (summary text + details) for a settled run. */

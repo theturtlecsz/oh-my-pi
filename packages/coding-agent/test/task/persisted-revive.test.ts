@@ -105,6 +105,7 @@ async function createPersistedSession(
 
 function createFactory(cwd: string, eventBus?: EventBus) {
 	const parentSession = {
+		isTaskRecoveryRevival: () => false,
 		sessionManager: {
 			getCwd: () => cwd,
 			getArtifactManager: () => undefined,

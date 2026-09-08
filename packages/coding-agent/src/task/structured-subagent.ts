@@ -33,7 +33,16 @@ import {
 } from "./isolation-runner";
 import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
+import {
+	initializationContract,
+	type PersistedTaskBindingV1,
+	type TaskCallCapture,
+	taskRecoveryHash,
+	taskRecoveryPolicy,
+	taskRuntimeContract,
+} from "./recovery";
 import { resolveSpawnPolicy } from "./spawn-policy";
+import type { TaskParams } from "./types";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -80,6 +89,10 @@ export interface StructuredSubagentIdentity {
 
 /** One normalized child invocation. */
 export interface StructuredSubagentRequest {
+	/** Set only by the eligible synchronous native TaskTool invocation. */
+	captureTaskCall?: (policy: EffectiveSubagentPolicy) => Promise<TaskCallCapture | undefined>;
+	recoveryArgs?: TaskParams;
+	recoveryRawAssignment?: string;
 	session: ToolSession;
 	invocationKind: "task" | "eval";
 	assignment: string;
@@ -549,6 +562,7 @@ function attachStructuredOutputMetadata(result: SingleResult, schema: Structured
  */
 export async function runStructuredSubagent(request: StructuredSubagentRequest): Promise<StructuredSubagentResult> {
 	const policy = await resolveEffectiveSubagentPolicy(request);
+	const taskCapture = await request.captureTaskCall?.(policy);
 	const lease = await leaseArtifacts(request.session, request.invocationKind);
 	let changesApplied: boolean | null = null;
 	let mergeSummary = "";
@@ -565,6 +579,41 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			label: request.identity?.label ?? (request.invocationKind === "eval" ? "EvalAgent" : undefined),
 		});
 		const baseOptions = buildExecutorOptions(request, policy, lease, id);
+		if (taskCapture && request.recoveryArgs) {
+			const recoveryArgs = request.recoveryArgs;
+			const parentPolicy = taskRecoveryPolicy(request.session);
+			baseOptions.taskRecovery = {
+				call: taskCapture.call,
+				onChildPrepared: async ({ session, init, registryId }) => {
+					const contract = {
+						agent: policy.effectiveAgent,
+						args: recoveryArgs,
+						assignment: request.assignment,
+						rawAssignment: request.recoveryRawAssignment,
+						initialization: initializationContract(init),
+						policy: parentPolicy,
+						runtime: taskRuntimeContract(session),
+					};
+					const sessionFile = session.sessionFile;
+					if (!sessionFile) throw new Error("Task recovery child has no durable session path");
+					const binding: PersistedTaskBindingV1 = {
+						version: 1,
+						mode: "sync-flat",
+						call: taskCapture.call,
+						child: {
+							registryId,
+							sessionId: session.sessionId,
+							sessionFile,
+							initEntryId: init.id,
+							cwd: session.sessionManager.getCwd(),
+						},
+						contract,
+						contractSha256: taskRecoveryHash(contract),
+					};
+					await taskCapture.bindChild(binding);
+				},
+			};
+		}
 		baseOptions.onCleanupDeferred = completion => {
 			deferredCleanup = completion;
 		};

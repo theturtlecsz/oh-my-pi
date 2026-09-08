@@ -65,6 +65,12 @@ import { attributeSubagentError } from "./error-attribution";
 import { generateTaskLabel } from "./label";
 import { resolveAgentPrewalkDefault } from "./prewalk";
 import { isReadOnlyAgent } from "./read-only-policy";
+import type {
+	BoundTaskDriverControls,
+	PersistedTaskBindingV1,
+	PersistedTaskCallRef,
+	PreparedTaskChild,
+} from "./recovery";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
 	type AgentDefinition,
@@ -360,6 +366,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Options for subagent execution */
 export interface ExecutorOptions {
+	taskRecovery?: { call: PersistedTaskCallRef; onChildPrepared(child: PreparedTaskChild): Promise<void> };
 	cwd: string;
 	/** Additional workspace directories to seed on the subagent session (multi-root). */
 	additionalDirectories?: string[];
@@ -935,6 +942,7 @@ const MAX_YIELD_TOOL_ERRORS = 6;
 
 /** Inputs for the run monitor driving one subagent assignment. */
 interface RunMonitorArgs {
+	recoveryControls?: BoundTaskDriverControls;
 	index: number;
 	id: string;
 	agent: AgentDefinition;
@@ -1109,11 +1117,13 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	const abortActiveSession = (): Promise<void> => {
 		const session = activeSession;
 		if (!session) return Promise.resolve();
-		activeSessionAbortPromise ??= session.abort().catch(error => {
-			logger.debug("Subagent session abort cleanup failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		});
+		activeSessionAbortPromise ??= (args.recoveryControls ? args.recoveryControls.abort() : session.abort()).catch(
+			error => {
+				logger.debug("Subagent session abort cleanup failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			},
+		);
 		return activeSessionAbortPromise;
 	};
 
@@ -1172,7 +1182,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		budgetStopRequested = true;
 		const session = activeSession;
 		budgetStopAbortPromise = session
-			? session.abort().catch(error => {
+			? (args.recoveryControls ? args.recoveryControls.abort() : session.abort()).catch(error => {
 					logger.debug("Subagent budget-stop abort failed", {
 						error: error instanceof Error ? error.message : String(error),
 					});
@@ -1197,7 +1207,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		yieldTurnStopRequested = true;
 		const session = activeSession;
 		yieldTurnStopPromise = session
-			? session.abort().catch(error => {
+			? (args.recoveryControls ? args.recoveryControls.abort() : session.abort()).catch(error => {
 					logger.debug("Subagent yield turn-stop abort failed", {
 						error: error instanceof Error ? error.message : String(error),
 					});
@@ -1893,10 +1903,15 @@ const MAX_YIELD_RETRIES = 3;
  * reminder ladder into a single forced final yield so partial findings still
  * come back as a real report.
  */
+type SubagentTurnStart =
+	| { kind: "new"; taskBindingId?: string }
+	| { kind: "persisted"; execute: () => Promise<void>; controls: BoundTaskDriverControls };
+
 async function driveSessionToYield(
 	session: AgentSession,
 	monitor: SubagentRunMonitor,
 	task: string,
+	start?: SubagentTurnStart,
 ): Promise<DriveOutcome> {
 	using _keepalive = new EventLoopKeepalive();
 	const abortSignal = monitor.abortSignal;
@@ -1934,7 +1949,11 @@ async function driveSessionToYield(
 
 	try {
 		try {
-			await awaitAbortable(session.prompt(task, { attribution: "agent" }));
+			await awaitAbortable<unknown>(
+				start?.kind === "persisted"
+					? start.execute()
+					: session.prompt(task, { attribution: "agent", taskBindingId: start?.taskBindingId }),
+			);
 			await awaitAbortable(session.waitForIdle());
 		} catch (err) {
 			// A budget stop or a yield turn-stop (terminal yield parked behind
@@ -1977,7 +1996,7 @@ async function driveSessionToYield(
 
 					const isFinalRetry = retryCount >= MAX_YIELD_RETRIES;
 					await awaitAbortable(
-						session.prompt(reminder, {
+						(start?.kind === "persisted" ? start.controls.prompt : session.prompt.bind(session))(reminder, {
 							attribution: "agent",
 							synthetic: true,
 							...(isFinalRetry && reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
@@ -2048,7 +2067,12 @@ async function driveSessionToYield(
 						jobs,
 					});
 					try {
-						await awaitAbortable(session.prompt(notice, { attribution: "agent", synthetic: true }));
+						await awaitAbortable(
+							(start?.kind === "persisted" ? start.controls.prompt : session.prompt.bind(session))(notice, {
+								attribution: "agent",
+								synthetic: true,
+							}),
+						);
 						await awaitAbortable(session.waitForIdle());
 					} catch (err) {
 						if (abortSignal.aborted || err instanceof ToolAbortError) throw err;
@@ -2625,25 +2649,76 @@ export interface FollowUpTurnOptions {
  * revive), and an aborted turn only aborts the in-flight turn.
  */
 export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Promise<SingleResult> {
+	const startedAt = Date.now();
+	const session = await AgentLifecycleManager.global().ensureLive(options.id);
+	return runMonitoredExistingSession(options, session, { kind: "new" }, true, startedAt);
+}
+
+export interface PersistedTaskRunOptions {
+	session: AgentSession;
+	binding: PersistedTaskBindingV1;
+	signal: AbortSignal;
+	eventBus?: EventBus;
+	artifactsDir: string;
+	maxRuntimeMs: number;
+	outputSchemaSource: StructuredSubagentSchemaSource;
+}
+
+/** Resume an existing task through the same monitor, yield ladder and finalizer. */
+export async function runPersistedTask(options: PersistedTaskRunOptions): Promise<SingleResult> {
+	const { session, binding } = options;
+	return session.runBoundTaskRecovery(binding, (execute, controls) =>
+		runMonitoredExistingSession(
+			{
+				id: binding.child.registryId,
+				agent: binding.contract.agent,
+				index: 0,
+				message: binding.contract.initialization.task,
+				assignment: binding.contract.assignment,
+				modelRole: binding.contract.initialization.modelRole,
+				outputSchema: binding.contract.initialization.outputSchema,
+				outputSchemaMode: binding.contract.initialization.outputSchemaMode,
+				outputSchemaSource: options.outputSchemaSource,
+				signal: options.signal,
+				eventBus: options.eventBus,
+				parentToolCallId: binding.call.toolCallId,
+				artifactsDir: options.artifactsDir,
+				maxRuntimeMs: options.maxRuntimeMs,
+			},
+			session,
+			{ kind: "persisted", execute, controls },
+			false,
+			Date.now(),
+		),
+	);
+}
+
+async function runMonitoredExistingSession(
+	options: FollowUpTurnOptions & { assignment?: string },
+	session: AgentSession,
+	start: SubagentTurnStart,
+	detached: boolean,
+	startTime: number,
+): Promise<SingleResult> {
 	const { id, agent, message, signal } = options;
 	const index = options.index ?? 0;
-	const startTime = Date.now();
-	const session = await AgentLifecycleManager.global().ensureLive(id);
 	const ref = AgentRegistry.global().get(id);
 	const sessionFile = ref?.sessionFile ?? undefined;
 
 	const monitor = createSubagentRunMonitor({
+		recoveryControls: start.kind === "persisted" ? start.controls : undefined,
 		index,
 		id,
 		agent,
 		task: message,
+		assignment: options.assignment,
 		description: options.description,
 		modelRole: options.modelRole,
 		signal,
 		onProgress: options.onProgress,
 		eventBus: options.eventBus,
 		parentToolCallId: options.parentToolCallId,
-		detached: true,
+		detached,
 		sessionFile,
 		softRequestBudget: 0,
 		softRequestBudgetNotice: false,
@@ -2655,7 +2730,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 			id,
 			agent: agent.name,
 			parentToolCallId: options.parentToolCallId,
-			detached: true,
+			detached,
 			agentSource: agent.source,
 			description: options.description,
 			status: "started",
@@ -2668,7 +2743,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 	const unsubscribe = monitor.attach(session);
 	let outcome: DriveOutcome;
 	try {
-		outcome = await driveSessionToYield(session, monitor, message);
+		outcome = await driveSessionToYield(session, monitor, message, start);
 	} finally {
 		try {
 			await untilAborted(AbortSignal.timeout(5000), () => monitor.waitForActiveSessionAbort());
@@ -2688,6 +2763,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		id,
 		agent,
 		task: message,
+		assignment: options.assignment,
 		modelRole: options.modelRole,
 		outputSchema: options.outputSchema,
 		outputSchemaMode: options.outputSchemaMode,
@@ -2696,8 +2772,8 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		artifactsDir: options.artifactsDir,
 		eventBus: options.eventBus,
 		parentToolCallId: options.parentToolCallId,
-		detached: true,
-		followUpTurn: true,
+		detached,
+		followUpTurn: detached,
 		sessionFile,
 		startTime,
 	});
@@ -3123,6 +3199,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				expectedAgentRef: CreateAgentSessionOptions["expectedAgentRef"],
 			): CreateAgentSessionOptions => ({
 				cwd: worktree ?? cwd,
+				disableInheritedAsyncJobs: options.taskRecovery !== undefined,
 				additionalDirectories: worktree !== undefined ? undefined : options.additionalDirectories,
 				authStorage,
 				modelRegistry,
@@ -3287,7 +3364,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				await awaitAbortable(session.setActiveToolsByName(filteredSubagentTools));
 			}
 
-			session.sessionManager.appendSessionInit({
+			const initEntryId = session.sessionManager.appendSessionInit({
+				taskCall: options.taskRecovery?.call,
 				systemPrompt: session.agent.state.systemPrompt.join("\n\n"),
 				task,
 				tools: session.getEnabledToolNames(),
@@ -3302,6 +3380,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				outputSchemaMode: options.outputSchemaMode,
 				restrictToolNames: restrictToolNames || undefined,
 			});
+			if (options.taskRecovery) {
+				if (prewalk || advisorSelection || session.asyncJobManager)
+					throw new Error("Task recovery binding does not support prewalk, advisor, or shared async runtime");
+				const init = session.sessionManager.getEntry(initEntryId);
+				if (init?.type !== "session_init") throw new Error("Prepared task initialization disappeared");
+				await session.sessionManager.ensureOnDisk();
+				await session.sessionManager.flush();
+				await options.taskRecovery.onChildPrepared({ session, init, registryId: id });
+				checkAbort();
+			}
 
 			abortSignal.addEventListener(
 				"abort",
@@ -3402,7 +3490,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			readyAt = performance.now();
-			const outcome = await driveSessionToYield(session, monitor, task);
+			const outcome = await driveSessionToYield(session, monitor, task, {
+				kind: "new",
+				taskBindingId: options.taskRecovery?.call.bindingId,
+			});
 			exitCode = outcome.exitCode;
 			error = outcome.error;
 			aborted = outcome.aborted;

@@ -647,6 +647,17 @@ export class ExtensionRunner {
 		return this.sessionManager.getSessionId();
 	}
 
+	#toolDispatchGuard: ((signal?: AbortSignal) => Promise<() => void> | undefined) | undefined;
+
+	/** Session-owned guard composed after extension revisions and tool approval. */
+	setToolDispatchGuard(guard: (signal?: AbortSignal) => Promise<() => void> | undefined): void {
+		this.#toolDispatchGuard = guard;
+	}
+
+	prepareToolDispatchGuard(signal?: AbortSignal): Promise<() => void> | undefined {
+		return this.#toolDispatchGuard?.(signal);
+	}
+
 	initialize(
 		actions: ExtensionActions,
 		contextActions: ExtensionContextActions,

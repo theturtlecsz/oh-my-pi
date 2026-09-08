@@ -208,13 +208,30 @@ dispatch refusals. Requests made during startup wait for the actual
 `session_start` lifecycle to finish. Existing prompt preparation runs again;
 the original execution message is not inserted a second time.
 
-This initial recovery surface accepts only an unambiguous unfinished turn with
+By default, this recovery surface accepts only an unambiguous unfinished turn with
 no later conversation or tool activity. Completed turns, pending tools, stale
 branches, queued owner input, failed persistence and ambiguous suffixes refuse.
 Unbound preparation messages after the anchor also refuse; their attribution
 alone does not establish ownership by this turn. Clients that defer agent-started
 turns, including that ACP configuration, report the capability as unavailable.
-No new RPC command or automatic task-result reconciliation is implied.
+
+`recoverSynchronousTask: true` opts into one narrowly bound native task recovery
+path. It requires one flat, synchronous, non-isolated bundled `task` call whose
+original child has not answered or executed a tool. Runtime-written parent/child
+identity and core prompt-preparation records must already exist. Recovery resumes
+that child and persists its real result for the original call before continuing
+the parent. A matching result already persisted on the parent branch can be
+reused without opening the child. Extensions cannot supply a replacement result
+or establish preparation ownership by adding message details.
+
+Tasks with prewalk or a selected child Advisor execute normally and remain
+ineligible for automatic recovery.
+
+The opt-in preserves startup, owner-input and fresh-authority guards throughout
+child execution and parent continuation. Async/batch/isolated tasks, multiple
+pending calls, historical unbound children, changed contracts and ambiguous
+child activity refuse. A child that finished before its parent result became
+durable remains outside this bounded recovery path. No new RPC command is added.
 
 ## 2) Handler context (`ExtensionContext`)
 

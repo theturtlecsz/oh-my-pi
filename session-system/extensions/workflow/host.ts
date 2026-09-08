@@ -2036,6 +2036,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 											sessionCtx.ui.notify(`Execution recovery skipped: ${refusal.reason}`, refusal.code === "turn-settled" ? "info" : "warning");
 										};
 										const result = pi.requestPersistedTurnContinuation({
+											recoverSynchronousTask: true,
 											sessionId: persisted.intent.sessionId!,
 											entryId: persisted.entryId,
 											expectedLeafId: sessionCtx.sessionManager.getLeafId()!,

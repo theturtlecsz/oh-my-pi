@@ -839,6 +839,17 @@ async function spillLargeResultToArtifact(
 // Tool wrapper
 // =============================================================================
 
+/** Shared success postprocessing, including native recovered tool results. */
+export async function processToolResultOutput<T>(
+	result: AgentToolResult<T>,
+	toolName: string,
+	context?: AgentToolContext,
+): Promise<AgentToolResult<T>> {
+	result = await spillLargeResultToArtifact(result, toolName, context);
+	const meta = isRecord(result.details) ? (result.details.meta as OutputMeta | undefined) : undefined;
+	return meta ? { ...result, content: appendOutputNotice(result.content, meta) } : result;
+}
+
 async function wrappedExecute(
 	this: AgentTool & { [kUnwrappedExecute]: AgentToolExecFn },
 	toolCallId: string,
@@ -850,20 +861,9 @@ async function wrappedExecute(
 	const originalExecute = this[kUnwrappedExecute];
 
 	try {
-		let result = await originalExecute.call(this, toolCallId, params, signal, onUpdate, context);
+		const result = await originalExecute.call(this, toolCallId, params, signal, onUpdate, context);
 
-		// Spill large results to artifact, truncate to tail
-		result = await spillLargeResultToArtifact(result, this.name, context);
-
-		// Append notices from meta
-		const meta: OutputMeta | undefined = result.details?.meta;
-		if (meta) {
-			return {
-				...result,
-				content: appendOutputNotice(result.content, meta),
-			};
-		}
-		return result;
+		return await processToolResultOutput(result, this.name, context);
 	} catch (e) {
 		// Re-throw with formatted message so agent-loop sets isError flag
 		throw new Error(renderError(e));

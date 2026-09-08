@@ -75,6 +75,7 @@ import { buildServiceTierByFamily } from "./config/service-tier";
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers, type CursorMcpResourceAdapter } from "./cursor";
 import { createBridgeEditTool, createBridgeGrepFactory } from "./cursor-bridge-tools";
+import { TaskTool } from "./task";
 import "./discovery";
 import { createImageUrlServiceFromSettings } from "./blob-broker/service";
 import { wrapStreamFnWithBlobUrlFallback } from "./blob-broker/stream-fallback";
@@ -227,7 +228,7 @@ import { isMCPToolName, normalizeToolNames } from "./tools/builtin-names";
 import { ToolContextStore } from "./tools/context";
 import { isIrcEnabled } from "./tools/hub";
 import { getImageGenTools } from "./tools/image-gen";
-import { wrapToolWithMetaNotice } from "./tools/output-meta";
+import { processToolResultOutput, wrapToolWithMetaNotice } from "./tools/output-meta";
 import { isFilesystemSourcePath } from "./tools/path-utils";
 import { isAutoQaEnabled } from "./tools/report-tool-issue";
 import { queueResolveHandler } from "./tools/resolve";
@@ -545,6 +546,10 @@ export interface CreateAgentSessionOptions {
 	 * @internal
 	 */
 	expectedAgentRef?: AgentRef | null;
+	/** Internal cold-task gate installed synchronously before any session publication. */
+	prepareSessionBeforeAttach?: (session: AgentSession) => void;
+	/** Bound synchronous task sessions cannot borrow a process-global async manager. */
+	disableInheritedAsyncJobs?: boolean;
 	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
 	parentTaskPrefix?: string;
 	/**
@@ -1670,7 +1675,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			? new AsyncJobManager({ maxRunningJobs: asyncMaxJobs })
 			: undefined;
 
-	const scopedAsyncJobManager = asyncJobManager ?? (options.parentTaskPrefix ? AsyncJobManager.instance() : undefined);
+	const scopedAsyncJobManager = options.disableInheritedAsyncJobs
+		? undefined
+		: (asyncJobManager ?? (options.parentTaskPrefix ? AsyncJobManager.instance() : undefined));
 
 	const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
 	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
@@ -1696,6 +1703,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		agentRegistry.unregister(resolvedAgentId, ref);
 	};
 	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
+	const disposeCallbacks = new Set<() => void>();
 
 	try {
 		const getActiveModelString = (): string | undefined => {
@@ -1708,7 +1716,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// entries capture it at fetch time and are dropped at injection if a newer
 		// mutation (any tool) bumped it in the meantime.
 		const fileMutationVersions = new Map<string, number>();
-		const disposeCallbacks = new Set<() => void>();
 		const activeToolNames = new Set<string>();
 		const toolRegistry = new Map<string, Tool & Pick<ToolDefinition, "defaultInactive">>();
 		const setActiveToolNames = (names: Iterable<string>): void => {
@@ -1718,6 +1725,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		};
 		const toolSession: ToolSession = {
+			captureTaskCall: (toolCallId, params) =>
+				session ? session.captureTaskCall(toolCallId, params) : Promise.resolve(undefined),
 			get cwd() {
 				return sessionManager.getCwd();
 			},
@@ -3530,7 +3539,34 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// path below (issue #9553): a large advisor transcript would otherwise
 		// block createAgentSession for tens of seconds while the whole file is
 		// streamed and parsed on the main thread.
+		const nativeTaskForRecovery = (): { native: TaskTool; wrapped: ExtensionToolWrapper } => {
+			const native = nativeToolsByName.get("task");
+			const wrapped = toolRegistry.get("task");
+			if (
+				!(native instanceof TaskTool) ||
+				!(wrapped instanceof ExtensionToolWrapper) ||
+				!builtInRegistryToolNames.has("task") ||
+				!activeToolNames.has("task")
+			)
+				throw new Error("Bound task recovery requires the active native task implementation");
+			return { native, wrapped };
+		};
 		session = new AgentSession({
+			validateSynchronousTaskPolicy: binding => nativeTaskForRecovery().native.validateRecoveryPolicy(binding),
+			assertSynchronousTaskPolicy: binding => nativeTaskForRecovery().native.assertRecoveryPolicy(binding),
+			recoverSynchronousTask: async request => {
+				const { native, wrapped } = nativeTaskForRecovery();
+				const result = await native.recoverPersistedCall(request);
+				const context = toolContextStore.getContext();
+				const processed = await processToolResultOutput(result, "task", context);
+				const transformed = await wrapped.processResult(
+					request.binding.call.toolCallId,
+					request.binding.contract.args,
+					processed,
+					context,
+				);
+				return { binding: request.binding, result: transformed };
+			},
 			codeModeState,
 			advisorWatchdogPrompt,
 			advisorContextPrompt,
@@ -3644,6 +3680,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			titleSystemPrompt: options.titleSystemPrompt,
 		});
 		hasSession = true;
+		options.prepareSessionBeforeAttach?.(session);
 		// Backfill the resumed advisor spend without blocking startup: the scan
 		// runs after the session is live, so `--resume` no longer scales with the
 		// advisor transcript size (issue #9553).
@@ -4120,6 +4157,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		unsubscribeCredentialDisabled?.();
 		try {
 			if (hasSession) {
+				if (options.prepareSessionBeforeAttach) {
+					session.invalidateTaskRecovery("Task child SDK construction failed");
+					const expected = options.expectedAgentRef;
+					if (expected && agentRegistry.get(resolvedAgentId) === expected && expected.session === session) {
+						agentRegistry.detachSession(resolvedAgentId, session);
+						if (expected.status !== "aborted") agentRegistry.setStatus(resolvedAgentId, "parked", expected);
+					}
+				}
 				await session.dispose();
 				if (hasRegistered) unregisterUnlessParked();
 			} else {
@@ -4142,6 +4187,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
 			});
 		}
+		for (const callback of disposeCallbacks) {
+			try {
+				callback();
+			} catch (disposeError) {
+				logger.warn("Failed to release SDK startup subscription", { error: String(disposeError) });
+			}
+		}
+		disposeCallbacks.clear();
 		throw error;
 	}
 }

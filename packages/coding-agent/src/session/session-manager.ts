@@ -18,6 +18,7 @@ import {
 	stringifyJson,
 	toError,
 } from "@oh-my-pi/pi-utils";
+import type { PersistedTaskCallRef, PersistedTaskResultRef } from "../task/recovery";
 import type { StructuredSubagentSchemaMode } from "../task/types";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
@@ -2147,8 +2148,14 @@ export class SessionManager {
 			| BashExecutionMessage
 			| PythonExecutionMessage
 			| FileMentionMessage,
+		taskResult?: PersistedTaskResultRef,
 	): string {
-		const entry: SessionMessageEntry = { type: "message", ...this.#freshEntryFields(), message };
+		const entry: SessionMessageEntry = {
+			type: "message",
+			...this.#freshEntryFields(),
+			message,
+			...(taskResult ? { taskResult } : {}),
+		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}
@@ -2224,6 +2231,7 @@ export class SessionManager {
 	}
 
 	appendSessionInit(init: {
+		taskCall?: PersistedTaskCallRef;
 		systemPrompt: string;
 		task: string;
 		tools: string[];

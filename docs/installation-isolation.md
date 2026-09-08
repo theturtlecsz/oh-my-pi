@@ -148,6 +148,18 @@ prompt preparation and checks fresh authority; ambiguous history, unfinished
 tools, owner input and deferred-client ownership refuse. Unbound preparation
 messages after that prompt and task-result restoration remain unqualified.
 
+The bounded synchronous-task qualification additionally requires runtime-written
+parent/child identity before the first child response, repeated restart after
+fresh prompt preparation, and restart after the real parent task result is
+durable. These journeys must retain the original child session and call, with no
+new assignment or reservation. Current execution uses child AgentSessions in the
+controller process; killing it does not prove independent worker-process
+isolation. Historical unbound children and child completion before parent-result
+durability remain explicit refusal boundaries. The
+[task recovery plan](omp-task-recovery-implementation-plan.md) names the required
+ownership, authority and persistence guards; only matching executed evidence
+qualifies a candidate.
+
 Existing halt, replay, canceled-grant, merge-head, and completion-evidence tests
 remain part of the workflow suites. The execution smoke is now an explicit CI
 step, but its synthetic session/transport parts remain documented limitations.

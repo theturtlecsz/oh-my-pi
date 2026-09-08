@@ -356,9 +356,12 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			// that owns the handlers are both in scope (`sdk.ts` wraps the whole tool
 			// registry with this class whenever a runner exists). Inert with no
 			// fallback registered: no scope is entered.
-			result = await withFileMutationSession(this.runner.sessionId, () =>
-				this.tool.execute(toolCallId, effectiveParams, signal, onUpdate, context),
-			);
+			const pendingGuard = this.runner.prepareToolDispatchGuard(signal);
+			const guard = pendingGuard ? await pendingGuard : undefined;
+			result = await withFileMutationSession(this.runner.sessionId, () => {
+				guard?.();
+				return this.tool.execute(toolCallId, effectiveParams, signal, onUpdate, context);
+			});
 		} catch (err) {
 			executionError = err instanceof Error ? err : new Error(String(err));
 			result = {
@@ -367,6 +370,17 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			};
 		}
 
+		return this.processResult(toolCallId, effectiveParams, result, context, executionError);
+	}
+
+	/** Shared result-hook merge; recovery passes a real native result without re-executing the tool. */
+	async processResult(
+		toolCallId: string,
+		effectiveParams: unknown,
+		result: AgentToolResult<TDetails, TParameters>,
+		context?: AgentToolContext,
+		executionError?: Error,
+	): Promise<AgentToolResult<TDetails, TParameters>> {
 		// Emit tool_result event - extensions can modify the result and error status
 		if (this.runner.hasHandlers("tool_result")) {
 			const resultResult = await this.runner.emitToolResult({

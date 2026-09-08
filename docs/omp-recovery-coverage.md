@@ -180,3 +180,22 @@ resume existing context without reinjecting the execution message or spending
 another reservation. Lifecycle, owner input, client ownership, persistence and
 fresh authority guards are required. This remains a bounded no-tool suffix;
 unbound preparation context and task/result restoration are still open.
+
+## Actual task interruption baseline
+
+The [task-active reproduction plan](omp-task-active-recovery-plan.md) exercised
+one synchronous, non-isolated bundled task through the installed CLI. The
+controller and child AgentSession shared the killed CLI process. Baseline R3
+held the child's first provider response, killed the process group, and resumed
+the original parent session. Restart refused its pending original task call;
+no child request or parent task result followed. Grant, child journal, files and
+remote refs remained unchanged. The prior six installed cases still passed.
+
+The child journal lacked a durable link to the original parent call and lacked
+core provenance for its agent-authored input plus preparation context. A task
+name or test-captured RPC registry row cannot safely reconstruct that link.
+The [bounded implementation plan](omp-task-recovery-implementation-plan.md)
+requires runtime-written identity before dispatch, original-child recovery and
+durability of the real original-call result before parent continuation.
+Historical unbound children remain refused. This baseline records an open
+recovery gap, not a passing task-recovery qualification or full S2.2 completion.

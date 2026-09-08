@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, MessageAttribution, ServiceTierByFamily, TextContent } from "@oh-my-pi/pi-ai";
+import type { PersistedTaskCallRef, PersistedTaskResultRef } from "../task/recovery";
 import type { StructuredSubagentSchemaMode } from "../task/types";
 import type { CompactionMethod } from "./compaction-methods";
 
@@ -66,6 +67,8 @@ export interface SessionEntryBase {
 export interface SessionMessageEntry extends SessionEntryBase {
 	type: "message";
 	message: AgentMessage;
+	/** Core result provenance, outside extension-replaceable result details. */
+	taskResult?: PersistedTaskResultRef;
 }
 
 export interface ThinkingLevelChangeEntry extends SessionEntryBase {
@@ -208,6 +211,7 @@ export interface CredentialPinEntry extends SessionEntryBase {
 
 /** Session init entry - captures initial context for subagent sessions (debugging/replay). */
 export interface SessionInitEntry extends SessionEntryBase {
+	taskCall?: PersistedTaskCallRef;
 	type: "session_init";
 	/** Full system prompt sent to the model */
 	systemPrompt: string;

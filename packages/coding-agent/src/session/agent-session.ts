@@ -13,12 +13,12 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { isPromise } from "node:util/types";
-
 import type { Clipboard, InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import {
 	type AfterToolCallContext,
@@ -178,13 +178,32 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
+import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import {
+	deobfuscateAgentMessages,
 	deobfuscateAssistantContent,
 	deobfuscateSessionContext,
 	deobfuscateToolArguments,
 	obfuscateProviderContext,
 } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
+import {
+	type BoundTaskDriverControls,
+	effectiveTaskArguments,
+	initializationContract,
+	type PersistedTaskBindingV1,
+	type PersistedTaskResultRef,
+	PROMPT_PREPARATION,
+	type PromptPreparationRecordV1,
+	preparedEntryIds,
+	readPreparationRecord,
+	readTaskBinding,
+	TASK_RUN_BINDING,
+	type TaskCallCapture,
+	type TaskRecoveryContract,
+	taskRecoveryHash,
+	taskRuntimeContract,
+} from "../task/recovery";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -310,6 +329,7 @@ import {
 	type CustomMessage,
 	type CustomMessagePayload,
 	convertToLlm,
+	createCustomMessage,
 	dedupeEphemeralReply,
 	demoteInterruptedThinking,
 	didSessionMessagesChange,
@@ -417,7 +437,7 @@ const noOpUIContext: ExtensionUIContext = {
 
 type MessageEndPersistenceSlot = {
 	readonly promise: Promise<void>;
-	persist: (persistMessage: () => void) => Promise<void>;
+	persist: (persistMessage: () => void | Promise<void>) => Promise<void>;
 	release: () => void;
 };
 
@@ -447,6 +467,50 @@ type SetSessionNameWithTrigger = (
 
 const kPersistedSessionEntryId = Symbol("persistedSessionEntryId");
 type PersistedAssistantMessage = AssistantMessage & { [kPersistedSessionEntryId]?: string };
+class PersistedContinuationError extends Error {
+	constructor(
+		readonly code: PersistedTurnRefusal["code"],
+		message: string,
+	) {
+		super(message);
+	}
+}
+interface ParentTaskRecoveryScope {
+	loadedPolicyHash: string;
+	phase: "child" | "parent";
+	resultEntryId?: string;
+	parentRuntime?: TaskRecoveryContract["runtime"];
+	parentTools?: Array<{ tool: AgentTool; execute: AgentTool["execute"] }>;
+	validatePolicy?: () => Promise<void>;
+	binding: PersistedTaskBindingV1;
+	signal: AbortSignal;
+	generation: number;
+	revoked?: string;
+	child?: AgentSession;
+	ref?: AgentRef;
+	validateAuthority(): Promise<void>;
+	assertOwnership(): void;
+	releaseChild?: () => void;
+}
+interface ChildTaskRecoveryScope {
+	loadedPolicyHash: string;
+	generation: number;
+	anchorEntryId?: string;
+	tools?: Array<{ tool: AgentTool; execute: AgentTool["execute"] }>;
+	parent: ParentTaskRecoveryScope;
+	token: object;
+	driverActive: boolean;
+}
+interface PromptPreparationBatch {
+	id: string;
+	sessionId: string;
+	generation: number;
+	anchor?: AgentMessage;
+	anchorEntryId?: string;
+	taskBindingId?: string;
+	members: Map<AgentMessage, string | undefined>;
+	complete: boolean;
+}
 
 /**
  * Clone one top-level notification field without ever returning an object owned
@@ -683,7 +747,21 @@ export class AgentSession {
 	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
 	#promptGeneration = 0;
 	#persistedTurnRequest: (PersistedTurnContinuationRequest & { generation: number }) | undefined;
+	#recoverSynchronousTask: AgentSessionConfig["recoverSynchronousTask"];
+	#validateSynchronousTaskPolicy: AgentSessionConfig["validateSynchronousTaskPolicy"];
+	#assertSynchronousTaskPolicy: AgentSessionConfig["assertSynchronousTaskPolicy"];
+	#activeTaskRecovery: ParentTaskRecoveryScope | undefined;
+	#childTaskRecovery: ChildTaskRecoveryScope | undefined;
+	#taskRecoveryOwner = new AsyncLocalStorage<object>();
+	#taskControlPermit: "prompt" | "abort" | undefined;
 	#promptSequence = 0;
+	#promptPreparationByMessage = new WeakMap<AgentMessage, PromptPreparationBatch>();
+	#persistedEntryByMessage = new WeakMap<AgentMessage, string>();
+	#activePromptPreparation: PromptPreparationBatch | undefined;
+	#boundTaskCalls = new Map<string, PersistedTaskBindingV1>();
+	#taskResultByMessage = new WeakMap<AgentMessage, PersistedTaskResultRef>();
+	#taskResultCommitScopes = new WeakMap<AgentMessage, ParentTaskRecoveryScope>();
+	#approvedTaskResultCommits = new WeakSet<AgentMessage>();
 	#skippedPostTurnSpeculationCompletion: Promise<void> | undefined;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	#inFlightSettledCallbacks: Array<() => void | Promise<void>> = [];
@@ -1396,6 +1474,9 @@ export class AgentSession {
 		};
 		this.#ttsr = new TtsrCoordinator(ttsrHost, config.ttsrManager);
 		this.#obfuscator = config.obfuscator;
+		this.#recoverSynchronousTask = config.recoverSynchronousTask;
+		this.#validateSynchronousTaskPolicy = config.validateSynchronousTaskPolicy;
+		this.#assertSynchronousTaskPolicy = config.assertSynchronousTaskPolicy;
 		const providerBoundaryHost: SessionProviderBoundaryHost = {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
@@ -2279,6 +2360,128 @@ export class AgentSession {
 		}
 	};
 
+	#recordPreparedMessage(message: AgentMessage, entryId: string): void {
+		this.#persistedEntryByMessage.set(message, entryId);
+		const batch = this.#promptPreparationByMessage.get(message);
+		if (!batch || batch.complete || batch.sessionId !== this.sessionId || batch.generation !== this.#promptGeneration)
+			return;
+		if (batch.anchor === message) batch.anchorEntryId = entryId;
+		if (batch.members.has(message)) batch.members.set(message, entryId);
+		if (!batch.anchorEntryId || [...batch.members.values()].some(id => id === undefined)) return;
+		const record: PromptPreparationRecordV1 = {
+			version: 1,
+			sessionId: batch.sessionId,
+			anchorEntryId: batch.anchorEntryId,
+			batchId: batch.id,
+			preparationEntryIds: [...batch.members.values()].filter((id): id is string => id !== undefined),
+			...(batch.taskBindingId ? { taskBindingId: batch.taskBindingId } : {}),
+		};
+		this.sessionManager.appendCustomEntry(PROMPT_PREPARATION, record);
+		batch.complete = true;
+	}
+
+	#associatePromptPreparation(
+		message: AgentMessage,
+		members: AgentMessage[],
+		generation: number,
+		anchorEntryId?: string,
+		taskBindingId?: string,
+	): void {
+		if (!("attribution" in message) || message.attribution !== "agent") {
+			this.#activePromptPreparation = undefined;
+			return;
+		}
+		const batch: PromptPreparationBatch = {
+			id: crypto.randomUUID(),
+			sessionId: this.sessionId,
+			generation,
+			anchor: anchorEntryId ? undefined : message,
+			anchorEntryId,
+			taskBindingId,
+			members: new Map(members.map(member => [member, undefined])),
+			complete: anchorEntryId !== undefined && members.length === 0,
+		};
+		if (!anchorEntryId) this.#promptPreparationByMessage.set(message, batch);
+		for (const member of members) this.#promptPreparationByMessage.set(member, batch);
+		this.#activePromptPreparation = batch;
+	}
+
+	/** Capture only the actual approved task call and this run's core prompt origin. */
+	async captureTaskCall(toolCallId: string, params: unknown): Promise<TaskCallCapture | undefined> {
+		if (!this.sessionManager.getSessionFile()) return undefined;
+		const origin = this.#activePromptPreparation;
+		if (!origin || origin.sessionId !== this.sessionId || origin.generation !== this.#promptGeneration)
+			return undefined;
+		const sessionId = this.sessionId;
+		const generation = this.#promptGeneration;
+		const assistant = this.messages.findLast(
+			message =>
+				message.role === "assistant" &&
+				message.content.some(part => part.type === "toolCall" && part.id === toolCallId),
+		);
+		if (assistant?.role !== "assistant") throw new Error("Original task assistant is unavailable");
+		await this.#waitForSessionMessagePersistence(assistant);
+		if (origin.anchor) await this.#waitForSessionMessagePersistence(origin.anchor);
+		await this.sessionManager.flush();
+		if (!this.sessionManager.isSessionOnDisk())
+			throw new Error("Original task input/assistant did not become durable");
+		const branch = this.sessionManager.getBranch();
+		const assistantEntryId = (assistant as PersistedAssistantMessage)[kPersistedSessionEntryId];
+		const entry = branch.find(candidate => candidate.id === assistantEntryId);
+		const calls =
+			entry?.type === "message" && entry.message.role === "assistant"
+				? entry.message.content.filter(part => part.type === "toolCall")
+				: [];
+		if (calls.length > 1) return undefined;
+		const args = calls[0]?.arguments;
+		const effectiveArgs = this.#obfuscator && args ? deobfuscateToolArguments(this.#obfuscator, args) : args;
+		if (
+			sessionId !== this.sessionId ||
+			generation !== this.#promptGeneration ||
+			!origin.complete ||
+			!origin.anchorEntryId ||
+			!assistantEntryId ||
+			calls.length !== 1 ||
+			calls[0].id !== toolCallId ||
+			calls[0].name !== "task" ||
+			taskRecoveryHash(effectiveTaskArguments(effectiveArgs)) !== taskRecoveryHash(effectiveTaskArguments(params))
+		)
+			throw new Error("Original task call or prompt could not be durably bound");
+		preparedEntryIds(branch, sessionId, origin.anchorEntryId, origin.taskBindingId);
+		const call = {
+			bindingId: crypto.randomUUID(),
+			sessionId,
+			promptEntryId: origin.anchorEntryId,
+			assistantEntryId,
+			toolCallId,
+			argumentsSha256: taskRecoveryHash(effectiveTaskArguments(params)),
+		};
+		return {
+			call,
+			bindChild: async binding => {
+				if (
+					this.#isDisposed ||
+					this.#abortInProgress ||
+					generation !== this.#promptGeneration ||
+					sessionId !== this.sessionId ||
+					taskRecoveryHash(binding.call) !== taskRecoveryHash(call)
+				)
+					throw new Error("Task binding lost parent ownership before child dispatch");
+				const active = this.sessionManager.getBranch();
+				if (
+					!active.some(candidate => candidate.id === assistantEntryId) ||
+					active.some(candidate => readTaskBinding(candidate)?.call.toolCallId === toolCallId)
+				)
+					throw new Error("Task binding conflicts with the active original call");
+				this.sessionManager.appendCustomEntry(TASK_RUN_BINDING, binding);
+				await this.sessionManager.flush();
+				if (generation !== this.#promptGeneration || sessionId !== this.sessionId || this.#isDisposed)
+					throw new Error("Task binding lost parent ownership during persistence");
+				this.#boundTaskCalls.set(toolCallId, binding);
+			},
+		};
+	}
+
 	#createMessageEndPersistenceSlot(message: AgentMessage): MessageEndPersistenceSlot | undefined {
 		const key = sessionMessagePersistenceKey(message);
 		if (!key) return undefined;
@@ -2296,7 +2499,8 @@ export class AgentSession {
 			persist: async persistMessage => {
 				await previous;
 				try {
-					persistMessage();
+					const persistence = persistMessage();
+					if (persistence) await persistence;
 				} finally {
 					resolve();
 					clear();
@@ -2396,9 +2600,32 @@ export class AgentSession {
 			| PythonExecutionMessage
 			| FileMentionMessage,
 	): string {
+		const commitScope = this.#taskResultCommitScopes.get(message);
+		if (commitScope) {
+			if (!this.#approvedTaskResultCommits.delete(message))
+				throw new Error("Recovered task result has no current persistence authorization");
+			commitScope.assertOwnership();
+		}
 		const cache = this.#persistedMessageKeys;
 		const wasFresh = cache !== undefined && cache.anchor === this.#persistedMessageKeysAnchor();
-		const entryId = this.sessionManager.appendMessage(message);
+		const binding =
+			message.role === "toolResult" && message.toolName === "task"
+				? this.#boundTaskCalls.get(message.toolCallId)
+				: undefined;
+		const taskResult =
+			this.#taskResultByMessage.get(message) ??
+			(binding &&
+			binding.call.sessionId === this.sessionId &&
+			this.sessionManager.getBranch().some(entry => entry.id === binding.call.assistantEntryId)
+				? {
+						bindingId: binding.call.bindingId,
+						contractSha256: binding.contractSha256,
+						toolCallId: binding.call.toolCallId,
+						childSessionId: binding.child.sessionId,
+					}
+				: undefined);
+		const entryId = this.sessionManager.appendMessage(message, taskResult);
+		this.#recordPreparedMessage(message, entryId);
 		if (message.role === "assistant") {
 			(message as PersistedAssistantMessage)[kPersistedSessionEntryId] = entryId;
 		}
@@ -2471,18 +2698,50 @@ export class AgentSession {
 		};
 	}
 
+	#discardUncommittedTaskResult(message: AgentMessage): void {
+		// Preserve every concurrent owner message and every queue. This exact
+		// candidate was inserted by emitExternalEvent before its durable append.
+		if (this.messages.includes(message))
+			this.agent.replaceMessages(this.messages.filter(candidate => candidate !== message));
+		this.#taskResultByMessage.delete(message);
+		this.#taskResultCommitScopes.delete(message);
+		this.#approvedTaskResultCommits.delete(message);
+	}
+
+	#persistMessageEndWithRecoveryGuard(message: AgentMessage): void | Promise<void> {
+		const scope = this.#taskResultCommitScopes.get(message);
+		if (!scope) return this.#persistMessageEnd(message);
+		return (async () => {
+			try {
+				await scope.validateAuthority();
+				scope.assertOwnership();
+				this.#taskResultByMessage.set(message, this.#taskResultRef(scope.binding));
+				this.#approvedTaskResultCommits.add(message);
+				this.#persistMessageEnd(message);
+				this.#taskResultCommitScopes.delete(message);
+			} catch (error) {
+				this.invalidateTaskRecovery(String(error));
+				this.#discardUncommittedTaskResult(message);
+				throw error;
+			} finally {
+				this.#approvedTaskResultCommits.delete(message);
+			}
+		})();
+	}
+
 	#persistMessageEnd(message: AgentMessage): void {
 		if (message.role === "hookMessage" || message.role === "custom") {
 			// Prewalk's plan nudge is a one-run steering instruction. Persisting it would
 			// resurrect the consumed prompt on resume, fork, or any context rebuild.
 			if (!isPrewalkPlanNudge(message)) {
-				this.sessionManager.appendCustomMessageEntry(
+				const entryId = this.sessionManager.appendCustomMessageEntry(
 					message.customType,
 					message.content,
 					message.display,
 					message.details,
 					message.attribution ?? "agent",
 				);
+				this.#recordPreparedMessage(message, entryId);
 			}
 			if (message.role === "custom" && message.customType === "ttsr-injection") {
 				this.#ttsr.markInjectedFromDetails(message.details);
@@ -2718,10 +2977,10 @@ export class AgentSession {
 				await this.#emitSessionEvent(displayEvent);
 			} catch (error) {
 				if (event.type === "message_end") {
-					const persistMessageEnd = () => this.#persistMessageEnd(event.message);
+					const persistMessageEnd = () => this.#persistMessageEndWithRecoveryGuard(event.message);
 					try {
 						if (messageEndPersistence) await messageEndPersistence.persist(persistMessageEnd);
-						else persistMessageEnd();
+						else await persistMessageEnd();
 					} catch (persistenceError) {
 						logger.warn("Failed to persist message after session event emission failed", {
 							error: String(persistenceError),
@@ -2782,11 +3041,11 @@ export class AgentSession {
 
 		// Handle session persistence
 		if (event.type === "message_end") {
-			const persistMessageEnd = () => this.#persistMessageEnd(event.message);
+			const persistMessageEnd = () => this.#persistMessageEndWithRecoveryGuard(event.message);
 			if (messageEndPersistence) {
 				await messageEndPersistence.persist(persistMessageEnd);
 			} else {
-				persistMessageEnd();
+				await persistMessageEnd();
 			}
 			if (interruptedThinkingMessage) {
 				this.sessionManager.appendCustomMessageEntry(
@@ -3335,11 +3594,11 @@ export class AgentSession {
 		options?.onSkip?.(reason);
 	}
 
-	/** Schedule a cold continuation of an existing durable prompt, never reinject it. */
+	/** Schedule a cold continuation; task recovery is an explicit native opt-in. */
 	requestPersistedTurnContinuation(request: PersistedTurnContinuationRequest): PersistedTurnContinuationResult {
 		request = { ...request };
 		const pending = this.#persistedTurnRequest;
-		if (pending) {
+		if (pending)
 			return pending.generation === this.#promptGeneration &&
 				pending.sessionId === request.sessionId &&
 				pending.entryId === request.entryId &&
@@ -3350,213 +3609,902 @@ export class AgentSession {
 						code: "conflicting-request",
 						reason: "Another persisted turn owns continuation scheduling",
 					};
-		}
-		const runner = this.#extensionRunner;
-		if (!runner)
-			return { status: "refused", code: "unavailable", reason: "No extension startup lifecycle is available" };
 		const generation = this.#promptGeneration;
-		const context = [...this.messages];
-		const localRefusal = (preparing = false): PersistedTurnRefusal | undefined => {
-			if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
-				return {
-					code: "unavailable",
-					reason: "Client must own agent-initiated turns through its prompt lifecycle",
-				};
-			}
-			if (
-				this.#isDisposed ||
-				this.#abortInProgress ||
-				this.isAborting ||
-				this.isCompacting ||
-				this.isGeneratingHandoff ||
-				this.isRetrying ||
-				this.agent.state.isStreaming ||
-				this.#promptInFlightCount > (preparing ? 1 : 0)
-			) {
-				return {
-					code: "session-unavailable",
-					reason: "Session is busy, aborting, retrying, disposing, or in maintenance",
-				};
-			}
-			if (
-				request.sessionId !== this.sessionId ||
-				this.#extensionRunner !== runner ||
-				generation !== this.#promptGeneration ||
-				request.expectedLeafId !== this.sessionManager.getLeafId() ||
-				context.length !== this.messages.length ||
-				context.some((message, index) => message !== this.messages[index])
-			) {
-				return {
-					code: "stale-identity",
-					reason: "Session, active leaf, prompt generation, or restored context changed",
-				};
-			}
-			if (this.agent.hasQueuedMessages() || this.#pendingNextTurnMessages.some(isUserQueuedMessage)) {
-				return { code: "queued-input", reason: "Queued input takes precedence over persisted turn recovery" };
-			}
-			return this.#classifyPersistedTurn(request.entryId);
-		};
-		const refusal = localRefusal();
-		if (refusal) return { status: "refused", ...refusal };
-		const message = this.messages.at(-1);
-		if (message?.role !== "custom")
-			return {
-				status: "refused",
-				code: "missing-anchor",
-				reason: "Persisted prompt is absent from active model context",
-			};
-		const expandedText =
-			typeof message.content === "string"
-				? message.content
-				: message.content
-						.filter(part => part.type === "text")
-						.map(part => part.text)
-						.join("\n");
-		const scheduledRequest = { ...request, generation };
-		this.#persistedTurnRequest = scheduledRequest;
-		const refuse = (reason: PersistedTurnRefusal) => {
-			logger.warn("Persisted turn continuation refused", { entryId: request.entryId, ...reason });
-			request.onRefused?.(reason);
-		};
+		try {
+			this.#assertPersistedLocal(request, generation, 0);
+			this.#classifyPersistedTurn(request.entryId, request.recoverSynchronousTask === true);
+		} catch (error) {
+			return { status: "refused", ...this.#persistedRefusal(error) };
+		}
+		const scheduled = { ...request, generation };
+		this.#persistedTurnRequest = scheduled;
 		this.#schedulePostPromptTask(
 			async signal => {
-				let reported = false;
-				const report = (reason: PersistedTurnRefusal) => {
-					reported = true;
-					refuse(reason);
-				};
 				try {
-					if (!(await untilAborted(signal, runner.waitForSessionStart()))) {
-						report({ code: "startup-incomplete", reason: "Extension startup did not finish successfully" });
-						return;
-					}
-					const before = localRefusal();
-					if (before) {
-						report(before);
-						return;
-					}
-					try {
-						await this.sessionManager.flush();
-						if (!this.sessionManager.isSessionOnDisk()) throw new Error("Session has no durable journal");
-					} catch (error) {
-						report({ code: "persistence-failed", reason: String(error) });
-						return;
-					}
-					const afterFlush = localRefusal();
-					if (afterFlush) {
-						report(afterFlush);
-						return;
-					}
-					const canDispatch = (preparedMessages: readonly AgentMessage[]): boolean => {
-						if (preparedMessages.some(isUserQueuedMessage)) {
-							report({ code: "queued-input", reason: "Owner input arrived during prompt preparation" });
-							return false;
-						}
-						const stale = localRefusal(true);
-						if (signal.aborted || stale) {
-							report(stale ?? { code: "session-unavailable", reason: "Continuation aborted before dispatch" });
-							return false;
-						}
-						return true;
-					};
-					const dispatched = await this.#promptWithMessage(message, expandedText, {
-						skipPostPromptRecoveryWait: true,
-						existingEntry: {
-							signal,
-							canDispatch,
-							beforeDispatch: async preparedMessages => {
-								if (!canDispatch(preparedMessages)) return false;
-								try {
-									await this.sessionManager.flush();
-								} catch (error) {
-									report({ code: "persistence-failed", reason: String(error) });
-									return false;
-								}
-								const authority = await request.validateDispatch();
-								if (!authority.ok) {
-									report({ code: "authority-refused", reason: authority.reason });
-									return false;
-								}
-								return canDispatch(preparedMessages);
-							},
-						},
-					});
-					if (!dispatched && !reported)
-						report({ code: "dispatch-failed", reason: "Prompt preparation declined continuation" });
+					if (!(await untilAborted(signal, this.#extensionRunner!.waitForSessionStart())))
+						throw new PersistedContinuationError(
+							"startup-incomplete",
+							"Extension startup did not finish successfully",
+						);
+					this.#assertPersistedLocal(request, generation, 0);
+					const binding = this.#classifyPersistedTurn(request.entryId, request.recoverSynchronousTask === true);
+					if (binding) await this.#recoverPersistedTaskTurn(request, binding, signal, generation);
+					else await this.#executePersistedPrompt(request, signal, generation);
 				} catch (error) {
-					report({ code: "dispatch-failed", reason: String(error) });
+					const refusal = this.#persistedRefusal(error);
+					logger.warn("Persisted turn continuation refused", { entryId: request.entryId, ...refusal });
+					request.onRefused?.(refusal);
 				} finally {
-					if (this.#persistedTurnRequest === scheduledRequest) this.#persistedTurnRequest = undefined;
+					if (this.#persistedTurnRequest === scheduled) this.#persistedTurnRequest = undefined;
 				}
 			},
 			{
 				generation,
 				onSkip: reason => {
-					if (this.#persistedTurnRequest === scheduledRequest) this.#persistedTurnRequest = undefined;
-					refuse({ code: "stale-identity", reason });
+					if (this.#persistedTurnRequest === scheduled) this.#persistedTurnRequest = undefined;
+					request.onRefused?.({ code: "stale-identity", reason });
 				},
 			},
 		);
 		return { status: "scheduled" };
 	}
 
-	#classifyPersistedTurn(entryId: string): PersistedTurnRefusal | undefined {
+	#persistedRefusal(error: unknown): PersistedTurnRefusal {
+		return error instanceof PersistedContinuationError
+			? { code: error.code, reason: error.message }
+			: { code: "dispatch-failed", reason: String(error) };
+	}
+
+	#assertPersistedLocal(request: PersistedTurnContinuationRequest, generation: number, ownedInFlight: number): void {
+		if (!this.#extensionRunner)
+			throw new PersistedContinuationError("unavailable", "No extension startup lifecycle is available");
+		if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns)
+			throw new PersistedContinuationError(
+				"unavailable",
+				"Client must own agent-initiated turns through its prompt lifecycle",
+			);
+		if (
+			this.#isDisposed ||
+			this.#abortInProgress ||
+			this.isAborting ||
+			this.isCompacting ||
+			this.isGeneratingHandoff ||
+			this.isRetrying ||
+			this.agent.state.isStreaming ||
+			this.#promptInFlightCount > ownedInFlight
+		)
+			throw new PersistedContinuationError(
+				"session-unavailable",
+				"Session is busy, aborting, retrying, disposing, or in maintenance",
+			);
+		if (
+			request.sessionId !== this.sessionId ||
+			generation !== this.#promptGeneration ||
+			request.expectedLeafId !== this.sessionManager.getLeafId()
+		)
+			throw new PersistedContinuationError("stale-identity", "Session, active leaf, or prompt generation changed");
+		if (this.agent.hasQueuedMessages() || this.#pendingNextTurnMessages.some(isUserQueuedMessage))
+			throw new PersistedContinuationError(
+				"queued-input",
+				"Queued input takes precedence over persisted turn recovery",
+			);
+	}
+
+	#messageForPersistedEntry(entryId: string): AgentMessage {
+		const entry = this.sessionManager.getEntry(entryId);
+		let candidate =
+			entry?.type === "message"
+				? entry.message
+				: entry?.type === "custom_message"
+					? createCustomMessage(
+							entry.customType,
+							entry.content,
+							entry.display,
+							entry.details,
+							entry.timestamp,
+							entry.attribution,
+						)
+					: undefined;
+		if (!candidate)
+			throw new PersistedContinuationError("missing-anchor", "Persisted input is not a conversation entry");
+		if (this.#obfuscator) candidate = deobfuscateAgentMessages(this.#obfuscator, [candidate])[0];
+		const matches = this.messages.filter(
+			message =>
+				message.role === candidate.role &&
+				(this.#persistedEntryByMessage.has(message)
+					? this.#persistedEntryByMessage.get(message) === entryId
+					: message.timestamp === candidate.timestamp) &&
+				sameMessageContent(message, candidate) &&
+				(message.role !== "custom" || (candidate.role === "custom" && message.customType === candidate.customType)),
+		);
+		if (matches.length !== 1)
+			throw new PersistedContinuationError(
+				"missing-anchor",
+				"Persisted input is missing, ambiguous, or changed in active model context",
+			);
+		return matches[0];
+	}
+
+	#classifyPersistedTurn(
+		entryId: string,
+		recoverTask = false,
+		childBinding?: PersistedTaskBindingV1,
+	): PersistedTaskBindingV1 | undefined {
 		const branch = this.sessionManager.getBranch();
 		const anchorIndex = branch.findIndex(entry => entry.id === entryId);
 		const anchor = branch[anchorIndex];
-		if (anchor?.type !== "custom_message" || anchor.attribution !== "agent") {
-			return { code: "missing-anchor", reason: "Expected agent prompt is not on the active branch" };
+		const customAnchor = anchor?.type === "custom_message" && anchor.attribution === "agent";
+		const taskAnchor =
+			childBinding &&
+			anchor?.type === "message" &&
+			anchor.message.role === "user" &&
+			anchor.message.attribution === "agent";
+		if (!customAnchor && !taskAnchor)
+			throw new PersistedContinuationError("missing-anchor", "Expected agent input is not on the active branch");
+		let prepared = new Set<string>();
+		const hasPreparation = branch.some(
+			entry =>
+				entry.type === "custom" &&
+				entry.customType === PROMPT_PREPARATION &&
+				isRecord(entry.data) &&
+				entry.data.anchorEntryId === entryId,
+		);
+		try {
+			if (hasPreparation || childBinding)
+				prepared = preparedEntryIds(branch, this.sessionId, entryId, childBinding?.call.bindingId);
+		} catch (error) {
+			throw new PersistedContinuationError("unsafe-suffix", String(error));
 		}
-		const pending = describePendingToolCalls(branch);
-		if (pending) return { code: "pending-tools", reason: pending };
+		for (const memberId of prepared) this.#messageForPersistedEntry(memberId);
 		const suffix = branch.slice(anchorIndex + 1);
-		const conversation = suffix.filter(entry => entry.type === "message" || entry.type === "custom_message");
+		if (
+			suffix.some(
+				entry => entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "reset_boundary",
+			)
+		)
+			throw new PersistedContinuationError("unsafe-suffix", "Context reset prevents persisted turn recovery");
+		const conversation = suffix.filter(
+			entry => (entry.type === "message" || entry.type === "custom_message") && !prepared.has(entry.id),
+		);
 		if (
 			conversation.some(
-				entry =>
-					(entry.type === "message" && entry.message.role === "user") ||
-					(entry.type === "custom_message" &&
-						(entry.attribution !== "agent" || entry.customType === anchor.customType)),
+				entry => (entry.type === "message" && entry.message.role === "user") || entry.type === "custom_message",
 			)
-		) {
-			return {
-				code: "unsafe-suffix",
-				reason: "A later owner turn or another assignment conflicts with the persisted turn",
-			};
-		}
+		)
+			throw new PersistedContinuationError(
+				"unsafe-suffix",
+				"Unassociated conversation or another assignment follows the persisted input",
+			);
+		const pending = describePendingToolCalls(branch);
 		const last = conversation.at(-1);
 		if (
+			!pending &&
 			last?.type === "message" &&
 			last.message.role === "assistant" &&
 			last.message.stopReason === "stop" &&
 			!last.message.content.some(part => part.type === "toolCall")
-		) {
-			return {
-				code: "turn-settled",
-				reason: "Persisted conversation turn already settled; workflow progress must be read from its owner",
-			};
+		)
+			throw new PersistedContinuationError(
+				"turn-settled",
+				"Persisted conversation turn already settled; workflow progress must be read from its owner",
+			);
+		if (recoverTask && !childBinding && conversation.length > 0) {
+			try {
+				return this.#boundParentTask(entryId);
+			} catch (error) {
+				throw new PersistedContinuationError(
+					pending ? "pending-tools" : "unsafe-suffix",
+					`${pending ?? "Task continuation refused."} ${String(error)}`,
+				);
+			}
 		}
+		if (pending) throw new PersistedContinuationError("pending-tools", pending);
+		if (conversation.length > 0)
+			throw new PersistedContinuationError(
+				"unsafe-suffix",
+				"Assistant or tool history prevents safe no-tool continuation",
+			);
 		if (
-			conversation.length > 0 ||
-			suffix.some(
-				entry => entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "reset_boundary",
+			childBinding &&
+			branch.some(
+				entry =>
+					(entry.type === "message" &&
+						(entry.message.role === "assistant" || entry.message.role === "toolResult")) ||
+					(entry.type === "custom" && entry.customType === TOOL_EXECUTION_START_CUSTOM_TYPE),
 			)
-		) {
-			return {
-				code: "unsafe-suffix",
-				reason: "Later conversation or context reset prevents safe no-tool continuation",
-			};
-		}
-		const tail = this.messages.at(-1);
-		if (
-			tail?.role !== "custom" ||
-			tail.customType !== anchor.customType ||
-			tail.timestamp !== Date.parse(anchor.timestamp) ||
-			JSON.stringify(tail.content) !== JSON.stringify(anchor.content)
-		) {
-			return { code: "missing-anchor", reason: "Persisted prompt is missing or changed in active model context" };
-		}
+		)
+			throw new PersistedContinuationError("unsafe-suffix", "Child already has assistant, tool, or effect history");
+		this.#messageForPersistedEntry(entryId);
 		return undefined;
+	}
+
+	#boundParentTask(promptEntryId: string): PersistedTaskBindingV1 {
+		const branch = this.sessionManager.getBranch();
+		const matches = branch
+			.map(readTaskBinding)
+			.filter(
+				(binding): binding is PersistedTaskBindingV1 =>
+					binding !== undefined && binding.call.promptEntryId === promptEntryId,
+			);
+		if (matches.length !== 1) throw new Error("Original task has no unique durable parent/child binding");
+		const binding = matches[0];
+		const call = binding.call;
+		const assistant = branch.find(entry => entry.id === call.assistantEntryId);
+		const calls =
+			assistant?.type === "message" && assistant.message.role === "assistant"
+				? assistant.message.content.filter(part => part.type === "toolCall")
+				: [];
+		const args = calls[0]?.arguments;
+		const effective = this.#obfuscator && args ? deobfuscateToolArguments(this.#obfuscator, args) : args;
+		if (
+			call.sessionId !== this.sessionId ||
+			calls.length !== 1 ||
+			calls[0].id !== call.toolCallId ||
+			calls[0].name !== "task" ||
+			taskRecoveryHash(effectiveTaskArguments(effective)) !== call.argumentsSha256 ||
+			taskRecoveryHash(effectiveTaskArguments(binding.contract.args)) !== call.argumentsSha256
+		)
+			throw new Error("Task assistant/call/argument binding differs");
+		const anchorIndex = branch.findIndex(entry => entry.id === promptEntryId);
+		const assistantIndex = branch.findIndex(entry => entry.id === call.assistantEntryId);
+		const bindingIndex = branch.findIndex(entry => readTaskBinding(entry)?.call.bindingId === call.bindingId);
+		if (assistantIndex <= anchorIndex || bindingIndex <= assistantIndex)
+			throw new Error("Task binding is not on the original call's active ancestry");
+		const prepared = preparedEntryIds(branch, this.sessionId, promptEntryId);
+		const results = branch.filter(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolCallId === call.toolCallId,
+		);
+		if (results.length > 1) throw new Error("Original task has conflicting parent results");
+		for (const entry of branch.slice(anchorIndex + 1)) {
+			if (entry.id === call.assistantEntryId || prepared.has(entry.id)) continue;
+			if (entry.type === "custom_message") throw new Error("Unassociated task conversation follows the anchor");
+			if (
+				entry.type === "message" &&
+				!(
+					entry.message.role === "toolResult" &&
+					entry.message.toolName === "task" &&
+					entry.message.toolCallId === call.toolCallId &&
+					!entry.message.isError &&
+					taskRecoveryHash(entry.taskResult) === taskRecoveryHash(this.#taskResultRef(binding))
+				)
+			)
+				throw new Error("Parent result or conversation does not belong to the bound original task");
+			if (entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "reset_boundary")
+				throw new Error("Task branch was reset or compacted");
+		}
+		const pending = collectPendingToolCalls(branch);
+		if (
+			results.length === 0
+				? pending.length !== 1 || pending[0].toolCallId !== call.toolCallId || pending[0].toolName !== "task"
+				: pending.length !== 0
+		)
+			throw new Error("Task recovery requires exactly the original unresolved call or its bound result");
+		return binding;
+	}
+
+	#taskResultRef(binding: PersistedTaskBindingV1): PersistedTaskResultRef {
+		return {
+			bindingId: binding.call.bindingId,
+			contractSha256: binding.contractSha256,
+			toolCallId: binding.call.toolCallId,
+			childSessionId: binding.child.sessionId,
+		};
+	}
+
+	async #executePersistedPrompt(
+		request: PersistedTurnContinuationRequest,
+		signal: AbortSignal,
+		generation: number,
+		ownedInFlight = 0,
+		childBinding?: PersistedTaskBindingV1,
+	): Promise<void> {
+		this.#assertPersistedLocal(request, generation, ownedInFlight);
+		this.#classifyPersistedTurn(request.entryId, request.recoverSynchronousTask === true, childBinding);
+		const message = this.#messageForPersistedEntry(request.entryId);
+		const context = [...this.messages];
+		const runner = this.#extensionRunner;
+		const check = (preparing: boolean, preparedMessages: readonly AgentMessage[] = []) => {
+			if (signal.aborted)
+				throw new PersistedContinuationError("session-unavailable", "Continuation aborted before dispatch");
+			this.#assertPersistedLocal(request, generation, ownedInFlight + (preparing ? 1 : 0));
+			if (
+				runner !== this.#extensionRunner ||
+				context.length !== this.messages.length ||
+				context.some((entry, index) => entry !== this.messages[index])
+			)
+				throw new PersistedContinuationError("stale-identity", "Restored context or startup owner changed");
+			if (preparedMessages.some(isUserQueuedMessage))
+				throw new PersistedContinuationError("queued-input", "Owner input arrived during prompt preparation");
+			this.#classifyPersistedTurn(request.entryId, request.recoverSynchronousTask === true, childBinding);
+		};
+		try {
+			await this.sessionManager.flush();
+			if (!this.sessionManager.isSessionOnDisk()) throw new Error("Session has no durable journal");
+		} catch (error) {
+			throw new PersistedContinuationError("persistence-failed", String(error));
+		}
+		check(false);
+		const text =
+			"content" in message && typeof message.content === "string"
+				? message.content
+				: "content" in message && Array.isArray(message.content)
+					? message.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("\n")
+					: "";
+		const dispatched = await this.#promptWithMessage(message, text, {
+			skipPostPromptRecoveryWait: true,
+			taskBindingId: childBinding?.call.bindingId,
+			existingEntry: {
+				anchorEntryId: request.entryId,
+				taskBound: childBinding !== undefined || request.recoverSynchronousTask === true,
+				signal,
+				canDispatch: preparedMessages => {
+					check(true, preparedMessages);
+					return true;
+				},
+				beforeDispatch: async preparedMessages => {
+					check(true, preparedMessages);
+					try {
+						await this.sessionManager.flush();
+					} catch (error) {
+						throw new PersistedContinuationError("persistence-failed", String(error));
+					}
+					const authority = await request.validateDispatch();
+					if (!authority.ok) throw new PersistedContinuationError("authority-refused", authority.reason);
+					check(true, preparedMessages);
+					return true;
+				},
+			},
+		});
+		if (!dispatched)
+			throw new PersistedContinuationError("dispatch-failed", "Prompt preparation declined continuation");
+	}
+
+	/** Restore only the bound call that ordinary replay projected away while it lacked a result. */
+	#restorePairedTaskAssistant(scope: ParentTaskRecoveryScope, priorProjection: readonly AgentMessage[]): void {
+		scope.assertOwnership();
+		const entry = this.sessionManager.getEntry(scope.binding.call.assistantEntryId);
+		if (entry?.type !== "message" || entry.message.role !== "assistant")
+			throw new Error("Original task assistant is unavailable for paired context restoration");
+		const original = this.#obfuscator
+			? deobfuscateAgentMessages(this.#obfuscator, [entry.message])[0]
+			: entry.message;
+		const key = sessionMessagePersistenceKey(original);
+		const paired = this.buildDisplaySessionContext().messages;
+		const matching = (messages: readonly AgentMessage[]) =>
+			messages.filter(message => sessionMessagePersistenceKey(message) === key);
+		const expected = matching(paired);
+		const prior = matching(priorProjection);
+		const current = matching(this.messages);
+		if (
+			!key ||
+			expected.length !== 1 ||
+			prior.length > 1 ||
+			current.length > 1 ||
+			(current.length === 1 &&
+				this.#persistedEntryByMessage.has(current[0]) &&
+				this.#persistedEntryByMessage.get(current[0]) !== entry.id) ||
+			taskRecoveryHash(expected[0]) !== taskRecoveryHash(original) ||
+			(current.length === 1 &&
+				taskRecoveryHash(current[0]) !== taskRecoveryHash(original) &&
+				(prior.length !== 1 || taskRecoveryHash(current[0]) !== taskRecoveryHash(prior[0])))
+		)
+			throw new Error("Original task assistant projection changed before paired context restoration");
+		const remaining = this.messages.filter(message => message !== current[0]);
+		const expectedRemaining = paired.filter(message => message !== expected[0]);
+		if (
+			remaining.length !== expectedRemaining.length ||
+			remaining.some((message, index) => taskRecoveryHash(message) !== taskRecoveryHash(expectedRemaining[index]))
+		)
+			throw new Error("Parent context changed outside the original task assistant projection");
+		// Preserve every unrelated live object and all queues. No event or journal append:
+		// the original assistant is already durable, now paired by the actual result.
+		const restored =
+			current.length === 1 && taskRecoveryHash(current[0]) === taskRecoveryHash(original) ? current[0] : expected[0];
+		remaining.splice(paired.indexOf(expected[0]), 0, restored);
+		scope.assertOwnership();
+		this.#persistedEntryByMessage.set(restored, entry.id);
+		this.agent.replaceMessages(remaining);
+	}
+
+	async #recoverPersistedTaskTurn(
+		request: PersistedTurnContinuationRequest,
+		binding: PersistedTaskBindingV1,
+		signal: AbortSignal,
+		generation: number,
+	): Promise<void> {
+		if (!this.#recoverSynchronousTask)
+			throw new PersistedContinuationError(
+				"unavailable",
+				"Native synchronous task recovery is unavailable in this host",
+			);
+		const projectionBeforeRecovery = this.buildDisplaySessionContext().messages;
+		this.#beginInFlight();
+		let currentRequest = { ...request };
+		const scope: ParentTaskRecoveryScope = {
+			phase: "child",
+			loadedPolicyHash: this.#dispatchPolicyHash(),
+			validatePolicy: this.#validateSynchronousTaskPolicy
+				? () => this.#validateSynchronousTaskPolicy!(binding)
+				: undefined,
+			binding,
+			signal,
+			generation,
+			revoked: undefined,
+			assertOwnership: () => {
+				if (scope.loadedPolicyHash !== this.#dispatchPolicyHash())
+					this.#revokeTaskRecovery("Loaded parent approval/spawn policy changed before dispatch or attachment");
+				this.#assertSynchronousTaskPolicy?.(binding);
+				if (scope !== this.#activeTaskRecovery || scope.revoked || signal.aborted)
+					throw new Error(scope.revoked ?? "Task result/dispatch scope was revoked");
+				if (scope.phase === "child") {
+					this.#assertPersistedLocal(currentRequest, generation, 1);
+					this.#boundParentTask(request.entryId);
+				} else this.#assertParentTaskRecovery(scope);
+				if (
+					scope.child &&
+					(AgentRegistry.global().get(binding.child.registryId) !== scope.ref ||
+						scope.ref?.session !== scope.child ||
+						scope.ref.status === "aborted")
+				)
+					throw new Error("Task child ownership changed before parent attachment");
+			},
+			validateAuthority: async () => {
+				scope.assertOwnership();
+				await scope.validatePolicy?.();
+				const authority = await request.validateDispatch();
+				if (!authority.ok) throw new PersistedContinuationError("authority-refused", authority.reason);
+				scope.assertOwnership();
+			},
+		};
+		if (this.#activeTaskRecovery) throw new Error("Another task recovery owns this session");
+		this.#activeTaskRecovery = scope;
+		this.#extensionRunner?.setToolDispatchGuard(signal => this.#prepareBoundTaskDispatch(signal));
+		const ignoredTasks = new Set(this.#postPromptTasks);
+		let candidateResult: ToolResultMessage | undefined;
+		let candidateDurable = false;
+		const stopModel = this.agent.addBeforeModelCall(async (_context, signal) => {
+			const check = await this.#prepareBoundTaskDispatch(signal);
+			check?.();
+		});
+		const stopQueues = this.agent.addBeforeQueuedMessageDequeueHook(() => {
+			if (this.agent.hasQueuedMessages()) this.#revokeTaskRecovery("Queued owner input superseded task recovery");
+		});
+		try {
+			await scope.validateAuthority();
+			const persistedResult = this.sessionManager
+				.getBranch()
+				.find(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "toolResult" &&
+						entry.message.toolCallId === binding.call.toolCallId,
+				);
+			if (!persistedResult) {
+				const completed = await this.#recoverSynchronousTask({
+					binding,
+					signal,
+					validateAuthority: scope.validateAuthority,
+					setPolicyGuard: guard => {
+						scope.validatePolicy = guard;
+					},
+					validateChild: (ref, child) => this.validateTaskRecoveryChild(ref, child),
+				});
+				await scope.validateAuthority();
+				scope.assertOwnership();
+				if (taskRecoveryHash(completed.binding) !== taskRecoveryHash(binding) || completed.result.isError)
+					throw new Error("Native task did not return the bound successful result");
+				const message: ToolResultMessage = {
+					role: "toolResult",
+					toolCallId: binding.call.toolCallId,
+					toolName: "task",
+					content: completed.result.content,
+					details: completed.result.details,
+					isError: false,
+					timestamp: Date.now(),
+					...(completed.result.providerMetadata ? { providerMetadata: completed.result.providerMetadata } : {}),
+				};
+				candidateResult = message;
+				this.#taskResultCommitScopes.set(message, scope);
+				this.agent.emitExternalEvent({
+					type: "tool_execution_end",
+					toolCallId: message.toolCallId,
+					toolName: "task",
+					result: completed.result,
+					isError: false,
+				});
+				this.agent.emitExternalEvent({ type: "message_start", message });
+				this.agent.emitExternalEvent({ type: "message_end", message });
+				await this.#waitForSessionMessagePersistence(message);
+				if (scope.revoked) throw new Error(scope.revoked);
+				await this.sessionManager.flush();
+				this.#boundParentTask(request.entryId);
+				const result = this.sessionManager
+					.getBranch()
+					.find(
+						entry =>
+							entry.type === "message" &&
+							entry.message.role === "toolResult" &&
+							entry.message.toolCallId === message.toolCallId,
+					);
+				if (
+					result?.type !== "message" ||
+					taskRecoveryHash(result.taskResult) !== taskRecoveryHash(this.#taskResultRef(binding))
+				)
+					throw new Error("Original task result did not become durable");
+				candidateDurable = true;
+				currentRequest = { ...request, expectedLeafId: this.sessionManager.getLeafId()! };
+			}
+			await scope.validateAuthority();
+			if (candidateDurable) this.#restorePairedTaskAssistant(scope, projectionBeforeRecovery);
+			const resultEntry = this.sessionManager
+				.getBranch()
+				.find(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "toolResult" &&
+						entry.message.toolCallId === binding.call.toolCallId,
+				);
+			if (!resultEntry) throw new Error("Original task result is unavailable for parent continuation");
+			scope.resultEntryId = resultEntry.id;
+			scope.parentRuntime = taskRuntimeContract(this);
+			scope.parentTools = this.agent.state.tools.map(tool => ({ tool, execute: tool.execute }));
+			scope.phase = "parent";
+			await this.#executePersistedPrompt(currentRequest, signal, generation, 1);
+			if (scope.revoked) throw new Error(scope.revoked);
+			await this.#drainInFlightEventHandlers();
+			await this.#waitForPostPromptRecovery(generation, ignoredTasks);
+		} catch (error) {
+			if (candidateResult && !candidateDurable) this.#discardUncommittedTaskResult(candidateResult);
+			throw error;
+		} finally {
+			stopModel();
+			stopQueues();
+			scope.releaseChild?.();
+			scope.releaseChild = undefined;
+			scope.child = undefined;
+			scope.ref = undefined;
+			if (this.#activeTaskRecovery === scope) this.#activeTaskRecovery = undefined;
+			this.#endInFlight();
+		}
+	}
+
+	/** True only for the exact child selected by this parent's native recovery. */
+	isTaskRecoveryRevival(ref: AgentRef): boolean {
+		const scope = this.#activeTaskRecovery;
+		return (
+			scope !== undefined &&
+			scope.binding.child.registryId === ref.id &&
+			scope.binding.child.sessionFile === ref.sessionFile
+		);
+	}
+
+	/** SDK calls synchronously before making a rebuilt child reachable by peers. */
+	installTaskRecoveryChild(ref: AgentRef, child: AgentSession): void {
+		const parent = this.#activeTaskRecovery;
+		if (
+			!parent ||
+			!this.isTaskRecoveryRevival(ref) ||
+			parent.signal.aborted ||
+			parent.revoked ||
+			parent.child ||
+			ref.status === "aborted" ||
+			ref.session
+		)
+			throw new Error("Task revival no longer exclusively owns the original child");
+		if (child.sessionId !== parent.binding.child.sessionId || child.sessionFile !== parent.binding.child.sessionFile)
+			throw new Error("Revived task session identity differs");
+		const scope: ChildTaskRecoveryScope = {
+			parent,
+			token: {},
+			driverActive: false,
+			loadedPolicyHash: child.#dispatchPolicyHash(),
+			generation: child.#promptGeneration,
+		};
+		child.#childTaskRecovery = scope;
+		child.#extensionRunner?.setToolDispatchGuard(signal => child.#prepareBoundTaskDispatch(signal));
+		parent.child = child;
+		parent.ref = ref;
+		const stopModel = child.agent.addBeforeModelCall(async (_context, signal) => {
+			const check = await child.#prepareBoundTaskDispatch(signal);
+			check?.();
+		});
+		const stopQueues = child.agent.addBeforeQueuedMessageDequeueHook(() => {
+			if (child.agent.hasQueuedMessages())
+				child.#revokeTaskRecovery("Foreign queued input arrived during bound task recovery");
+		});
+		parent.releaseChild = () => {
+			scope.driverActive = false;
+			stopModel();
+			stopQueues();
+			if (child.#childTaskRecovery === scope) child.#childTaskRecovery = undefined;
+		};
+	}
+
+	/** Rechecked after SDK tool registration/clamping and again before the driver. */
+	async validateTaskRecoveryChild(ref: AgentRef, child: AgentSession): Promise<void> {
+		const scope = this.#activeTaskRecovery;
+		if (!scope || scope.child !== child || scope.ref !== ref || !child.#childTaskRecovery)
+			throw new Error("Task recovery lost its exact revived child");
+		if (AgentRegistry.global().get(ref.id) !== ref) throw new Error("Original child registry generation changed");
+		await scope.validateAuthority();
+		if (
+			child.sessionFile !== scope.binding.child.sessionFile ||
+			child.sessionManager.getCwd() !== scope.binding.child.cwd
+		)
+			throw new Error("Original child session path or workspace changed during revival");
+		const init = child.sessionManager.getEntry(scope.binding.child.initEntryId);
+		if (
+			init?.type !== "session_init" ||
+			taskRecoveryHash(init.taskCall) !== taskRecoveryHash(scope.binding.call) ||
+			taskRecoveryHash(initializationContract(init)) !== taskRecoveryHash(scope.binding.contract.initialization)
+		)
+			throw new Error("Revived child initialization or reverse binding differs");
+		if (
+			child.asyncJobManager ||
+			child.settings.get("advisor.enabled") ||
+			taskRecoveryHash(taskRuntimeContract(child)) !== taskRecoveryHash(scope.binding.contract.runtime)
+		)
+			throw new Error("Revived child model/tool/async/advisor contract differs");
+		const records = child.sessionManager
+			.getBranch()
+			.map(readPreparationRecord)
+			.filter(record => record?.taskBindingId === scope.binding.call.bindingId);
+		const anchors = new Set(records.map(record => record!.anchorEntryId));
+		if (anchors.size !== 1) throw new Error("Bound child has no unique original core-prepared input");
+		const anchor = [...anchors][0];
+		child.#classifyPersistedTurn(anchor, false, scope.binding);
+		child.#childTaskRecovery.anchorEntryId = anchor;
+		child.#childTaskRecovery.tools = child.agent.state.tools.map(tool => ({ tool, execute: tool.execute }));
+	}
+
+	#revokeTaskRecovery(reason: string): never {
+		this.invalidateTaskRecovery(reason);
+		throw new Error(reason);
+	}
+
+	#assertTaskRecoveryInput(kind?: "prompt"): void {
+		const scope = this.#childTaskRecovery;
+		if (scope) {
+			const permitted =
+				kind === "prompt" && this.#taskControlPermit === "prompt" && scope.driverActive && !scope.parent.revoked;
+			this.#taskControlPermit = undefined;
+			if (!permitted) this.#revokeTaskRecovery("Public input cannot take over a bound task recovery");
+		} else if (this.#activeTaskRecovery) {
+			this.invalidateTaskRecovery("Owner input superseded parent task recovery");
+		}
+	}
+
+	#checkTaskRecoveryDriver(signal?: AbortSignal): void {
+		const scope = this.#childTaskRecovery;
+		if (!scope) return;
+		if (!scope.driverActive || this.#taskRecoveryOwner.getStore() !== scope.token)
+			this.#revokeTaskRecovery("No original task driver owns dispatch");
+		if (signal?.aborted) signal.throwIfAborted();
+		if (scope.loadedPolicyHash !== this.#dispatchPolicyHash())
+			this.#revokeTaskRecovery("Loaded child approval/spawn policy changed before dispatch");
+		if (
+			scope.parent.signal.aborted ||
+			scope.parent.revoked ||
+			this.#isDisposed ||
+			this.#abortInProgress ||
+			this.isCompacting ||
+			this.isGeneratingHandoff ||
+			scope.parent.child !== this ||
+			scope.parent.binding.child.sessionId !== this.sessionId ||
+			scope.parent.binding.child.sessionFile !== this.sessionFile ||
+			scope.parent.binding.child.cwd !== this.sessionManager.getCwd() ||
+			AgentRegistry.global().get(scope.parent.binding.child.registryId) !== scope.parent.ref ||
+			scope.parent.ref?.session !== this ||
+			scope.parent.ref.status === "aborted"
+		)
+			this.#revokeTaskRecovery(scope.parent.revoked ?? "Bound task recovery lost dispatch ownership");
+		const branch = this.sessionManager.getBranch();
+		const initIndex = branch.findIndex(entry => entry.id === scope.parent.binding.child.initEntryId);
+		if (
+			scope.generation !== this.#promptGeneration ||
+			initIndex < 0 ||
+			!scope.anchorEntryId ||
+			!branch.some(entry => entry.id === scope.anchorEntryId) ||
+			branch
+				.slice(initIndex + 1)
+				.some(
+					entry =>
+						entry.type === "compaction" || entry.type === "reset_boundary" || entry.type === "branch_summary",
+				)
+		)
+			this.#revokeTaskRecovery("Original child generation or active ancestry changed");
+		this.#messageForPersistedEntry(scope.anchorEntryId);
+		if (this.agent.hasQueuedMessages() || this.#irc.hasPending() || this.#pendingNextTurnMessages.length > 0)
+			this.#revokeTaskRecovery("Queued input conflicts with bound task recovery");
+		if (
+			taskRecoveryHash(taskRuntimeContract(this)) !== taskRecoveryHash(scope.parent.binding.contract.runtime) ||
+			scope.tools?.some(
+				({ tool, execute }, index) => this.agent.state.tools[index] !== tool || tool.execute !== execute,
+			)
+		)
+			this.#revokeTaskRecovery("Bound task model or executable tool contract changed");
+	}
+
+	#dispatchPolicyHash(): string {
+		return taskRecoveryHash({
+			approval: this.settings.get("tools.approval"),
+			mode: this.settings.get("tools.approvalMode"),
+			roles: this.settings.getModelRoles(),
+			async: this.settings.get("async.enabled"),
+			batch: this.settings.get("task.batch"),
+			isolation: this.settings.get("task.isolation.mode"),
+			depth: this.settings.get("task.maxRecursionDepth"),
+			disabledAgents: this.settings.get("task.disabledAgents"),
+			prewalk: this.settings.get("task.prewalk"),
+			agentPrewalk: this.settings.get("task.agentPrewalk"),
+			agentAdvisor: this.settings.get("task.agentAdvisor"),
+			modelOverride: this.settings.get("task.agentModelOverrides"),
+		});
+	}
+
+	#assertParentTaskRecovery(scope: ParentTaskRecoveryScope, signal?: AbortSignal): void {
+		if (scope.loadedPolicyHash !== this.#dispatchPolicyHash())
+			this.#revokeTaskRecovery("Loaded parent policy changed during final authorization await");
+		this.#assertSynchronousTaskPolicy?.(scope.binding);
+		if (
+			scope !== this.#activeTaskRecovery ||
+			scope.phase !== "parent" ||
+			scope.revoked ||
+			signal?.aborted ||
+			scope.signal.aborted ||
+			this.#isDisposed ||
+			this.#abortInProgress ||
+			scope.generation !== this.#promptGeneration ||
+			scope.binding.call.sessionId !== this.sessionId ||
+			this.isCompacting ||
+			this.isGeneratingHandoff
+		)
+			this.#revokeTaskRecovery(scope.revoked ?? "Parent task continuation lost ownership");
+		if (this.agent.hasQueuedMessages() || this.#pendingNextTurnMessages.length > 0 || this.#irc.hasPending())
+			this.#revokeTaskRecovery("Owner input superseded parent task continuation");
+		const branch = this.sessionManager.getBranch();
+		const call = scope.binding.call;
+		const anchorIndex = branch.findIndex(entry => entry.id === call.promptEntryId);
+		const assistantIndex = branch.findIndex(entry => entry.id === call.assistantEntryId);
+		const resultIndex = branch.findIndex(entry => entry.id === scope.resultEntryId);
+		const result = branch[resultIndex];
+		const binding = branch.map(readTaskBinding).filter(value => value?.call.bindingId === call.bindingId);
+		if (
+			anchorIndex < 0 ||
+			assistantIndex <= anchorIndex ||
+			resultIndex <= assistantIndex ||
+			binding.length !== 1 ||
+			taskRecoveryHash(binding[0]) !== taskRecoveryHash(scope.binding) ||
+			result?.type !== "message" ||
+			result.message.role !== "toolResult" ||
+			result.message.isError ||
+			taskRecoveryHash(result.taskResult) !== taskRecoveryHash(this.#taskResultRef(scope.binding)) ||
+			branch
+				.slice(anchorIndex + 1)
+				.some(
+					entry =>
+						entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "reset_boundary",
+				)
+		)
+			this.#revokeTaskRecovery("Parent original task/result ancestry changed during continuation");
+		this.#messageForPersistedEntry(call.promptEntryId);
+		this.#messageForPersistedEntry(call.assistantEntryId);
+		this.#messageForPersistedEntry(result.id);
+		if (
+			!scope.parentTools ||
+			scope.parentTools.length !== this.agent.state.tools.length ||
+			scope.parentTools.some(
+				({ tool, execute }, index) => this.agent.state.tools[index] !== tool || tool.execute !== execute,
+			)
+		)
+			this.#revokeTaskRecovery("Parent executable tool ownership changed during task continuation");
+		if (taskRecoveryHash(taskRuntimeContract(this)) !== taskRecoveryHash(scope.parentRuntime))
+			this.#revokeTaskRecovery("Parent model or tool contract changed during task continuation");
+	}
+
+	#prepareBoundTaskDispatch(signal?: AbortSignal): Promise<() => void> | undefined {
+		const scope = this.#childTaskRecovery;
+		if (!scope) {
+			const parent = this.#activeTaskRecovery;
+			if (!parent) return undefined;
+			return (async () => {
+				this.#assertParentTaskRecovery(parent, signal);
+				try {
+					await parent.validateAuthority();
+				} catch (error) {
+					this.invalidateTaskRecovery(String(error));
+					throw error;
+				}
+				this.#assertParentTaskRecovery(parent, signal);
+				return () => this.#assertParentTaskRecovery(parent, signal);
+			})();
+		}
+		return (async () => {
+			this.#checkTaskRecoveryDriver(signal);
+			try {
+				await scope.parent.validateAuthority();
+			} catch (error) {
+				this.invalidateTaskRecovery(String(error));
+				throw error;
+			}
+			this.#checkTaskRecoveryDriver(signal);
+			return () => this.#checkTaskRecoveryDriver(signal);
+		})();
+	}
+
+	/** Called only by the task-owned monitored driver after guarded cold revival. */
+	async runBoundTaskRecovery<T>(
+		binding: PersistedTaskBindingV1,
+		run: (start: () => Promise<void>, controls: BoundTaskDriverControls) => Promise<T>,
+	): Promise<T> {
+		const scope = this.#childTaskRecovery;
+		if (!scope || scope.driverActive || taskRecoveryHash(binding) !== taskRecoveryHash(scope.parent.binding))
+			throw new Error("No exclusive task recovery driver owns this child");
+		scope.driverActive = true;
+		try {
+			return await this.#taskRecoveryOwner.run(scope.token, async () => {
+				this.#checkTaskRecoveryDriver();
+				const records = this.sessionManager
+					.getBranch()
+					.map(readPreparationRecord)
+					.filter(record => record?.taskBindingId === binding.call.bindingId);
+				const anchors = new Set(records.map(record => record!.anchorEntryId));
+				if (anchors.size !== 1) throw new Error("Task recovery original prompt association differs");
+				const request: PersistedTurnContinuationRequest = {
+					sessionId: this.sessionId,
+					entryId: [...anchors][0],
+					expectedLeafId: this.sessionManager.getLeafId()!,
+					validateDispatch: async () => {
+						await scope.parent.validateAuthority();
+						return { ok: true };
+					},
+				};
+				const controls: BoundTaskDriverControls = {
+					prompt: (text, options) =>
+						this.#taskRecoveryOwner.run(scope.token, () => {
+							this.#taskControlPermit = "prompt";
+							try {
+								return this.prompt(text, options);
+							} finally {
+								this.#taskControlPermit = undefined;
+							}
+						}),
+					abort: () => {
+						const aborted = this.#taskRecoveryOwner.run(scope.token, () => {
+							this.#taskControlPermit = "abort";
+							try {
+								return this.abort();
+							} finally {
+								this.#taskControlPermit = undefined;
+							}
+						});
+						return aborted.finally(() => {
+							if (!scope.parent.revoked) scope.generation = this.#promptGeneration;
+						});
+					},
+				};
+				return run(
+					() => this.#executePersistedPrompt(request, scope.parent.signal, this.#promptGeneration, 0, binding),
+					controls,
+				);
+			});
+		} finally {
+			scope.driverActive = false;
+		}
+	}
+
+	invalidateTaskRecovery(reason: string): void {
+		const child = this.#childTaskRecovery;
+		const scope = child?.parent ?? this.#activeTaskRecovery;
+		if (!scope) return;
+		scope.revoked ??= reason;
+		if (child) child.driverActive = false;
+		if (scope.child && scope.child.#childTaskRecovery) scope.child.#childTaskRecovery.driverActive = false;
+		scope.child?.agent.abort();
+		this.agent.abort();
 	}
 
 	#scheduleAgentContinue(options?: ScheduledAgentContinueOptions): void {
@@ -3702,7 +4650,7 @@ export class AgentSession {
 	 * and fire-and-forget `agent.continue()` may still be streaming after
 	 * the TTSR resume gate resolves.
 	 */
-	async #waitForPostPromptRecovery(generation?: number): Promise<void> {
+	async #waitForPostPromptRecovery(generation?: number, ignoredTasks?: ReadonlySet<Promise<unknown>>): Promise<void> {
 		while (true) {
 			// An abort bumps #promptGeneration. When this wait runs on behalf of a
 			// specific prompt turn, stop as soon as that turn has been superseded:
@@ -3720,8 +4668,11 @@ export class AgentSession {
 				continue;
 			}
 			if (this.#postPromptTasksPromise) {
-				await this.#postPromptTasksPromise;
-				continue;
+				const tasks = ignoredTasks ? [...this.#postPromptTasks].filter(task => !ignoredTasks.has(task)) : undefined;
+				if (!tasks || tasks.length > 0) {
+					await (tasks ? Promise.allSettled(tasks) : this.#postPromptTasksPromise);
+					continue;
+				}
 			}
 			// Tracked post-prompt tasks cover deferred continuations scheduled from
 			// event handlers. Keep the streaming fallback for direct agent activity
@@ -4259,6 +5210,7 @@ export class AgentSession {
 	 * gap slips past the disposal guards.
 	 */
 	beginDispose(): void {
+		this.invalidateTaskRecovery("Session disposal superseded task recovery");
 		this.#isDisposed = true;
 		this.#queuedMessageDrainBlocked = false;
 		this.#usagePreflightReadyForNextModelCall = false;
@@ -4494,6 +5446,8 @@ export class AgentSession {
 		// closes the writer.
 		this.sessionManager.seal();
 		await this.sessionManager.close();
+		this.#activePromptPreparation = undefined;
+		this.#boundTaskCalls.clear();
 
 		// Release retained conversation memory. dispose() is terminal, and every
 		// revival path reopens the transcript from disk (AgentLifecycleManager
@@ -4545,6 +5499,7 @@ export class AgentSession {
 	}
 
 	freshSession(): FreshSessionResult | undefined {
+		this.#assertTaskRecoveryInput();
 		if (this.isStreaming) return undefined;
 		const previousSessionId = this.sessionId;
 		const closedProviderSessions = this.#providerSessionState.size;
@@ -4579,6 +5534,7 @@ export class AgentSession {
 	 * streaming or a foreground bash/python execution is in flight.
 	 */
 	async resetSessionContext(): Promise<ResetSessionContextResult | undefined> {
+		this.#assertTaskRecoveryInput();
 		// Refuse while a response streams OR a foreground user bash/python
 		// execution is in flight: those complete via recordBashResult()/
 		// recordPythonResult(), which append directly to agent.state when not
@@ -5786,6 +6742,7 @@ export class AgentSession {
 	 * the ACP agent) use this to know whether to expect an `agent_end` event.
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
+		this.#assertTaskRecoveryInput("prompt");
 		// A manual `/compact` runs with the agent subscription disconnected until its
 		// cleanup finally re-drains the preserved queues. Starting a turn before then
 		// would neither persist nor forward its events and could race the in-flight
@@ -5942,6 +6899,7 @@ export class AgentSession {
 			queueOnly?: boolean;
 		},
 	): Promise<void> {
+		this.#assertTaskRecoveryInput();
 		const textContent =
 			typeof message.content === "string"
 				? message.content
@@ -6011,9 +6969,12 @@ export class AgentSession {
 		expandedText: string,
 		options?: Pick<PromptOptions, "toolChoice" | "images" | "skipCompactionCheck"> & {
 			prependMessages?: AgentMessage[];
+			taskBindingId?: string;
 			skipPostPromptRecoveryWait?: boolean;
 			acceptTerminalEmptyStop?: boolean;
 			existingEntry?: {
+				anchorEntryId: string;
+				taskBound?: boolean;
 				signal: AbortSignal;
 				beforeDispatch: (preparedMessages: readonly AgentMessage[]) => Promise<boolean>;
 				canDispatch: (preparedMessages: readonly AgentMessage[]) => boolean;
@@ -6243,6 +7204,11 @@ export class AgentSession {
 
 			if (options?.existingEntry) {
 				try {
+					if (options.existingEntry.taskBound && drainedNextTurn.length > 0)
+						throw new PersistedContinuationError(
+							"queued-input",
+							"Unassociated queued context conflicts with task recovery",
+						);
 					if (!(await options.existingEntry.beforeDispatch(messages))) {
 						restoreDrainedNextTurn();
 						return false;
@@ -6277,10 +7243,22 @@ export class AgentSession {
 			// (issue #1246) still clear it for re-injection on the next turn.
 			try {
 				// No await may separate this ownership check from agent dispatch.
-				if (options?.existingEntry && !options.existingEntry.canDispatch(messages)) {
+				try {
+					if (options?.existingEntry && !options.existingEntry.canDispatch(messages)) {
+						restoreDrainedNextTurn();
+						return false;
+					}
+				} catch (error) {
 					restoreDrainedNextTurn();
-					return false;
+					throw error;
 				}
+				this.#associatePromptPreparation(
+					message,
+					messages.filter(member => member !== message && !drainedNextTurn.some(queued => queued === member)),
+					generation,
+					options?.existingEntry?.anchorEntryId,
+					options?.taskBindingId,
+				);
 				if (planReferenceMessage) this.#planReferenceSent = true;
 				if (options?.existingEntry) {
 					if (messages.length === 0) await this.agent.continue(options.existingEntry.signal);
@@ -6463,6 +7441,7 @@ export class AgentSession {
 	 * Queue a steering message to interrupt the agent mid-run.
 	 */
 	async steer(text: string, images?: ImageContent[]): Promise<void> {
+		this.#assertTaskRecoveryInput();
 		if (text.startsWith("/")) {
 			this.#throwIfExtensionCommand(text);
 		}
@@ -6479,6 +7458,7 @@ export class AgentSession {
 	 * flipping advisor auto-resume.
 	 */
 	async followUp(text: string, images?: ImageContent[], options?: FollowUpOptions): Promise<void> {
+		this.#assertTaskRecoveryInput();
 		if (text.startsWith("/")) {
 			this.#throwIfExtensionCommand(text);
 		}
@@ -6659,6 +7639,7 @@ export class AgentSession {
 	 *  the returned promise settles only after real streaming/idle injection into
 	 *  THIS session (the enqueue-time session id is stamped on the entry). */
 	async queueExtensionDelivery(entry: ExtensionDeliveryEntry): Promise<void> {
+		this.#assertTaskRecoveryInput();
 		if (this.#isDisposed) throw new Error("Session disposed before extension delivery");
 		if (entry.triggerTurn === false) {
 			if (this.isStreaming) {
@@ -6795,6 +7776,9 @@ export class AgentSession {
 				this.#resetPromptMaintenanceState();
 			}
 			this.#recovery.setAcceptTerminalEmptyStop(acceptTerminalEmptyStop);
+			// This core path sends one agent-authored custom input without the user
+			// prompt pipeline; it still owns that exact input's persistence origin.
+			this.#associatePromptPreparation(message, [], this.#promptGeneration);
 			await this.agent.prompt(message);
 			await this.#waitForPostPromptRecovery();
 		} finally {
@@ -6862,6 +7846,7 @@ export class AgentSession {
 			acceptTerminalEmptyStop?: boolean;
 		},
 	): Promise<boolean> {
+		this.#assertTaskRecoveryInput();
 		const normalizedPayload = normalizeCustomMessagePayload<T>(message);
 		const details =
 			options?.queueChipText && options.deliverAs !== "nextTurn"
@@ -6950,6 +7935,7 @@ export class AgentSession {
 		content: string | (TextContent | ImageContent)[],
 		options?: { deliverAs?: "steer" | "followUp" },
 	): Promise<void> {
+		this.#assertTaskRecoveryInput();
 		// Normalize content to text string + optional images
 		let text: string;
 		let images: ImageContent[] | undefined;
@@ -7256,6 +8242,9 @@ export class AgentSession {
 		/** Internal `/compact` startup keeps the manual-compaction marker alive while aborting the active turn. */
 		preserveCompaction?: boolean;
 	}): Promise<void> {
+		const internalTaskAbort = this.#childTaskRecovery && this.#taskControlPermit === "abort";
+		this.#taskControlPermit = undefined;
+		if (!internalTaskAbort) this.invalidateTaskRecovery("Public abort superseded task recovery");
 		const userInterrupt = options?.reason === USER_INTERRUPT_LABEL;
 		this.#pendingAbortErrorId = userInterrupt ? AIError.create(AIError.Flag.UserInterrupt) : undefined;
 		if (userInterrupt) this.#advisors.autoResumeSuppressed = true;
@@ -7340,6 +8329,7 @@ export class AgentSession {
 	 * @returns true if completed, false if cancelled by hook
 	 */
 	async newSession(options?: NewSessionOptions): Promise<boolean> {
+		this.#assertTaskRecoveryInput();
 		this.#assertVibeSessionTransitionAllowed("start a new session");
 		const previousSessionFile = this.sessionFile;
 
@@ -7456,6 +8446,7 @@ export class AgentSession {
 	 * @returns true if completed, false if cancelled by hook or not persisting
 	 */
 	async fork(): Promise<boolean> {
+		this.#assertTaskRecoveryInput();
 		this.#assertVibeSessionTransitionAllowed("fork the session");
 		const previousSessionFile = this.sessionFile;
 		const previousSessionId = this.sessionManager.getSessionId();
@@ -7529,6 +8520,7 @@ export class AgentSession {
 
 	/** Move the active session and artifacts after enforcing mode transition invariants. */
 	async moveSession(newCwd: string, targetSessionDir?: string): Promise<void> {
+		this.#assertTaskRecoveryInput();
 		this.#assertVibeSessionTransitionAllowed("move the session");
 		await this.sessionManager.moveTo(newCwd, targetSessionDir);
 	}
@@ -8222,6 +9214,7 @@ export class AgentSession {
 
 	/** Delivers an IRC message into this recipient session. */
 	deliverIrcMessage(msg: IrcMessage, opts?: { expectsReply?: boolean }): Promise<"injected" | "woken"> {
+		if (this.#childTaskRecovery) this.#revokeTaskRecovery("IRC input conflicts with bound task recovery");
 		return this.#irc.deliver(msg, opts);
 	}
 
@@ -8256,6 +9249,7 @@ export class AgentSession {
 		signal?: AbortSignal;
 		dedupeReply?: boolean;
 	}): Promise<{ replyText: string; assistantMessage: AssistantMessage }> {
+		if (this.#childTaskRecovery) this.#revokeTaskRecovery("Foreign side-channel turn conflicts with task recovery");
 		const model = this.model;
 		if (!model) {
 			throw new Error("No active model on session");
@@ -8414,6 +9408,7 @@ export class AgentSession {
 	 * @returns true if switch completed, false if cancelled by hook
 	 */
 	async switchSession(sessionPath: string): Promise<boolean> {
+		this.#assertTaskRecoveryInput();
 		const previousSessionFile = this.sessionManager.getSessionFile();
 		const switchingToDifferentSession = previousSessionFile
 			? path.resolve(previousSessionFile) !== path.resolve(sessionPath)
@@ -8718,6 +9713,7 @@ export class AgentSession {
 		selectedImages: ImageContent[];
 		cancelled: boolean;
 	}> {
+		this.#assertTaskRecoveryInput();
 		const previousSessionFile = this.sessionFile;
 		const selectedEntry = this.sessionManager.getEntry(entryId);
 
@@ -9005,6 +10001,7 @@ export class AgentSession {
 		 */
 		askReanswerCommitted?: boolean;
 	}> {
+		this.#assertTaskRecoveryInput();
 		await this.#bash.flushPending();
 		const oldLeafId = this.sessionManager.getLeafId();
 
