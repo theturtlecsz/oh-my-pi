@@ -28,7 +28,7 @@ afterEach(async () => {
 	await Promise.all(directories.splice(0).map(directory => fs.rm(directory, { recursive: true, force: true })));
 });
 
-async function makeHarness(state: "active" | "paused" = "active") {
+async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active", repository?: string) {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "execution-halt-"));
 	directories.push(directory);
 	const item: ExecutionGrantItemView = {
@@ -50,7 +50,7 @@ async function makeHarness(state: "active" | "paused" = "active") {
 			grant_id: "grant-1",
 			workspace_id: "workspace-1",
 			owner_id: "owner-1",
-			repository: directory,
+			repository: repository ?? directory,
 			remote_ref: "refs/heads/execution/omp-1",
 			state,
 			mode: "single",
@@ -68,12 +68,17 @@ async function makeHarness(state: "active" | "paused" = "active") {
 		activeItem: item,
 	};
 	const stateChanges: StateChange[] = [];
+	const workspaceEffects: string[] = [];
 	const backend = {
 		cacheFile: path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(directory, "cache.json")),
 		markerFile: ".work-project",
 		evidenceKinds: ["verification", "closeout"],
 		scopeFix: "",
 		getExecution: async () => execution,
+		currentNow: async () => ({ id: item.work_id, key: "OMP-1", title: "Development change" }),
+		pendingDeliveries: async () => [],
+		getPendingExecutionClaims: async () => [],
+		issueDetail: async () => ({}),
 		findIssue: async () => ({ id: item.work_id, key: "OMP-1", title: "Development change" }),
 		setExecutionState: async (input: StateChange) => {
 			stateChanges.push(input);
@@ -94,6 +99,7 @@ async function makeHarness(state: "active" | "paused" = "active") {
 		},
 	} as unknown as WorkflowBackend;
 	const inputHandlers: InputHandler[] = [];
+	const startHandlers: InputHandler[] = [];
 	const commands = new Map<string, CommandHandler>();
 	let executeTool: ToolHandler | undefined;
 	const pi = {
@@ -108,6 +114,7 @@ async function makeHarness(state: "active" | "paused" = "active") {
 		registerMessageRenderer: () => {},
 		on: (name: string, handler: InputHandler) => {
 			if (name === "input") inputHandlers.push(handler);
+			if (name === "session_start") startHandlers.push(handler);
 		},
 		appendEntry: () => {},
 		sendMessage: () => {},
@@ -121,14 +128,17 @@ async function makeHarness(state: "active" | "paused" = "active") {
 		acceptEntry: () => true,
 		executionWorkspaceManager: {
 			primaryRoot: async cwd => cwd,
-			ensure: async (cwd, _key, grantId, baseline) => ({
+			ensure: async (cwd, _key, grantId, baseline) => {
+				workspaceEffects.push("ensure");
+				return {
 				primaryRoot: cwd,
 				path: cwd,
 				branch: "execution/omp-1",
 				grantId,
 				baseline,
 				reused: true,
-			}),
+				};
+			},
 			cleanup: async () => ({ cleaned: true, detail: "fixture workspace" }),
 		},
 	})(pi);
@@ -140,7 +150,8 @@ async function makeHarness(state: "active" | "paused" = "active") {
 		abort: () => {
 			aborts += 1;
 		},
-		sessionManager: { getCwd: () => directory },
+		sessionManager: { getCwd: () => directory, getBranch: () => [], moveTo: async () => { workspaceEffects.push("moveTo"); } },
+		newSession: async () => { workspaceEffects.push("newSession"); return { cancelled: false }; },
 		ui: {
 			notify: (message: string) => {
 				notifications.push(message);
@@ -150,6 +161,10 @@ async function makeHarness(state: "active" | "paused" = "active") {
 		},
 	} as unknown as ExtensionCommandContext;
 	return {
+		getSnapshot: () => structuredClone(execution),
+		workspaceEffects,
+		setPhase: (phase: ExecutionGrantItemView["phase"]) => { item.phase = phase; },
+		start: async () => { for (const handler of startHandlers) await handler({ originalText: "", source: "startup" }, context); },
 		stateChanges,
 		notifications,
 		getAborts: () => aborts,
@@ -170,6 +185,10 @@ async function makeHarness(state: "active" | "paused" = "active") {
 				undefined,
 				context,
 			);
+		},
+		review: async () => {
+			if (!executeTool) throw new Error("work tool missing");
+			return executeTool("review-1", { action: "begin_execution_review", work: "OMP-1", body: "Focused verification passed" }, new AbortController().signal, undefined, context);
 		},
 	};
 }
@@ -192,7 +211,7 @@ describe("execution halt remains available when development breaks the auditor",
 	});
 
 	test("owner cancel terminates the grant when no auditor is installed", async () => {
-		const harness = await makeHarness();
+		const harness = await makeHarness("active", "legacy-repo");
 		vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
 		await harness.command("cancel OMP-1");
 		expect(harness.stateChanges).toEqual([
@@ -205,10 +224,11 @@ describe("execution halt remains available when development breaks the auditor",
 			},
 		]);
 		expect(harness.notifications.some(message => message.includes("Execution grant canceled"))).toBe(true);
+		expect(harness.getSnapshot().grant.repository).toBe("legacy-repo");
 	});
 
 	test("stop_execution records its terminal reason despite unavailable auditor source", async () => {
-		const harness = await makeHarness();
+		const harness = await makeHarness("active", "legacy-repo");
 		vi.spyOn(taskModule, "discoverAgents").mockRejectedValue(new Error("auditor source unavailable"));
 		const result = await harness.stop();
 		expect(result.details.success).toBe(true);
@@ -222,6 +242,7 @@ describe("execution halt remains available when development breaks the auditor",
 			},
 		]);
 		expect(result.content[0]?.text).toContain("terminal; resume is impossible");
+		expect(harness.getSnapshot().grant.repository).toBe("legacy-repo");
 	});
 
 	test("resume still refuses an unavailable auditor without reactivating the grant", async () => {
@@ -238,4 +259,59 @@ describe("execution halt remains available when development breaks the auditor",
 			),
 		).toBe(true);
 	});
+});
+
+describe("legacy relative execution repository refusal", () => {
+	for (const phase of ["executing", "reviewing"] as const) {
+		test(`${phase} grant refuses review before audit, freeze, push or new authority`, async () => {
+			const harness = await makeHarness("active", "legacy-repo");
+			harness.setPhase(phase);
+			const original = harness.getSnapshot();
+			const discover = vi.spyOn(taskModule, "discoverAgents");
+			const freeze = vi.spyOn(gitModule, "freezeCandidateCommit");
+			const push = vi.spyOn(gitModule, "pushCandidate");
+			const result = await harness.review();
+			expect(result.details.success).toBe(false);
+			expect(result.content[0].text).toContain("repository must be an absolute path");
+			expect(discover).not.toHaveBeenCalled();
+			expect(freeze).not.toHaveBeenCalled();
+			expect(push).not.toHaveBeenCalled();
+			expect(harness.getSnapshot()).toEqual(original);
+			expect(harness.stateChanges).toEqual([]);
+		});
+	}
+
+	test("paused legacy grant refuses explicit resume before workspace or SDK relocation", async () => {
+		const harness = await makeHarness("paused", "legacy-repo");
+		const original = harness.getSnapshot();
+		await harness.command("resume OMP-1");
+		expect(harness.notifications.some(message => message.includes("repository must be an absolute path"))).toBe(true);
+		expect(harness.workspaceEffects).toEqual([]);
+		expect(harness.stateChanges).toEqual([]);
+		expect(harness.getSnapshot()).toEqual(original);
+	});
+
+	test("active legacy startup refuses before managed workspace recovery", async () => {
+		const harness = await makeHarness("active", "legacy-repo");
+		const original = harness.getSnapshot();
+		await harness.start();
+		expect(harness.notifications.some(message => message.includes("Execution recovery skipped") && message.includes("repository must be an absolute path"))).toBe(true);
+		expect(harness.workspaceEffects).toEqual([]);
+		expect(harness.stateChanges).toEqual([]);
+		expect(harness.getSnapshot()).toEqual(original);
+	});
+
+	for (const state of ["stopped", "canceled", "completed"] as const) {
+		test(`${state} legacy grant keeps terminal refusal ahead of repository validation`, async () => {
+			const harness = await makeHarness(state, "legacy-repo");
+			const original = harness.getSnapshot();
+			await harness.command("resume OMP-1");
+			expect(harness.notifications.some(message => message.includes(`grant state is ${state}`))).toBe(true);
+			expect(harness.notifications.some(message => message.includes("repository must"))).toBe(false);
+			const review = await harness.review();
+			expect(review.content[0].text).toContain("no active execution grant");
+			expect(harness.workspaceEffects).toEqual([]);
+			expect(harness.getSnapshot()).toEqual(original);
+		});
+	}
 });
