@@ -241,3 +241,13 @@ zero provider requests or original results, and unchanged service/Git effects.
 The automatic recovery assertion remains a real failure. The ten prior installed
 cases passed separately against the same runtime and reviewed changed harness.
 No production remedy or full S2.2 acceptance follows from this negative evidence.
+
+The [first-run result implementation plan](omp-first-run-task-result-plan.md)
+extends the existing certificate/claim/result protocol to an original task with
+exact runtime execution authority. The current positive observer requires actual
+`original-sync-task-v1` readiness and no processing claim at the frozen cut; R1's
+earlier uncertified observation remains bound to its original runtime and harness.
+Cached delivery must retain the original result/wire pair and avoid child replay.
+CI retains first-run cut/restart journals, byte-reader diagnostics and disposable
+runtime process logs. Fresh installed qualification and exact-head delivery gates
+remain separate from source tests and from full S2.2 acceptance.

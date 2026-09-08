@@ -219,3 +219,11 @@ The discovery-root executable tests protect semantic behavior across upstream
 integration. Refit or retire this seam when upstream supplies equivalent
 configuration isolation. The Git archive helper extends the existing central
 Git utility; no parallel VCS wrapper or new workflow ledger was added.
+
+The original first-run task case observes native `original-sync-task-v1` readiness
+and the child's actual completed lifecycle before stopping the process group.
+It accepts a cut only while every live thread is stopped and strict journal/RPC
+inspection shows no processing claim or original parent result. A certified
+unprocessed result can then be delivered once through the original parent call;
+legacy completion and started-without-result histories remain refused. This
+observer is separate from the resumed-child authority-response cut above.

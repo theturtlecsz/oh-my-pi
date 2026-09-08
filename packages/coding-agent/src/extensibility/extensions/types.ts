@@ -956,6 +956,8 @@ export interface ToolApprovalResolvedEvent {
 }
 
 interface ToolCallEventBase {
+	/** Core prompt provenance for task result qualification; not taken from tool arguments. */
+	taskResultOrigin?: Readonly<{ sessionId: string; promptEntryId: string }>;
 	type: "tool_call";
 	toolCallId: string;
 }

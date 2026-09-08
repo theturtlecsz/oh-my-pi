@@ -1025,7 +1025,9 @@ def capture_task_active_recovery(
             if entry.get("type") == "custom" and entry.get("customType") == custom_type
         ]
 
-    def native_ready(entries: list[dict]) -> dict | None:
+    def native_ready(
+        entries: list[dict], *, expected_producer: str = "recovered-sync-task-v1"
+    ) -> dict | None:
         records = result_records(entries, "task-native-result-ready")
         if not records:
             return None
@@ -1034,7 +1036,7 @@ def capture_task_active_recovery(
         branch = durable_session_branch(entries)
         assert entry in branch, "Native ready checkpoint is outside bound branch"
         data = entry["data"]
-        assert data["version"] == 1 and data["producer"] == "recovered-sync-task-v1"
+        assert data["version"] == 1 and data["producer"] == expected_producer
         assert data["processingProtocol"] == "claim-before-parent-processing-v1"
         assert (
             data["call"] == binding["call"]
@@ -1060,6 +1062,56 @@ def capture_task_active_recovery(
         )
         return entry
 
+    def require_unstarted_native_ready(
+        parent_entries: list[dict],
+        child_entries: list[dict],
+        child_bytes: bytes,
+        output_path: Path,
+        output_bytes: bytes,
+        *,
+        expected_producer: str = "recovered-sync-task-v1",
+    ) -> dict:
+        entry = native_ready(parent_entries, expected_producer=expected_producer)
+        assert entry is not None, "Completed cut has no runtime-certified ready result"
+        assert not result_records(parent_entries, "task-result-processing-started"), (
+            "Parent processing already entered before frozen cut"
+        )
+        data = entry["data"]
+        branch = durable_session_branch(child_entries)
+        indexed_entries = [
+            row for row in child_entries if row.get("type") not in ("title", "session")
+        ]
+        yields = [
+            row
+            for row in branch
+            if row.get("type") == "message"
+            and row.get("message", {}).get("role") == "toolResult"
+            and row["message"].get("toolCallId") == "task-child-yield"
+        ]
+        assert len(yields) == 1 and not yields[0]["message"].get("isError")
+        assert data["child"] == {
+            "sessionId": binding["child"]["sessionId"],
+            "initEntryId": binding["child"]["initEntryId"],
+            "promptEntryId": original_preparation[0]["anchorEntryId"],
+            "leafId": branch[-1]["id"],
+            "branchSha256": task_recovery_hash(branch),
+            "entriesSha256": task_recovery_hash(indexed_entries),
+            "fileSha256": hashlib.sha256(child_bytes).hexdigest(),
+            "yieldResultEntryId": yields[0]["id"],
+        }
+        assert data["output"] == {
+            "path": str(output_path),
+            "bytes": len(output_bytes),
+            "sha256": hashlib.sha256(output_bytes).hexdigest(),
+        }
+        assert json.loads(
+            json.loads(data["payloadJson"])["details"]["results"][0]["output"]
+        ) == {
+            "path": "result.txt",
+            "observed": provider.child_read_content,
+        }
+        return entry
+
     def successful_result(entries: list[dict]) -> dict:
         results = original_results(entries)
         assert len(results) == 1 and not results[0]["message"].get("isError"), results
@@ -1078,7 +1130,12 @@ def capture_task_active_recovery(
             "toolCallId": call_id,
             "childSessionId": binding["child"]["sessionId"],
         }
-        ready_entry = native_ready(entries)
+        ready_entry = native_ready(
+            entries,
+            expected_producer="original-sync-task-v1"
+            if provider.task_fault == "first-run-result-gap"
+            else "recovered-sync-task-v1",
+        )
         claims = result_records(entries, "task-result-processing-started")
         if ready_entry is not None:
             assert len(claims) == 1, (
@@ -1273,6 +1330,7 @@ def capture_task_active_recovery(
         output_path = child_path.with_suffix(".md")
         frozen_child: bytes | None = None
         frozen_output: bytes | None = None
+        first_ready_entry: dict | None = None
 
         def frozen_entries(file: Path, label: str) -> tuple[bytes, list[dict]]:
             raw = file.read_bytes()
@@ -1438,10 +1496,6 @@ def capture_task_active_recovery(
             )
             assert_same_journals()
             absent_parent(drained["frames"], parent_now)
-            assert not result_records(parent_now, "task-native-result-ready")
-            assert not result_records(parent_now, "task-result-processing-started"), (
-                "Ordinary first-run unexpectedly entered certified processing protocol"
-            )
             branch = durable_session_branch(child_now)
             reads = [
                 entry["message"]
@@ -1478,6 +1532,14 @@ def capture_task_active_recovery(
             }
             frozen_output = output_path.read_bytes()
             assert json.loads(frozen_output) == expected_output
+            first_ready_entry = require_unstarted_native_ready(
+                parent_now,
+                child_now,
+                frozen_child,
+                output_path,
+                frozen_output,
+                expected_producer="original-sync-task-v1",
+            )
             (tmp_path / "first-run-completed-output.md").write_bytes(frozen_output)
             trigger = drained["stop"]["trigger"]["payload"]
             assert (
@@ -1499,8 +1561,15 @@ def capture_task_active_recovery(
                 and child_path.read_bytes() == frozen_child
             )
             absent_parent(latest["frames"], final_parent)
+            assert (
+                native_ready(final_parent, expected_producer="original-sync-task-v1")
+                == first_ready_entry
+            )
+            assert not result_records(final_parent, "task-result-processing-started")
             evidence["firstRunWitness"] = {
                 "binding": binding,
+                "nativeReadyEntry": first_ready_entry,
+                "nativeReadySha256": task_recovery_hash(first_ready_entry["data"]),
                 "completedLifecycle": drained["stop"]["trigger"],
                 "outputSha256": hashlib.sha256(frozen_output).hexdigest(),
                 "output": expected_output,
@@ -1508,7 +1577,7 @@ def capture_task_active_recovery(
                 "workflow": get_view(workflow_url),
                 "effects": effects(),
                 "parentResultAbsentFromDurableBranchAndReceivedFrames": True,
-                "processingState": "uncertified; marker absence does not prove processing unstarted",
+                "processingState": "runtime-certified original ready; mandatory processing claim absent across retained history",
             }
             save()
             before_kill = process_group_snapshot(group_id, include_threads=True)
@@ -1536,7 +1605,10 @@ def capture_task_active_recovery(
             assert parent_path.read_bytes() == parent_bytes, (
                 "Frozen parent journal changed through process death"
             )
-            assert not result_records(after_death, "task-native-result-ready")
+            assert (
+                native_ready(after_death, expected_producer="original-sync-task-v1")
+                == first_ready_entry
+            )
             assert not result_records(after_death, "task-result-processing-started")
             assert_stable_state()
             assert (
@@ -1559,6 +1631,7 @@ def capture_task_active_recovery(
             cleanup_owned_group()
 
         provider.restarting = True
+        assert first_ready_entry is not None
         outcomes = []
         for generation in (1, 2):
             provider.restart_generation = generation
@@ -1601,6 +1674,10 @@ def capture_task_active_recovery(
                     time.sleep(0.05)
                 time.sleep(2)
                 parent_now, _ = assert_same_journals()
+                assert (
+                    native_ready(parent_now, expected_producer="original-sync-task-v1")
+                    == first_ready_entry
+                ), "Restart changed original first-run ready checkpoint"
                 result = (
                     successful_result(parent_now)
                     if original_results(parent_now)
@@ -1613,7 +1690,7 @@ def capture_task_active_recovery(
                     if row["restartGeneration"] == generation
                 ]
                 assert not any(row["model"] == "local-task" for row in requests), (
-                    "Uncertified completed child was executed again"
+                    "Certified completed first-run child was executed again"
                 )
                 assert (
                     child_path.read_bytes() == frozen_child
@@ -1633,6 +1710,10 @@ def capture_task_active_recovery(
                     "generation": generation,
                     "parentCompleted": finished,
                     "originalResult": result,
+                    "nativeReadyEntry": first_ready_entry,
+                    "processingClaims": result_records(
+                        parent_now, "task-result-processing-started"
+                    ),
                     "refusals": notifications,
                     "providerObservations": requests,
                     "subagents": roster,
@@ -1816,43 +1897,14 @@ def capture_task_active_recovery(
                         "Held bytes are not unchanged real authority"
                     )
                 parent_now, child_now = assert_same_journals()
-                gap_ready_entry = native_ready(parent_now)
-                assert gap_ready_entry is not None, (
-                    "Completed cut has no runtime-certified ready result"
+                gap_ready_entry = require_unstarted_native_ready(
+                    parent_now,
+                    child_now,
+                    child_path.read_bytes(),
+                    gap_output_path,
+                    gap_output_bytes,
                 )
-                assert not result_records(
-                    parent_now, "task-result-processing-started"
-                ), "Parent processing already entered before held cut"
                 ready_data = gap_ready_entry["data"]
-                child_branch = durable_session_branch(child_now)
-                child_entries = [
-                    entry
-                    for entry in child_now
-                    if entry.get("type") not in ("title", "session")
-                ]
-                assert ready_data["child"] == {
-                    "sessionId": binding["child"]["sessionId"],
-                    "initEntryId": binding["child"]["initEntryId"],
-                    "promptEntryId": original_preparation[0]["anchorEntryId"],
-                    "leafId": child_branch[-1]["id"],
-                    "branchSha256": task_recovery_hash(child_branch),
-                    "entriesSha256": task_recovery_hash(child_entries),
-                    "fileSha256": hashlib.sha256(child_path.read_bytes()).hexdigest(),
-                    "yieldResultEntryId": yield_results[0]["id"],
-                }
-                assert ready_data["output"] == {
-                    "path": str(gap_output_path),
-                    "bytes": len(gap_output_bytes),
-                    "sha256": hashlib.sha256(gap_output_bytes).hexdigest(),
-                }
-                assert (
-                    json.loads(
-                        json.loads(ready_data["payloadJson"])["details"]["results"][0][
-                            "output"
-                        ]
-                    )
-                    == expected_output
-                )
                 assert not original_results(parent_now), (
                     "Parent result became durable before completion cut"
                 )

@@ -112,7 +112,7 @@ export type NativeTaskResultObserver = (
 
 export interface NativeTaskResultReadyV1 {
 	version: 1;
-	producer: "recovered-sync-task-v1";
+	producer: "recovered-sync-task-v1" | "original-sync-task-v1";
 	processingProtocol: typeof TASK_RESULT_PROCESSING_PROTOCOL;
 	call: PersistedTaskCallRef;
 	contractSha256: string;
@@ -164,7 +164,22 @@ export interface NativeRecoveredTaskResult {
 	completion: NativeTaskResultReadyCheckpoint;
 }
 
+/** Runtime-only gate belonging to one actually approved original task invocation. */
+export interface TaskResultProcessingGate {
+	enter(): Promise<void>;
+}
+
+export interface OriginalTaskCompletionCapture {
+	prepareChild(child: AgentSession): void;
+	runNative<T>(run: () => Promise<T>): Promise<T>;
+	activateDriver(): BoundTaskDriverControls;
+	settleChild(): Promise<void>;
+	recordNativeResult(record: NativeTaskResultReadyV1): Promise<NativeTaskResultReadyCheckpoint>;
+	setCompletionGuard(guard: () => Promise<() => void>): void;
+}
+
 export interface TaskCallCapture {
+	completion?: OriginalTaskCompletionCapture;
 	call: PersistedTaskCallRef;
 	bindChild(binding: PersistedTaskBindingV1): Promise<void>;
 }
@@ -508,7 +523,7 @@ export function taskResultRecoveryState(
 			throw new Error("Task completion belongs to a different original call or contract");
 		if (entry.customType === TASK_NATIVE_RESULT_READY) {
 			if (
-				data.producer !== "recovered-sync-task-v1" ||
+				(data.producer !== "recovered-sync-task-v1" && data.producer !== "original-sync-task-v1") ||
 				data.processingProtocol !== TASK_RESULT_PROCESSING_PROTOCOL ||
 				!isRecord(data.child) ||
 				!isRecord(data.output) ||

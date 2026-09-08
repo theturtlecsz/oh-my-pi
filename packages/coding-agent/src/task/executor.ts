@@ -69,6 +69,7 @@ import type {
 	BoundTaskDriverControls,
 	NativeTaskOutputIdentity,
 	NativeTaskResultObserver,
+	OriginalTaskCompletionCapture,
 	PersistedTaskBindingV1,
 	PersistedTaskCallRef,
 	PreparedTaskChild,
@@ -368,7 +369,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Options for subagent execution */
 export interface ExecutorOptions {
-	taskRecovery?: { call: PersistedTaskCallRef; onChildPrepared(child: PreparedTaskChild): Promise<void> };
+	taskRecovery?: {
+		call: PersistedTaskCallRef;
+		completion?: OriginalTaskCompletionCapture;
+		onNativeResult?: NativeTaskResultObserver;
+		onChildPrepared(child: PreparedTaskChild): Promise<void>;
+	};
 	cwd: string;
 	/** Additional workspace directories to seed on the subagent session (multi-root). */
 	additionalDirectories?: string[];
@@ -1906,7 +1912,7 @@ const MAX_YIELD_RETRIES = 3;
  * come back as a real report.
  */
 type SubagentTurnStart =
-	| { kind: "new"; taskBindingId?: string }
+	| { kind: "new"; taskBindingId?: string; controls?: BoundTaskDriverControls }
 	| {
 			kind: "persisted";
 			binding: PersistedTaskBindingV1;
@@ -1959,7 +1965,10 @@ async function driveSessionToYield(
 			await awaitAbortable<unknown>(
 				start?.kind === "persisted"
 					? start.execute()
-					: session.prompt(task, { attribution: "agent", taskBindingId: start?.taskBindingId }),
+					: (start?.controls?.prompt ?? session.prompt.bind(session))(task, {
+							attribution: "agent",
+							taskBindingId: start?.taskBindingId,
+						}),
 			);
 			await awaitAbortable(session.waitForIdle());
 		} catch (err) {
@@ -2003,7 +2012,7 @@ async function driveSessionToYield(
 
 					const isFinalRetry = retryCount >= MAX_YIELD_RETRIES;
 					await awaitAbortable(
-						(start?.kind === "persisted" ? start.controls.prompt : session.prompt.bind(session))(reminder, {
+						(start?.controls?.prompt ?? session.prompt.bind(session))(reminder, {
 							attribution: "agent",
 							synthetic: true,
 							...(isFinalRetry && reminderToolChoice ? { toolChoice: reminderToolChoice } : {}),
@@ -2075,7 +2084,7 @@ async function driveSessionToYield(
 					});
 					try {
 						await awaitAbortable(
-							(start?.kind === "persisted" ? start.controls.prompt : session.prompt.bind(session))(notice, {
+							(start?.controls?.prompt ?? session.prompt.bind(session))(notice, {
 								attribution: "agent",
 								synthetic: true,
 							}),
@@ -2962,7 +2971,20 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const lspEnabled = enableLsp ?? true;
 	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("eval");
 
+	let originalControls: BoundTaskDriverControls | undefined;
 	const monitor = createSubagentRunMonitor({
+		recoveryControls: options.taskRecovery?.completion
+			? {
+					prompt: (text, promptOptions) => {
+						if (!originalControls) throw new Error("Original task driver has not been promoted");
+						return originalControls.prompt(text, promptOptions);
+					},
+					abort: () => {
+						if (!originalControls) throw new Error("Original task driver has not been promoted");
+						return originalControls.abort();
+					},
+				}
+			: undefined,
 		index,
 		id,
 		agent,
@@ -3244,6 +3266,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			): CreateAgentSessionOptions => ({
 				cwd: worktree ?? cwd,
 				disableInheritedAsyncJobs: options.taskRecovery !== undefined,
+				prepareSessionBeforeAttach: options.taskRecovery?.completion?.prepareChild,
 				additionalDirectories: worktree !== undefined ? undefined : options.additionalDirectories,
 				authStorage,
 				modelRegistry,
@@ -3533,10 +3556,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 			}
 
+			originalControls = options.taskRecovery?.completion?.activateDriver();
 			readyAt = performance.now();
 			const outcome = await driveSessionToYield(session, monitor, task, {
 				kind: "new",
 				taskBindingId: options.taskRecovery?.call.bindingId,
+				controls: originalControls,
 			});
 			exitCode = outcome.exitCode;
 			error = outcome.error;
@@ -3592,6 +3617,19 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						id,
 						error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
 					});
+				}
+			}
+			if (options.taskRecovery?.completion && !aborted) {
+				try {
+					await options.taskRecovery.completion.settleChild();
+					const lateError = monitor.terminalError();
+					if (lateError) {
+						error = lateError;
+						exitCode = 1;
+					}
+				} catch (settleError) {
+					error = String(settleError);
+					exitCode = 1;
 				}
 			}
 			if (unsubscribe) {
@@ -3703,6 +3741,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	monitor.finish();
 
 	const result = await finalizeRunResult({
+		onNativeResult: options.taskRecovery?.onNativeResult,
 		monitor,
 		done,
 		index,

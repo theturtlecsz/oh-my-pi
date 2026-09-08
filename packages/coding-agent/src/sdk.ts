@@ -1725,8 +1725,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		};
 		const toolSession: ToolSession = {
-			captureTaskCall: (toolCallId, params) =>
-				session ? session.captureTaskCall(toolCallId, params) : Promise.resolve(undefined),
+			captureTaskCall: (toolCallId, params, signal) =>
+				session ? session.captureTaskCall(toolCallId, params, signal) : Promise.resolve(undefined),
+			getTaskResultProcessingGate: id => session?.getTaskResultProcessingGate(id),
 			get cwd() {
 				return sessionManager.getCwd();
 			},
@@ -2739,7 +2740,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// TTS, and startup (non-deferred) MCP tools all funnel through here, so apply
 		// it once at this adapter boundary (idempotent — a no-op if already wrapped).
 		const wrappedExtensionTools: Tool[] = deduplicateMCPToolsByName(
-			wrapRegisteredTools(allCustomTools, extensionRunner).map(wrapToolWithMetaNotice),
+			wrapRegisteredTools(allCustomTools, extensionRunner).map(tool => wrapToolWithMetaNotice(tool)),
 		);
 		const initialMcpManagerToolNames = new Set<string>();
 		for (const tool of wrappedExtensionTools) {

@@ -303,11 +303,24 @@ export interface TodoReminderEvent {
 // Shared Event Result Shapes
 // ============================================================================
 
+/** Runtime-only authority for one core-origin task result; never a model/RPC payload. */
+export interface TaskResultAuthorityContext {
+	readonly sessionId: string;
+	readonly promptEntryId: string;
+	readonly assistantEntryId: string;
+	readonly toolCallId: string;
+}
+export type TaskResultAuthorityValidator = (
+	context: TaskResultAuthorityContext,
+) => Promise<{ ok: true } | { ok: false; reason: string }>;
+
 /**
  * Return type for `tool_call` handlers.
  * Allows handlers to block tool execution or revise the input the tool runs with.
  */
 export interface ToolCallEventResult {
+	/** Optional task-only runtime callback. Multiple authorizers are rejected, never last-wins. */
+	taskResultAuthority?: TaskResultAuthorityValidator;
 	/** If true, block the tool from executing */
 	block?: boolean;
 	/** Reason for blocking (returned to LLM as error) */

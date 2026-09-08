@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Agent, type AgentEvent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as customTools from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools";
@@ -12,7 +14,7 @@ import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-
 import { AgentRegistry, getAgentTombstonePath } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import * as sdk from "@oh-my-pi/pi-coding-agent/sdk";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as artifacts from "@oh-my-pi/pi-coding-agent/session/artifacts";
 import { TOOL_EXECUTION_START_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
 import { loadSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
@@ -36,6 +38,7 @@ import * as outputMeta from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { TempDir, untilAborted } from "@oh-my-pi/pi-utils";
 import assignment from "../../../python/omp-work/tests/fixtures/task-active-assignment.md" with { type: "text" };
+import ownerResume from "./fixtures/task-recovery-owner-resume.md" with { type: "text" };
 import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 interface WireRequest {
@@ -63,7 +66,7 @@ describe("native task recovery session integration", () => {
 		startRun = true,
 		preparedContext = false,
 		assistantNarration = false,
-		testOptions: { maxRuntimeMs?: number; outputSchema?: unknown } = {},
+		testOptions: { maxRuntimeMs?: number; outputSchema?: unknown; extensions?: ExtensionFactory[] } = {},
 	) {
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
@@ -207,6 +210,7 @@ describe("native task recovery session integration", () => {
 				settings,
 				disableExtensionDiscovery: true,
 				extensions: [
+					...(testOptions.extensions ?? []),
 					...extraExtensions,
 					...(preparedContext
 						? [
@@ -356,6 +360,918 @@ describe("native task recovery session integration", () => {
 		AgentRegistry.resetGlobalForTests();
 		return { f, snapshot, ready: state.ready };
 	}
+
+	async function originalReadyFixture() {
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let held = false;
+		cleanups.push(async () => release.resolve());
+		const f = await fixture(false, true, true, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", (event, ctx) =>
+						event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										if (
+											!held &&
+											ctx.sessionManager
+												.getEntries()
+												.some(
+													entry =>
+														entry.type === "custom" && entry.customType === TASK_NATIVE_RESULT_READY,
+												)
+										) {
+											held = true;
+											reached.resolve();
+											await release.promise;
+										}
+										return { ok: true };
+									},
+								}
+							: undefined,
+					);
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		await untilAborted(AbortSignal.timeout(10000), reached.promise);
+		const snapshot = await f.takeSnapshot();
+		const state = taskResultRecoveryState(f.manager.getEntries(), f.manager.getBranch(), snapshot.binding);
+		if (!state.ready || state.processing) throw new Error("Original native checkpoint was not unprocessed");
+		expect(state.ready.record.producer).toBe("original-sync-task-v1");
+		const child = AgentRegistry.global().get(snapshot.binding.child.registryId)?.session;
+		release.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.run!);
+		await f.session.dispose();
+		await child?.dispose();
+		await fs.rm(snapshot.artifactsDir, { recursive: true, force: true });
+		for (const [name, bytes] of snapshot.artifacts) await Bun.write(path.join(snapshot.artifactsDir, name), bytes);
+		await Bun.write(snapshot.file, snapshot.journal);
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		return { f, snapshot, ready: state.ready };
+	}
+
+	it("qualified original ready checkpoint restores actual parent wire result without reopening the completed child", async () => {
+		const { f, snapshot, ready } = await originalReadyFixture();
+		const journal = await SessionManager.open(snapshot.file);
+		let hooks = 0;
+		const { session } = await f.createParent(journal, [
+			pi => {
+				pi.on("tool_result", async event => {
+					if (event.toolName !== "task") return;
+					const disk = await loadSessionFile(snapshot.file);
+					expect(
+						disk.entries.filter(
+							entry => entry.type === "custom" && entry.customType === TASK_RESULT_PROCESSING_STARTED,
+						),
+					).toHaveLength(1);
+					hooks++;
+				});
+			},
+		]);
+		f.setCurrentSession(session);
+		await initializeExtensions(session, { reportSendError: () => {}, reportRuntimeError: () => {} });
+		const revive = vi.spyOn(AgentLifecycleManager.global(), "ensureLive");
+		const requests = f.calls.length;
+		const refusals: unknown[] = [];
+		session.requestPersistedTurnContinuation({
+			sessionId: session.sessionId,
+			entryId: snapshot.binding.call.promptEntryId,
+			expectedLeafId: journal.getLeafId()!,
+			recoverSynchronousTask: true,
+			validateDispatch: async () => ({ ok: true }),
+			onRefused: reason => refusals.push(reason),
+		});
+		await untilAborted(AbortSignal.timeout(10000), session.waitForIdle());
+		expect(refusals).toEqual([]);
+		expect(revive).not.toHaveBeenCalled();
+		expect(hooks).toBe(1);
+		const resumed = f.calls.slice(requests);
+		expect(resumed.filter(request => request.model === "child")).toHaveLength(0);
+		const wire = resumed.find(
+			request =>
+				request.model === "parent" && request.messages.some(message => message.tool_call_id === "original-task"),
+		)?.messages;
+		expect(wire).toBeDefined();
+		const taskCall = wire!.flatMap(message => message.tool_calls ?? []).filter(call => call.id === "original-task");
+		expect(taskCall).toHaveLength(1);
+		expect(JSON.parse(taskCall[0].function.arguments).task).toBe(assignment);
+		expect(wire!.filter(message => message.tool_call_id === "original-task")).toHaveLength(1);
+		expect(wire!.find(message => message.tool_call_id === "original-task")?.content).toContain("before");
+		const state = taskResultRecoveryState(journal.getEntries(), journal.getBranch(), snapshot.binding);
+		expect(state.ready?.record.payloadJson).toBe(ready.record.payloadJson);
+		expect(state.processing?.record.readyEntryId).toBe(ready.entryId);
+	}, 30000);
+
+	it("qualified original completion persists its claim and result before the parent provider sees the pair", async () => {
+		let resultHooks = 0;
+		let authorityCalls = 0;
+		const f = await fixture(false, true, true, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event => {
+						return event.toolName === "task" && event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										authorityCalls++;
+										return { ok: true };
+									},
+								}
+							: undefined;
+					});
+					pi.on("tool_result", event => {
+						if (event.toolName === "task") {
+							resultHooks++;
+							(event.details as TaskToolDetails).results[0].output = "Hook processed actual native result";
+						}
+					});
+				},
+			],
+		});
+		try {
+			await untilAborted(AbortSignal.timeout(10000), f.childReached.promise);
+		} catch (error) {
+			throw new Error(`${error}: ${JSON.stringify(f.session.messages)}`);
+		}
+		f.releaseChild.resolve();
+		try {
+			await untilAborted(AbortSignal.timeout(10000), f.parentReached.promise);
+		} catch (error) {
+			throw new Error(`${error}: ${JSON.stringify(f.session.messages)}`);
+		}
+		const binding = f.manager
+			.getBranch()
+			.map(readTaskBinding)
+			.find(value => value !== undefined)!;
+		const state = taskResultRecoveryState(f.manager.getEntries(), f.manager.getBranch(), binding);
+		if (!state.ready) throw new Error(JSON.stringify({ authorityCalls, entries: f.manager.getEntries() }));
+		expect(state.ready?.record.producer).toBe("original-sync-task-v1");
+		expect(state.processing?.record.readyEntryId).toBe(state.ready?.entryId);
+		expect(resultHooks).toBe(1);
+		expect(authorityCalls).toBeGreaterThan(1);
+		const disk = await loadSessionFile(f.manager.getSessionFile()!);
+		const result = disk.entries.find(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolCallId === "original-task",
+		);
+		expect(result?.type === "message" && result.taskResult?.completion?.processingEntryId).toBe(
+			state.processing?.entryId,
+		);
+		const wire = f.calls.find(
+			request =>
+				request.model === "parent" && request.messages.some(message => message.tool_call_id === "original-task"),
+		)?.messages;
+		expect(wire?.filter(message => message.tool_call_id === "original-task")).toHaveLength(1);
+		const calls = wire?.flatMap(message => message.tool_calls ?? []).filter(call => call.id === "original-task");
+		expect(calls).toHaveLength(1);
+		expect(JSON.parse(calls![0].function.arguments).task).toBe(assignment);
+		const raw = JSON.parse(state.ready.record.payloadJson) as { details: TaskToolDetails };
+		expect(raw.details.results[0].output).toContain("before");
+		expect(raw.details.results[0].output).not.toContain("Hook processed");
+		expect(wire!.find(message => message.tool_call_id === "original-task")?.content).toContain("before");
+		f.releaseParent.resolve();
+		await f.run;
+	}, 30000);
+
+	it("qualified original authority failure cannot downgrade into task result hooks or child execution", async () => {
+		let hooks = 0;
+		let validations = 0;
+		const f = await fixture(false, true, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										validations++;
+										return { ok: false, reason: "Execution authority was revoked" };
+									},
+								}
+							: undefined,
+					);
+					pi.on("tool_result", event => {
+						if (event.toolName === "task") hooks++;
+					});
+				},
+			],
+		});
+		await untilAborted(
+			AbortSignal.timeout(10000),
+			f.run!.catch(() => {}),
+		);
+		expect(validations).toBe(1);
+		expect(hooks).toBe(0);
+		expect(f.calls.filter(request => request.model === "child")).toHaveLength(0);
+		expect(
+			f.calls.filter(
+				request => request.model === "parent" && request.messages.some(message => message.role === "tool"),
+			),
+		).toHaveLength(0);
+		expect(
+			f.manager.getEntries().filter(entry => entry.type === "message" && entry.message.role === "toolResult"),
+		).toHaveLength(0);
+	}, 15000);
+
+	it("qualified original first-use assistant copy is refused before authority activation or child dispatch", async () => {
+		let validations = 0;
+		let hooks = 0;
+		const capture = AgentSession.prototype.captureTaskCall;
+		vi.spyOn(AgentSession.prototype, "captureTaskCall").mockImplementation(function (
+			this: AgentSession,
+			id,
+			params,
+			signal,
+		) {
+			const original = this.messages.findLast(message => message.role === "assistant");
+			if (original)
+				this.agent.replaceMessages(
+					this.messages.map(message => (message === original ? { ...original } : message)),
+				);
+			return capture.call(this, id, params, signal);
+		});
+		const f = await fixture(false, true, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										validations++;
+										return { ok: true };
+									},
+								}
+							: undefined,
+					);
+					pi.on("tool_result", event => {
+						if (event.toolName === "task") hooks++;
+					});
+				},
+			],
+		});
+		await untilAborted(
+			AbortSignal.timeout(10000),
+			f.run!.catch(() => {}),
+		);
+		expect(validations).toBe(0);
+		expect(hooks).toBe(0);
+		expect(f.calls.filter(request => request.model === "child")).toHaveLength(0);
+		expect(
+			f.manager.getEntries().filter(entry => entry.type === "message" && entry.message.role === "toolResult"),
+		).toHaveLength(0);
+		const requestsBeforeOwner = f.calls.length;
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.session.prompt(ownerResume));
+		const ownerRequests = f.calls
+			.slice(requestsBeforeOwner)
+			.filter(request => request.model === "parent" && request.tools?.some(tool => tool.function.name === "task"));
+		expect(ownerRequests).toHaveLength(1);
+		expect(
+			ownerRequests[0].messages.some(
+				message => message.role === "user" && JSON.stringify(message.content).includes(ownerResume.trim()),
+			),
+		).toBe(true);
+		expect(validations).toBe(0);
+		expect(hooks).toBe(0);
+	}, 15000);
+
+	it("owner-authored task remains ordinary when a matching execution authority callback is available", async () => {
+		let validations = 0;
+		let hooks = 0;
+		const f = await fixture(false, false, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										validations++;
+										return { ok: true };
+									},
+								}
+							: undefined,
+					);
+					pi.on("tool_result", event => {
+						if (event.toolName === "task") hooks++;
+					});
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.session.prompt(assignment));
+		expect(validations).toBe(0);
+		expect(hooks).toBe(1);
+		expect(f.calls.filter(request => request.model === "child")).toHaveLength(2);
+		expect(
+			f.manager
+				.getEntries()
+				.filter(
+					entry =>
+						entry.type === "custom" &&
+						(entry.customType === TASK_NATIVE_RESULT_READY ||
+							entry.customType === TASK_RESULT_PROCESSING_STARTED),
+				),
+		).toHaveLength(0);
+	}, 15000);
+
+	for (const failedMarker of [TASK_NATIVE_RESULT_READY, TASK_RESULT_PROCESSING_STARTED]) {
+		it(`qualified original ${failedMarker} append failure cannot reach fallback result hooks or parent provider`, async () => {
+			const append = SessionManager.prototype.appendCustomEntry;
+			let failed = false;
+			let hooks = 0;
+			vi.spyOn(SessionManager.prototype, "appendCustomEntry").mockImplementation(function (
+				this: SessionManager,
+				type,
+				data,
+			) {
+				if (type === failedMarker) {
+					failed = true;
+					throw new Error("Injected journal write failure");
+				}
+				return append.call(this, type, data);
+			});
+			const f = await fixture(false, true, false, false, {
+				extensions: [
+					pi => {
+						pi.on("tool_call", event =>
+							event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+						);
+						pi.on("tool_result", event => {
+							if (event.toolName === "task") hooks++;
+						});
+					},
+				],
+			});
+			await untilAborted(AbortSignal.timeout(10000), f.childReached.promise);
+			f.releaseChild.resolve();
+			await untilAborted(
+				AbortSignal.timeout(10000),
+				f.run!.catch(() => {}),
+			);
+			expect(failed).toBe(true);
+			expect(hooks).toBe(0);
+			expect(
+				f.calls.filter(
+					request => request.model === "parent" && request.messages.some(message => message.role === "tool"),
+				),
+			).toHaveLength(0);
+			const disk = await loadSessionFile(f.manager.getSessionFile()!);
+			expect(
+				disk.entries.filter(entry => entry.type === "message" && entry.message.role === "toolResult"),
+			).toHaveLength(0);
+			expect(
+				disk.entries.filter(entry => entry.type === "custom" && entry.customType === failedMarker),
+			).toHaveLength(0);
+		}, 15000);
+	}
+
+	it("qualified original hook effect with no result stays refused after restart without repeating processing", async () => {
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let hooks = 0;
+		cleanups.push(async () => release.resolve());
+		const f = await fixture(false, true, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+					pi.on("tool_result", async (event, ctx) => {
+						if (event.toolName !== "task") return;
+						hooks++;
+						await Bun.write(path.join(ctx.cwd, "original-hook-effect.txt"), String(hooks));
+						reached.resolve();
+						await release.promise;
+					});
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		await untilAborted(AbortSignal.timeout(10000), reached.promise);
+		const snapshot = await f.takeSnapshot();
+		const state = taskResultRecoveryState(f.manager.getEntries(), f.manager.getBranch(), snapshot.binding);
+		expect(state.processing?.record.readyEntryId).toBe(state.ready?.entryId);
+		f.settings.set("tools.approval", { read: "deny" });
+		release.resolve();
+		await untilAborted(
+			AbortSignal.timeout(10000),
+			f.run!.catch(() => {}),
+		);
+		expect(
+			f.calls.filter(
+				request => request.model === "parent" && request.messages.some(message => message.role === "tool"),
+			),
+		).toHaveLength(0);
+		expect(
+			f.session.messages.filter(message => message.role === "toolResult" && message.toolCallId === "original-task"),
+		).toHaveLength(0);
+		const after = await loadSessionFile(snapshot.file);
+		expect(
+			after.entries.filter(entry => entry.type === "message" && entry.message.role === "toolResult"),
+		).toHaveLength(0);
+		const child = AgentRegistry.global().get(snapshot.binding.child.registryId)?.session;
+		await f.session.dispose();
+		await child?.dispose();
+		await fs.rm(snapshot.artifactsDir, { recursive: true, force: true });
+		for (const [name, bytes] of snapshot.artifacts) await Bun.write(path.join(snapshot.artifactsDir, name), bytes);
+		await Bun.write(snapshot.file, snapshot.journal);
+		f.settings.set("tools.approval", {});
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		const journal = await SessionManager.open(snapshot.file);
+		const { session } = await f.createParent(journal);
+		f.setCurrentSession(session);
+		await initializeExtensions(session, { reportSendError: () => {}, reportRuntimeError: () => {} });
+		const requests = f.calls.length;
+		const refusals: unknown[] = [];
+		const outcome = session.requestPersistedTurnContinuation({
+			sessionId: session.sessionId,
+			entryId: snapshot.binding.call.promptEntryId,
+			expectedLeafId: journal.getLeafId()!,
+			recoverSynchronousTask: true,
+			validateDispatch: async () => ({ ok: true }),
+			onRefused: reason => refusals.push(reason),
+		});
+		await untilAborted(AbortSignal.timeout(10000), session.waitForIdle());
+		expect(outcome.status).toBe("refused");
+		if (outcome.status !== "refused") throw new Error("Incomplete original processing was admitted");
+		expect(outcome.code).toBe("task-result-processing-incomplete");
+		expect(refusals).toEqual([]);
+		expect(f.calls.length).toBe(requests);
+		expect(hooks).toBe(1);
+		expect(await Bun.file(path.join(f.root.path(), "original-hook-effect.txt")).text()).toBe("1");
+	}, 30000);
+
+	it("qualified original final result append failure retains native evidence without exposing success or parent dispatch", async () => {
+		const append = SessionManager.prototype.appendMessage;
+		let failed = false;
+		let hooks = 0;
+		vi.spyOn(SessionManager.prototype, "appendMessage").mockImplementation(function (
+			this: SessionManager,
+			message,
+			metadata,
+		) {
+			if (message.role === "toolResult" && message.toolName === "task") {
+				failed = true;
+				throw new Error("Original result journal append failed");
+			}
+			return append.call(this, message, metadata);
+		});
+		const f = await fixture(false, true, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+					pi.on("tool_result", event => {
+						if (event.toolName === "task") hooks++;
+					});
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		await untilAborted(
+			AbortSignal.timeout(10000),
+			f.run!.catch(() => {}),
+		);
+		expect(failed).toBe(true);
+		expect(hooks).toBe(1);
+		expect(
+			f.calls.filter(
+				request => request.model === "parent" && request.messages.some(message => message.role === "tool"),
+			),
+		).toHaveLength(0);
+		expect(
+			f.session.messages.filter(message => message.role === "toolResult" && message.toolCallId === "original-task"),
+		).toHaveLength(0);
+		const disk = await loadSessionFile(f.manager.getSessionFile()!);
+		expect(
+			disk.entries.filter(entry => entry.type === "custom" && entry.customType === TASK_NATIVE_RESULT_READY),
+		).toHaveLength(1);
+		expect(
+			disk.entries.filter(entry => entry.type === "custom" && entry.customType === TASK_RESULT_PROCESSING_STARTED),
+		).toHaveLength(1);
+		expect(
+			disk.entries.filter(entry => entry.type === "message" && entry.message.role === "toolResult"),
+		).toHaveLength(0);
+	}, 15000);
+
+	it("qualified original delivered child remains available for later ordinary lifecycle revival", async () => {
+		const f = await fixture(false, true, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.run!);
+		const binding = f.manager
+			.getBranch()
+			.map(readTaskBinding)
+			.find(value => value !== undefined)!;
+		const before = AgentRegistry.global().get(binding.child.registryId)?.session;
+		const lifecycle = AgentLifecycleManager.global();
+		await lifecycle.park(binding.child.registryId);
+		expect(AgentRegistry.global().get(binding.child.registryId)?.session).toBeNull();
+		const revived = await lifecycle.ensureLive(binding.child.registryId);
+		expect(revived).not.toBe(before);
+		expect(revived.sessionId).toBe(binding.child.sessionId);
+		expect(revived.sessionFile).toBe(binding.child.sessionFile);
+		await untilAborted(AbortSignal.timeout(10000), revived.prompt(assignment, { attribution: "agent" }));
+		expect(revived.messages.at(-1)?.role).toBe("toolResult");
+		await revived.dispose();
+	}, 30000);
+
+	it("qualified original result message-end delivery failure cannot commit or advance parent", async () => {
+		const f = await fixture(false, false, true, false, {
+			extensions: [
+				pi => {
+					pi.on("message_end", () => {});
+					pi.on("tool_call", event =>
+						event.toolName === "task" && event.taskResultOrigin
+							? { taskResultAuthority: async () => ({ ok: true }) }
+							: undefined,
+					);
+				},
+			],
+		});
+		const runner = f.session.extensionRunner!;
+		const emit = runner.emit.bind(runner);
+		let failed = false;
+		vi.spyOn(runner, "emit").mockImplementation(event => {
+			if (
+				event.type === "message_end" &&
+				event.message.role === "toolResult" &&
+				event.message.toolCallId === "original-task"
+			) {
+				failed = true;
+				return Promise.reject(new Error("Probe original message-end delivery failed"));
+			}
+			return emit(event);
+		});
+		f.releaseParent.resolve();
+		const run = f.session.sendCustomMessage(
+			{ customType: "work-execute", content: assignment, display: false, attribution: "agent" },
+			{ triggerTurn: true },
+		);
+		cleanups.push(async () => {
+			f.releaseChild.resolve();
+			await run.catch(() => {});
+		});
+		await untilAborted(AbortSignal.timeout(10000), f.childReached.promise);
+		f.releaseChild.resolve();
+		await untilAborted(AbortSignal.timeout(10000), run);
+		await f.session.waitForIdle();
+		await f.manager.flush();
+		const disk = await loadSessionFile(f.manager.getSessionFile()!);
+		const results = disk.entries.filter(
+			e => e.type === "message" && e.message.role === "toolResult" && e.message.toolCallId === "original-task",
+		);
+		const requests = f.calls.filter(
+			c => c.model === "parent" && c.messages.some(m => m.tool_call_id === "original-task"),
+		);
+		expect(failed).toBe(true);
+		expect(results).toHaveLength(0);
+		expect(requests).toHaveLength(0);
+	}, 30000);
+	it("qualified original owner follow-up during result delivery preserves input and suppresses uncommitted success", async () => {
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		cleanups.push(async () => release.resolve());
+		const f = await fixture(false, true, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+					);
+					pi.on("message_end", async event => {
+						if (event.message.role === "toolResult" && event.message.toolName === "task") {
+							reached.resolve();
+							await release.promise;
+						}
+					});
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		await untilAborted(AbortSignal.timeout(10000), reached.promise);
+		await f.session.sendUserMessage(assignment, { deliverAs: "followUp" });
+		expect(f.session.getQueuedMessages().followUp).toEqual([assignment]);
+		release.resolve();
+		await untilAborted(
+			AbortSignal.timeout(10000),
+			f.run!.catch(() => {}),
+		);
+		expect(f.session.getQueuedMessages().followUp).toEqual([assignment]);
+		expect(
+			f.session.messages.filter(message => message.role === "toolResult" && message.toolCallId === "original-task"),
+		).toHaveLength(0);
+		const disk = await loadSessionFile(f.manager.getSessionFile()!);
+		expect(
+			disk.entries.filter(entry => entry.type === "message" && entry.message.role === "toolResult"),
+		).toHaveLength(0);
+		const requestsBeforeOwner = f.calls.length;
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.session.waitForIdle());
+		await untilAborted(AbortSignal.timeout(10000), f.session.prompt(ownerResume));
+		expect(f.session.getQueuedMessages().followUp).toEqual([]);
+		const ownerRequests = f.calls
+			.slice(requestsBeforeOwner)
+			.filter(request => request.model === "parent" && request.tools?.some(tool => tool.function.name === "task"));
+		const explicitOwnerRequests = ownerRequests.filter(request =>
+			request.messages.some(
+				message => message.role === "user" && JSON.stringify(message.content).includes(ownerResume.trim()),
+			),
+		);
+		expect(explicitOwnerRequests).toHaveLength(1);
+		const ownerText = JSON.stringify(explicitOwnerRequests[0].messages.filter(message => message.role === "user"));
+		expect(ownerText).toContain(ownerResume.trim());
+		const initialRequest = f.calls
+			.slice(0, requestsBeforeOwner)
+			.find(request => request.model === "parent" && request.tools?.some(tool => tool.function.name === "task"))!;
+		const initialText = JSON.stringify(initialRequest.messages.filter(message => message.role === "user"));
+		expect(ownerText.split(assignment.trim()).length - 1).toBe(initialText.split(assignment.trim()).length);
+	}, 15000);
+
+	it("qualified original message-start authority cannot be overtaken by result commit/provider dispatch", async () => {
+		const eventScope = new AsyncLocalStorage<AgentEvent>();
+		const subscribe = Agent.prototype.subscribe;
+		vi.spyOn(Agent.prototype, "subscribe").mockImplementation(function (this: Agent, fn) {
+			return subscribe.call(this, event => eventScope.run(event, () => fn(event)));
+		});
+		const parentBoundary = Promise.withResolvers<void>();
+		const addBeforeModel = Agent.prototype.addBeforeModelCall;
+		vi.spyOn(Agent.prototype, "addBeforeModelCall").mockImplementation(function (this: Agent, fn) {
+			return addBeforeModel.call(this, (context, signal) => {
+				if (context.messages.some(m => m.role === "toolResult" && m.toolCallId === "original-task"))
+					parentBoundary.resolve();
+				return fn(context, signal);
+			});
+		});
+		const held = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		cleanups.push(async () => release.resolve());
+		let stopped = false;
+		const f = await fixture(false, true, true, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.toolName === "task" && event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										const phase = eventScope.getStore();
+										if (
+											!stopped &&
+											phase?.type === "message_start" &&
+											phase.message.role === "toolResult" &&
+											phase.message.toolCallId === "original-task"
+										) {
+											stopped = true;
+											held.resolve();
+											await release.promise;
+										}
+										return { ok: true };
+									},
+								}
+							: undefined,
+					);
+				},
+			],
+		});
+		await untilAborted(AbortSignal.timeout(10000), f.childReached.promise);
+		f.releaseChild.resolve();
+		await untilAborted(AbortSignal.timeout(10000), held.promise);
+		await untilAborted(AbortSignal.timeout(10000), parentBoundary.promise);
+		const before = await loadSessionFile(f.manager.getSessionFile()!);
+		const resultsBefore = before.entries.filter(
+			e => e.type === "message" && e.message.role === "toolResult" && e.message.toolCallId === "original-task",
+		);
+		const providerBefore = f.calls.filter(
+			c => c.model === "parent" && c.messages.some(m => m.tool_call_id === "original-task"),
+		);
+		expect(resultsBefore).toHaveLength(0);
+		expect(providerBefore).toHaveLength(0);
+		release.resolve();
+		f.releaseParent.resolve();
+		await f.run;
+		await f.session.waitForIdle();
+		await f.manager.flush();
+		const after = await loadSessionFile(f.manager.getSessionFile()!);
+		const resultsAfter = after.entries.filter(
+			e => e.type === "message" && e.message.role === "toolResult" && e.message.toolCallId === "original-task",
+		);
+		const live = f.session.messages.filter(m => m.role === "toolResult" && m.toolCallId === "original-task");
+		expect(resultsAfter).toHaveLength(1);
+		expect(live).toHaveLength(1);
+		expect(
+			f.calls.filter(c => c.model === "parent" && c.messages.some(m => m.tool_call_id === "original-task")),
+		).toHaveLength(1);
+	}, 30000);
+
+	it("qualified original capture cannot adopt a foreign leaf during initial persistence", async () => {
+		const f = await fixture(false, false, true, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.toolName === "task" && event.taskResultOrigin
+							? { taskResultAuthority: async () => ({ ok: true }) }
+							: undefined,
+					);
+				},
+			],
+		});
+		let capturing = false;
+		let foreign: string | undefined;
+		const capture = f.session.captureTaskCall.bind(f.session);
+		vi.spyOn(f.session, "captureTaskCall").mockImplementation(async (...args) => {
+			capturing = true;
+			try {
+				return await capture(...args);
+			} finally {
+				capturing = false;
+			}
+		});
+		const flush = f.manager.flush.bind(f.manager);
+		vi.spyOn(f.manager, "flush").mockImplementation(async () => {
+			await flush();
+			if (capturing && !foreign) {
+				foreign = f.manager.appendCustomEntry("foreign-owner-during-initial-persistence", { owner: "new" });
+				await flush();
+			}
+		});
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await f.session.sendCustomMessage(
+			{ customType: "work-execute", content: assignment, display: false, attribution: "agent" },
+			{ triggerTurn: true },
+		);
+		await f.session.waitForIdle();
+		await f.manager.flush();
+		const children = f.calls.filter(c => c.model === "child");
+		const ready = f.manager
+			.getEntries()
+			.filter(e => e.type === "custom" && e.customType === TASK_NATIVE_RESULT_READY);
+		expect(foreign).toBeDefined();
+		expect(children).toHaveLength(0);
+		expect(ready).toHaveLength(0);
+	}, 30000);
+	it("qualified original post-flush ownership loss preserves already-durable original result", async () => {
+		const f = await fixture(false, false, true, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.toolName === "task" && event.taskResultOrigin
+							? { taskResultAuthority: async () => ({ ok: true }) }
+							: undefined,
+					);
+				},
+			],
+		});
+		let foreign: string | undefined;
+		const flush = f.manager.flush.bind(f.manager);
+		vi.spyOn(f.manager, "flush").mockImplementation(async () => {
+			await flush();
+			const leaf = f.manager.getEntry(f.manager.getLeafId()!);
+			if (
+				!foreign &&
+				leaf?.type === "message" &&
+				leaf.message.role === "toolResult" &&
+				leaf.message.toolCallId === "original-task"
+			) {
+				foreign = f.manager.appendCustomEntry("foreign-owner-after-durable-result", { owner: "new" });
+				await flush();
+			}
+		});
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await f.session.sendCustomMessage(
+			{ customType: "work-execute", content: assignment, display: false, attribution: "agent" },
+			{ triggerTurn: true },
+		);
+		await f.session.waitForIdle();
+		await f.manager.flush();
+		const disk = await loadSessionFile(f.manager.getSessionFile()!);
+		const results = disk.entries.filter(
+			e => e.type === "message" && e.message.role === "toolResult" && e.message.toolCallId === "original-task",
+		);
+		const live = f.session.messages.filter(m => m.role === "toolResult" && m.toolCallId === "original-task");
+		const requests = f.calls.filter(
+			c => c.model === "parent" && c.messages.some(m => m.tool_call_id === "original-task"),
+		);
+		expect(foreign).toBeDefined();
+		expect(results).toHaveLength(1);
+		expect(requests).toHaveLength(0);
+		expect(live).toHaveLength(1);
+	}, 30000);
+
+	it("qualified original retained authority cannot downgrade when the session changes before capture", async () => {
+		let validations = 0;
+		let hooks = 0;
+		const f = await fixture(false, false, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										validations++;
+										return { ok: true };
+									},
+								}
+							: undefined,
+					);
+					pi.on("tool_result", event => {
+						if (event.toolName === "task") hooks++;
+					});
+				},
+			],
+		});
+		const replacement = SessionManager.create(f.root.path(), path.join(f.root.path(), "other-sessions"));
+		await replacement.ensureOnDisk();
+		const replacementFile = replacement.getSessionFile()!;
+		await replacement.close();
+		const capture = f.session.captureTaskCall.bind(f.session);
+		vi.spyOn(f.session, "captureTaskCall").mockImplementation(async (...args) => {
+			await f.manager.setSessionFile(replacementFile);
+			return capture(...args);
+		});
+		await untilAborted(
+			AbortSignal.timeout(10000),
+			f.session
+				.sendCustomMessage(
+					{ customType: "work-execute", content: assignment, display: false, attribution: "agent" },
+					{ triggerTurn: true },
+				)
+				.catch(() => {}),
+		);
+		expect(validations).toBe(0);
+		expect(hooks).toBe(0);
+		expect(f.calls.filter(request => request.model === "child")).toHaveLength(0);
+		expect(
+			f.manager
+				.getEntries()
+				.filter(entry => entry.type === "custom" && entry.customType === TASK_NATIVE_RESULT_READY),
+		).toHaveLength(0);
+	}, 15000);
+
+	it("qualified original child bootstrap rejects foreign journal append during initial authority", async () => {
+		let changed = false;
+		const f = await fixture(false, true, false, false, {
+			extensions: [
+				pi => {
+					pi.on("tool_call", (event, ctx) =>
+						event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										const binding = ctx.sessionManager
+											.getBranch()
+											.map(readTaskBinding)
+											.find(value => value !== undefined);
+										const child = binding
+											? AgentRegistry.global().get(binding.child.registryId)?.session
+											: undefined;
+										if (
+											child &&
+											!changed &&
+											!child.sessionManager.getBranch().some(entry => readPreparationRecord(entry))
+										) {
+											changed = true;
+											child.sessionManager.appendCustomEntry(
+												"foreign-owner-during-initial-child-authority",
+												{ owner: "changed" },
+											);
+											await child.sessionManager.flush();
+										}
+										return { ok: true };
+									},
+								}
+							: undefined,
+					);
+				},
+			],
+		});
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await f.run;
+		await f.session.waitForIdle();
+		const children = f.calls.filter(c => c.model === "child");
+		const ready = f.manager
+			.getEntries()
+			.filter(e => e.type === "custom" && e.customType === TASK_NATIVE_RESULT_READY);
+		expect(changed).toBe(true);
+		expect(children).toHaveLength(0);
+		expect(ready).toHaveLength(0);
+	}, 30000);
 
 	it("writes original parent/child binding before first child response and attaches the real yield result", async () => {
 		const f = await fixture();

@@ -16,6 +16,7 @@ import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { AgentSession } from "../session/agent-session";
 import type { TaskEffort } from "../thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../tools/hub";
@@ -35,6 +36,7 @@ import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
 import {
 	initializationContract,
+	type NativeTaskOutputIdentity,
 	type PersistedTaskBindingV1,
 	type TaskCallCapture,
 	taskRecoveryHash,
@@ -91,6 +93,15 @@ export interface StructuredSubagentIdentity {
 export interface StructuredSubagentRequest {
 	/** Set only by the eligible synchronous native TaskTool invocation. */
 	captureTaskCall?: (policy: EffectiveSubagentPolicy) => Promise<TaskCallCapture | undefined>;
+	onNativeResult?: (
+		capture: TaskCallCapture,
+		binding: PersistedTaskBindingV1,
+		child: AgentSession,
+		result: SingleResult,
+		output: NativeTaskOutputIdentity | undefined,
+		artifactsDir: string,
+		projectAgentsDir: string | null,
+	) => Promise<void>;
 	recoveryArgs?: TaskParams;
 	recoveryRawAssignment?: string;
 	session: ToolSession;
@@ -582,8 +593,26 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		if (taskCapture && request.recoveryArgs) {
 			const recoveryArgs = request.recoveryArgs;
 			const parentPolicy = taskRecoveryPolicy(request.session);
+			let boundChild: AgentSession | undefined;
+			let boundBinding: PersistedTaskBindingV1 | undefined;
 			baseOptions.taskRecovery = {
 				call: taskCapture.call,
+				completion: taskCapture.completion,
+				onNativeResult: taskCapture.completion
+					? async (result, output) => {
+							if (!boundChild || !boundBinding || !request.onNativeResult)
+								throw new Error("Original native result has no bound projection");
+							await request.onNativeResult(
+								taskCapture,
+								boundBinding,
+								boundChild,
+								result,
+								output,
+								lease.artifactsDir,
+								policy.discovery.projectAgentsDir,
+							);
+						}
+					: undefined,
 				onChildPrepared: async ({ session, init, registryId }) => {
 					const contract = {
 						agent: policy.effectiveAgent,
@@ -611,6 +640,8 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 						contractSha256: taskRecoveryHash(contract),
 					};
 					await taskCapture.bindChild(binding);
+					boundBinding = binding;
+					boundChild = session;
 				},
 			};
 		}
@@ -633,7 +664,9 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		}
 		let result: SingleResult;
 		if (!isolationContext) {
-			result = await runSubprocess(baseOptions);
+			result = taskCapture?.completion
+				? await taskCapture.completion.runNative(() => runSubprocess(baseOptions))
+				: await runSubprocess(baseOptions);
 			onSubprocessResult?.(result);
 		} else {
 			result = await runIsolatedSubprocess({

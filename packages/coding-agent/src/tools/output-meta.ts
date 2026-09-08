@@ -17,6 +17,7 @@ import { getDefault, type Settings } from "../config/settings";
 import { formatGroupedDiagnosticMessages } from "../lsp/utils";
 import type { Theme } from "../modes/theme/theme";
 import { type OutputSummary, type TruncationResult, truncateMiddle, truncateTail } from "../session/streaming-output";
+import type { TaskResultProcessingGate } from "../task/recovery";
 import { formatBytes, wrapBrackets } from "./render-utils";
 import { renderError } from "./tool-errors";
 
@@ -604,6 +605,7 @@ function appendOutputNotice(
 }
 
 const kUnwrappedExecute = Symbol("OutputMeta.UnwrappedExecute");
+const kTaskResultGate = Symbol("OutputMeta.TaskResultGate");
 
 // =============================================================================
 // Centralized artifact spill for large tool results
@@ -851,7 +853,10 @@ export async function processToolResultOutput<T>(
 }
 
 async function wrappedExecute(
-	this: AgentTool & { [kUnwrappedExecute]: AgentToolExecFn },
+	this: AgentTool & {
+		[kUnwrappedExecute]: AgentToolExecFn;
+		[kTaskResultGate]?: (id: string) => TaskResultProcessingGate | undefined;
+	},
 	toolCallId: string,
 	params: any,
 	signal?: AbortSignal,
@@ -863,6 +868,7 @@ async function wrappedExecute(
 	try {
 		const result = await originalExecute.call(this, toolCallId, params, signal, onUpdate, context);
 
+		await this[kTaskResultGate]?.(toolCallId)?.enter();
 		return await processToolResultOutput(result, this.name, context);
 	} catch (e) {
 		// Re-throw with formatted message so agent-loop sets isError flag
@@ -875,7 +881,10 @@ async function wrappedExecute(
  * 1. Automatically append output notices based on details.meta
  * 2. Handle ToolError rendering
  */
-export function wrapToolWithMetaNotice<T extends AgentTool<any, any, any>>(tool: T): T {
+export function wrapToolWithMetaNotice<T extends AgentTool<any, any, any>>(
+	tool: T,
+	taskResultGate?: (id: string) => TaskResultProcessingGate | undefined,
+): T {
 	if (kUnwrappedExecute in tool) {
 		return tool;
 	}
@@ -883,6 +892,7 @@ export function wrapToolWithMetaNotice<T extends AgentTool<any, any, any>>(tool:
 	const originalExecute = tool.execute;
 
 	return Object.defineProperties(tool, {
+		[kTaskResultGate]: { value: taskResultGate, configurable: true },
 		[kUnwrappedExecute]: {
 			value: originalExecute,
 			enumerable: false,
