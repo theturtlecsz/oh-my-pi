@@ -167,6 +167,7 @@ packages/coding-agent/test/git-active-context.test.ts	shared	modified	668de1ccdb
 packages/coding-agent/test/interactive-mode-plan-review.test.ts	shared	modified	35fa09735639	feat(coding-agent): cancellable plan_approved extension event (HOME-122)	retained
 packages/coding-agent/test/marketplace/project-scope.test.ts	shared	modified	aa6a69ca0922	session candidate: OMP-127	retained
 packages/coding-agent/test/mcp-incremental-connect.test.ts	shared	modified	a3a679be42e2	ci: repair red main baseline (OMP-217)	retained
+packages/coding-agent/test/modes/noninteractive-dispose.test.ts	shared	modified	05e5c056b402	OMP-246: Keep disposal regression compatible with required session idle waiting	retained
 packages/coding-agent/test/modes/warp-events.test.ts	shared	modified	88712d3731da	session candidate: OMP-108	retained
 packages/coding-agent/test/print-mode-json-flush.test.ts	shared	modified	a6a30851ba52	fork change (describe); OMP-246: Model required idle waiting in print fake session	retained
 packages/coding-agent/test/print-mode-working-indicator.test.ts	shared	modified	cf5328d12068	fork change (describe); OMP-246: Model required idle waiting in print fake session	retained
@@ -424,7 +425,7 @@ session-system/tests/auditor-runner.test.ts	fork-only	added	5e2769994a90	session
 session-system/tests/checkpoint-delivery.test.ts	fork-only	added	fc637e476062	fix(workflow): adopt post-freeze OMP-106 drift + overlap-refusal tests (OMP-116, OMP-118); session candidate: OMP-106	retained
 session-system/tests/closeout-boundary.test.ts	fork-only	added	2c0b57a08fdc	session candidate: HOME-149; session close: HOME-130; HOME-116: commit live session rules — scope refusals, closeout lock, checkpoint contract (+tests)	retained
 session-system/tests/closeout-lock.test.ts	fork-only	added	218547110645	session candidate: OMP-172; session candidate: OMP-140; session candidate: OMP-108; fix(session): HOME-149 audit remediation; session candidate: HOME-149	retained
-session-system/tests/commit-step.test.ts	fork-only	added	610b5d074ce1	session candidate: OMP-213; session candidate: OMP-220; session candidate: OMP-218; session candidate: OMP-212; feat(workflow): support zero-path execution plans and contract OMP-194	retained
+session-system/tests/commit-step.test.ts	fork-only	added	51e262771fbb	session candidate: OMP-213; session candidate: OMP-220; session candidate: OMP-218; session candidate: OMP-212; feat(workflow): support zero-path execution plans and contract OMP-194; OMP-246: Prove remote advancement using a real shared-history clone and successful push	retained
 session-system/tests/execute-cycle-smoke.ts	fork-only	added	c50e356442b7	session candidate: OMP-223; session candidate: OMP-213; session candidate: OMP-188; session candidate: OMP-195; feat(workflow): support zero-path execution plans and contract OMP-194; OMP-246: Separate simulated persisted wakes from fresh reservations and preserve budget/refusal coverage	retained
 session-system/tests/execution-halt.test.ts	fork-only	added	359e94a45411	session candidate: OMP-251	retained
 session-system/tests/extension-load.test.ts	fork-only	added	c27f5da76f98	session candidate: OMP-25; session candidate: HOME-149; feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147); feat(session-system): fork tests + update loop after subtree merge	retained
