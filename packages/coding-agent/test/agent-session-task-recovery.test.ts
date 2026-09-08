@@ -31,7 +31,12 @@ import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/age
 
 interface WireRequest {
 	model: string;
-	messages: Array<{ role: string; content: string; tool_call_id?: string }>;
+	messages: Array<{
+		role: string;
+		content: string;
+		tool_call_id?: string;
+		tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+	}>;
 	tools?: Array<{ function: { name: string } }>;
 }
 
@@ -44,7 +49,7 @@ describe("native task recovery session integration", () => {
 		AgentRegistry.resetGlobalForTests();
 	});
 
-	async function fixture(multipleCalls = false, startRun = true) {
+	async function fixture(multipleCalls = false, startRun = true, preparedContext = false, assistantNarration = false) {
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
 		// Only discovery is confined: executable tools, sessions and task driver are real.
@@ -100,6 +105,7 @@ describe("native task recovery session integration", () => {
 					if (results.length === 0) {
 						const task = call("original-task", "task", { name: "Child", agent: "task", task: assignment });
 						delta = {
+							...(assistantNarration ? { content: assignment } : {}),
 							tool_calls: multipleCalls
 								? [call("parent-read", "read", { path: "result.txt" }), { ...task, index: 1 }]
 								: [task],
@@ -177,7 +183,15 @@ describe("native task recovery session integration", () => {
 				modelRegistry: models,
 				settings,
 				disableExtensionDiscovery: true,
-				extensions: [],
+				extensions: preparedContext
+					? [
+							pi => {
+								pi.on("before_agent_start", () => ({
+									message: { customType: "work-digest", content: assignment, display: false },
+								}));
+							},
+						]
+					: [],
 				preloadedCustomToolPaths: [],
 				skills: [],
 				contextFiles: [],
@@ -349,68 +363,105 @@ describe("native task recovery session integration", () => {
 		f.releaseParent.resolve();
 		await f.run;
 	}, 30000);
-	it("cold replay resumes the runtime-bound original child through native read and yield", async () => {
-		const f = await fixture();
-		await untilAborted(AbortSignal.timeout(10000), f.childReached.promise);
-		const snapshot = await f.takeSnapshot();
-		// Component replay of exact runtime-written snapshots. Installed tests own
-		// process death; this test neither invents nor edits binding/join fields.
-		f.releaseChild.resolve();
-		f.releaseParent.resolve();
-		await f.run;
-		await f.session.dispose();
-		await fs.rm(snapshot.artifactsDir, { recursive: true, force: true });
-		for (const [name, bytes] of snapshot.artifacts) await Bun.write(path.join(snapshot.artifactsDir, name), bytes);
-		await Bun.write(snapshot.file, snapshot.journal);
-		AgentLifecycleManager.resetGlobalForTests();
-		AgentRegistry.resetGlobalForTests();
-		const journal = await SessionManager.open(snapshot.file);
-		const { session: restored, eventBus } = await f.createParent(journal);
-		f.setCurrentSession(restored);
-		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
-			createPersistedSubagentReviverFactory({
-				session: restored,
-				authStorage: f.auth,
-				modelRegistry: f.models,
-				settings: f.settings,
-				enableLsp: false,
-				eventBus,
-			}),
-			0,
-		);
-		await initializeExtensions(restored, { reportSendError: () => {}, reportRuntimeError: () => {} });
-		const before = f.calls.length;
-		const refusals: unknown[] = [];
-		expect(
-			restored.requestPersistedTurnContinuation({
-				sessionId: restored.sessionId,
-				entryId: snapshot.binding.call.promptEntryId,
-				expectedLeafId: journal.getLeafId()!,
-				recoverSynchronousTask: true,
-				validateDispatch: async () => ({ ok: true }),
-				onRefused: reason => refusals.push(reason),
-			}),
-		).toEqual({ status: "scheduled" });
-		await untilAborted(AbortSignal.timeout(15000), restored.waitForIdle());
-		await journal.flush();
-		expect(refusals).toEqual([]);
-		expect(f.calls.slice(before).filter(call => call.model === "child")).toHaveLength(2);
-		const results = journal
-			.getBranch()
-			.filter(
-				entry =>
-					entry.type === "message" &&
-					entry.message.role === "toolResult" &&
-					entry.message.toolCallId === "original-task",
+	it.each(["call-only", "text-and-call"] as const)(
+		"cold replay restores %s assistant and dispatches parent after real read/yield",
+		async turnShape => {
+			const assistantNarration = turnShape === "text-and-call";
+			const f = await fixture(false, true, true, assistantNarration);
+			await untilAborted(AbortSignal.timeout(10000), f.childReached.promise);
+			const snapshot = await f.takeSnapshot();
+			// Component replay of exact runtime-written snapshots. Installed tests own
+			// process death; this test neither invents nor edits binding/join fields.
+			f.releaseChild.resolve();
+			f.releaseParent.resolve();
+			await f.run;
+			await f.session.dispose();
+			await fs.rm(snapshot.artifactsDir, { recursive: true, force: true });
+			for (const [name, bytes] of snapshot.artifacts) await Bun.write(path.join(snapshot.artifactsDir, name), bytes);
+			await Bun.write(snapshot.file, snapshot.journal);
+			AgentLifecycleManager.resetGlobalForTests();
+			AgentRegistry.resetGlobalForTests();
+			const journal = await SessionManager.open(snapshot.file);
+			const { session: restored, eventBus } = await f.createParent(journal);
+			f.setCurrentSession(restored);
+			const projected = restored.messages.filter(message => message.role === "assistant");
+			expect(projected).toHaveLength(assistantNarration ? 1 : 0);
+			if (assistantNarration) expect(projected[0].content).toEqual([{ type: "text", text: assignment }]);
+			AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
+				createPersistedSubagentReviverFactory({
+					session: restored,
+					authStorage: f.auth,
+					modelRegistry: f.models,
+					settings: f.settings,
+					enableLsp: false,
+					eventBus,
+				}),
+				0,
 			);
-		expect(results).toHaveLength(1);
-		const result = results[0];
-		if (result.type !== "message" || result.message.role !== "toolResult")
-			throw new Error("Original task result missing");
-		expect(result.taskResult?.childSessionId).toBe(snapshot.binding.child.sessionId);
-		expect(JSON.stringify(result.message.content)).toContain("before");
-		expect(AgentRegistry.global().get("Child-2")).toBeUndefined();
-	}, 30000);
+			await initializeExtensions(restored, { reportSendError: () => {}, reportRuntimeError: () => {} });
+			const before = f.calls.length;
+			const refusals: unknown[] = [];
+			expect(
+				restored.requestPersistedTurnContinuation({
+					sessionId: restored.sessionId,
+					entryId: snapshot.binding.call.promptEntryId,
+					expectedLeafId: journal.getLeafId()!,
+					recoverSynchronousTask: true,
+					validateDispatch: async () => ({ ok: true }),
+					onRefused: reason => refusals.push(reason),
+				}),
+			).toEqual({ status: "scheduled" });
+			await untilAborted(AbortSignal.timeout(15000), restored.waitForIdle());
+			await journal.flush();
+			expect(refusals).toEqual([]);
+			expect(f.calls.slice(before).filter(call => call.model === "child")).toHaveLength(2);
+			const results = journal
+				.getBranch()
+				.filter(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "toolResult" &&
+						entry.message.toolCallId === "original-task",
+				);
+			expect(results).toHaveLength(1);
+			const result = results[0];
+			if (result.type !== "message" || result.message.role !== "toolResult")
+				throw new Error("Original task result missing");
+			expect(result.taskResult?.childSessionId).toBe(snapshot.binding.child.sessionId);
+			expect(JSON.stringify(result.message.content)).toContain("before");
+			expect(AgentRegistry.global().get("Child-2")).toBeUndefined();
+
+			const parentRequests = f.calls
+				.slice(before)
+				.filter(call => call.model === "parent" && call.tools?.some(tool => tool.function.name === "task"));
+			expect(parentRequests).toHaveLength(1);
+			const wire = parentRequests[0].messages;
+			const originalCalls = wire
+				.flatMap(message => message.tool_calls ?? [])
+				.filter(call => call.id === "original-task");
+			expect(originalCalls).toHaveLength(1);
+			expect(JSON.parse(originalCalls[0].function.arguments)).toEqual({
+				name: "Child",
+				agent: "task",
+				task: assignment,
+			});
+			const callIndex = wire.findIndex(message => message.tool_calls?.some(call => call.id === "original-task"));
+			const resultIndex = wire.findIndex(message => message.tool_call_id === "original-task");
+			expect(resultIndex).toBeGreaterThan(callIndex);
+			expect(wire.filter(message => message.tool_call_id === "original-task")).toHaveLength(1);
+			expect(
+				journal
+					.getBranch()
+					.filter(
+						entry =>
+							entry.type === "message" &&
+							entry.message.role === "assistant" &&
+							entry.message.stopReason === "error",
+					),
+			).toHaveLength(0);
+		},
+		30000,
+	);
 
 	it("durable original task result continues parent without native recovery or child reopen", async () => {
 		const f = await fixture();

@@ -3962,6 +3962,53 @@ export class AgentSession {
 			throw new PersistedContinuationError("dispatch-failed", "Prompt preparation declined continuation");
 	}
 
+	/** Restore only the bound call that ordinary replay projected away while it lacked a result. */
+	#restorePairedTaskAssistant(scope: ParentTaskRecoveryScope, priorProjection: readonly AgentMessage[]): void {
+		scope.assertOwnership();
+		const entry = this.sessionManager.getEntry(scope.binding.call.assistantEntryId);
+		if (entry?.type !== "message" || entry.message.role !== "assistant")
+			throw new Error("Original task assistant is unavailable for paired context restoration");
+		const original = this.#obfuscator
+			? deobfuscateAgentMessages(this.#obfuscator, [entry.message])[0]
+			: entry.message;
+		const key = sessionMessagePersistenceKey(original);
+		const paired = this.buildDisplaySessionContext().messages;
+		const matching = (messages: readonly AgentMessage[]) =>
+			messages.filter(message => sessionMessagePersistenceKey(message) === key);
+		const expected = matching(paired);
+		const prior = matching(priorProjection);
+		const current = matching(this.messages);
+		if (
+			!key ||
+			expected.length !== 1 ||
+			prior.length > 1 ||
+			current.length > 1 ||
+			(current.length === 1 &&
+				this.#persistedEntryByMessage.has(current[0]) &&
+				this.#persistedEntryByMessage.get(current[0]) !== entry.id) ||
+			taskRecoveryHash(expected[0]) !== taskRecoveryHash(original) ||
+			(current.length === 1 &&
+				taskRecoveryHash(current[0]) !== taskRecoveryHash(original) &&
+				(prior.length !== 1 || taskRecoveryHash(current[0]) !== taskRecoveryHash(prior[0])))
+		)
+			throw new Error("Original task assistant projection changed before paired context restoration");
+		const remaining = this.messages.filter(message => message !== current[0]);
+		const expectedRemaining = paired.filter(message => message !== expected[0]);
+		if (
+			remaining.length !== expectedRemaining.length ||
+			remaining.some((message, index) => taskRecoveryHash(message) !== taskRecoveryHash(expectedRemaining[index]))
+		)
+			throw new Error("Parent context changed outside the original task assistant projection");
+		// Preserve every unrelated live object and all queues. No event or journal append:
+		// the original assistant is already durable, now paired by the actual result.
+		const restored =
+			current.length === 1 && taskRecoveryHash(current[0]) === taskRecoveryHash(original) ? current[0] : expected[0];
+		remaining.splice(paired.indexOf(expected[0]), 0, restored);
+		scope.assertOwnership();
+		this.#persistedEntryByMessage.set(restored, entry.id);
+		this.agent.replaceMessages(remaining);
+	}
+
 	async #recoverPersistedTaskTurn(
 		request: PersistedTurnContinuationRequest,
 		binding: PersistedTaskBindingV1,
@@ -3973,6 +4020,7 @@ export class AgentSession {
 				"unavailable",
 				"Native synchronous task recovery is unavailable in this host",
 			);
+		const projectionBeforeRecovery = this.buildDisplaySessionContext().messages;
 		this.#beginInFlight();
 		let currentRequest = { ...request };
 		const scope: ParentTaskRecoveryScope = {
@@ -4090,6 +4138,7 @@ export class AgentSession {
 				currentRequest = { ...request, expectedLeafId: this.sessionManager.getLeafId()! };
 			}
 			await scope.validateAuthority();
+			if (candidateDurable) this.#restorePairedTaskAssistant(scope, projectionBeforeRecovery);
 			const resultEntry = this.sessionManager
 				.getBranch()
 				.find(
