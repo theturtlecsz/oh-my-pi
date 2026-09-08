@@ -217,3 +217,27 @@ result delivery from uncertain hook progress. Legacy completion, ordinary
 first-run completion without certification, and partially processed results
 remain refusal boundaries. Matching installed qualification is still required;
 these plans and baseline refusals do not establish a successful remedy.
+
+PR #24 subsequently delivered that bounded resumed-task remedy. Its exact-head
+hosted qualification passed ten installed cases with no failures or skips;
+WorkService retains the manifest, source/tree and raw crash-boundary evidence.
+This does not certify ordinary first-run task completion.
+
+## Ordinary first-run completion baseline
+
+The [first-run reproduction plan](omp-first-run-task-result-gap-plan.md) uses an
+external single-reader SIGSTOP observer on the actual completed lifecycle frame.
+The observer validates every stopped process-group thread, complete journals and
+received RPC bytes, and the missing original parent result before and after
+SIGKILL. There is no initial child-request crash and no recovered-child execution.
+Late or incomplete cuts are preserved as misses, with at most three fresh attempts.
+
+Baseline R1 against qualified runtime `af2aae1efa` reached the cut on its first
+attempt: real read/yield and child output were durable, the original parent result
+was absent, and no ready or processing-start marker existed. Marker absence
+establishes uncertified completion, not that parent hooks had never started.
+One actual SIGKILL and two same-session restarts produced explicit refusals,
+zero provider requests or original results, and unchanged service/Git effects.
+The automatic recovery assertion remains a real failure. The ten prior installed
+cases passed separately against the same runtime and reviewed changed harness.
+No production remedy or full S2.2 acceptance follows from this negative evidence.

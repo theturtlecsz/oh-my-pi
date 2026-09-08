@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import queue
+import select
 import signal
 import socket
 import subprocess
@@ -293,12 +294,28 @@ class AuthorityResponseProxy:
 
 
 class RpcProcess:
-    def __init__(self, child: subprocess.Popen[str], log: Path):
+    def __init__(
+        self, child: subprocess.Popen[str], log: Path, *, completion_stop: bool = False
+    ):
         self.child = child
         self.log = log
         self.stdout_log = log.with_suffix(".rpc.jsonl")
         self.events: queue.Queue[str | None] = queue.Queue()
-        self.reader = threading.Thread(target=self._read, daemon=True)
+        self._completion_stop = completion_stop
+        self._stop_lock = threading.Lock()
+        self._stop_target: dict | None = None
+        self.stop_requested = threading.Event()
+        self.stop_record: dict | None = None
+        self.reader_error: str | None = None
+        self._raw_tail = b""
+        self._raw_frames: list[dict] = []
+        self._drain_requested = threading.Event()
+        self._drained = threading.Event()
+        self._raw_eof = False
+        self._reader_finished = threading.Event()
+        self.reader = threading.Thread(
+            target=self._read_bytes if completion_stop else self._read, daemon=True
+        )
         self.reader.start()
 
     def _read(self) -> None:
@@ -314,6 +331,155 @@ class RpcProcess:
             pass
         finally:
             self.events.put(None)
+
+    def arm_completion_stop(
+        self, *, group_id: int, child_id: str, tool_call_id: str, session_file: str
+    ) -> None:
+        assert self._completion_stop, (
+            "Completion stop requires the sole byte reader from process start"
+        )
+        assert group_id == self.child.pid and os.getpgid(self.child.pid) == group_id
+        with self._stop_lock:
+            assert self._stop_target is None
+            self._stop_target = {
+                "groupId": group_id,
+                "childId": child_id,
+                "toolCallId": tool_call_id,
+                "sessionFile": session_file,
+            }
+
+    def _read_bytes(self) -> None:
+        """Own stdout exclusively; signal before disk logging or main-thread dispatch."""
+        pending = b""
+        unlogged = b""
+        capture_attempted = False
+        try:
+            if self.child.stdout is None:
+                raise OSError("RPC stdout is unavailable")
+            descriptor = self.child.stdout.fileno()
+            os.set_blocking(descriptor, False)
+            with self.stdout_log.open("wb") as captured:
+                while True:
+                    select.select([descriptor], [], [], 0.05)
+                    while True:
+                        try:
+                            chunk = os.read(descriptor, 65536)
+                        except BlockingIOError:
+                            if self._drain_requested.is_set():
+                                with self._stop_lock:
+                                    self._raw_tail = pending
+                                self._drain_requested.clear()
+                                self._drained.set()
+                            break
+                        if not chunk:
+                            with self._stop_lock:
+                                self._raw_eof = True
+                            return
+                        unlogged = chunk
+                        capture_attempted = False
+                        pending += chunk
+                        lines = pending.split(b"\n")
+                        pending = lines.pop()
+                        completed: list[str] = []
+                        for raw in lines:
+                            line = raw.decode("utf-8")
+                            event = json.loads(line)
+                            if not isinstance(event, dict):
+                                raise TypeError("RPC frame is not an object")
+                            lifecycle = event.get("type") == "subagent_lifecycle"
+                            payload = event.get("payload")
+                            if lifecycle and not isinstance(payload, dict):
+                                raise TypeError(
+                                    "Subagent lifecycle payload is not an object"
+                                )
+                            with self._stop_lock:
+                                self._raw_frames.append(event)
+                                target = self._stop_target
+                                if (
+                                    target
+                                    and self.stop_record is None
+                                    and lifecycle
+                                    and (
+                                        payload.get("status") == "completed"
+                                        and payload.get("id") == target["childId"]
+                                        and payload.get("parentToolCallId")
+                                        == target["toolCallId"]
+                                        and payload.get("sessionFile")
+                                        == target["sessionFile"]
+                                    )
+                                ):
+                                    record = {
+                                        "signal": "SIGSTOP",
+                                        "groupId": target["groupId"],
+                                        "requestedAt": time.time(),
+                                        "frameOrdinal": len(self._raw_frames),
+                                        "trigger": event,
+                                        "triggerSha256": hashlib.sha256(
+                                            raw + b"\n"
+                                        ).hexdigest(),
+                                    }
+                                    os.killpg(target["groupId"], signal.SIGSTOP)
+                                    self.stop_record = record
+                                    self.stop_requested.set()
+                            completed.append(line + "\n")
+                        capture_attempted = True
+                        captured.write(chunk)
+                        unlogged = b""
+                        captured.flush()
+                        with self._stop_lock:
+                            self._raw_tail = pending
+                        for line in completed:
+                            self.events.put(line)
+        except (OSError, ValueError, UnicodeError, TypeError, KeyError) as error:
+            self.reader_error = f"{type(error).__name__}: {error}"
+            if unlogged:
+                if capture_attempted:
+                    # A failed write may have stored a prefix; keep separate raw evidence.
+                    self.stdout_log.with_suffix(".read-error.bin").write_bytes(unlogged)
+                else:
+                    with self.stdout_log.open("ab") as captured:
+                        captured.write(unlogged)
+            self.stdout_log.with_suffix(".reader-error.json").write_text(
+                json.dumps(
+                    {
+                        "error": self.reader_error,
+                        "uncertainCaptureWrite": bool(unlogged) and capture_attempted,
+                    }
+                )
+            )
+        finally:
+            with self._stop_lock:
+                self._raw_tail = pending
+            self._reader_finished.set()
+            self._drained.set()
+            self.events.put(None)
+
+    def byte_snapshot(self) -> dict:
+        assert self._completion_stop
+        with self._stop_lock:
+            snapshot = {
+                "frames": list(self._raw_frames),
+                "partialBytes": self._raw_tail.hex(),
+                "eof": self._raw_eof,
+                "readerError": self.reader_error,
+                "stop": dict(self.stop_record or {}),
+            }
+        self.stdout_log.with_suffix(".partial.bin").write_bytes(
+            bytes.fromhex(snapshot["partialBytes"])
+        )
+        return snapshot
+
+    def drain_stopped(self) -> dict:
+        """Reach EAGAIN via the sole reader, or return its already terminal snapshot."""
+        assert self._completion_stop
+        if self._reader_finished.is_set():
+            return self.byte_snapshot()
+        assert self.stop_requested.is_set()
+        self._drained.clear()
+        self._drain_requested.set()
+        if not self._reader_finished.is_set():
+            assert self._drained.wait(5), "Stopped stdout did not drain"
+        return self.byte_snapshot()
 
     def send(self, command: str, **fields: object) -> str:
         request_id = str(uuid4())

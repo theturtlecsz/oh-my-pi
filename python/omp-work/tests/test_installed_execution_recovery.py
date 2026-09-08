@@ -36,8 +36,16 @@ from pg_native import native_postgres, seed_authority
 from psycopg.rows import dict_row
 
 TaskFault = Literal[
-    "child-request", "repeated-child-request", "parent-result", "child-result-gap"
+    "child-request",
+    "repeated-child-request",
+    "parent-result",
+    "child-result-gap",
+    "first-run-result-gap",
 ]
+
+
+class FirstRunCutMiss(AssertionError):
+    """Observed first-run completion did not satisfy the frozen cut; preserve and retry fresh."""
 
 
 class RecoveryProvider:
@@ -108,7 +116,17 @@ class RecoveryProvider:
         # A task may itself have work tools. Route by its explicitly configured
         # model before parent/auxiliary handling, including after restart.
         if self.checkpoint == "task-active" and request.get("model") == "local-task":
-            if self.restarting:
+            if self.restarting or self.task_fault == "first-run-result-gap":
+                if (
+                    self.task_fault == "first-run-result-gap"
+                    and not self.restarting
+                    and not any(
+                        message.get("role") == "tool"
+                        for message in request.get("messages", [])
+                    )
+                ):
+                    self.child_held.set()
+                    self.completion_observer_ready.wait(300)
                 if (
                     self.task_fault == "child-result-gap"
                     and self.restart_generation == 1
@@ -121,7 +139,8 @@ class RecoveryProvider:
                     self.restarted_child_held.set()
                     self.release.wait(300)
                     return {"content": "Disconnected held recovery request."}
-                self.child_recovered.set()
+                if self.restarting:
+                    self.child_recovered.set()
                 results = [
                     message
                     for message in request.get("messages", [])
@@ -225,6 +244,8 @@ class RecoveryProvider:
                 for message in request.get("messages", [])
                 if message.get("role") == "tool"
             ]
+            if self.task_fault == "first-run-result-gap" and results:
+                return {"content": "First-run parent received the actual task result."}
             if results or self.task_calls:
                 self.error = (
                     f"Task did not enter held child boundary: {json.dumps(results)}"
@@ -421,7 +442,9 @@ def read_complete_session(path: Path) -> list[dict]:
     return [json.loads(line) for line in complete.splitlines() if line]
 
 
-def process_group_snapshot(group_id: int) -> list[dict]:
+def process_group_snapshot(
+    group_id: int, *, include_threads: bool = False
+) -> list[dict]:
     """Observe Linux processes; task registry IDs are never treated as PIDs."""
     processes: list[dict] = []
     for directory in Path("/proc").iterdir():
@@ -449,6 +472,23 @@ def process_group_snapshot(group_id: int) -> list[dict]:
                     record[link] = os.readlink(directory / link)
                 except OSError:
                     record[link] = None
+            if include_threads:
+                threads = []
+                for task in (directory / "task").iterdir():
+                    try:
+                        task_fields = (
+                            (task / "stat").read_text().rsplit(")", 1)[1].split()
+                        )
+                        threads.append(
+                            {
+                                "tid": int(task.name),
+                                "state": task_fields[0],
+                                "startTicks": task_fields[19],
+                            }
+                        )
+                    except (FileNotFoundError, ProcessLookupError):
+                        continue
+                record["threads"] = sorted(threads, key=lambda task: task["tid"])
             processes.append(record)
         except (FileNotFoundError, ProcessLookupError, PermissionError):
             continue
@@ -913,7 +953,9 @@ def capture_task_active_recovery(
         }
     )
 
-    def kill_host(process: subprocess.Popen, label: str) -> None:
+    def kill_host(
+        process: subprocess.Popen, label: str, *, qualified: bool = True
+    ) -> None:
         group_id = os.getpgid(process.pid)
         topology = process_group_snapshot(group_id)
         hosts = [
@@ -942,7 +984,8 @@ def capture_task_active_recovery(
             "killedAt": time.time(),
         }
         evidence["kills"].append(record)
-        evidence["barrierReached"] = True
+        if qualified:
+            evidence["barrierReached"] = True
         save()
         os.killpg(group_id, signal.SIGKILL)
         record["exitCode"] = process.wait(timeout=10)
@@ -1158,6 +1201,463 @@ def capture_task_active_recovery(
         ), "Recovery appended a replacement child assignment"
         assert_stable_state()
         return parent_now, child_now
+
+    def assert_parent_wire(observations: list[dict]) -> None:
+        parent_requests = [
+            provider.calls[row["ordinal"] - 1]
+            for row in observations
+            if row["model"] == "local-recovery"
+            and any(
+                tool.get("function", {}).get("name") == "work"
+                for tool in provider.calls[row["ordinal"] - 1].get("tools", [])
+            )
+        ]
+        assert len(parent_requests) == 1, (
+            "Cached result needs one actual tool-bearing parent request"
+        )
+        messages = parent_requests[0]["messages"]
+        wire_calls = [
+            (index, tool_call)
+            for index, message in enumerate(messages)
+            if message.get("role") == "assistant"
+            for tool_call in message.get("tool_calls", [])
+        ]
+        assert len(wire_calls) == 1, (
+            "Parent wire omitted or duplicated original task call"
+        )
+        call_index, wire_call = wire_calls[0]
+        assert wire_call["id"] == call_id
+        assert wire_call["function"]["name"] == parent_calls[0]["name"] == "task"
+        assert (
+            json.loads(wire_call["function"]["arguments"])
+            == parent_calls[0]["arguments"]
+        ), "Parent wire changed original raw task arguments"
+        wire_results = [
+            (index, message)
+            for index, message in enumerate(messages)
+            if message.get("role") == "tool" and message.get("tool_call_id") == call_id
+        ]
+        assert len(wire_results) == 1 and wire_results[0][0] > call_index, (
+            "Parent wire has no unique result after original task call"
+        )
+
+    if provider.task_fault == "first-run-result-gap":
+        evidence["firstRunCutReached"] = False
+        group_id = os.getpgid(cli.pid)
+        before_topology = process_group_snapshot(group_id, include_threads=True)
+        hosts = [
+            row
+            for row in before_topology
+            if str(release.root / "source/packages/coding-agent/src/cli.ts")
+            in row["argv"]
+        ]
+        assert len(hosts) == 1 and hosts[0]["parentPid"] == cli.pid
+        host_identity = (hosts[0]["pid"], hosts[0]["startTicks"])
+        launcher = next(row for row in before_topology if row["pid"] == cli.pid)
+        launcher_identity = (launcher["pid"], launcher["startTicks"])
+        postgres_pid = int(
+            (tmp_path / "postgres/pgdata/postmaster.pid").read_text().splitlines()[0]
+        )
+        outsiders = [os.getpid(), service_pid, postgres_pid]
+        assert all(os.getpgid(pid) != group_id for pid in outsiders)
+        evidence["stopOutsideGroup"] = outsiders
+
+        rpc.request("set_subagent_subscription", level="events")
+        rpc.arm_completion_stop(
+            group_id=group_id,
+            child_id=child["id"],
+            tool_call_id=call_id,
+            session_file=str(child_path),
+        )
+        provider.completion_observer_ready.set()
+        output_path = child_path.with_suffix(".md")
+        frozen_child: bytes | None = None
+        frozen_output: bytes | None = None
+
+        def frozen_entries(file: Path, label: str) -> tuple[bytes, list[dict]]:
+            raw = file.read_bytes()
+            (tmp_path / label).write_bytes(raw)
+            assert raw.endswith(b"\n"), f"Incomplete frozen journal tail: {file.name}"
+            entries = [
+                json.loads(line) for line in raw.decode("utf-8").splitlines() if line
+            ]
+            assert entries and all(isinstance(entry, dict) for entry in entries)
+            assert file.read_bytes() == raw, (
+                f"Frozen journal changed during inspection: {file.name}"
+            )
+            return raw, entries
+
+        def absent_parent(frames: list[dict], entries: list[dict]) -> None:
+            assert not original_results(entries), (
+                "Original parent result is already durable"
+            )
+            assert not any(
+                frame.get("type") == "tool_execution_end"
+                and frame.get("toolCallId") == call_id
+                for frame in frames
+            ), "Received/drained frames contain original parent tool execution result"
+
+            assert not any(
+                frame.get("type") in ("message_start", "message_end")
+                and frame.get("message", {}).get("role") == "toolResult"
+                and frame["message"].get("toolCallId") == call_id
+                for frame in frames
+            ), "Received/drained frames contain original parent result"
+            assert not any(
+                row["model"] == "local-recovery"
+                and row["ordinal"] > child_requests[0]["ordinal"]
+                and any(
+                    tool.get("function", {}).get("name") == "work"
+                    for tool in provider.calls[row["ordinal"] - 1].get("tools", [])
+                )
+                for row in provider.request_observations
+            ), "First-run parent provider continuation already occurred"
+
+        def topology_identity(rows: list[dict]) -> list[tuple]:
+            return [
+                (
+                    row["pid"],
+                    row["startTicks"],
+                    tuple((task["tid"], task["startTicks"]) for task in row["threads"]),
+                )
+                for row in rows
+            ]
+
+        def fully_stopped(rows: list[dict]) -> bool:
+            return bool(rows) and all(
+                row["state"] in ("T", "t", "Z", "X")
+                and (
+                    row["state"] in ("Z", "X")
+                    or bool(row["threads"])
+                    and all(
+                        task["state"] in ("T", "t", "Z", "X") for task in row["threads"]
+                    )
+                )
+                for row in rows
+            )
+
+        def cleanup_owned_group() -> None:
+            topology = process_group_snapshot(group_id)
+            leaders = [row for row in topology if row["pid"] == group_id]
+            assert (
+                not leaders
+                or (leaders[0]["pid"], leaders[0]["startTicks"]) == launcher_identity
+            ), "Owned process group identity was reused"
+            assert all(row["processSessionId"] == group_id for row in topology), (
+                "Process escaped original owned session"
+            )
+            if any(row["state"] not in ("Z", "X") for row in topology):
+                record = {
+                    "label": "unqualified-first-run-attempt-cleanup",
+                    "signal": "SIGKILL",
+                    "processGroupId": group_id,
+                    "topologyBefore": topology,
+                    "killedAt": time.time(),
+                }
+                evidence["kills"].append(record)
+                os.killpg(group_id, signal.SIGKILL)
+                record["exitCode"] = cli.wait(timeout=10)
+                save()
+            elif cli.poll() is None:
+                cli.wait(timeout=10)
+            deadline = time.monotonic() + 5
+            while True:
+                remaining = process_group_snapshot(group_id)
+                alive = [row for row in remaining if row["state"] not in ("Z", "X")]
+                if not alive or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.02)
+            assert not alive, f"Owned group did not die cleanly: {remaining}"
+            rpc.reader.join(timeout=5)
+            terminal = rpc.byte_snapshot()
+            evidence["readerAfterCleanup"] = {
+                key: value for key, value in terminal.items() if key != "frames"
+            }
+            save()
+            assert not rpc.reader.is_alive() and terminal["eof"], (
+                "Reader did not observe actual EOF after group cleanup"
+            )
+
+        try:
+            assert rpc.stop_requested.wait(45), (
+                f"Completed lifecycle stop not reached; reader error: {rpc.reader_error}"
+            )
+            deadline = time.monotonic() + 5
+            previous_members: list[tuple] | None = None
+            stopped: list[dict] = []
+            while True:
+                stopped = process_group_snapshot(group_id, include_threads=True)
+                members = topology_identity(stopped)
+                identities = [(row["pid"], row["startTicks"]) for row in stopped]
+                assert (
+                    host_identity in identities and launcher_identity in identities
+                ), "Original CLI/launcher identity changed before stop confirmation"
+                host = next(
+                    row
+                    for row in stopped
+                    if (row["pid"], row["startTicks"]) == host_identity
+                )
+                assert host["state"] not in ("Z", "X"), "CLI died before the stop cut"
+                launcher_now = next(
+                    row
+                    for row in stopped
+                    if (row["pid"], row["startTicks"]) == launcher_identity
+                )
+                assert launcher_now["state"] not in ("Z", "X"), (
+                    "Launcher died before the stop cut"
+                )
+
+                all_stopped = fully_stopped(stopped)
+                if all_stopped and members == previous_members:
+                    break
+                assert time.monotonic() < deadline, (
+                    f"Stable whole-group/thread stop not confirmed: {stopped}"
+                )
+                previous_members = members
+                time.sleep(0.02)
+            evidence["stop"] = {
+                "requested": rpc.stop_record,
+                "confirmedAt": time.time(),
+                "before": before_topology,
+                "stopped": stopped,
+            }
+            drained = rpc.drain_stopped()
+            (tmp_path / "first-run-drained-rpc.json").write_text(
+                json.dumps(drained, indent=2)
+            )
+            assert drained["readerError"] is None, drained["readerError"]
+            assert not drained["partialBytes"], (
+                "Incomplete received RPC frame at frozen cut"
+            )
+            assert not drained["eof"], "CLI exited instead of remaining stopped"
+            parent_bytes, parent_now = frozen_entries(
+                parent_path, "first-run-parent-stopped.jsonl"
+            )
+            frozen_child, child_now = frozen_entries(
+                child_path, "first-run-child-stopped.jsonl"
+            )
+            assert_same_journals()
+            absent_parent(drained["frames"], parent_now)
+            assert not result_records(parent_now, "task-native-result-ready")
+            assert not result_records(parent_now, "task-result-processing-started"), (
+                "Ordinary first-run unexpectedly entered certified processing protocol"
+            )
+            branch = durable_session_branch(child_now)
+            reads = [
+                entry["message"]
+                for entry in branch
+                if entry.get("type") == "message"
+                and entry.get("message", {}).get("role") == "toolResult"
+                and entry["message"].get("toolCallId") == "task-child-read"
+            ]
+            yields = [
+                entry["message"]
+                for entry in branch
+                if entry.get("type") == "message"
+                and entry.get("message", {}).get("role") == "toolResult"
+                and entry["message"].get("toolCallId") == "task-child-yield"
+            ]
+            assert (
+                len(reads) == len(yields) == 1
+                and not reads[0].get("isError")
+                and not yields[0].get("isError")
+            )
+            expected_output = {
+                "path": "result.txt",
+                "observed": provider.child_read_content,
+            }
+            assert provider.child_read_content is not None
+            assert [
+                part["text"]
+                for part in reads[0]["content"]
+                if part.get("type") == "text"
+            ] == [provider.child_read_content]
+            assert yields[0]["details"] == {
+                "data": expected_output,
+                "status": "success",
+            }
+            frozen_output = output_path.read_bytes()
+            assert json.loads(frozen_output) == expected_output
+            (tmp_path / "first-run-completed-output.md").write_bytes(frozen_output)
+            trigger = drained["stop"]["trigger"]["payload"]
+            assert (
+                trigger["agent"] == "task"
+                and trigger["agentSource"] == "bundled"
+                and trigger.get("detached") is not True
+            )
+            assert provider.task_calls == 1 and not provider.restarting
+            assert_stable_state()
+            # Outstanding I/O cannot turn a late result into a qualifying cut.
+            latest = rpc.drain_stopped()
+            assert latest["readerError"] is None, latest["readerError"]
+            assert not latest["partialBytes"]
+            _, final_parent = frozen_entries(
+                parent_path, "first-run-parent-before-kill.jsonl"
+            )
+            assert (
+                parent_path.read_bytes() == parent_bytes
+                and child_path.read_bytes() == frozen_child
+            )
+            absent_parent(latest["frames"], final_parent)
+            evidence["firstRunWitness"] = {
+                "binding": binding,
+                "completedLifecycle": drained["stop"]["trigger"],
+                "outputSha256": hashlib.sha256(frozen_output).hexdigest(),
+                "output": expected_output,
+                "execution": get_view(execution_url),
+                "workflow": get_view(workflow_url),
+                "effects": effects(),
+                "parentResultAbsentFromDurableBranchAndReceivedFrames": True,
+                "processingState": "uncertified; marker absence does not prove processing unstarted",
+            }
+            save()
+            before_kill = process_group_snapshot(group_id, include_threads=True)
+            assert fully_stopped(before_kill) and topology_identity(
+                before_kill
+            ) == topology_identity(stopped), (
+                "Stopped process/thread membership changed before kill"
+            )
+            evidence["stop"]["beforeKill"] = before_kill
+            kill_host(cli, "ordinary-first-run-completed-child", qualified=False)
+            rpc.reader.join(timeout=5)
+            assert not rpc.reader.is_alive() and rpc.reader_error is None
+            _, after_death = frozen_entries(
+                parent_path, "first-run-parent-after-kill.jsonl"
+            )
+            raw_frames = rpc.stdout_log.read_bytes()
+            assert raw_frames.endswith(b"\n"), "Incomplete RPC tail after death"
+            frames = [
+                json.loads(line)
+                for line in raw_frames.decode("utf-8").splitlines()
+                if line
+            ]
+            absent_parent(frames, after_death)
+
+            assert parent_path.read_bytes() == parent_bytes, (
+                "Frozen parent journal changed through process death"
+            )
+            assert not result_records(after_death, "task-native-result-ready")
+            assert not result_records(after_death, "task-result-processing-started")
+            assert_stable_state()
+            assert (
+                child_path.read_bytes() == frozen_child
+                and output_path.read_bytes() == frozen_output
+            )
+            evidence["firstRunCutReached"] = evidence["barrierReached"] = True
+            save()
+        except (AssertionError, ValueError, OSError) as error:
+            evidence["firstRunMiss"] = {
+                "reason": str(error),
+                "observedAt": time.time(),
+                "stop": rpc.stop_record,
+                "readerError": rpc.reader_error,
+                "providerObservations": provider.request_observations,
+            }
+            save()
+            raise FirstRunCutMiss(str(error)) from error
+        finally:
+            cleanup_owned_group()
+
+        provider.restarting = True
+        outcomes = []
+        for generation in (1, 2):
+            provider.restart_generation = generation
+            log = tmp_path / f"first-run-restart-{generation}.stderr"
+            with _process(
+                release.command(
+                    state,
+                    repository,
+                    "--mode",
+                    "rpc",
+                    "--session",
+                    str(parent_path),
+                    "--provider",
+                    "qualification",
+                    "--model",
+                    "local-recovery",
+                ),
+                repository,
+                env,
+                log,
+            ) as restarted:
+                resumed = RpcProcess(restarted, log)
+                current_state = resumed.request("get_state")
+                assert current_state["sessionId"] == current["sessionId"]
+                deadline = time.monotonic() + 30
+                while True:
+                    entries = read_complete_session(parent_path)
+                    notifications = [
+                        frame
+                        for frame in read_complete_session(resumed.stdout_log)
+                        if frame.get("type") == "extension_ui_request"
+                        and frame.get("method") == "notify"
+                        and str(frame.get("message", "")).startswith(
+                            "Execution recovery skipped:"
+                        )
+                    ]
+                    finished = terminal_parent_answer(entries) is not None
+                    if finished or notifications or time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.05)
+                time.sleep(2)
+                parent_now, _ = assert_same_journals()
+                result = (
+                    successful_result(parent_now)
+                    if original_results(parent_now)
+                    else None
+                )
+                assert provider.error is None, provider.error
+                requests = [
+                    dict(row)
+                    for row in provider.request_observations
+                    if row["restartGeneration"] == generation
+                ]
+                assert not any(row["model"] == "local-task" for row in requests), (
+                    "Uncertified completed child was executed again"
+                )
+                assert (
+                    child_path.read_bytes() == frozen_child
+                    and output_path.read_bytes() == frozen_output
+                )
+                if finished and not outcomes:
+                    assert_parent_wire(requests)
+                if not finished:
+                    assert result is None and not requests
+                if outcomes:
+                    assert result == outcomes[0]["originalResult"] and not requests
+                roster = resumed.request("get_subagents")["subagents"]
+                assert len(roster) <= 1 and all(
+                    row["id"] == child["id"] for row in roster
+                )
+                outcome = {
+                    "generation": generation,
+                    "parentCompleted": finished,
+                    "originalResult": result,
+                    "refusals": notifications,
+                    "providerObservations": requests,
+                    "subagents": roster,
+                    "execution": get_view(execution_url),
+                    "workflow": get_view(workflow_url),
+                    "effects": effects(),
+                    "refusalSafety": bool(notifications)
+                    and not requests
+                    and result is None,
+                }
+                outcomes.append(outcome)
+                evidence["firstRunOutcomes"] = outcomes
+                shutil.copyfile(
+                    parent_path, tmp_path / f"first-run-parent-after-{generation}.jsonl"
+                )
+                shutil.copyfile(
+                    child_path, tmp_path / f"first-run-child-after-{generation}.jsonl"
+                )
+                save()
+        assert len(outcomes) == 2 and all(
+            row["parentCompleted"] and row["originalResult"] for row in outcomes
+        ), (
+            "Ordinary first-run completed child did not recover original parent result; refusal safety is not automatic recovery"
+        )
+        return
 
     gap_output_path = child_path.with_suffix(".md")
     gap_child_baseline: list[dict] | None = None
@@ -1506,50 +2006,7 @@ def capture_task_active_recovery(
                         "Repeated completion-gap restart dispatched another request"
                     )
                 elif finished:
-                    parent_requests = [
-                        provider.calls[row["ordinal"] - 1]
-                        for row in observations
-                        if row["model"] == "local-recovery"
-                        and any(
-                            tool.get("function", {}).get("name") == "work"
-                            for tool in provider.calls[row["ordinal"] - 1].get(
-                                "tools", []
-                            )
-                        )
-                    ]
-                    assert len(parent_requests) == 1, (
-                        "Cached result needs one actual tool-bearing parent request"
-                    )
-                    messages = parent_requests[0]["messages"]
-                    wire_calls = [
-                        (index, tool_call)
-                        for index, message in enumerate(messages)
-                        if message.get("role") == "assistant"
-                        for tool_call in message.get("tool_calls", [])
-                    ]
-                    assert len(wire_calls) == 1, (
-                        "Parent wire omitted or duplicated original task call"
-                    )
-                    call_index, wire_call = wire_calls[0]
-                    assert wire_call["id"] == call_id
-                    assert (
-                        wire_call["function"]["name"]
-                        == parent_calls[0]["name"]
-                        == "task"
-                    )
-                    assert (
-                        json.loads(wire_call["function"]["arguments"])
-                        == parent_calls[0]["arguments"]
-                    ), "Parent wire changed original raw task arguments"
-                    wire_results = [
-                        (index, message)
-                        for index, message in enumerate(messages)
-                        if message.get("role") == "tool"
-                        and message.get("tool_call_id") == call_id
-                    ]
-                    assert len(wire_results) == 1 and wire_results[0][0] > call_index, (
-                        "Parent wire has no unique result after original task call"
-                    )
+                    assert_parent_wire(observations)
                 if not finished:
                     assert result is None, (
                         "Refused completed-task recovery attached a parent result"
@@ -2016,7 +2473,11 @@ def exercise_controller_recovery(
                     env,
                     cli_log,
                 ) as cli:
-                    rpc = RpcProcess(cli, cli_log)
+                    rpc = RpcProcess(
+                        cli,
+                        cli_log,
+                        completion_stop=task_fault == "first-run-result-gap",
+                    )
                     initial = rpc.request("get_state")
                     if checkpoint == "task-active":
                         capture_task_active_recovery(
@@ -2623,4 +3084,50 @@ def test_completed_child_recovers_missing_original_parent_result(
     """A completed original child must recover its missing parent result once."""
     exercise_controller_recovery(
         installed_release, tmp_path, "task-active", task_fault="child-result-gap"
+    )
+
+
+def test_first_run_completed_child_recovers_missing_parent_result(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Only a verified first-run frozen cut may establish the missing-result recovery gap."""
+    attempts: list[dict] = []
+    report = tmp_path / "first-run-attempts.json"
+    for index in range(1, 4):
+        root = tmp_path / f"attempt-{index}"
+        root.mkdir()
+        try:
+            exercise_controller_recovery(
+                installed_release,
+                root,
+                "task-active",
+                task_fault="first-run-result-gap",
+            )
+        except FirstRunCutMiss as error:
+            attempts.append(
+                {
+                    "attempt": index,
+                    "path": str(root),
+                    "outcome": "cut-missed",
+                    "reason": str(error),
+                }
+            )
+            report.write_text(json.dumps(attempts, indent=2))
+            continue
+        except AssertionError:
+            attempts.append(
+                {
+                    "attempt": index,
+                    "path": str(root),
+                    "outcome": "assertion-failed",
+                    "evidence": str(root / "task-recovery-evidence.json"),
+                }
+            )
+            report.write_text(json.dumps(attempts, indent=2))
+            raise
+        attempts.append({"attempt": index, "path": str(root), "outcome": "recovered"})
+        report.write_text(json.dumps(attempts, indent=2))
+        return
+    raise AssertionError(
+        "First-run completion checkpoint not reached in three fresh attempts; preserved misses are not recovery evidence"
     )
