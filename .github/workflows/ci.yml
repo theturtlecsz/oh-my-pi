@@ -1129,3 +1129,12 @@ jobs:
               uv run --project python/omp-work --extra dev pytest \
                 python/omp-work/tests/test_installed_runtime_isolation.py \
                 --junitxml="$RUNNER_TEMP/omp-installed-runtime-tests.xml"
+         - name: Preserve installed qualification evidence
+           if: ${{ always() }}
+           uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+           with:
+              name: installed-runtime-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+              path: |
+                 ${{ runner.temp }}/omp-installed-runtime/manifest.json
+                 ${{ runner.temp }}/omp-installed-runtime-tests.xml
+              if-no-files-found: warn

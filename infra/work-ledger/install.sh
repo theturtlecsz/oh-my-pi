@@ -12,6 +12,7 @@ pgport=${OMP_WORK_POSTGRES_PORT:-54321}
 httpport=${OMP_WORK_HTTP_PORT:-54322}
 service_python=$root/python/omp-work/.venv/bin/python
 unit_dir=$HOME/.config/systemd/user
+unit_dir_explicit=0
 render_only=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -19,11 +20,15 @@ while [ "$#" -gt 0 ]; do
     --postgres-port) pgport=${2:?--postgres-port needs a port}; shift 2 ;;
     --http-port) httpport=${2:?--http-port needs a port}; shift 2 ;;
     --python) service_python=${2:?--python needs an installed executable}; shift 2 ;;
-    --unit-dir) unit_dir=${2:?--unit-dir needs an output directory}; shift 2 ;;
+    --unit-dir) unit_dir=${2:?--unit-dir needs an output directory}; unit_dir_explicit=1; shift 2 ;;
     --render-only) render_only=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+if [ "$render_only" -eq 1 ] && [ "$unit_dir_explicit" -eq 0 ]; then
+  echo '--render-only requires an explicit --unit-dir outside live systemd units' >&2
+  exit 2
+fi
 case "$pgdata" in /*) ;; *) echo '--postgres-data must be absolute' >&2; exit 2 ;; esac
 case "$service_python" in /*) ;; *) echo '--python must be absolute' >&2; exit 2 ;; esac
 case "$unit_dir" in /*) ;; *) echo '--unit-dir must be absolute' >&2; exit 2 ;; esac
@@ -34,12 +39,21 @@ if [ "$render_only" -eq 0 ]; then
   done
   [ "$(postgres --version | grep -oE '[0-9]+' | head -1)" = "18" ] || { echo 'native PostgreSQL 18 required' >&2; exit 1; }
 fi
-python3 - "$service_python" "$unit_dir" "$config" "$state" "$share" "$pgdata" "$pgport" "$httpport" "$xdg_config" "$xdg_state" "$xdg_data" <<'PY'
+python3 - "$service_python" "$unit_dir" "$config" "$state" "$share" "$pgdata" "$pgport" "$httpport" "$xdg_config" "$xdg_state" "$xdg_data" "$render_only" <<'PY'
 from pathlib import Path
+import stat
 import sys
-service_python, unit_dir, config, state, share, pgdata, pgport, httpport, xdg_config, xdg_state, xdg_data = sys.argv[1:]
+service_python, unit_dir, config, state, share, pgdata, pgport, httpport, xdg_config, xdg_state, xdg_data, render_only = sys.argv[1:]
 if any("\n" in value or "\r" in value for value in sys.argv[1:]):
     raise SystemExit("unit paths must not contain line breaks")
+out = Path(unit_dir)
+if render_only == "1":
+    live_units = {
+        (Path.home() / ".config/systemd/user").resolve(),
+        (Path(xdg_config) / "systemd/user").resolve(),
+    }
+    if any(out.resolve().is_relative_to(live) for live in live_units):
+        raise SystemExit("--render-only output must be outside live systemd units")
 
 def quoted(value: str) -> str:
     return '"' + value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -115,7 +129,14 @@ Persistent=true
 WantedBy=timers.target
 ''',
 }
-out = Path(unit_dir)
+if render_only == "1":
+    for name in units:
+        try:
+            existing = (out / name).lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(existing.st_mode) or existing.st_nlink != 1:
+            raise SystemExit("--render-only output units must be independent regular files")
 out.mkdir(parents=True, exist_ok=True)
 for name, content in units.items():
     (out / name).write_text(content)

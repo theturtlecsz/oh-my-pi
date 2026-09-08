@@ -5,6 +5,8 @@ import stat
 import subprocess
 import tempfile
 
+import pytest
+
 
 def test_installer_generates_service_units_with_migration_preflight():
     repo_root = Path(__file__).resolve().parents[3]
@@ -126,3 +128,57 @@ def test_render_only_targets_installed_python_without_creating_live_state(tmp_pa
             "omp_work",
             *expected,
         ]
+
+
+@pytest.mark.parametrize(
+    "destination", ["omitted", "home", "xdg", "directory-symlink", "unit-symlink", "unit-hardlink"]
+)
+def test_render_only_refuses_live_unit_overwrites(tmp_path, destination):
+    """Preparing candidate units must preserve live units, including aliased paths."""
+    install_script = (
+        Path(__file__).resolve().parents[3] / "infra/work-ledger/install.sh"
+    )
+    home = tmp_path / "home"
+    config = tmp_path / "config"
+    home_units = home / ".config/systemd/user"
+    xdg_units = config / "systemd/user"
+    for units in (home_units, xdg_units):
+        units.mkdir(parents=True)
+        (units / "omp-work-service.service").write_text("existing admitted unit\n")
+    output = tmp_path / "review-units"
+    if destination == "directory-symlink":
+        output.symlink_to(home_units, target_is_directory=True)
+    elif destination in {"unit-symlink", "unit-hardlink"}:
+        output.mkdir()
+        unit = output / "omp-work-service.service"
+        live = home_units / "omp-work-service.service"
+        if destination == "unit-symlink":
+            unit.symlink_to(live)
+        else:
+            unit.hardlink_to(live)
+    command = ["bash", str(install_script), "--render-only", "--python", "/candidate/python"]
+    if destination != "omitted":
+        target = {"home": home_units, "xdg": xdg_units}.get(destination, output)
+        command.extend(["--unit-dir", str(target)])
+    result = subprocess.run(
+        command,
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(config),
+            "XDG_STATE_HOME": str(tmp_path / "state"),
+            "XDG_DATA_HOME": str(tmp_path / "data"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode != 0
+    assert "--render-only" in result.stderr
+    for units in (home_units, xdg_units):
+        assert (units / "omp-work-service.service").read_text() == "existing admitted unit\n"
+        assert {entry.name for entry in units.iterdir()} == {"omp-work-service.service"}
+    if destination in {"unit-symlink", "unit-hardlink"}:
+        assert {entry.name for entry in output.iterdir()} == {"omp-work-service.service"}
+    assert not (tmp_path / "state").exists()
+    assert not (tmp_path / "data").exists()

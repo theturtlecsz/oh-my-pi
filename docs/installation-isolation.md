@@ -130,6 +130,9 @@ disposable PostgreSQL. It compares resident and fresh CLI behavior after
 candidate edits and configuration poisoning, and rejects an altered artifact.
 Missing installation inputs produce explicit pytest skips; skips do not qualify
 a release. Required promotion automation must supply both inputs and reject skips.
+CI retains the full installation manifest and installed-test JUnit report in its
+`installed-runtime-qualification` artifact, including available evidence on failed
+runs. A manifest alone or an absent/skipped test report does not qualify a release.
 
 Existing halt, replay, canceled-grant, merge-head, and completion-evidence tests
 remain part of the workflow suites. The execution smoke is now an explicit CI
@@ -153,6 +156,10 @@ separate qualification work. Do not infer them from artifact integrity or CI.
      --python /absolute/releases/candidate-id/python/bin/python \
      --unit-dir /absolute/review-units
    ```
+
+   Render-only mode requires an explicit output directory outside live systemd
+   unit directories and refuses symlinks, shared inodes, and non-regular output
+   files before writing any units.
 
 4. Owner schedules cutover. Drain or stop affected workers and confirm current
    operations/effects. Install reviewed units and select the qualified launcher
