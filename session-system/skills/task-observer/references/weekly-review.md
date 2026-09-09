@@ -159,7 +159,9 @@ Updated skills ([N] observations, [N] principles applied):
 [items with reasons]
 ```
 
-Wait for the user to acknowledge before other work.
+Interactive reviews: wait for the user to acknowledge before other work.
+Scheduled/autonomous runs (user absent): apply the autonomous policy above
+and continue — never wait unattended.
 
 ## Constraints
 

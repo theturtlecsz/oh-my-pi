@@ -18,6 +18,11 @@ over ultracode for ops sessions.
 Keep tool output filtered (`grep`/`jq`/`tail`); never dump raw logs or
 re-read large files.
 
+When both render, this doctrine governs WHEN to delegate; the harness
+default prompt's delegation gates still govern HOW any authorized delegation
+operates (decomposition, dependency ordering, concurrency, subagent
+context).
+
 ## Intake routing (HOME-43, 2026-08-11)
 
 All intake-shaped requests — a vague idea to formalize, a plan or draft to
@@ -39,6 +44,13 @@ reachable: it lives in issue comments and comes out the moment he asks for it
 the completion tree (`work` tool, action my_now) plus one plain explanation
 line. Code, commits, and Work Ledger evidence keep full technical precision — this
 governs what Chris SEES, not what is recorded.
+
+This paragraph is the standing owner-facing style law. Terse/compressed
+modes (caveman, ponytail, compressed personalities) apply to working notes
+and technical artifacts, never to owner-facing summaries; strict
+machine-readable role contracts always win. Prose cannot disable a plugin
+injection — the ponytail block is controlled by its own mechanisms (see the
+cross-harness plugin note in the MCP section).
 
 ## Question format (owner ruling, 2026-08-27 — non-negotiable, global)
 
@@ -128,27 +140,36 @@ episodes (logging observations, weekly reviews, editing or staging skills).
 
 When loading any skill, check the observation log
 (`~/.agents/skill-observations/log.md`) for OPEN
-observations tagged to that skill and apply their insights to the current
-work, even if the skill file hasn't been updated yet.
+observations tagged to that skill and treat them as candidate evidence that
+may inform judgment in the current session. No observation status by itself
+amends standing policy: a standing-rule change lands only when promoted into
+its canonical source (this file, a rule file, or the skill body) through an
+owner-approved change with recorded provenance.
 
 ## Model escalation (HOME-131, 2026-08-14)
 
-Everyday work runs on the default worker (Terra-medium). Escalation is
-explicit routing — no automatic machinery:
+Roles, not model names, carry this doctrine. Read effective assignments from
+the runtime's model resolution, agent definition, and configuration when it
+matters; request overrides and per-agent settings may differ from the default
+shown by `/model`. Never trust prose to name today's model. Everyday work runs
+on the configured default worker (`@default`) at its configured effort.
+Escalation is explicit routing — no automatic machinery:
 
-* **Escalate to Sol-xhigh (`@slow`)** when the work touches any of:
+* **Escalate to `@slow`** when the work touches any of:
   security/auth changes; concurrency or distributed-state behavior; data
   migrations or destructive operations; public API or compatibility changes;
   more than 3 subsystems affected; two failed repair/test loops; or a
   material deviation from the approved plan.
-* **Escalate to K3-high (`@deep`)** for exceptionally large-repo or
-  long-horizon work, or as the third-family adjudicator when the worker and
-  the auditor disagree.
+* **Escalate to `@deep`** for exceptionally large-repo or long-horizon
+  work, or as the third-family adjudicator when the worker and the auditor
+  disagree. Any `@deep` reference carries an explicit `:high` or `:low`
+  effort suffix — never bare.
 
-Any K3 reference carries an explicit `:high` or `:low` suffix — never bare
-(K3 always thinks and defaults to max effort). The bookend roles (`intake`,
-`audit`, `deep`) stay out of the execution cycle; /intake and the /summary
-auditor own them.
+The `intake` and `deep` roles stay out of the execution cycle. The `audit`
+role belongs to the manual `/summary` auditor and the `/execute` grant's
+native independent audit runner, never its implementation worker. New model
+availability changes no assignment by itself; assignments remain owner
+decisions recorded in configuration.
 
 # MCP — gotchas only
 
@@ -192,6 +213,18 @@ chromium --user-data-dir=~/.local/share/notebooklm-mcp/chrome_profile \
          --password-store=basic --no-first-run https://notebooklm.google.com
 # log in, close the browser, restart Claude Code, then: notebooklm doctor
 ```
+
+## Cross-harness plugin injection (audited 2026-09-05)
+
+OMP can load Ponytail from its plugin installation. Ponytail appends a mode
+block through `before_agent_start` whenever the session's mode is not `off`.
+For an OMP-only fresh-session default, launch with `PONYTAIL_DEFAULT_MODE=off omp`;
+`/ponytail full` and `/ponytail off` remain available. A resumed session's saved
+mode overrides that default. Do not use `/ponytail default off` for OMP-only
+changes: it writes shared Ponytail configuration. Exact-package project
+overrides can disable the plugin entirely, including its commands and skills.
+See the repository's `docs/instruction-scope.md` for supported configuration
+and qualification limits. Never edit plugin caches to restyle owner output.
 
 ## Retired
 
