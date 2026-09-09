@@ -95,7 +95,11 @@ describe("issue #9597 — cold-launch welcome duplication", () => {
 			await mode.init({ suppressWelcomeIntro: resuming, clearInitialTerminalHistory: true });
 			await terminal.waitForRender();
 			await mode.renderInitialMessages({ preserveExistingChat: true });
-			await terminal.waitForRender();
+			await terminal.waitForRender(
+				resuming
+					? () => terminal.getScrollBuffer().some(line => Bun.stripANSI(line).includes("resume marker answer"))
+					: undefined,
+			);
 			const rows = terminal.getScrollBuffer().map(l => Bun.stripANSI(l));
 			return {
 				resets: terminal.countResets(),

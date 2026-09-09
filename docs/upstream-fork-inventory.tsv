@@ -223,6 +223,7 @@ packages/coding-agent/test/gc-cli.test.ts	shared	modified	72d2defdf2ad	ci: repai
 packages/coding-agent/test/getalltools-toolinfo.test.ts	shared	modified	f4375f73e6c9	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/git-active-context.test.ts	shared	modified	668de1ccdb2b	session candidate: OMP-127	retained
 packages/coding-agent/test/interactive-mode-plan-review.test.ts	shared	modified	35fa09735639	feat(coding-agent): cancellable plan_approved extension event (HOME-122)	retained
+packages/coding-agent/test/issue-9597-cold-launch-double-clear.test.ts	shared	modified	dd4355cbb2be	OMP-217: Wait for the resumed transcript through adaptive render delay; retain reset/header/marker assertions; checks: controlled slow-write before/after, issue-9597, CI native bucket, ci:check:full	retained
 packages/coding-agent/test/launch/broker-idle-shutdown.test.ts	shared	modified	fdc67e7e7b2c	OMP-246 CI: Hold startup presence until child admission, then prove live child retention and idle exit without authentication timing races	retained
 packages/coding-agent/test/marketplace/project-scope.test.ts	shared	modified	aa6a69ca0922	session candidate: OMP-127	retained
 packages/coding-agent/test/mcp-http-transport.test.ts	shared	modified	0d57e9bcfdc6	OMP-246 CI: Bound automatic SSE resumption with the existing external guard instead of an incidental startup deadline	retained
