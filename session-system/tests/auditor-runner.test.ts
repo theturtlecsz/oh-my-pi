@@ -2140,8 +2140,10 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			zod: z,
 		} as unknown as ExtensionAPI;
 
-		const cwd = path.resolve(import.meta.dir, "../..");
-		const head = headCommit(cwd) ?? "0".repeat(40);
+		const repo = makeTempRepo();
+		fixtureCaches.push(repo.dir, path.resolve(os.homedir(), ".omp", "agent", repo.cacheFile, ".."));
+		const cwd = repo.dir;
+		const head = repo.headSha;
 		const exec = makeSnapshot("paused", "queue", [
 			{ position: 0, work_id: "OMP-176", phase: "executing" },
 			{ position: 1, work_id: "OMP-180", phase: "pending" },
@@ -2205,7 +2207,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			expect(resumeCmd).toBeDefined();
 			await resumeCmd!("resume OMP-176", fakeCtx);
 
-			expect(notifications.some(n => n.includes("Execution grant stopped: max_continuations_exceeded"))).toBe(true);
+			expect(notifications).toEqual(expect.arrayContaining([expect.stringContaining("Execution grant stopped: max_continuations_exceeded")]));
 			expect(notifications.some(n => n.includes("Items: 0 completed, 2 skipped (of 2 items)."))).toBe(true);
 			expect(messages.some(m => m.customType === "work-execution-status" && m.content?.includes("Grant is terminal; resume is impossible."))).toBe(true);
 			expect(messages.some(m => m.customType === "work-execution-status" && m.content?.includes("Next: /execute OMP-176 --queue"))).toBe(true);
@@ -2238,8 +2240,10 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			zod: z,
 		} as unknown as ExtensionAPI;
 
-		const cwd = path.resolve(import.meta.dir, "../..");
-		const head = headCommit(cwd) ?? "0".repeat(40);
+		const repo = makeTempRepo();
+		fixtureCaches.push(repo.dir, path.resolve(os.homedir(), ".omp", "agent", repo.cacheFile, ".."));
+		const cwd = repo.dir;
+		const head = repo.headSha;
 		const exec = makeSnapshot("active", "queue", [
 			{ position: 0, work_id: "OMP-176", phase: "executing" },
 			{ position: 1, work_id: "OMP-180", phase: "pending" },
@@ -2308,7 +2312,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 				await h({}, fakeCtx);
 			}
 
-			expect(notifications.some(n => n.includes("Execution grant stopped: max_continuations_exceeded"))).toBe(true);
+			expect(notifications).toEqual(expect.arrayContaining([expect.stringContaining("Execution grant stopped: max_continuations_exceeded")]));
 			expect(statuses["work-now"]).toContain("✕ Grant ad5c45a7 stopped (terminal — resume impossible) (max_continuations_exceeded)");
 			expect(statuses["work-now"]).toContain("0 completed, 2 skipped (of 2 items).");
 			expect(messages.some(m => m.customType === "work-execution-status" && m.content?.includes("Grant is terminal; resume is impossible."))).toBe(true);
