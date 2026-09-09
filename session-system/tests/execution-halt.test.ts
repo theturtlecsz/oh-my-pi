@@ -1,10 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, test, vi } from "bun:test";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import type { ExecutionGrantItemView } from "@oh-my-pi/pi-work-client";
+import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { z } from "zod";
 import type { ExecutionSnapshot, WorkflowBackend } from "../extensions/workflow/backend";
 import * as gitModule from "../extensions/workflow/git";
@@ -22,13 +23,16 @@ type ToolHandler = (
 ) => Promise<{ content: Array<{ type: "text"; text: string }>; details: { success: boolean } }>;
 
 const directories: string[] = [];
+let originalProjectDir: string;
+beforeEach(() => { originalProjectDir = getProjectDir(); });
 
 afterEach(async () => {
 	vi.restoreAllMocks();
+	setProjectDir(originalProjectDir);
 	await Promise.all(directories.splice(0).map(directory => fs.rm(directory, { recursive: true, force: true })));
 });
 
-async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active", repository?: string) {
+async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active", repository?: string, bound = true) {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "execution-halt-"));
 	directories.push(directory);
 	const item: ExecutionGrantItemView = {
@@ -69,18 +73,40 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 	};
 	const stateChanges: StateChange[] = [];
 	const workspaceEffects: string[] = [];
+	const workspace = { grantId: "grant-1", key: "OMP-1", primaryRoot: directory, path: directory, branch: "execution/omp-1", baseline: item.initial_git_baseline, reused: false };
+	const branch: SessionEntry[] = bound ? [{ type: "custom", customType: "work-now", id: "original-binding", parentId: null, timestamp: new Date().toISOString(), data: { backend: "work", executionWorkspace: workspace } }] : [];
+	const lookups: Array<string | undefined> = [];
+	let lookupGate: Promise<void> | undefined;
+	let lookupEntered: (() => void) | undefined;
+	let ensureGate: Promise<void> | undefined;
+	let ensureEntered: (() => void) | undefined;
+	let sessionId = "session-1";
+	let hostSessionId = "session-1";
+	let cwd = directory;
+	const stateCalls: StateChange[] = [];
+	let stateResponseHook: (() => void) | undefined;
+	const ensures: Array<{ cwd: string; key: string; baseline: string }> = [];
 	const backend = {
+		name: "work",
 		cacheFile: path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(directory, "cache.json")),
 		markerFile: ".work-project",
 		evidenceKinds: ["verification", "closeout"],
 		scopeFix: "",
-		getExecution: async () => execution,
+		getExecution: async (selector?: string) => {
+			lookups.push(selector);
+			lookupEntered?.();
+			await lookupGate;
+			return structuredClone(execution);
+		},
+		setNowRemote: async () => {},
 		currentNow: async () => ({ id: item.work_id, key: "OMP-1", title: "Development change" }),
 		pendingDeliveries: async () => [],
 		getPendingExecutionClaims: async () => [],
 		issueDetail: async () => ({}),
 		findIssue: async () => ({ id: item.work_id, key: "OMP-1", title: "Development change" }),
 		setExecutionState: async (input: StateChange) => {
+			stateCalls.push(input);
+			if (input.expectedGrantVersion !== execution.grant.grant_version) throw new Error("Execution version CAS refused");
 			stateChanges.push(input);
 			execution = {
 				...execution,
@@ -92,6 +118,7 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 				},
 				activeItem: input.targetState === "stopped" || input.targetState === "canceled" ? null : item,
 			};
+			stateResponseHook?.();
 			return execution;
 		},
 		workClient: {
@@ -100,6 +127,8 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 	} as unknown as WorkflowBackend;
 	const inputHandlers: InputHandler[] = [];
 	const startHandlers: InputHandler[] = [];
+	const switchHandlers: Array<(event: { reason: string }, ctx: ExtensionContext) => Promise<unknown>> = [];
+	const beforeStartHandlers: InputHandler[] = [];
 	const commands = new Map<string, CommandHandler>();
 	let executeTool: ToolHandler | undefined;
 	const pi = {
@@ -115,25 +144,30 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		on: (name: string, handler: InputHandler) => {
 			if (name === "input") inputHandlers.push(handler);
 			if (name === "session_start") startHandlers.push(handler);
+			if (name === "before_agent_start") beforeStartHandlers.push(handler);
+			if (name === "session_switch") switchHandlers.push(handler as unknown as (event: { reason: string }, ctx: ExtensionContext) => Promise<unknown>);
 		},
-		appendEntry: () => {},
+		appendEntry: (customType: string, data: unknown) => { branch.push({ type: "custom", customType, data, id: crypto.randomUUID(), parentId: branch.at(-1)?.id ?? null, timestamp: new Date().toISOString() }); },
 		sendMessage: () => {},
-		getSessionId: () => "session-1",
+		getSessionId: () => hostSessionId,
 		logger: { warn: () => {} },
 	} as unknown as ExtensionAPI;
 	createWorkflowHost({
 		backend,
 		teamNoun: "the ledger",
 		entryType: "work-now",
-		acceptEntry: () => true,
+		acceptEntry: data => data.backend === "work",
 		executionWorkspaceManager: {
 			primaryRoot: async cwd => cwd,
-			ensure: async (cwd, _key, grantId, baseline) => {
+			ensure: async (_cwd, key, grantId, baseline) => {
 				workspaceEffects.push("ensure");
+				ensures.push({ cwd: _cwd, key, baseline });
+				ensureEntered?.();
+				await ensureGate;
 				return {
-				primaryRoot: cwd,
-				path: cwd,
-				branch: "execution/omp-1",
+				primaryRoot: directory,
+				path: directory,
+				branch: `execution/${key.toLowerCase()}`,
 				grantId,
 				baseline,
 				reused: true,
@@ -144,13 +178,16 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 	})(pi);
 	const notifications: string[] = [];
 	let aborts = 0;
+	let abortHook: (() => void) | undefined;
+	let manager = { getCwd: () => cwd, getSessionId: () => sessionId, getBranch: () => branch, moveTo: async (target: string) => { workspaceEffects.push("moveTo"); cwd = target; } };
 	const context = {
-		cwd: directory,
+		get cwd() { return cwd; },
 		taskDepth: 0,
 		abort: () => {
 			aborts += 1;
+			abortHook?.();
 		},
-		sessionManager: { getCwd: () => directory, getBranch: () => [], moveTo: async () => { workspaceEffects.push("moveTo"); } },
+		get sessionManager() { return manager; },
 		newSession: async () => { workspaceEffects.push("newSession"); return { cancelled: false }; },
 		ui: {
 			notify: (message: string) => {
@@ -161,6 +198,27 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		},
 	} as unknown as ExtensionCommandContext;
 	return {
+		directory,
+		workspace,
+		stateCalls,
+		ensures,
+		preparePrompt: async () => { const results: unknown[] = []; for (const handler of beforeStartHandlers) results.push(await handler({ originalText: "", source: "tui" }, context)); return results; },
+		onStateResponse: (callback: () => void) => { stateResponseHook = callback; },
+		setItem: (patch: Partial<ExecutionGrantItemView>) => { Object.assign(item, patch); },
+		appendState: (data: unknown) => { branch.push({ type: "custom", customType: "work-now", data, id: crypto.randomUUID(), parentId: branch.at(-1)?.id ?? null, timestamp: new Date().toISOString() }); },
+		setCwd: (value: string) => { cwd = value; },
+		setSession: (value: string) => { sessionId = value; hostSessionId = value; },
+		setHostSession: (value: string) => { hostSessionId = value; },
+		replaceManager: () => { manager = { ...manager }; },
+		setGrant: (patch: Partial<ExecutionSnapshot["grant"]>) => { Object.assign(execution.grant, patch); },
+		onAbort: (callback: () => void) => { abortHook = callback; },
+		holdLookup: () => { const entered = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>(); lookupEntered = entered.resolve; lookupGate = release.promise; return { entered: entered.promise, release: release.resolve }; },
+		holdEnsure: () => { const entered = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>(); ensureEntered = entered.resolve; ensureGate = release.promise; return { entered: entered.promise, release: release.resolve }; },
+		poisonCache: () => Bun.write(path.join(directory, "cache.json"), JSON.stringify({ executionWorkspace: workspace })),
+		now: async () => { await commands.get("now")!("OMP-1", context); },
+		switchSession: async () => { for (const handler of switchHandlers) await handler({ reason: "new" }, context); },
+		branch,
+		lookups,
 		getSnapshot: () => structuredClone(execution),
 		workspaceEffects,
 		setPhase: (phase: ExecutionGrantItemView["phase"]) => { item.phase = phase; },
@@ -194,6 +252,27 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 }
 
 describe("execution halt remains available when development breaks the auditor", () => {
+	test("unrelated owner input cannot abort its turn or pause another session's grant", async () => {
+		const harness = await makeHarness("active", undefined, false);
+		const before = harness.getSnapshot();
+		await harness.input("Inspect this unrelated repository");
+		expect(harness.getAborts()).toBe(0);
+		expect(harness.stateChanges).toEqual([]);
+		expect(harness.getSnapshot()).toEqual(before);
+	});
+
+	test("fresh unrelated startup cannot manufacture an execution binding before owner input", async () => {
+		const harness = await makeHarness("active", undefined, false);
+		const before = harness.getSnapshot();
+		await harness.start();
+		await harness.input("Continue unrelated work");
+		expect(harness.workspaceEffects).toEqual([]);
+		expect(harness.branch.filter(entry => entry.type === "custom" && entry.customType === "work-now" && (entry.data as { executionWorkspace?: unknown }).executionWorkspace)).toHaveLength(0);
+		expect(harness.getAborts()).toBe(0);
+		expect(harness.stateChanges).toEqual([]);
+		expect(harness.getSnapshot()).toEqual(before);
+	});
+
 	test("owner interjection pauses the current grant even when auditor discovery fails", async () => {
 		const harness = await makeHarness();
 		vi.spyOn(taskModule, "discoverAgents").mockRejectedValue(new Error("auditor source unavailable"));
@@ -258,6 +337,155 @@ describe("execution halt remains available when development breaks the auditor",
 					message.includes("judge TCB computation failed") && message.includes("auditor source unavailable"),
 			),
 		).toBe(true);
+	});
+});
+
+describe("own-session execution witness", () => {
+	for (const change of ["clear", "replace"] as const) {
+		test(`ordinary publication respects ${change} during held startup lookup`, async () => {
+			const h = await makeHarness();
+			const before = h.getSnapshot();
+			const gate = h.holdLookup();
+			const starting = h.start();
+			await gate.entered;
+			h.appendState({ backend: "work", ...(change === "replace" ? { executionWorkspace: { ...h.workspace, grantId: "replacement-grant", key: "OMP-2", branch: "execution/omp-2" } } : {}) });
+			gate.release();
+			await starting;
+			await h.now();
+			await h.input("Continue this session after the ownership change");
+			expect(h.getAborts()).toBe(0);
+			expect(h.stateCalls).toEqual([]);
+			expect(h.getSnapshot()).toEqual(before);
+			expect(h.lookups).toEqual(change === "replace" ? ["grant-1", "replacement-grant"] : ["grant-1"]);
+		});
+	}
+
+	test("complete legacy binding remains haltable without auditor discovery", async () => {
+		const h = await makeHarness("active", "legacy-repo");
+		const discovery = vi.spyOn(taskModule, "discoverAgents").mockRejectedValue(new Error("Auditor unavailable"));
+		await h.input("Pause my execution");
+		expect(h.lookups).toEqual(["grant-1"]);
+		expect(h.getAborts()).toBe(1);
+		expect(h.getSnapshot().grant.state).toBe("paused");
+		expect(h.stateCalls[0].judgeSha256).toBe("4".repeat(64));
+		expect(discovery).not.toHaveBeenCalled();
+	});
+
+	for (const change of ["sibling-cwd", "host-session", "foreign-grant", "foreign-repository", "cleared-binding", "malformed-binding"] as const) {
+		test(`${change} does not authorize automatic pause`, async () => {
+			const h = await makeHarness();
+			if (change === "sibling-cwd") h.setCwd(path.join(h.directory, "sibling"));
+			if (change === "host-session") h.setHostSession("another-session");
+			if (change === "foreign-grant") h.setGrant({ grant_id: "another-grant" });
+			if (change === "foreign-repository") h.setGrant({ repository: path.join(h.directory, "another-primary") });
+			if (change === "cleared-binding") h.appendState({ backend: "work" });
+			if (change === "malformed-binding") h.appendState({ backend: "work", executionWorkspace: { ...h.workspace, path: "relative-workspace" } });
+			const before = h.getSnapshot();
+			await h.input("Work on this session");
+			expect(h.getAborts()).toBe(0);
+			expect(h.stateCalls).toEqual([]);
+			expect(h.getSnapshot()).toEqual(before);
+		});
+	}
+
+	test("ignored foreign-backend entry cannot supersede own binding", async () => {
+		const h = await makeHarness();
+		h.appendState({ backend: "other" });
+		await h.input("Pause own work");
+		expect(h.getSnapshot().grant.state).toBe("paused");
+	});
+
+	for (const change of ["session", "manager", "cwd", "witness", "terminal"] as const) {
+		test(`held grant lookup refuses ${change} drift before abort or pause`, async () => {
+			const h = await makeHarness();
+			const gate = h.holdLookup();
+			const input = h.input("Pause own work");
+			await gate.entered;
+			if (change === "session") h.setSession("replacement");
+			if (change === "manager") h.replaceManager();
+			if (change === "cwd") h.setCwd(path.join(h.directory, "sibling"));
+			if (change === "witness") h.appendState({ backend: "work", executionWorkspace: { ...h.workspace } });
+			if (change === "terminal") h.setGrant({ state: "canceled", grant_version: 4 });
+			gate.release();
+			await input;
+			expect(h.getAborts()).toBe(0);
+			expect(h.stateCalls).toEqual([]);
+		});
+	}
+
+	test("ordinary conversation advancement does not revoke unchanged ownership", async () => {
+		const h = await makeHarness();
+		const gate = h.holdLookup();
+		const input = h.input("Pause own work");
+		await gate.entered;
+		h.branch.push({ type: "message", id: "new-conversation-entry", parentId: h.branch.at(-1)!.id, timestamp: new Date().toISOString(), message: { role: "user", content: "ordinary message", timestamp: Date.now() } });
+		gate.release();
+		await input;
+		expect(h.getSnapshot().grant.state).toBe("paused");
+	});
+
+	test("pause CAS cannot undo a racing terminal transition", async () => {
+		const h = await makeHarness();
+		h.onAbort(() => h.setGrant({ state: "canceled", grant_version: 4 }));
+		await expect(h.input("Pause own work")).rejects.toThrow("CAS refused");
+		expect(h.getSnapshot().grant.state).toBe("canceled");
+		expect(h.getSnapshot().grant.grant_version).toBe(4);
+		expect(h.stateChanges).toEqual([]);
+	});
+
+	test("pause response cannot publish notice into replacement session", async () => {
+		const h = await makeHarness();
+		h.onStateResponse(() => h.setSession("replacement"));
+		await h.input("Pause own work");
+		expect(h.getSnapshot().grant.state).toBe("paused");
+		expect((await h.preparePrompt()).filter(result => result !== undefined)).toEqual([]);
+	});
+
+	test("shared cache cannot become ownership through startup and ordinary persistence", async () => {
+		const h = await makeHarness("active", undefined, false);
+		await h.poisonCache();
+		await h.start();
+		await h.now();
+		await h.input("Unrelated follow-up");
+		expect(h.getAborts()).toBe(0);
+		expect(h.stateCalls).toEqual([]);
+		expect(h.branch.filter(entry => entry.type === "custom" && entry.customType === "work-now" && (entry.data as { executionWorkspace?: unknown }).executionWorkspace)).toHaveLength(0);
+	});
+
+	test("new session cannot republish previous transcript binding through ordinary persistence", async () => {
+		const h = await makeHarness();
+		await h.start();
+		h.branch.splice(0);
+		h.setSession("new-owner-session");
+		await h.switchSession();
+		await h.now();
+		await h.input("New session work");
+		expect(h.getAborts()).toBe(0);
+		expect(h.stateCalls).toEqual([]);
+		expect(h.branch.filter(entry => entry.type === "custom" && entry.customType === "work-now" && (entry.data as { executionWorkspace?: unknown }).executionWorkspace)).toHaveLength(0);
+	});
+
+	test("startup retains recorded anchor but uses current recovery baseline", async () => {
+		const h = await makeHarness();
+		h.setItem({ current_git_baseline: "a".repeat(40), work_id: "next-queue-item" });
+		h.setCwd(path.join(h.directory, "launch-location"));
+		await h.start();
+		expect(h.ensures).toEqual([{ cwd: h.directory, key: "OMP-1", baseline: "a".repeat(40) }]);
+	});
+
+	test("startup refuses changed context during ensure before relocation or new binding", async () => {
+		const h = await makeHarness();
+		const gate = h.holdEnsure();
+		const starting = h.start();
+		await gate.entered;
+		const noticesBeforeDrift = h.notifications.length;
+		h.setCwd(path.join(h.directory, "replacement"));
+		gate.release();
+		await starting;
+		expect(h.workspaceEffects).toEqual(["ensure"]);
+		expect(h.notifications.slice(noticesBeforeDrift)).toEqual([]);
+		expect(h.branch.filter(entry => entry.type === "custom" && entry.customType === "work-now")).toHaveLength(1);
+		expect(h.stateCalls).toEqual([]);
 	});
 });
 

@@ -1123,6 +1123,8 @@ jobs:
                 --native "$GITHUB_WORKSPACE/packages/natives/native/pi_natives.linux-x64-modern.node"
          - name: Qualify installed isolation and controller recovery
            run: |
+              ulimit -c 0
+              command -v bwrap >/dev/null || sudo apt-get install -y bubblewrap
               manifest_sha=$(sha256sum "$RUNNER_TEMP/omp-installed-runtime/manifest.json")
               OMP_INSTALLED_RELEASE="$RUNNER_TEMP/omp-installed-runtime" \
               OMP_INSTALLED_MANIFEST_SHA256="${manifest_sha%% *}" \
@@ -1153,6 +1155,11 @@ jobs:
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/provider-*.json
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/authority-*.json
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/task-completed-output-*.md
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/child-output-final.md
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/session-ownership-*.json
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/session-ownership-*.jsonl
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/session-ownership-*.stderr
+                 ${{ runner.temp }}/omp-installed-runtime-test-state/**/setup.json
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/first-run-*.json
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/first-run-*.jsonl
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/first-run-*.stderr

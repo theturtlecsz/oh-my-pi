@@ -9,7 +9,7 @@ import { z } from "zod";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type Model, AssistantMessageEventStream } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
-import { AgentSession, SessionManager, Settings, type ExtensionAPI, type ExtensionContext, type PersistedTurnContinuationRequest } from "@oh-my-pi/pi-coding-agent";
+import { AgentSession, SessionManager, Settings, type CustomEntry, type ExtensionAPI, type ExtensionContext, type PersistedTurnContinuationRequest } from "@oh-my-pi/pi-coding-agent";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -27,6 +27,7 @@ import {
 	resetConfirmations,
 } from "../extensions/workflow/confirm";
 import * as gitModule from "../extensions/workflow/git";
+import type { ExecutionWorkspace } from "../extensions/workflow/git";
 import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
 import { headCommit } from "../extensions/workflow/git";
 import {
@@ -45,6 +46,13 @@ function temporaryCacheFile(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-auditor-cache-"));
 	fixtureCaches.push(dir);
 	return path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(dir, "cache.json"));
+}
+
+/** Component fixture only; installed qualification must obtain this through actual /execute. */
+function executionOwnershipEntry(exec: ExecutionSnapshot, cwd: string, key: string, overrides: Partial<ExecutionWorkspace> = {}): CustomEntry {
+	return { type: "custom", customType: "work-now", id: crypto.randomUUID(), parentId: null, timestamp: new Date().toISOString(), data: {
+		backend: "work", executionWorkspace: { grantId: exec.grant.grant_id, key, primaryRoot: exec.grant.repository, path: cwd, branch: `execution/${key.toLowerCase()}`, baseline: exec.activeItem?.initial_git_baseline, reused: false, ...overrides },
+	} };
 }
 beforeEach(() => {
 	vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
@@ -108,6 +116,7 @@ describe("execution recovery identity guards", () => {
 		const baseline = "1".repeat(40);
 		let head = baseline;
 		const exec = makeSnapshot("active", "single", [{ position: 0, work_id: "work-recovery", phase: "executing" }]);
+		exec.grant.repository = cwd;
 		exec.grant.grant_version = 2;
 		exec.grant.expires_at = new Date(Date.now() + 86400000).toISOString();
 		exec.activeItem!.initial_git_baseline = baseline;
@@ -122,7 +131,7 @@ describe("execution recovery identity guards", () => {
 			candidate: undefined as Candidate | undefined,
 		};
 		const attempts: AttemptBinding[] = [];
-		const entries: Array<OutboxEntry | InjectedEntry | { id: string; type: "message"; message: {
+		const entries: Array<OutboxEntry | InjectedEntry | CustomEntry | { id: string; type: "message"; message: {
 			role: "assistant"; content: Array<{type:"toolCall";id:string;name:string;arguments:Record<string,unknown>}>;
 		} }> = [];
 		const sent: Array<{ customType?: string; details?: { executionContinuation?: ContinuationIdentity } }> = [];
@@ -172,6 +181,7 @@ describe("execution recovery identity guards", () => {
 			preReservationVersion: 1, postVersion: 2, messageId: "queued-recovery",
 		};
 		entries.push({ type: "custom", customType: "work-now-execute-outbox", data: { ...intent, status: "queued", at: new Date().toISOString() } });
+		entries.push(executionOwnershipEntry(exec, cwd, issue.key));
 		return {
 			intent, entries, sent, reserve, notices, attempts, item, exec, continuations,
 			backend,
@@ -908,9 +918,11 @@ describe("native auditor runner (OMP-168)", () => {
 			},
 		} as unknown as ExecutionSnapshot;
 		exec.items = [exec.activeItem!];
+		const ownershipEntry = executionOwnershipEntry(exec, cwd, issue.key);
 
 		let failNextIssueLookup = false;
 		let suppressNextDelivery = false;
+		let keyedLookupsBeforeSuppression = 0;
 		const mockBackend = {
 			cacheFile,
 			markerFile: ".work-project",
@@ -918,7 +930,7 @@ describe("native auditor runner (OMP-168)", () => {
 			scopeFix: "",
 			getExecution: async (selector?: string) => {
 				lookupArgs.push(selector);
-				if (selector === exec.grant.grant_id && suppressNextDelivery) {
+				if (selector === exec.grant.grant_id && suppressNextDelivery && keyedLookupsBeforeSuppression-- <= 0) {
 					suppressNextDelivery = false;
 					return {
 						...exec,
@@ -975,7 +987,7 @@ describe("native auditor runner (OMP-168)", () => {
 			cwd,
 			taskDepth: 0,
 			abort: () => {},
-			sessionManager: { getBranch: () => branchEntries },
+			sessionManager: { getBranch: () => [ownershipEntry, ...branchEntries], getSessionId: () => "pause-notice-session", getCwd: () => cwd },
 			ui: {
 				notify: (text: string) => { notifications.push(text); },
 				theme: { fg: (_color: string, text: string) => text },
@@ -987,7 +999,7 @@ describe("native auditor runner (OMP-168)", () => {
 		let dirt: string[] = [];
 		const dirtySpy = vi.spyOn(gitModule, "dirtyPaths").mockImplementation(() => dirt);
 
-		const pauseAndResume = async (fallback: boolean): Promise<string> => {
+		const pauseAndResume = async (fallback: boolean, suppressDelivery = false): Promise<string> => {
 			failNextIssueLookup = fallback;
 			const inputHandler = handlers.get("input")?.[0];
 			expect(inputHandler).toBeDefined();
@@ -1008,6 +1020,7 @@ describe("native auditor runner (OMP-168)", () => {
 
 			const resume = commands.get("execute");
 			expect(resume).toBeDefined();
+			if (suppressDelivery) { suppressNextDelivery = true; keyedLookupsBeforeSuppression = 0; }
 			await resume!(`resume ${suggested}`, fakeCtx);
 			expect(exec.grant.state).toBe("active");
 			expect(notifications.at(-1)).toContain("Execution grant resumed");
@@ -1051,6 +1064,7 @@ describe("native auditor runner (OMP-168)", () => {
 			appendedRecords.length = 0;
 			branchEntries = [pendingReplay("completed-replay")];
 			suppressNextDelivery = true;
+			keyedLookupsBeforeSuppression = 1; // Startup ownership lookup precedes the delivery-seam re-fetch.
 			for (const start of sessionStarts) await start({}, fakeCtx);
 			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(0);
 			expect(appendedRecords.filter(record =>
@@ -1071,8 +1085,7 @@ describe("native auditor runner (OMP-168)", () => {
 
 			sentMessages.length = 0;
 			appendedEntries.length = 0;
-			suppressNextDelivery = true;
-			expect(await pauseAndResume(false)).toBe(issue.key);
+			expect(await pauseAndResume(false, true)).toBe(issue.key);
 			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(0);
 			expect(appendedEntries.filter(type => type === "work-now-execute-outbox")).toHaveLength(0);
 
@@ -1966,6 +1979,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		spawnSync("git", ["commit", "-m", "seed"], { cwd });
 		const head = headCommit(cwd) ?? "0".repeat(40);
 		const exec = makeSnapshot("active", "single", [{ position: 0, work_id: "OMP-213", phase: "executing" }]);
+		exec.grant.repository = cwd;
 		exec.activeItem!.initial_git_baseline = head;
 		exec.activeItem!.current_git_baseline = head;
 		exec.items[0]!.initial_git_baseline = head;
@@ -2038,6 +2052,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		});
 
 		let activeCwd = cwd;
+		const ownershipEntry = executionOwnershipEntry(exec, recoveredCwd, issue.key, { branch: "execution/omp-213-recovery" });
 		const branchEntries = [{
 			type: "custom",
 			customType: "work-now-execute-outbox",
@@ -2058,7 +2073,8 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			taskDepth: 0,
 			models: {},
 			sessionManager: {
-				getBranch: () => branchEntries,
+				getBranch: () => [ownershipEntry, ...branchEntries],
+				getSessionId: () => "recovery-relocation-session",
 				getCwd: () => activeCwd,
 				moveTo: async (nextCwd: string) => {
 					activeCwd = nextCwd;
@@ -2221,6 +2237,8 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		exec.items[0]!.current_git_baseline = head;
 		exec.activeItem!.initial_git_baseline = head;
 		exec.activeItem!.current_git_baseline = head;
+		exec.grant.repository = cwd;
+		const ownershipEntry = executionOwnershipEntry(exec, cwd, "OMP-176");
 
 		const mockBackend = {
 			cacheFile: temporaryCacheFile(),
@@ -2258,7 +2276,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const fakeCtx = {
 			cwd,
 			taskDepth: 0,
-			sessionManager: { getBranch: () => [] },
+			sessionManager: { getBranch: () => [ownershipEntry], getSessionId: () => "sess-1", getCwd: () => cwd },
 			ui: {
 				notify: (text: string) => { notifications.push(text); },
 				theme: { fg: (_c: string, t: string) => t },
@@ -3067,6 +3085,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 
 	test("execution delivery checkpoint race and crash-retry use one guarded continuation", async () => {
 		const repo = makeTempRepo();
+		let ownershipEntry: CustomEntry | undefined;
 		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
 		const sentMessages: Array<{ customType?: string; content?: string }> = [];
 		const appendedEntries: string[] = [];
@@ -3091,7 +3110,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		const fakeCtx = {
 			cwd: repo.dir,
 			taskDepth: 0,
-			sessionManager: { getBranch: () => [] },
+			sessionManager: { getBranch: () => ownershipEntry ? [ownershipEntry] : [], getSessionId: () => "checkpoint-recovery-session", getCwd: () => repo.dir },
 			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			ui: {
@@ -3167,6 +3186,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		};
 
 		const callLog: string[] = [];
+		ownershipEntry = executionOwnershipEntry(exec, repo.dir, "OMP-199");
 		let pendingEvents = [
 			{
 				event_id: "ev-pending-1",
@@ -4010,6 +4030,7 @@ describe("dead execution context and terminal work suppression (OMP-247)", () =>
 		})(fakePi);
 
 		const sessionManager = SessionManager.inMemory(cwd);
+		vi.spyOn(fakePi, "getSessionId").mockImplementation(() => sessionManager.getSessionId());
 		const fakeCtx = {
 			cwd,
 			taskDepth: 0,
@@ -4095,6 +4116,7 @@ describe("dead execution context and terminal work suppression (OMP-247)", () =>
 		})(fakePi);
 
 		const sessionManager = SessionManager.inMemory(cwd);
+		vi.spyOn(fakePi, "getSessionId").mockImplementation(() => sessionManager.getSessionId());
 		const fakeCtx = {
 			cwd,
 			taskDepth: 0,

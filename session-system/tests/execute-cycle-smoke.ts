@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 import { pushCandidate, validateExecutionPath } from "../extensions/workflow/git";
 import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
+import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 
 if (process.env.OMP_WORK_POSTGRES_INTEGRATION !== "1") {
 	console.log("execute-cycle-smoke: skipped (set OMP_WORK_POSTGRES_INTEGRATION=1)");
@@ -1350,23 +1351,26 @@ if (args[0] === "api") {
 	const happyFinalExec = happyOut2.exec ?? happyOut1.exec;
 	await cancelGrant(happyFinalExec?.grant?.grant_id, happyFinalExec?.grant?.grant_version, happyFinalExec?.grant?.judge_sha256);
 
-	// A distinct controller session has no persisted turn to resume. It must
-	// reserve a new continuation; repeated startup of that session must not.
+	// A distinct controller session has no own execution binding and must not join the grant.
 	const freshSessionCase = await createAndStartDisposableGrant("fresh-session");
 	const freshSessionOut = runHarness("recovery-new-session", freshSessionCase.item.key);
-	assert.equal((freshSessionOut.sentMessages as unknown[])?.length, 1, "a new controller session injects one newly reserved continuation");
-	assert.equal((freshSessionOut.simulatedControllerTurns as Array<{ source: string }>)?.[0]?.source, "injected", "new continuation drives one simulated turn");
-	assert.equal((freshSessionOut.simulatedControllerTurns as unknown[])?.length, 1, "new continuation wakes once");
-	assert.equal(freshSessionOut.exec?.grant?.continuations_scheduled, 1, "new continuation spends one reservation");
-	assert.equal(freshSessionOut.exec?.grant?.grant_version, 2, "new reservation advances grant version");
+	assert.equal((freshSessionOut.sentMessages as unknown[])?.length, 0, "unbound controller sends no execution continuation");
+	assert.deepEqual(freshSessionOut.simulatedControllerTurns, [], "unbound controller drives no simulated execution turn");
+	assert.deepEqual(freshSessionOut.exec?.grant, freshSessionCase.startOut.exec?.grant, "unbound startup preserves original grant authority and reservation count");
+	assert.equal(freshSessionOut.workspacePath, probe, "unbound startup stays in its own checkout");
 	const freshSessionAgain = runHarness("recovery-new-session", freshSessionCase.item.key);
-	assert.equal((freshSessionAgain.sentMessages as unknown[])?.length, 0, "settled new-session turn is not reinjected");
-	assert.deepEqual(freshSessionAgain.simulatedControllerTurns, [], "settled new-session turn is not repeated");
-	assert.equal(freshSessionAgain.exec?.grant?.continuations_scheduled, 1, "settled new-session turn spends no second reservation");
+	assert.equal((freshSessionAgain.sentMessages as unknown[])?.length, 0, "repeated unbound startup sends no execution continuation");
+	assert.deepEqual(freshSessionAgain.simulatedControllerTurns, [], "repeated unbound startup drives no execution turn");
+	assert.deepEqual(freshSessionAgain.exec?.grant, freshSessionCase.startOut.exec?.grant, "unbound restart cannot acquire execution authority from shared cache");
 	await cancelGrant(freshSessionAgain.exec?.grant?.grant_id, freshSessionAgain.exec?.grant?.grant_version, freshSessionAgain.exec?.grant?.judge_sha256);
 
 	// 1b. Crash-after-commit-before-append: journaled set_execution_state claim exists on disk
 	const crashCase = await createAndStartDisposableGrant("crash-gap");
+	const crashPriorTurn = runHarness("recovery", crashCase.item.key);
+	assert.deepEqual(crashPriorTurn.simulatedControllerTurns, [{ entryId: crashCase.startOut.initialExecutionEntryId, source: "persisted" }], "original same-session turn settles before reserving the next continuation");
+	const crashSessionPath = path.join(path.dirname(probe), ".smoke-session-branch.json");
+	const crashHistory: SessionEntry[] = await Bun.file(crashSessionPath).json();
+	assert.ok(crashHistory.some(entry => entry.type === "custom" && entry.customType === "work-now" && (entry.data as { executionWorkspace?: { grantId?: string } }).executionWorkspace?.grantId === crashCase.startOut.exec?.grant?.grant_id), "existing native admission binding precedes the crash window");
 	const crashGrantId = crashCase.startOut.exec?.grant?.grant_id;
 	const crashJudgeSha = crashCase.startOut.exec?.grant?.judge_sha256;
 	const crashRes = await (await fetch(`${baseUrl}/v1/commands`, {
@@ -1413,13 +1417,15 @@ if (args[0] === "api") {
 		result: crashRes.result,
 		resolved_at: new Date().toISOString(),
 	}));
-	fs.rmSync(path.join(path.dirname(probe), ".smoke-session-branch.json"), { force: true });
+	assert.deepEqual(await Bun.file(crashSessionPath).json(), crashHistory, "committed reservation has not appended its new turn or discarded earlier ownership/history");
 
 	const recoveryCrash1 = runHarness("recovery", crashCase.item.key);
 	assert.equal((recoveryCrash1.sentMessages as unknown[])?.length, 1, "recovery delivers the un-appended turn");
 	assert.equal((recoveryCrash1.simulatedControllerTurns as unknown[])?.length, 1, "committed-claim replay drives one simulated turn");
 	assert.equal(recoveryCrash1.exec?.grant?.continuations_scheduled, 1, "continuations_scheduled remained 1");
 	assert.equal(recoveryCrash1.exec?.grant?.grant_version, 2, "grant_version remained 2");
+	const crashRecoveredHistory: SessionEntry[] = await Bun.file(crashSessionPath).json();
+	assert.deepEqual(crashRecoveredHistory.slice(0, crashHistory.length), crashHistory, "recovery preserves original session history and ownership entry");
 
 	const recoveryCrash2 = runHarness("recovery", crashCase.item.key);
 	assert.equal((recoveryCrash2.sentMessages as unknown[])?.length, 0, "duplicate replay sends zero turns");
