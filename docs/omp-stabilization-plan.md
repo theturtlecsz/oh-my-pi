@@ -172,6 +172,10 @@ Exit: deployed release meets its recorded acceptance criteria. Only then resume
 bounded typed intake. General CPK, broad hot reload, Fleet, new hosts, and major
 UI work stay deferred unless they remove a reproduced stabilization blocker.
 
+The [versioned intake exploration contract and ownership](omp-intake-exploration-implementation-plan.md)
+records the accepted 03B amendments and separate future qualification gates.
+Its documentation checkpoint does not qualify intake, exploration, or activation.
+
 ## Technical references
 
 - [Installation commands and rollback details](installation-isolation.md)
