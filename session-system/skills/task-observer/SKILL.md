@@ -76,24 +76,32 @@ Task Observer is active, the complete startup protocol is:
    `.claude/worktrees/`, a temporary clone), warn the user and re-anchor
    on the stable project path first — state written to an ephemeral
    checkout is lost at teardown.
-2. Scan OPEN observations and active principles; hold them in awareness,
-   don't surface unprompted — with one exception: **prescriptive
-   command-construction rules are not ambient context.** Any OPEN
+2. Scan OPEN observations as candidate evidence and read approved active
+   principles. An observation's status does not amend standing policy or
+   authorize an action; canonical approved instructions and their priority
+   govern. Promote standing changes through the owner's existing approval
+   process with recorded provenance. Do not surface observations unprompted —
+   with one exception: **command-construction proposals require explicit
+   review before use.** Any OPEN
    observation whose improvement prescribes how commands must be written
    (look for "never"/"always" about pipes, redirection, flags, addressing)
-   gets restated explicitly in your working notes BEFORE the first tool
-   call it governs. A rule held only "in awareness" has repeatedly failed
+   gets reviewed and restated explicitly in your working notes BEFORE the
+   first matching tool call, including whether it follows existing policy
+   or conflicts with it. Apply compatible safe practices within current
+   authority; retain conflicting proposals as evidence, never as a bypass.
+   A rule held only "in awareness" has repeatedly failed
    at the moment of command construction (#42 → #67 → #71: the same
    pipe-masking rule was violated in three sessions while logged OPEN).
    Scope restated rules by observable command SHAPE, not intent category:
    ANY invocation of a build/test-runner binary (cargo test, bun test,
-   npm test, vitest, pytest, …) gets the prescribed form regardless of
+   npm test, vitest, pytest, …) gets the policy-compatible form regardless of
    whose code it tests or why — intent-keyed rules ("gates") fail on
    boundary cases like diagnostic probes (#83). When the session begins
    from an approved plan document, scan the plan itself for prescriptive
    command-construction clauses ("never pipe", "run separately", "exact
    command") and restate them alongside OPEN-observation rules — plans
-   are a second source of never/always rules (#139).
+   are a second source of never/always rules (#139), within their approved
+   scope and the instruction hierarchy.
 3. Read `skill-observations/last-review-date.txt`. The value carries the
    truth: a date = when the last review actually ran; `never` = no review
    has run yet. A missing file is abnormal (step 1 creates it) — recreate

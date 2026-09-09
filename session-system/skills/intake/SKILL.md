@@ -33,27 +33,27 @@ Not a seam: published-issue work plans in its executing session, never intake.
 
 **What order** — never ask before its dependency's answer exists; rank unlocked by impact × uncertainty; name the dependency in the "why now" line.
 
-**When to stop** — hard cap **7 questions**/session (owner may reset). Stop: budget spent AND no dangling edges AND every asking-you item asked/owner-skipped — or owner exits. Survivors → Deferred & assumptions, never dropped.
+**When to stop asking** — hard cap **7 questions**/session (owner may reset); the cap is a ceiling, never a target. Stop when no consequential questions remain, the budget is spent, or the owner exits. Ending the interview never completes intake by itself: unresolved consequential items (scope, authorization, product behavior) remain explicit open questions and block affected publication readiness. An owner-approved deferral must name what remains unresolved and keep dependent scope blocked or out of the published slice; skipping a question alone does not settle it. Routine reversible survivors → Deferred & assumptions, never dropped.
 
 ### Visible scan (BINDING)
 
 BEFORE the first question: standalone assistant message, ZERO tool calls that turn (co-emitted text doesn't count). Host blocks `ask` and publication until it lands. Three lists:
 
-- **Figured out myself** — facts settled by code/records, each citing its source; judgment calls here = violation.
-- **Asking you** — every surfaced judgment call; these ARE the questions. BINDING: each asked unless owner skips, skip recorded verbatim in Decisions.
+- **Figured out myself** — facts settled by code/records (each citing its source), plus routine reversible calls decided and tagged as recorded assumptions; consequential judgment calls here = violation.
+- **Asking you** — every surfaced CONSEQUENTIAL judgment call (scope, authorization, product behavior); these ARE the questions. BINDING: each asked unless owner skips, skip recorded verbatim in Decisions. Routine reversible calls (naming, ordering, internal representation — cheap to change later without owner impact) never consume asking-you slots; they are decided and recorded as assumptions.
 - **Leaving for later** — deliberately parked → Deferred & assumptions.
 
-Jargon-free: name the thing ("what happens when a recording fails"), never categories/paths/symbols. Renders on every interviewing seam, even with nothing to ask. Existing-plan seam: draft judgment calls enter as confirm-or-overturn. NO quota: facts looked up, judgment calls asked.
+Jargon-free: name the thing ("what happens when a recording fails"), never categories/paths/symbols. Renders on every interviewing seam, even with nothing to ask. Existing-plan seam: consequential draft judgment calls enter as confirm-or-overturn. NO quota: facts looked up, routine reversible calls recorded as assumptions, consequential judgment calls asked.
 
 ### Entity graph
 
 Beside the draft blueprint. Every answer adds exactly one: **node** (defined noun — entity/state/actor/artifact) | **edge** (typed relation: has/uses/blocks/becomes) | **constraint** (exactly-one|exclusive|allowed-values|transitive; templates derive mechanically: two-Ys? · ever-both? · closed-list? · transitive?).
 
-**Dangling edge** — a referenced noun no node defines — IS an open question; blocks the stop condition.
+**Dangling edge** — a referenced noun no node defines — IS an unresolved gap. Resolve it from evidence or a routine recorded assumption where possible; otherwise retain it as a consequential open question blocking affected publication readiness. It never extends the question ceiling.
 
 ### Question mechanics
 
-AskUserQuestion, ONE decision per dialog, answer awaited — never bundle; ratifications confirm component-by-component. Recommended option first: "(Recommended)" + one-line reason. Explorable facts get explored, never asked; judgment calls never self-answered — they enter asking-you.
+AskUserQuestion, ONE decision per dialog, answer awaited — never bundle; ratifications confirm component-by-component. Recommended option first: "(Recommended)" + one-line reason. Explorable facts get explored, never asked; consequential judgment calls never self-answered — they enter asking-you. Routine reversible calls are decided and recorded as assumptions.
 
 ## Pre-send gate (G1–G6)
 
@@ -107,8 +107,8 @@ No side effects before lint passes. Check all:
 - Categorical mappings exercised on the most important live exemplar, rendered line shown; falsified at execution → surfaced conflict + parked decision, never silent change.
 - Batch blocking edges acyclic; every child in ≥1 edge.
 - Scan shown before the first question (even no-question sessions).
-- Every asking-you item asked or skip recorded verbatim in Decisions.
-- Figured-out-myself: facts only, each citing its source.
+- Every asking-you item answered or skip recorded verbatim in Decisions; skipped consequential questions remain unresolved unless explicitly settled or bounded by an owner-approved deferral. No unresolved question may silently authorize dependent scope.
+- Figured-out-myself: facts cite sources; routine reversible calls are tagged as assumptions. Consequential scope, authorization, and behavior decisions stay in asking-you.
 - Named external records (projects/milestones/labels): one live exemplar per type probed, term→type confirmed BEFORE preview.
 - Criteria over N records → aggregate readback (fetch all N, report misses) first.
 
@@ -121,6 +121,8 @@ Host refuses missing/stale artifacts, byte drift, multi-deliverable single issue
 - **Single issue** (default): `create_work`, description byte-exact from the artifact; preview shown verbatim (item becomes NOW); `confirm:true` only after owner yes.
 - **Conditional split** — ONE complaint, ≥2 independently verifiable slices with blocking relations (never bundled independents): parent = blueprint byte-exact; children carry NATIVE `blocks` links (text never substitutes), every child ≥1 edge; ONE batch preview, one owner yes.
 - No `success:true` → not landed.
+
+Zero interview questions do not waive lint, the exact publication preview, or owner confirmation. Publication is ready only for scope whose consequential questions are settled or explicitly excluded/blocked by an approved deferral.
 
 Unverified feasibility claims → offer pre-publication validation; interview output never green-lights architecture.
 

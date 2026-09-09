@@ -68,6 +68,9 @@ The work item is the durable cross-session state:
 Evidence comments never settle handoff/review debt. Reads and NOW selection never
 imply execution. Closeout remains literal-command-only: never infer `/summary`
 or `/done` from completion, and a keep-open verdict blocks closeout.
+Sole exception: a literal owner `/execute <KEY>` grant carries its own bounded
+audit-and-close authority (owner ruling 2026-08-28); manual `/summary` and
+`/done` gates are unchanged outside that grant.
 
 Enforcement lives in the workflow host (`work-now` extension):
 the start bookend and tool description inject one canonical sequence, plan

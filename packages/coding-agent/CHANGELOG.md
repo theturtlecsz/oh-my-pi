@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Clarified worker and auditor completion instructions to honor assigned scope, verification duties, and harness stop boundaries.
 - Resume workflow-bound synchronous tasks after a completed local text read when using `openai-completions`, without repeating the read.
 
 - Fixed recovery losing a completed first-run synchronous task when its execution authority is bound and parent result processing has not started.

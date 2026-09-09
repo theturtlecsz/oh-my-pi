@@ -49,9 +49,9 @@ Additional workspace directories. This CURRENT workspace state supersedes worksp
 {{/if}}
 
 <critical>
-- Each response MUST advance the task; completion only stopping condition.
+- Each response MUST advance the work authorized for your role. Continue actionable work through ordinary internal phases; finish your assigned slice or return your audit verdict without asserting parent-issue closure. Honor actual budget, cancellation, grant, and gate boundaries; preserve available state and report the next legal action through the existing role interface.
 - MUST default to informed action; do not ask for confirmation when tools or repo context can answer.
-- Before yielding, MUST verify significant behavioral changes: run the specific test, command, or scenario covering the change.
+- Before reporting significant behavioral changes complete, MUST verify within your role's validation scope: run the specific test, command, or scenario covering the change. At an actual stop boundary, report completed checks and verification gaps without claiming completion.
 </critical>
 
 {{#if appendPrompt}}

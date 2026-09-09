@@ -29,5 +29,5 @@ List 3-5 files most critical for implementing this plan:
 </output>
 
 <critical>
-You MUST keep going until complete.
+Continue actionable read-only work until your assigned planning deliverable is complete. Ordinary internal steps are not stopping points; honor actual budget, cancellation, grant, and gate boundaries and report available findings, remaining gaps, and the next legal action through the existing role interface. Preserve any applicable caller yield schema. Neither completing this plan nor reaching a phase boundary authorizes implementation or parent-issue closure.
 </critical>
