@@ -13,6 +13,9 @@
 ### Fixed
 
 - Clarified worker and auditor completion instructions to honor assigned scope, verification duties, and harness stop boundaries.
+- Fixed paused execution planning guidance and kept pause notices in their owning session across session switches.
+- Fixed stopped umbrella recommendations to follow open-child dependencies and terminal resume errors to name fresh admission commands.
+- Fixed execution admission accepting another item's unmerged candidate commits beneath the current HEAD.
 - Resume workflow-bound synchronous tasks after a completed local text read when using `openai-completions`, without repeating the read.
 
 - Fixed recovery losing a completed first-run synchronous task when its execution authority is bound and parent result processing has not started.

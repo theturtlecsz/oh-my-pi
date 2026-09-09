@@ -74,6 +74,7 @@ import {
 	type WorkflowBackend,
 	type WorkflowCheckpoint,
 	type ExecutionSnapshot,
+	type ExecutionChildren,
 } from "./backend";
 import { pendingOpsDir, type WorkClientConfig } from "./config";
 import { candidateDrift, type CandidateDriftShape, freezeCandidateCommit, headCommit, pushCandidate } from "./git";
@@ -96,6 +97,64 @@ function terminalNextAction(shape?: CandidateDriftShape): string {
 		default:
 			return "if code changed since the reviewed snapshot, enter /plan then /summary; otherwise enter /summary";
 	}
+}
+
+function executionChildrenFromTree(tree: WorkspaceTree, key: string): ExecutionChildren {
+	const unavailable = (diagnostic: string): ExecutionChildren => ({ umbrella: false, children: [], diagnostic });
+	if (!Array.isArray(tree?.items) || !Array.isArray(tree?.relations)) return unavailable("execution child graph malformed");
+	// The v1 tree projection silently caps these collections. At the cap,
+	// completeness cannot be established without a richer service read.
+	if (tree.items.length >= 1000 || tree.relations.length >= 5000) return unavailable("execution child graph may be truncated");
+	const byId = new Map<string, WorkItemView>();
+	const keys = new Set<string>();
+	for (const item of tree.items) {
+		if (!item || typeof item.work_id !== "string" || !item.work_id || !item.alias?.primary || !/^[A-Z]+-[1-9]\d*$/.test(item.alias.key) ||
+			typeof item.state !== "string" || typeof item.archived !== "boolean" || byId.has(item.work_id) || keys.has(item.alias.key)) return unavailable("execution child graph malformed");
+		byId.set(item.work_id, item);
+		keys.add(item.alias.key);
+	}
+	const root = tree.items.find(item => item.alias.key === key || item.work_id === key);
+	if (!root) return unavailable("execution child graph anchor missing");
+	const children = new Set<string>();
+	const parentOf = new Map<string, string>();
+	for (const edge of tree.relations) {
+		if (!edge || typeof edge.active !== "boolean") return unavailable("execution child graph malformed");
+		if (!edge.active || (edge.kind !== "parent" && edge.kind !== "blocks")) continue;
+		if (!byId.has(edge.source_work_id) || !byId.has(edge.target_work_id)) return unavailable("execution child graph endpoint missing");
+		if (edge.kind === "parent") {
+			if (parentOf.has(edge.source_work_id) && parentOf.get(edge.source_work_id) !== edge.target_work_id) return unavailable("execution child graph has inconsistent parents");
+			parentOf.set(edge.source_work_id, edge.target_work_id);
+			if (edge.target_work_id === root.work_id) children.add(edge.source_work_id);
+		}
+	}
+	for (const start of [root.work_id, ...children]) {
+		const visited = new Set<string>();
+		let id: string | undefined = start;
+		while (id !== undefined) {
+			if (visited.has(id)) return unavailable("execution child graph parent cycle");
+			visited.add(id);
+			id = parentOf.get(id);
+		}
+	}
+	const nonterminal = (item: WorkItemView): boolean => !["DONE", "CANCELED", "CANCELLED"].includes(item.state);
+	const pending = new Set([...children].filter(id => !byId.get(id)!.archived && nonterminal(byId.get(id)!)));
+	const blockers = new Map([...pending].map(id => [id, new Set<string>()]));
+	for (const edge of tree.relations) {
+		if (!edge.active || edge.kind !== "blocks" || !pending.has(edge.target_work_id) || !nonterminal(byId.get(edge.source_work_id)!)) continue;
+		if (!pending.has(edge.source_work_id)) return unavailable("execution child graph has an open blocker outside the child set");
+		blockers.get(edge.target_work_id)!.add(edge.source_work_id);
+	}
+	const ordered: string[] = [];
+	while (pending.size) {
+		const ready = [...pending].filter(id => blockers.get(id)!.size === 0)
+			.sort((a, b) => byId.get(a)!.alias.key.localeCompare(byId.get(b)!.alias.key, "en", { numeric: true }));
+		const next = ready[0];
+		if (!next) return unavailable("execution child graph blocks cycle");
+		pending.delete(next);
+		ordered.push(byId.get(next)!.alias.key);
+		for (const dependencies of blockers.values()) dependencies.delete(next);
+	}
+	return { umbrella: children.size > 0, children: ordered };
 }
 
 function parseKeyNumber(key: string): number {
@@ -1780,6 +1839,11 @@ export function createWorkBackend(
 			});
 			if (result.type !== "finalize_candidate") throw new Error(`unexpected result ${result.type}`);
 			return result.candidate;
+		},
+
+		async executionChildren(key: string): Promise<ExecutionChildren> {
+			try { return executionChildrenFromTree(await client.tree(), key); }
+			catch { return { umbrella: false, children: [], diagnostic: "execution child graph unavailable" }; }
 		},
 
 		async snapshotQueue(projectFilter?: string, currentKey?: string, cwd?: string): Promise<ExecutionGrantItemClaim[]> {

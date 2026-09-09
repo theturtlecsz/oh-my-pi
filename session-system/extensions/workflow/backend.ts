@@ -19,6 +19,12 @@ import type {
 	WorkClient,
 } from "@oh-my-pi/pi-work-client";
 
+export interface ExecutionChildren {
+	umbrella: boolean;
+	children: string[];
+	diagnostic?: string;
+}
+
 export interface ExecutionSnapshot {
 	grant: ExecutionGrantView;
 	items: ExecutionGrantItemView[];
@@ -614,6 +620,7 @@ export interface WorkflowBackend {
 
 	// ---- OMP-180 execution cycle authority ----
 	getExecution(key?: string): Promise<ExecutionSnapshot | null>;
+	executionChildren(key: string): Promise<ExecutionChildren>;
 	finalizeExecutionCandidate(key: string, plannedCandidateId: string, freeze: { commitSha: string; candidateSha256: string; paths: string[] }): Promise<Candidate>;
 	snapshotQueue(projectFilter?: string, currentKey?: string): Promise<ExecutionGrantItemClaim[]>;
 	beginExecution(input: {
