@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	freezeCandidateCommit,
+	inProgressGitOp,
 	runGit,
 	verifyMergeConfirmation,
 	type FreezeUi,
@@ -87,6 +88,55 @@ describe("execution freeze preserves deletion and credential-scan contracts", ()
 		expect("refused" in result && result.reason).toContain("unreadable file for credential scan");
 		expect(git(root, "rev-parse", "HEAD")).toBe(baseline);
 	});
+});
+
+describe("workflow operation guards follow real Git operation lifetimes", () => {
+	for (const backend of ["merge", "apply"] as const) {
+		test(`${backend} rebase blocks execution until resolved completion, including a retained historical REBASE_HEAD`, async () => {
+			const primary = await makeRepo();
+			// A linked worktree has a .git file; operation state belongs to its own Git directory.
+			const root = path.join(await fs.mkdtemp(path.join(tempRoot, "linked-")), "topic");
+			git(primary, "worktree", "add", "-qb", "topic", root);
+			await Bun.write(path.join(root, "seed.txt"), "topic\n");
+			git(root, "commit", "-qam", "topic");
+			await Bun.write(path.join(primary, "seed.txt"), "main\n");
+			git(primary, "commit", "-qam", "main");
+			expect(runGit(root, ["rebase", `--${backend}`, "main"]).ok).toBe(false);
+			expect(inProgressGitOp(root)).toBe(true);
+			expect(inProgressGitOp(primary)).toBe(false);
+			await Bun.write(path.join(root, "seed.txt"), "resolved\n");
+			git(root, "add", "--", "seed.txt");
+			// A staged resolution is still an active rebase until Git completes it.
+			expect(inProgressGitOp(root)).toBe(true);
+			git(root, "-c", "core.editor=true", "rebase", "--continue");
+			expect(git(root, "status", "--porcelain")).toBe("");
+			if (backend === "merge") {
+				// Git itself retains this historical ref after the resolved merge-backend rebase.
+				expect(runGit(root, ["rev-parse", "--verify", "REBASE_HEAD"]).ok).toBe(true);
+			}
+			expect(inProgressGitOp(root)).toBe(false);
+		});
+	}
+
+	for (const operation of ["merge", "cherry-pick", "revert"] as const) {
+		test(`${operation} conflict blocks execution until Git aborts the operation`, async () => {
+			const root = await makeRepo();
+			git(root, "checkout", "-qb", "topic");
+			await Bun.write(path.join(root, "seed.txt"), "topic\n");
+			git(root, "commit", "-qam", "topic");
+			const topic = git(root, "rev-parse", "HEAD");
+			if (operation !== "revert") git(root, "checkout", "main");
+			await Bun.write(path.join(root, "seed.txt"), "later\n");
+			git(root, "commit", "-qam", "later");
+			const before = git(root, "rev-parse", "HEAD");
+			expect(runGit(root, [operation, topic]).ok).toBe(false);
+			expect(inProgressGitOp(root)).toBe(true);
+			git(root, operation, "--abort");
+			expect(git(root, "rev-parse", "HEAD")).toBe(before);
+			expect(git(root, "status", "--porcelain")).toBe("");
+			expect(inProgressGitOp(root)).toBe(false);
+		});
+	}
 });
 
 interface MergeFixture {
