@@ -836,3 +836,67 @@ describe("workflow revise_work structured amendment", () => {
 		}
 	});
 });
+
+describe("OMP233 structured execution children", () => {
+	test("archived nonterminal blockers prevent child recommendations until terminal", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "archived-execution-blocker-"));
+		const archived = { work_id: "work-3", alias: { key: "OMP-3", primary: true }, state: "BACKLOG", archived: true };
+		const tree = {
+			items: [
+				{ work_id: "work-1", alias: { key: "OMP-1", primary: true }, state: "BACKLOG", archived: false },
+				{ work_id: "work-2", alias: { key: "OMP-2", primary: true }, state: "BACKLOG", archived: false },
+				archived,
+			],
+			relations: [
+				{ source_work_id: "work-2", target_work_id: "work-1", kind: "parent", active: true },
+				{ source_work_id: "work-3", target_work_id: "work-1", kind: "parent", active: true },
+				{ source_work_id: "work-3", target_work_id: "work-2", kind: "blocks", active: true },
+			],
+			projects: [],
+		};
+		const backend = createWorkBackend({ baseUrl: "http://127.0.0.1:9999", workspaceId: "ws", ownerId: "owner" }, () => "token", async () => Response.json(tree), dir);
+		try {
+			expect(await backend.executionChildren("OMP-1")).toMatchObject({ children: [], diagnostic: expect.stringContaining("open blocker outside the child set") });
+			archived.state = "DONE";
+			expect(await backend.executionChildren("OMP-1")).toEqual({ umbrella: true, children: ["OMP-2"] });
+		} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+	});
+
+	test("orders open children by active blocks with stable keys and rejects unsafe graph reads", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "execution-children-"));
+		const item = (key: string, state = "BACKLOG", archived = false) => ({ work_id: key, alias: { key, primary: true }, state, archived });
+		const edge = (source: string, target: string, kind = "parent", active = true) => ({ source_work_id: source, target_work_id: target, kind, active });
+		const items = [item("OMP-1"), item("OMP-3"), item("OMP-2"), item("OMP-4"), item("OMP-5", "DONE"), item("OMP-6", "CANCELED"), item("OMP-7", "BACKLOG", true)];
+		const relations = [2, 3, 4, 5, 6, 7].map(n => edge(`OMP-${n}`, "OMP-1"));
+		relations.push(edge("OMP-3", "OMP-2", "blocks"), edge("OMP-2", "OMP-3", "blocks", false), edge("OMP-5", "OMP-3", "blocks"));
+		let tree: unknown = { items, relations, projects: [] };
+		let failed = false;
+		const fetcher = async () => { if (failed) throw new Error("offline"); return Response.json(tree); };
+		const backend = createWorkBackend({ baseUrl: "http://127.0.0.1:9999", workspaceId: "ws", ownerId: "owner" }, () => "token", fetcher, dir);
+		try {
+			expect(await backend.executionChildren("OMP-1")).toEqual({ umbrella: true, children: ["OMP-3", "OMP-2", "OMP-4"] });
+			relations.push(edge("OMP-2", "OMP-3", "blocks"));
+			expect(await backend.executionChildren("OMP-1")).toMatchObject({ children: [], diagnostic: expect.stringContaining("cycle") });
+			relations.pop();
+			relations.push(edge("missing", "OMP-2", "blocks"));
+			expect(await backend.executionChildren("OMP-1")).toMatchObject({ children: [], diagnostic: expect.stringContaining("missing") });
+			relations.pop();
+			relations.push(edge("OMP-1", "OMP-3"));
+			expect(await backend.executionChildren("OMP-1")).toMatchObject({ children: [], diagnostic: expect.stringContaining("parent cycle") });
+			relations.pop();
+			items[1]!.alias.primary = false;
+			expect(await backend.executionChildren("OMP-1")).toMatchObject({ children: [], diagnostic: expect.stringContaining("malformed") });
+			items[1]!.alias.primary = true;
+			tree = { items: [item("OMP-1"), item("OMP-2", "DONE")], relations: [edge("OMP-2", "OMP-1")], projects: [] };
+			expect(await backend.executionChildren("OMP-1")).toEqual({ umbrella: true, children: [] });
+			tree = { items: Array.from({ length: 1000 }, (_, n) => item(`OMP-${n + 1}`)), relations: [], projects: [] };
+			expect(await backend.executionChildren("OMP-1")).toMatchObject({ children: [], diagnostic: expect.stringContaining("truncated") });
+			tree = { items, relations: Array.from({ length: 5000 }, () => edge("OMP-2", "OMP-1")), projects: [] };
+			expect(await backend.executionChildren("OMP-1")).toMatchObject({ children: [], diagnostic: expect.stringContaining("truncated") });
+			tree = { items, projects: [] };
+			expect(await backend.executionChildren("OMP-1")).toMatchObject({ children: [], diagnostic: expect.stringContaining("malformed") });
+			failed = true;
+			expect(await backend.executionChildren("OMP-1")).toMatchObject({ children: [], diagnostic: expect.stringContaining("unavailable") });
+		} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+	});
+});

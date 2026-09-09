@@ -24,6 +24,21 @@ export function runGit(cwd: string, args: string[], timeoutMs = 10_000): { ok: b
 	return { ok: r.status === 0 && !r.error, out: raw.trim(), raw, err };
 }
 
+interface CandidateCommitIdentity {
+	workKey: string;
+	candidateIds: string[];
+}
+
+/** Shared exact subject/trailer contract for admission and lost-response retries. */
+function candidateCommitIdentity(message: string): CandidateCommitIdentity | undefined {
+	const [subject, ...body] = message.split("\n");
+	const subjectPrefix = "session candidate: ";
+	const trailerPrefix = "Work-Candidate: ";
+	if (!subject?.startsWith(subjectPrefix)) return undefined;
+	const candidateIds = body.filter(line => line.startsWith(trailerPrefix)).map(line => line.slice(trailerPrefix.length));
+	return candidateIds.length ? { workKey: subject.slice(subjectPrefix.length), candidateIds } : undefined;
+}
+
 export interface ExecutionWorkspace {
 	primaryRoot: string;
 	path: string;
@@ -589,10 +604,10 @@ export async function freezeCandidateCommit(
 				const head = runGit(root, ["log", "-1", "--format=%H%x00%B"]);
 				const sep = head.ok ? head.out.indexOf("\x00") : -1;
 				const headSha = sep > 0 ? head.out.slice(0, sep) : "";
-				const headLines = sep > 0 ? head.out.slice(sep + 1).split("\n") : [];
+				const identity = sep > 0 ? candidateCommitIdentity(head.out.slice(sep + 1)) : undefined;
 				if (!headSha) return refuse("failed", "execution freeze refused: no HEAD commit to bind as candidate", "error");
 				// Re-freeze idempotency: current HEAD already is this candidate.
-				if (headLines[0] === `session candidate: ${key}` && headLines.includes(`Work-Candidate: ${candidateId}`)) {
+				if (identity?.workKey === key && identity.candidateIds.includes(candidateId)) {
 					const paths = committedPaths(root, headSha);
 					return { root, paths, commitSha: headSha, candidateSha256: candidateSha256(headSha, paths) };
 				}
@@ -704,11 +719,12 @@ export async function freezeCandidateCommit(
 			const head = runGit(root, ["log", "-1", "--format=%H%x00%B"]);
 			const sep = head.ok ? head.out.indexOf("\x00") : -1;
 			const headSha = sep > 0 ? head.out.slice(0, sep) : "";
-			const headLines = sep > 0 ? head.out.slice(sep + 1).split("\n") : [];
+			const headSubject = sep > 0 ? head.out.slice(sep + 1).split("\n", 1)[0] : "";
+			const identity = sep > 0 ? candidateCommitIdentity(head.out.slice(sep + 1)) : undefined;
 			if (
 				headSha &&
-				headLines[0] === `session candidate: ${key}` &&
-				headLines.includes(`Work-Candidate: ${candidateId}`)
+				identity?.workKey === key &&
+				identity.candidateIds.includes(candidateId)
 			) {
 				const paths = committedPaths(root, headSha);
 				ui.notify(`reusing the existing candidate commit ${headSha.slice(0, 12)} for ${key}`, "info");
@@ -718,7 +734,7 @@ export async function freezeCandidateCommit(
 				const approvedSha = options.approvedSnapshot.commitSha;
 				const details = [
 					`approved snapshot: ${approvedSha.slice(0, 12)}`,
-					`current HEAD: ${headSha ? headSha.slice(0, 12) : "none"} ${headLines[0] ?? ""}`,
+					`current HEAD: ${headSha ? headSha.slice(0, 12) : "none"} ${headSubject}`,
 					leftAlone ? `${leftAlone} — these dirty paths will NOT be part of the candidate` : "",
 					`sealed paths:\n${listPaths(options.approvedSnapshot.paths)}`,
 				].filter(Boolean).join("\n\n");
@@ -730,7 +746,7 @@ export async function freezeCandidateCommit(
 			if (!headSha) return refuse("nothing", `nothing to freeze${leftAlone ? ` — ${leftAlone}` : ""}`, "info");
 			const paths = committedPaths(root, headSha);
 			const details = [
-				`current HEAD: ${headSha.slice(0, 12)} ${headLines[0] ?? ""}`,
+				`current HEAD: ${headSha.slice(0, 12)} ${headSubject}`,
 				leftAlone ? `${leftAlone} — these dirty paths will NOT be part of the candidate` : "",
 			].filter(Boolean).join("\n\n");
 			const yes = await ui.confirm(`Use current HEAD as the candidate for ${key}?`, details);
@@ -850,7 +866,7 @@ export function resolveDefaultBranch(root: string): string {
  *  so /execute refuses to begin when HEAD is behind the origin default tip
  *  (the OMP-218 delivery needed hand conflict surgery because its lineage
  *  predated a merged PR). */
-export function ensureUpToDateWithDefault(root: string, defaultBranch?: string): { ok: boolean; detail: string } {
+export function ensureUpToDateWithDefault(root: string, defaultBranch?: string, workKey?: string): { ok: boolean; detail: string } {
 	const resolvedDefault = defaultBranch ?? resolveDefaultBranch(root);
 	const name = resolvedDefault.startsWith("refs/heads/") ? resolvedDefault.slice("refs/heads/".length) : resolvedDefault;
 	const fetch = runGit(root, ["fetch", "origin", `+refs/heads/${name}:refs/remotes/origin/${name}`], 30_000);
@@ -863,6 +879,29 @@ export function ensureUpToDateWithDefault(root: string, defaultBranch?: string):
 			ok: false,
 			detail: `HEAD is behind origin/${name} tip ${tip.out.slice(0, 12)} — run \`git merge origin/${name}\` (or pull) and retry so PASS candidates stay conflict-free`,
 		};
+	}
+	if (workKey) {
+		const ahead = runGit(root, ["log", "--format=%H%x00%B%x00", `${tip.out}..HEAD`, "--"]);
+		if (!ahead.ok) return { ok: false, detail: `cannot inspect unmerged candidates above origin/${name}: ${ahead.err.split("\n")[0]}` };
+		if (ahead.out) {
+			const fields = ahead.out.split("\0");
+			if (fields.pop() !== "" || fields.length % 2 !== 0) {
+				return { ok: false, detail: `cannot parse unmerged candidate history above origin/${name}` };
+			}
+			for (let index = 0; index < fields.length; index += 2) {
+				const commit = fields[index].trim();
+				if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit)) {
+					return { ok: false, detail: `cannot parse unmerged candidate identity above origin/${name}` };
+				}
+				const identity = candidateCommitIdentity(fields[index + 1]);
+				if (identity && identity.workKey !== workKey) {
+					return {
+						ok: false,
+						detail: `HEAD contains unmerged candidate ${commit.slice(0, 12)} for ${identity.workKey}, not ${workKey}; start from a fresh worktree at origin/${name} before admission`,
+					};
+				}
+			}
+		}
 	}
 	return { ok: true, detail: `HEAD contains origin/${name} tip ${tip.out.slice(0, 12)}` };
 }

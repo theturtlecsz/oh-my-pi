@@ -66,6 +66,7 @@ import {
 	type WorkflowCheckpoint,
 	type WorkStateCarrier,
 	type ExecutionSnapshot,
+	type ExecutionChildren,
 	renderCenterReadout,
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
@@ -448,10 +449,19 @@ export async function resolveAnchorKey(
 	return undefined;
 }
 
+async function executionPlanningRefusal(backend: WorkflowBackend, exec: ExecutionSnapshot | null, targetKey?: string): Promise<string | undefined> {
+	if (!exec) return "no active execution grant";
+	if (exec.grant.state === "active") return undefined;
+	const key = await resolveAnchorKey(backend, exec, targetKey);
+	if (exec.grant.state === "paused") return `execution grant is paused; ${key ? `use /execute resume ${key}` : "resume key unavailable; inspect /execute status"}`;
+	return `execution grant is ${exec.grant.state}; no active execution grant`;
+}
+
 export function computeExecutionNoticeDetails(
 	exec: ExecutionSnapshot,
 	reason?: string | null,
 	targetKey?: string,
+	graph?: ExecutionChildren,
 ): ExecutionNoticeDetails {
 	const g = exec.grant;
 	const termReason = reason ?? g.terminal_reason ?? g.state;
@@ -467,16 +477,8 @@ export function computeExecutionNoticeDetails(
 	const rawAnchor = targetKey ?? anchorItem?.work_id;
 	const anchorKey = rawAnchor && /^[A-Z]+-\d+$/.test(rawAnchor) ? rawAnchor : undefined;
 
-	const keyMatches = (termReason || "").match(/\b[A-Z]+-\d+\b/g) || [];
-	const blockingKey = keyMatches.find(k => k !== anchorKey);
-
 	let nextCommandLine = "";
-	if (blockingKey && anchorKey) {
-		const queueSuffix = g.mode === "queue" ? " --queue" : "";
-		nextCommandLine = `Next: /execute ${blockingKey} then /execute ${anchorKey}${queueSuffix}`;
-	} else if (blockingKey) {
-		nextCommandLine = `Next: /execute ${blockingKey}`;
-	} else if (anchorKey && termReason?.includes("contract_approval_required")) {
+	if (anchorKey && termReason?.includes("contract_approval_required")) {
 		const afterApprove = isTerminal
 			? `/execute ${anchorKey}${g.mode === "queue" ? " --queue" : ""}`
 			: "/execute resume";
@@ -490,6 +492,12 @@ export function computeExecutionNoticeDetails(
 		termReason?.includes("budget_exhausted"))
 	) {
 		nextCommandLine = `Next: /now ${anchorKey} then /summary`;
+	} else if (graph?.diagnostic) {
+		nextCommandLine = `Next: ${graph.diagnostic}; inspect work relations before choosing execution order.`;
+	} else if (graph?.umbrella) {
+		nextCommandLine = graph.children.length
+			? `Next: ${graph.children.map(key => `/execute ${key}`).join(" then ")} (recommendations only; each requires fresh admission)`
+			: "Next: no open nonarchived children; inspect umbrella work status.";
 	} else if (anchorKey) {
 		const queueSuffix = g.mode === "queue" ? " --queue" : "";
 		nextCommandLine = `Next: /execute ${anchorKey}${queueSuffix}`;
@@ -501,14 +509,30 @@ export function computeExecutionNoticeDetails(
 	return { causeLine, tallyLine, nextCommandLine, fullNotice };
 }
 
+export async function resolveExecutionNoticeDetails(
+	backend: WorkflowBackend,
+	exec: ExecutionSnapshot,
+	reason?: string | null,
+	targetKey?: string,
+): Promise<ExecutionNoticeDetails> {
+	const key = await resolveAnchorKey(backend, exec, targetKey);
+	let graph: ExecutionChildren | undefined;
+	if (key && ["stopped", "canceled", "completed"].includes(exec.grant.state)) {
+		try { graph = await backend.executionChildren(key); }
+		catch { graph = { umbrella: false, children: [], diagnostic: "execution child graph unavailable" }; }
+	}
+	return computeExecutionNoticeDetails(exec, reason, key, graph);
+}
+
 export function renderExecutionTerminalBanner(
 	exec: ExecutionSnapshot | undefined,
 	targetKey?: string,
+	notice?: ExecutionNoticeDetails,
 ): string[] {
 	if (!exec) return [];
 	const g = exec.grant;
 	if (g.state !== "stopped" && g.state !== "canceled") return [];
-	const details = computeExecutionNoticeDetails(exec, g.terminal_reason, targetKey);
+	const details = notice ?? computeExecutionNoticeDetails(exec, g.terminal_reason, targetKey);
 	return [
 		`STATUS: EXECUTION GRANT ${g.state} (terminal — resume impossible)`,
 		`CAUSE: ${g.terminal_reason ?? g.state}`,
@@ -767,6 +791,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 	let activeCenterRunId: number | null = null;
 	let nextCenterRunId = 1;
 	const pendingNotices: string[] = [];
+	const pendingPauseNotices = new Map<string, string[]>();
 
 	function currentNowRef(): NowRef | undefined {
 		if (!state.issueId || !state.identifier) return undefined;
@@ -1936,6 +1961,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			const cached = await loadCache();
 			if (!startupCurrent()) return;
 			state = cached;
+			state.terminalExecution = undefined;
 			hydrateExecutionWorkspace(ctx);
 			models = ctx.models;
 			const outboxEntries = new Map<string, ExecutionOutboxEntry>();
@@ -2001,7 +2027,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					if (!("data" in entry) || !entry.data || typeof entry.data !== "object") continue;
 					// own persisted shape — written by persistSession above
 					const data = entry.data as HostNowState;
-					if (cfg.acceptEntry(data as Record<string, unknown>)) Object.assign(state, data);
+					if (cfg.acceptEntry(data as Record<string, unknown>)) { Object.assign(state, data); state.terminalExecution = undefined; }
 				}
 			} catch {
 				/* fresh session */
@@ -2100,7 +2126,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 						}
 					if (exec && (exec.grant.state === "stopped" || exec.grant.state === "canceled")) {
 						const anchorKey = await resolveAnchorKey(backend, exec, state.identifier);
-						const notice = computeExecutionNoticeDetails(exec, exec.grant.terminal_reason, anchorKey);
+						const notice = await resolveExecutionNoticeDetails(backend, exec, exec.grant.terminal_reason, anchorKey);
+						if (!startupCurrent()) return;
 						state.terminalExecution = {
 							grantId: exec.grant.grant_id,
 							state: exec.grant.state,
@@ -2227,7 +2254,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 												};
 												const resolvedKey = (await resolveAnchorKey(backend, postExec, preflight.targetIssue.key)) ?? preflight.targetIssue.key;
 												if (!ownsExecutionSession(sessionCtx, startupWitness, startupWitness.workspace.path)) return;
-												const notice = computeExecutionNoticeDetails(postExec, updated.grant.terminal_reason ?? "cap reached", resolvedKey);
+												const notice = await resolveExecutionNoticeDetails(backend, postExec, updated.grant.terminal_reason ?? "cap reached", resolvedKey);
+												if (!ownsExecutionSession(sessionCtx, startupWitness, startupWitness.workspace.path)) return;
 												state.terminalExecution = {
 													grantId: postExec.grant.grant_id,
 													state: "stopped",
@@ -2300,7 +2328,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 							// Historical UUID notices remain resumable via getExecution fallback.
 						}
 					}
-					if (ownsExecutionSession(ctx, witness, witness.workspace.path)) pendingNotices.push(`[${TOOL_NAME}] Execution grant paused due to owner message. Use '/execute resume ${resumeTarget}' to resume.`);
+					if (ownsExecutionSession(ctx, witness, witness.workspace.path)) {
+						const notices = pendingPauseNotices.get(witness.sessionId) ?? [];
+						notices.push(`[${TOOL_NAME}] Execution grant paused due to owner message. Use '/execute resume ${resumeTarget}' to resume.`);
+						pendingPauseNotices.set(witness.sessionId, notices);
+					}
 				}
 			}
 			if (/^\s*\/plan\b/.test(event.originalText)) {
@@ -2429,18 +2461,29 @@ export function createWorkflowHost(cfg: HostConfig) {
 			return undefined;
 		});
 		pi.on("before_agent_start", async (event, ctx) => {
-			const notices = pendingNotices.splice(0).join("\n");
+			const manager = ctx.sessionManager;
+			const sessionId = manager.getSessionId?.();
+			const generalNotices = pendingNotices.splice(0);
+			const consumeNotices = (): string => {
+				const current = ownerSession(ctx) && sessionId && ctx.sessionManager === manager && manager.getSessionId() === sessionId && pi.getSessionId() === sessionId;
+				const pauseNotices = current ? pendingPauseNotices.get(sessionId) ?? [] : [];
+				if (current) pendingPauseNotices.delete(sessionId);
+				return [...generalNotices, ...pauseNotices].join("\n");
+			};
 			if (!digestPending || digestInjectedThisSession) {
+				const notices = consumeNotices();
 				return notices ? { message: { customType: `${TOOL_NAME}-notice`, content: notices } } : undefined;
 			}
 			digestPending = false;
 			try {
 				const digest = await buildDigest(ctx.cwd);
 				digestInjectedThisSession = true;
+				const notices = consumeNotices();
 				return { message: { customType: `${TOOL_NAME}-digest`, content: notices ? `${digest}\n${notices}` : digest } };
 			} catch (e) {
 				pi.logger.warn(`${TOOL_NAME}-now: digest failed`, { error: String(e) });
-				return { message: { customType: `${TOOL_NAME}-digest`, content: `[${TOOL_NAME}] digest unavailable (${String(e)}) — session unblocked` } };
+				const notices = consumeNotices();
+				return { message: { customType: `${TOOL_NAME}-digest`, content: `[${TOOL_NAME}] digest unavailable (${String(e)}) — session unblocked${notices ? `\n${notices}` : ""}` } };
 			}
 		});
 
@@ -2863,7 +2906,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 					const item = exec.activeItem;
 					const isTerminal = g.state === "stopped" || g.state === "canceled" || g.state === "completed";
 					const resolvedKey = await resolveAnchorKey(backend, exec, key);
-					const details = computeExecutionNoticeDetails(exec, g.terminal_reason, resolvedKey);
+					const details = await resolveExecutionNoticeDetails(backend, exec, g.terminal_reason, resolvedKey);
 					const lines = [
 						`── Execution Grant ${g.grant_id.slice(0, 8)} (${g.state}) ──`,
 						`Mode: ${g.mode} · Version: ${g.grant_version}`,
@@ -2886,7 +2929,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 						return;
 					}
 					if (exec.grant.state !== "paused") {
-						ctx.ui.notify(`Cannot resume: grant state is ${exec.grant.state}, expected paused`, "error");
+						const terminal = ["stopped", "canceled", "completed"].includes(exec.grant.state);
+						const terminalKey = terminal ? await resolveAnchorKey(backend, exec, key) : undefined;
+						ctx.ui.notify(`Cannot resume: grant state is ${exec.grant.state}.${terminal ? ` Grant is terminal; ${terminalKey ? `use /execute ${terminalKey} for new admission` : "choose a work key for /execute to request new admission"}.` : " Expected paused."}`, "error");
 						return;
 					}
 					if (!isAbsolute(exec.grant.repository)) {
@@ -2946,7 +2991,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							activeItem: null,
 						};
 						const resolvedKey = await resolveAnchorKey(backend, exec, key);
-						const notice = computeExecutionNoticeDetails(postExec, updated.grant.terminal_reason ?? "cap reached", resolvedKey);
+						const notice = await resolveExecutionNoticeDetails(backend, postExec, updated.grant.terminal_reason ?? "cap reached", resolvedKey);
 						state.terminalExecution = {
 							grantId: postExec.grant.grant_id,
 							state: "stopped",
@@ -2983,7 +3028,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 						activeItem: null,
 					};
 					const resolvedKey = await resolveAnchorKey(backend, exec, key);
-					const notice = computeExecutionNoticeDetails(postExec, "owner_cancel", resolvedKey);
+					const notice = await resolveExecutionNoticeDetails(backend, postExec, "owner_cancel", resolvedKey);
 					state.terminalExecution = {
 						grantId: postExec.grant.grant_id,
 						state: "canceled",
@@ -3064,7 +3109,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 				const defaultBranch = resolveDefaultBranch(sourceCwd);
 				const isDefaultBranch = currentRef === defaultBranch || currentRef === "refs/heads/main" || currentRef === "refs/heads/master";
 				const remoteRef = isDefaultBranch ? `refs/heads/execution/${issue.key.toLowerCase()}` : currentRef;
-				const upToDate = ensureUpToDateWithDefault(sourceCwd, defaultBranch);
+				const upToDate = ensureUpToDateWithDefault(sourceCwd, defaultBranch, issue.key);
 				if (!upToDate.ok) {
 					ctx.ui.notify(`Cannot begin execution: ${upToDate.detail}`, "error");
 					return;
@@ -3127,7 +3172,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 						judgeSha256: tcb.judgeSha256,
 					});
 					const postExec: ExecutionSnapshot = { grant: stopped.grant, items: begun.items, activeItem: null };
-					const notice = computeExecutionNoticeDetails(postExec, reason, issue.key);
+					const notice = await resolveExecutionNoticeDetails(backend, postExec, reason, issue.key);
 					if (workspace) state.executionWorkspace = { ...workspace, key: issue.key };
 					state.terminalExecution = {
 						grantId: stopped.grant.grant_id,
@@ -3251,7 +3296,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								}
 								const exec = await backend.getExecution(workTarget);
 								if (exec && (exec.grant.state === "stopped" || exec.grant.state === "canceled")) {
-									const execBanner = renderExecutionTerminalBanner(exec, workTarget);
+									const execBanner = renderExecutionTerminalBanner(exec, workTarget, await resolveExecutionNoticeDetails(backend, exec, exec.grant.terminal_reason, workTarget));
 									if (execBanner.length > 0) {
 										text = `${execBanner.join("\n")}\n\n${msg}`;
 										break;
@@ -3344,7 +3389,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 							try {
 								const exec = await backend.getExecution(params.work);
 								if (exec && (exec.grant.state === "stopped" || exec.grant.state === "canceled")) {
-									execBanner = renderExecutionTerminalBanner(exec, params.work);
+									execBanner = renderExecutionTerminalBanner(exec, params.work, await resolveExecutionNoticeDetails(backend, exec, exec.grant.terminal_reason, params.work));
 								}
 							} catch {}
 							return okText(
@@ -3889,7 +3934,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 						}
 						case "seal_execution_criteria": {
 							const exec = await backend.getExecution(params.work);
-							if (!exec || exec.grant.state !== "active") return deny("no active execution grant");
+							const refusal = await executionPlanningRefusal(backend, exec, params.work);
+							if (refusal || !exec) return deny(refusal ?? "no active execution grant");
 							if (!exec.activeItem || exec.activeItem.phase !== "criteria_pending") {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected criteria_pending`);
 							}
@@ -3915,7 +3961,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 						}
 						case "stamp_execution_plan": {
 							const exec = await backend.getExecution(params.work);
-							if (!exec || exec.grant.state !== "active") return deny("no active execution grant");
+							const refusal = await executionPlanningRefusal(backend, exec, params.work);
+							if (refusal || !exec) return deny(refusal ?? "no active execution grant");
 							const isExecutingReplan = exec.activeItem?.phase === "executing" && (exec.activeItem.close_attempts_started ?? 0) === 0;
 							if (!exec.activeItem || (!["planning", "remediating"].includes(exec.activeItem.phase) && !isExecutingReplan)) {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected planning or remediating`);
@@ -4237,7 +4284,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 									const currentExec = await backend.getExecution(params.work);
 									if (currentExec?.grant?.state === "stopped" || currentExec?.grant?.state === "canceled") {
 										const anchorKey = (await resolveAnchorKey(backend, currentExec, targetIssue.key)) ?? targetIssue.key;
-										const notice = computeExecutionNoticeDetails(currentExec, currentExec.grant.terminal_reason, anchorKey);
+										const notice = await resolveExecutionNoticeDetails(backend, currentExec, currentExec.grant.terminal_reason, anchorKey);
 										state.terminalExecution = {
 											grantId: currentExec.grant.grant_id,
 											state: currentExec.grant.state,
@@ -4322,7 +4369,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 											activeItem: null,
 										};
 										const anchorKey = (await resolveAnchorKey(backend, postExec, targetIssue.key)) ?? targetIssue.key;
-										const notice = computeExecutionNoticeDetails(postExec, "execution_worktree_not_clean", anchorKey);
+										const notice = await resolveExecutionNoticeDetails(backend, postExec, "execution_worktree_not_clean", anchorKey);
 										state.terminalExecution = {
 											grantId: postExec.grant.grant_id,
 											state: "stopped",
@@ -4350,7 +4397,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 											activeItem: null,
 										};
 										const anchorKey = (await resolveAnchorKey(backend, postExec, targetIssue.key)) ?? targetIssue.key;
-										const notice = computeExecutionNoticeDetails(postExec, "no_head_commit", anchorKey);
+										const notice = await resolveExecutionNoticeDetails(backend, postExec, "no_head_commit", anchorKey);
 										state.terminalExecution = {
 											grantId: postExec.grant.grant_id,
 											state: "stopped",
@@ -4580,7 +4627,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								activeItem: null,
 							};
 							const anchorKey = (await resolveAnchorKey(backend, postExec, params.work ?? state.identifier)) ?? state.identifier;
-							const notice = computeExecutionNoticeDetails(postExec, reason, anchorKey);
+							const notice = await resolveExecutionNoticeDetails(backend, postExec, reason, anchorKey);
 							state.terminalExecution = {
 								grantId: postExec.grant.grant_id,
 								state: "stopped",

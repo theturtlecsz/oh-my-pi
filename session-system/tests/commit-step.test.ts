@@ -1432,6 +1432,39 @@ describe("merge confirmation gating (OMP-212)", () => {
 });
 
 describe("admission rebase-check (OMP-220)", () => {
+	test("admission rejects a foreign candidate below ordinary HEAD and permits it once merged", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `admission-origin-${repoSeq++}.git`);
+		git(repo, "init", "--bare", "--initial-branch=main", remote);
+		git(repo, "remote", "add", "origin", remote);
+		git(repo, "push", "origin", "HEAD:refs/heads/main");
+		git(repo, "commit", "--allow-empty", "-m", "session candidate: OMP-239\n\nWork-Candidate: legacy-candidate-id");
+		const foreign = git(repo, "rev-parse", "HEAD");
+		git(repo, "commit", "--allow-empty", "-m", "ordinary work after the candidate");
+		const head = git(repo, "rev-parse", "HEAD");
+		const blocked = ensureUpToDateWithDefault(repo, "refs/heads/main", "OMP-233");
+		expect(blocked.ok).toBe(false);
+		expect(blocked.detail).toContain("OMP-239");
+		expect(blocked.detail).toContain(foreign.slice(0, 12));
+		expect(git(repo, "rev-parse", "HEAD")).toBe(head);
+		git(repo, "push", "origin", `${foreign}:refs/heads/main`);
+		expect(ensureUpToDateWithDefault(repo, "refs/heads/main", "OMP-233").ok).toBe(true);
+	});
+
+	test("admission distinguishes its own candidate and ordinary prose from foreign candidate markers", () => {
+		const repo = makeRepo();
+		const remote = path.join(tempRoot, `admission-origin-${repoSeq++}.git`);
+		git(repo, "init", "--bare", "--initial-branch=main", remote);
+		git(repo, "remote", "add", "origin", remote);
+		git(repo, "push", "origin", "HEAD:refs/heads/main");
+		git(repo, "commit", "--allow-empty", "-m", "session candidate: OMP-233\n\nWork-Candidate: own-legacy-id");
+		git(repo, "commit", "--allow-empty", "-m", "ordinary discussion\n\nsession candidate: OMP-239\nWork-Candidate: quoted-id");
+		git(repo, "commit", "--allow-empty", "-m", "session candidate: OMP-239\n\nNo candidate trailer here");
+		expect(ensureUpToDateWithDefault(repo, "refs/heads/main", "OMP-233").ok).toBe(true);
+		git(repo, "commit", "--allow-empty", "-m", "session candidate: OMP-239\n\nWork-Candidate: actual-id");
+		expect(ensureUpToDateWithDefault(repo, "refs/heads/main", "OMP-233").ok).toBe(false);
+	});
+
 	test("passes when HEAD contains the origin default tip and refuses when behind", () => {
 		const repo = makeRepo("main");
 		const remote = path.join(tempRoot, `remote-${repoSeq}.git`);

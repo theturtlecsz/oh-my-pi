@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
@@ -10,6 +11,7 @@ import { z } from "zod";
 import type { ExecutionSnapshot, WorkflowBackend } from "../extensions/workflow/backend";
 import * as gitModule from "../extensions/workflow/git";
 import { createWorkflowHost } from "../extensions/workflow/host";
+import { createWorkBackend } from "../extensions/workflow/work";
 import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
 
 type StateChange = Parameters<WorkflowBackend["setExecutionState"]>[0];
@@ -17,7 +19,7 @@ type InputHandler = (event: { originalText: string; source: string }, ctx: Exten
 type CommandHandler = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 type ToolHandler = (
 	id: string,
-	params: { action: string; work?: string; body?: string },
+	params: { action: string; work?: string; body?: string; criteria?: string[]; plan_file?: string; paths?: string[] },
 	signal: AbortSignal,
 	onUpdate: undefined,
 	ctx: ExtensionContext,
@@ -97,6 +99,7 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		markerFile: ".work-project",
 		evidenceKinds: ["verification", "closeout"],
 		scopeFix: "",
+		executionChildren: async () => ({ umbrella: false, children: [] }),
 		getExecution: async (selector?: string) => {
 			lookups.push(selector);
 			lookupEntered?.();
@@ -107,7 +110,7 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		currentNow: async () => ({ id: item.work_id, key: "OMP-1", title: "Development change" }),
 		pendingDeliveries: async () => [],
 		getPendingExecutionClaims: async () => [],
-		issueDetail: async () => ({}),
+		issueDetail: async () => ({ labels: [] }),
 		findIssue: async () => ({ id: item.work_id, key: "OMP-1", title: "Development change" }),
 		setExecutionState: async (input: StateChange) => {
 			stateCalls.push(input);
@@ -187,6 +190,7 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		},
 	})(pi);
 	const notifications: string[] = [];
+	const statuses: string[] = [];
 	let aborts = 0;
 	let abortHook: (() => void) | undefined;
 	let manager = { getCwd: () => cwd, getSessionId: () => sessionId, getBranch: () => branch, moveTo: async (target: string) => { workspaceEffects.push("moveTo"); cwd = target; } };
@@ -212,7 +216,7 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 			notify: (message: string) => {
 				notifications.push(message);
 			},
-			setStatus: () => {},
+			setStatus: (_key: string, text?: string) => { if (text) statuses.push(text); },
 			theme: { fg: (_color: string, text: string) => text },
 		},
 	} as unknown as ExtensionCommandContext;
@@ -248,6 +252,7 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		start: async () => { for (const handler of startHandlers) await handler({ originalText: "", source: "startup" }, context); },
 		stateChanges,
 		notifications,
+		statuses,
 		getAborts: () => aborts,
 		input: async (text: string) => {
 			for (const handler of inputHandlers) await handler({ originalText: text, source: "tui" }, context);
@@ -257,15 +262,23 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 			if (!handler) throw new Error("execute command missing");
 			await handler(args, context);
 		},
-		stop: async () => {
+		stop: async (body = "owner requested a halt") => {
 			if (!executeTool) throw new Error("work tool missing");
 			return executeTool(
 				"stop-1",
-				{ action: "stop_execution", work: "OMP-1", body: "owner requested a halt" },
+				{ action: "stop_execution", work: "OMP-1", body },
 				new AbortController().signal,
 				undefined,
 				context,
 			);
+		},
+		planning: async (action: "seal_execution_criteria" | "stamp_execution_plan") => {
+			if (!executeTool) throw new Error("work tool missing");
+			return executeTool("planning-1", { action, work: "OMP-1", criteria: ["Contract"], plan_file: "/missing/plan.md", paths: ["src/main.ts"] }, new AbortController().signal, undefined, context);
+		},
+		getWork: async () => {
+			if (!executeTool) throw new Error("work tool missing");
+			return executeTool("read-1", { action: "get_work", work: "OMP-1" }, new AbortController().signal, undefined, context);
 		},
 		review: async () => {
 			if (!executeTool) throw new Error("work tool missing");
@@ -639,7 +652,7 @@ describe("legacy relative execution repository refusal", () => {
 			const harness = await makeHarness(state, "legacy-repo");
 			const original = harness.getSnapshot();
 			await harness.command("resume OMP-1");
-			expect(harness.notifications.some(message => message.includes(`grant state is ${state}`))).toBe(true);
+			expect(harness.notifications.some(message => message.includes(`grant state is ${state}`) && message.includes("/execute OMP-1"))).toBe(true);
 			expect(harness.notifications.some(message => message.includes("repository must"))).toBe(false);
 			const review = await harness.review();
 			expect(review.content[0].text).toContain("no active execution grant");
@@ -647,4 +660,116 @@ describe("legacy relative execution repository refusal", () => {
 			expect(harness.getSnapshot()).toEqual(original);
 		});
 	}
+});
+
+
+describe("OMP233 paused planning and queued notice delivery", () => {
+	for (const action of ["seal_execution_criteria", "stamp_execution_plan"] as const) {
+		test(`${action} reports paused with keyed resume before planning effects`, async () => {
+			const h = await makeHarness("paused");
+			h.setPhase(action === "seal_execution_criteria" ? "criteria_pending" : "planning");
+			const before = h.getSnapshot();
+			const health = vi.spyOn(h.backend.workClient!, "healthReady");
+			const read = vi.spyOn(fsSync, "readFileSync");
+			const seal = h.backend.sealExecutionCriteria = vi.fn();
+			const stamp = h.backend.stampExecutionPlan = vi.fn();
+			const result = await h.planning(action);
+			expect(result.details.success).toBe(false);
+			expect(result.content[0].text).toContain("paused");
+			expect(result.content[0].text).toContain("/execute resume OMP-1");
+			expect(health).not.toHaveBeenCalled();
+			expect(read.mock.calls.some(call => call[0] === "/missing/plan.md")).toBe(false);
+			expect(seal).not.toHaveBeenCalled();
+			expect(stamp).not.toHaveBeenCalled();
+			expect(h.getSnapshot()).toEqual(before);
+		});
+	}
+
+	test("completed pause enqueue waits for original session and delivers once", async () => {
+		const h = await makeHarness();
+		await h.input("Pause own work");
+		h.setSession("replacement");
+		await h.switchSession();
+		expect(JSON.stringify(await h.preparePrompt())).not.toContain("Execution grant paused");
+		h.setSession("session-1");
+		await h.switchSession();
+		expect(JSON.stringify(await h.preparePrompt())).toContain("/execute resume OMP-1");
+		expect(JSON.stringify(await h.preparePrompt())).not.toContain("Execution grant paused");
+	});
+});
+
+
+describe("OMP233 asynchronous guidance boundaries", () => {
+	test("pause notice survives session replacement during digest assembly", async () => {
+		const h = await makeHarness();
+		await h.input("Pause own work");
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		h.backend.digestExtras = async () => { entered.resolve(); await release.promise; return []; };
+		await h.switchSession();
+		const preparing = h.preparePrompt();
+		await entered.promise;
+		h.setSession("replacement");
+		release.resolve();
+		expect(JSON.stringify(await preparing)).not.toContain("Execution grant paused");
+		h.setSession("session-1");
+		expect(JSON.stringify(await h.preparePrompt())).toContain("/execute resume OMP-1");
+		expect(JSON.stringify(await h.preparePrompt())).not.toContain("Execution grant paused");
+	});
+
+	for (const capStop of [false, true]) {
+		test(`${capStop ? "recovery cap" : "terminal startup"} graph read cannot publish after session replacement`, async () => {
+			const h = await makeHarness(capStop ? "active" : "stopped");
+			if (capStop) {
+				vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({ agents: [{ name: "auditor", description: "Fixture auditor", systemPrompt: "", model: ["@audit"], output: { properties: { report: { type: "string" } } }, source: "bundled" }], projectAgentsDir: null });
+				vi.spyOn(gitModule, "inProgressGitOp").mockReturnValue(false);
+				vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+				vi.spyOn(gitModule, "headCommit").mockReturnValue("1".repeat(40));
+				const tcb = await computeAuditTcb(h.context, h.backend.workClient!);
+				h.setGrant({ judge_sha256: tcb.judgeSha256, expires_at: new Date(Date.now() + 86400000).toISOString() });
+				h.backend.setExecutionState = async () => { h.setGrant({ state: "stopped", terminal_reason: "max_continuations_exceeded" }); return h.getSnapshot(); };
+			}
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			h.backend.executionChildren = async () => { entered.resolve(); await release.promise; return { umbrella: true, children: ["OMP-2"] }; };
+			const starting = h.start();
+			await entered.promise;
+			const before = { entries: h.branch.length, notices: h.notifications.length, statuses: h.statuses.length, messages: h.sentMessages.length };
+			const cache = await Bun.file(path.join(h.directory, "cache.json")).text();
+			h.setSession("replacement");
+			release.resolve();
+			await starting;
+			expect({ entries: h.branch.length, notices: h.notifications.length, statuses: h.statuses.length, messages: h.sentMessages.length }).toEqual(before);
+			expect(await Bun.file(path.join(h.directory, "cache.json")).text()).toBe(cache);
+		});
+	}
+
+	test("live stop, status, work banner and rebuilt footer use structured child order and discard cached prose commands", async () => {
+		const h = await makeHarness();
+		const items = [1, 2, 3].map(n => ({ work_id: `work-${n}`, alias: { key: `OMP-${n}`, primary: true }, state: "BACKLOG", archived: false }));
+		const relations = [2, 3].map(n => ({ source_work_id: `work-${n}`, target_work_id: "work-1", kind: "parent", active: true }));
+		relations.push({ source_work_id: "work-3", target_work_id: "work-2", kind: "blocks", active: true });
+		let unavailable = false;
+		const graphBackend = createWorkBackend({ baseUrl: "http://127.0.0.1:9999", workspaceId: "ws", ownerId: "owner" }, () => "token", async () => { if (unavailable) throw new Error("offline"); return Response.json({ items, relations, projects: [] }); }, h.directory);
+		h.backend.executionChildren = graphBackend.executionChildren;
+		const result = await h.stop("Umbrella split; precedent OMP-999");
+		const order = "/execute OMP-3 then /execute OMP-2";
+		expect(result.content[0].text).toContain(order);
+		expect(result.content[0].text).not.toContain("/execute OMP-999");
+		expect(result.content[0].text).not.toContain("/execute OMP-1");
+		await h.command("status OMP-1");
+		expect(h.notifications.at(-1)).toContain(order);
+		expect((await h.getWork()).content[0].text).toContain(order);
+		await h.start();
+		expect(h.statuses.at(-1)).toContain(order);
+		unavailable = true;
+		await h.start();
+		expect(h.statuses.at(-1)).toContain("graph unavailable");
+		expect(h.statuses.at(-1)).not.toContain("/execute OMP-");
+		h.appendState({ backend: "work", terminalExecution: { grantId: "grant-1", state: "stopped", nextCommand: "Next: /execute OMP-999", at: Date.now() } });
+		h.backend.getExecution = async () => { throw new Error("offline"); };
+		const previous = h.statuses.length;
+		await h.start();
+		expect(h.statuses.slice(previous).join("\n")).not.toContain("/execute OMP-999");
+	});
 });
