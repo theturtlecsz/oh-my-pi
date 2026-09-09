@@ -341,3 +341,58 @@ runtime checks and the full PostgreSQL execution smoke pass. Independent review
 cleared the source after fixing a test expectation to use the canonical primary
 root under symlinked temporary directories; that reproduction also passes.
 Exact-head CI, installed qualification and any live activation remain separate.
+
+## Own-session execution steering (OMP-233 AC1)
+
+Automatic owner-input pause and startup recovery use the current session's
+newest accepted workspace binding and a keyed grant lookup. Shared cache cannot
+establish that ownership. Unrelated repositories, sibling worktrees and fresh
+unbound sessions must not abort input, pause a grant, relocate into execution or
+reserve a continuation. Bound owner input remains haltable with broken auditor
+discovery, including complete legacy-relative bindings; explicit stop/cancel and
+terminal handling stay independent.
+
+Ownership is rechecked across awaits and at ordinary publication, so a cleared
+or replaced journal binding cannot be restored from stale memory by a later
+`/now` or other ordinary persistence. Explicit admission/resume/recovery may
+publish their authorized binding. The original anchor and recorded baseline are
+not confused with a queue/remediation item's newer identity. Copied/forked
+journal provenance and the other five OMP-233 criteria remain outside this slice.
+
+The installed regression now starts real CLI `/execute` admission. Prior setup
+created a grant externally and relied on a fresh CLI joining it; that shortcut
+cannot establish the ownership contract. A process-local read-only GitHub
+protection adapter supplies the controlled external response, without replacing
+CLI/session machinery or claiming live GitHub qualification.
+
+Baseline R1 missed setup because namespace device access aborted Bun. R2 also
+missed setup after an unexpected sparse crash dump contaminated the baseline
+release inventory; unchanged manifest JSON did not establish unchanged release
+contents. The dump was quarantined and the full inventory reverified. R3 then
+proved the actual startup defect: an unrelated CLI acquired the same grant and
+workspace, advancing grant version 1 to 2 and continuations 0 to 1 while the
+original child MAIN response remained held at zero bytes. Its explicit prompt
+was refused because that CLI was already processing, so installed input-triggered
+pause was not demonstrated by this baseline.
+
+The positive observer waits for actual unrelated turn completion and a durable
+assistant result, not merely RPC acknowledgement. It preserves raw worker
+snapshots while distinguishing legitimate clock updates from ownership, request
+or output progress. Source verification passes 114 component tests with 517
+assertions, plus 21 shared publication tests with 170 assertions and supported
+checks. Full PostgreSQL smoke passes after preserving the original session
+history at its simulated crash cut instead of deleting the ownership record.
+Fresh thirteen-case installed qualification and exact-head CI are separate
+evidence gates; none of this closes all OMP-233 criteria or activates a release.
+
+The first installed candidate, `a42bab96b2`, stopped at three passes and one
+failure, with nine cases not run. Its queued-resume case exposed lazy session
+creation: the owning binding was memory-only while the first MAIN response was
+held and became visible on disk during shutdown. That is not sufficient crash
+recovery evidence. Explicit admission now uses the existing public new-session
+setup to await workspace relocation, `ensureOnDisk()` and setup error draining.
+Already-owned same-workspace resume retains its session; unbound same-cwd resume
+uses fresh setup. Native SessionManager regressions verify visibility before
+closure and setup-failure refusal. This establishes successful hot-append
+process-crash/page-cache visibility, not a universal later-I/O-failure barrier,
+fsync/power-loss durability or recovery for nonpersistent SDK sessions.

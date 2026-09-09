@@ -208,6 +208,8 @@ class RecoveryProvider:
         return request.get("model") == "local-task" and {"read", "yield"} <= names
 
     def respond(self, request: dict) -> dict:
+        if request.get("model") == "local-unrelated":
+            return {"content": "Unrelated session completed its own request."}
         # A task may itself have work tools. Route by its explicitly configured
         # model before parent/auxiliary handling, including after restart.
         if self.checkpoint == "task-active" and request.get("model") == "local-task":
@@ -614,6 +616,34 @@ def process_group_snapshot(
         except (FileNotFoundError, ProcessLookupError, PermissionError):
             continue
     return sorted(processes, key=lambda process: process["pid"])
+
+
+def installed_cli_host(
+    release: InstalledRelease, topology: list[dict], wrapper_pid: int
+) -> dict:
+    hosts = [
+        row
+        for row in topology
+        if str(release.root / "source/packages/coding-agent/src/cli.ts") in row["argv"]
+    ]
+    assert len(hosts) == 1, topology
+    host = hosts[0]
+    by_pid = {row["pid"]: row for row in topology}
+    launcher = by_pid.get(host["parentPid"])
+    assert (
+        launcher is not None
+        and str(release.root / "source/session-system/runtime/run.ts")
+        in launcher["argv"]
+    ), topology
+    seen = {host["pid"]}
+    ancestor = host
+    while ancestor["pid"] != wrapper_pid:
+        assert ancestor["parentPid"] not in seen and ancestor["parentPid"] in by_pid, (
+            topology
+        )
+        ancestor = by_pid[ancestor["parentPid"]]
+        seen.add(ancestor["pid"])
+    return host
 
 
 def durable_session_branch(entries: list[dict]) -> list[dict]:
@@ -1085,15 +1115,7 @@ def capture_task_active_recovery(
     ) -> None:
         group_id = os.getpgid(process.pid)
         topology = process_group_snapshot(group_id)
-        hosts = [
-            row
-            for row in topology
-            if str(release.root / "source/packages/coding-agent/src/cli.ts")
-            in row["argv"]
-        ]
-        assert len(hosts) == 1, topology
-        host = hosts[0]
-        assert host["pid"] != process.pid and host["parentPid"] == process.pid
+        host = installed_cli_host(release, topology, process.pid)
         assert group_id == process.pid
         postgres_pid = int(
             (tmp_path / "postgres/pgdata/postmaster.pid").read_text().splitlines()[0]
@@ -1103,6 +1125,10 @@ def capture_task_active_recovery(
         record = {
             "label": label,
             "launcherPid": process.pid,
+            "launcherRole": "bubblewrap external GitHub fixture"
+            if release.github_adapter
+            else "runtime launcher",
+            "runtimeLauncherPid": host["parentPid"],
             "processGroupId": group_id,
             "cliPidHostingParentAndChildSessions": host["pid"],
             "topologyBefore": topology,
@@ -1965,14 +1991,8 @@ def capture_task_active_recovery(
         evidence["firstRunCutReached"] = False
         group_id = os.getpgid(cli.pid)
         before_topology = process_group_snapshot(group_id, include_threads=True)
-        hosts = [
-            row
-            for row in before_topology
-            if str(release.root / "source/packages/coding-agent/src/cli.ts")
-            in row["argv"]
-        ]
-        assert len(hosts) == 1 and hosts[0]["parentPid"] == cli.pid
-        host_identity = (hosts[0]["pid"], hosts[0]["startTicks"])
+        host = installed_cli_host(release, before_topology, cli.pid)
+        host_identity = (host["pid"], host["startTicks"])
         launcher = next(row for row in before_topology if row["pid"] == cli.pid)
         launcher_identity = (launcher["pid"], launcher["startTicks"])
         postgres_pid = int(
@@ -2984,6 +3004,216 @@ def capture_task_active_recovery(
         )
 
 
+def capture_unrelated_owner_session(
+    *,
+    release: InstalledRelease,
+    tmp_path: Path,
+    repository: Path,
+    state: Path,
+    env: dict[str, str],
+    client: httpx.Client,
+    workspace_id: str,
+    setup: dict,
+    provider: RecoveryProvider,
+    cli: subprocess.Popen,
+    rpc: RpcProcess,
+) -> None:
+    """Two real CLI processes share configuration, but only one admitted /execute."""
+    evidence_file = tmp_path / "session-ownership-evidence.json"
+    evidence: dict = {
+        "release": str(release.root),
+        "manifest": release.digest,
+        "admission": setup["admission"],
+        "cutReached": False,
+    }
+
+    def view(suffix: str) -> dict:
+        response = client.get(suffix)
+        response.raise_for_status()
+        return response.json()
+
+    execution_url = f"/v1/workspaces/{workspace_id}/execution/{provider.key}"
+    workflow_url = f"/v1/work-items/{provider.key}/workflow"
+    try:
+        assert provider.child_held.wait(45), (
+            "Owning CLI never reached its actual child MAIN request"
+        )
+        assert provider.error is None, provider.error
+        before = view(execution_url)
+        owner = rpc.request("get_state")
+        child_before = rpc.request("get_subagents")
+        assert before["grant"]["state"] == "active" and owner["isStreaming"] is True
+        assert (
+            len(child_before["subagents"]) == 1
+            and child_before["subagents"][0]["status"] == "running"
+        )
+        evidence.update(
+            {
+                "cutReached": True,
+                "executionBefore": before,
+                "workflowBefore": view(workflow_url),
+                "ownerBefore": owner,
+                "childBefore": child_before,
+                "ownerProcessGroup": process_group_snapshot(cli.pid),
+            }
+        )
+        shutil.copyfile(
+            Path(str(owner["sessionFile"])),
+            tmp_path / "session-ownership-owner-before.jsonl",
+        )
+        sibling = tmp_path / "unrelated-sibling"
+        _run(
+            ["git", "worktree", "add", "-b", "unrelated-owner", str(sibling), "main"],
+            repository,
+            env,
+        )
+        arguments = (
+            "--mode",
+            "rpc",
+            "--session",
+            str(tmp_path / "unrelated-session.jsonl"),
+            "--provider",
+            "qualification",
+            "--model",
+            "local-unrelated",
+        )
+        command = release.command(state, sibling, *arguments)
+        evidence["unrelatedLaunchArgv"] = command
+        evidence_file.write_text(json.dumps(evidence, indent=2))
+        log = tmp_path / "session-ownership-unrelated.stderr"
+        with _process(command, sibling, env, log) as unrelated:
+            second_rpc = RpcProcess(unrelated, log)
+            try:
+                initial = second_rpc.request("get_state")
+                evidence["unrelatedInitial"] = initial
+                evidence["executionAfterStartup"] = view(execution_url)
+                evidence["unrelatedProcessGroup"] = process_group_snapshot(
+                    unrelated.pid
+                )
+                evidence["unrelatedInputRequest"] = second_rpc.send(
+                    "prompt",
+                    message="Explain what you can inspect in this unrelated sibling checkout. Do not execute tools or workflow actions.",
+                )
+                evidence["unrelatedTurnEnd"] = second_rpc.until(
+                    lambda event: event.get("type") == "agent_end"
+                )
+                deadline = time.monotonic() + 10
+                while True:
+                    after = second_rpc.request("get_state")
+                    unrelated_entries = read_complete_session(
+                        Path(str(after["sessionFile"]))
+                    )
+                    answers = [
+                        row
+                        for row in durable_session_branch(unrelated_entries)
+                        if row.get("type") == "message"
+                        and row.get("message", {}).get("role") == "assistant"
+                    ]
+                    if not after["isStreaming"] and answers:
+                        break
+                    assert time.monotonic() < deadline, (
+                        "Unrelated input did not settle durably"
+                    )
+                    time.sleep(0.02)
+                assert answers[-1]["message"]["stopReason"] == "stop", (
+                    "Unrelated input was aborted or failed"
+                )
+                evidence["unrelatedInputCompleted"] = True
+                evidence["unrelatedAfterInput"] = after
+                evidence["unrelatedBindings"] = [
+                    row
+                    for row in durable_session_branch(unrelated_entries)
+                    if row.get("customType") == "work-now"
+                    and row.get("data", {}).get("executionWorkspace")
+                ]
+                shutil.copyfile(
+                    Path(str(after["sessionFile"])),
+                    tmp_path / "session-ownership-unrelated-after.jsonl",
+                )
+            finally:
+                evidence["executionAfterInput"] = view(execution_url)
+                evidence["workflowAfterInput"] = view(workflow_url)
+                evidence["ownerAfter"] = rpc.request("get_state")
+                evidence["childAfter"] = rpc.request("get_subagents")
+                if len(evidence["childAfter"]["subagents"]) == 1:
+                    later_child = evidence["childAfter"]["subagents"][0]
+                    earlier_child = child_before["subagents"][0]
+                    evidence["childClockMetadata"] = {
+                        "lastUpdate": {
+                            "before": earlier_child.get("lastUpdate"),
+                            "after": later_child.get("lastUpdate"),
+                        },
+                        "durationMs": {
+                            "before": earlier_child.get("progress", {}).get(
+                                "durationMs"
+                            ),
+                            "after": later_child.get("progress", {}).get("durationMs"),
+                        },
+                    }
+                evidence["ownerProcessGroupAfter"] = process_group_snapshot(cli.pid)
+                evidence["providerRequests"] = provider.request_observations
+                evidence_file.write_text(json.dumps(evidence, indent=2))
+            assert initial["sessionId"] != owner["sessionId"], (
+                "Second CLI reused owning session"
+            )
+            assert evidence["executionAfterStartup"] == before, (
+                "Unrelated startup changed the owning grant"
+            )
+            assert evidence["executionAfterInput"] == before, (
+                "Unrelated input paused or altered the owning grant"
+            )
+            assert evidence["workflowAfterInput"] == evidence["workflowBefore"], (
+                "Unrelated session changed workflow state"
+            )
+            assert evidence["unrelatedBindings"] == [], (
+                "Unrelated startup manufactured an execution binding"
+            )
+            assert (
+                evidence["ownerAfter"]["sessionId"] == owner["sessionId"]
+                and evidence["ownerAfter"]["isStreaming"] is True
+            )
+            assert len(evidence["childAfter"]["subagents"]) == 1
+            earlier_child = child_before["subagents"][0]
+            later_child = evidence["childAfter"]["subagents"][0]
+            for field in (
+                "id",
+                "agent",
+                "agentSource",
+                "sessionFile",
+                "parentToolCallId",
+                "assignment",
+                "status",
+            ):
+                assert later_child[field] == earlier_child[field], (
+                    f"Held worker {field} changed"
+                )
+            for field in ("toolCount", "requests", "recentTools", "recentOutput"):
+                assert (
+                    later_child["progress"][field] == earlier_child["progress"][field]
+                ), f"Held worker {field} changed"
+            before_host = installed_cli_host(
+                release, evidence["ownerProcessGroup"], cli.pid
+            )
+            after_host = installed_cli_host(
+                release, evidence["ownerProcessGroupAfter"], cli.pid
+            )
+            assert (after_host["pid"], after_host["startTicks"]) == (
+                before_host["pid"],
+                before_host["startTicks"],
+            ), "Owning CLI process was replaced"
+            child_requests = [
+                row
+                for row in provider.request_observations
+                if row["model"] == "local-task"
+            ]
+            assert (
+                len(child_requests) == 1
+                and child_requests[0]["responseStarted"] is False
+            )
+    finally:
+        evidence_file.write_text(json.dumps(evidence, indent=2))
+
+
 def exercise_controller_recovery(
     release: InstalledRelease,
     tmp_path: Path,
@@ -2991,11 +3221,24 @@ def exercise_controller_recovery(
     *,
     progress: bool = False,
     task_fault: TaskFault = "child-request",
+    unrelated_session: bool = False,
 ) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
     state = tmp_path / "runtime"
-    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path)}
+    process_tmp = tmp_path / "process-tmp"
+    process_tmp.mkdir()
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": str(tmp_path),
+        "TMPDIR": str(process_tmp),
+    }
+    adapter = (
+        Path(__file__).resolve().parents[3]
+        / "session-system/tests/fixtures/installed-gh-protection.sh"
+    )
+    release = InstalledRelease(release.root, release.digest, adapter)
+    assert os.access(adapter, os.X_OK), "External GitHub fixture must be executable"
     for args in (
         ["init", "-b", "main"],
         ["config", "user.name", "Recovery Fixture"],
@@ -3099,6 +3342,9 @@ def exercise_controller_recovery(
             model_config = json.loads(model_file.read_text())
             models = model_config["providers"]["qualification"]["models"]
             models.append({**models[0], "id": "local-task", "name": "Local task"})
+            models.append(
+                {**models[0], "id": "local-unrelated", "name": "Unrelated owner"}
+            )
             model_file.write_text(json.dumps(model_config))
             (agent_dir / "config.yml").write_text(
                 "modelRoles:\n  audit: qualification/local-recovery\n  default: qualification/local-recovery\n  smol: qualification/local-recovery\n  task: qualification/local-task\nadvisor:\n  enabled: false\nasync:\n  enabled: false\ntask:\n  batch: false\n  isolation:\n    mode: none\n  prewalk: false\n  maxRecursionDepth: 1\ntools:\n  xdev: false\n"
@@ -3193,7 +3439,69 @@ def exercise_controller_recovery(
                         cli_log,
                         completion_stop=task_fault == "first-run-result-gap",
                     )
+                    before_admission = rpc.request("get_state")
+                    admission_request = rpc.send(
+                        "prompt", message=f"/execute {provider.key}"
+                    )
+                    rpc.until(
+                        lambda event: (
+                            event.get("type") == "extension_ui_request"
+                            and event.get("method") == "notify"
+                            and f"Execution grant started for {provider.key} in "
+                            in str(event.get("message", ""))
+                        )
+                    )
                     initial = rpc.request("get_state")
+                    own_path = Path(str(initial["sessionFile"]))
+                    deadline = time.monotonic() + 10
+                    own_bindings = []
+                    while time.monotonic() < deadline:
+                        own_bindings = [
+                            row
+                            for row in read_complete_session(own_path)
+                            if row.get("customType") == "work-now"
+                            and row.get("data", {}).get("backend") == "work"
+                            and row.get("data", {}).get("executionWorkspace")
+                        ]
+                        if own_bindings:
+                            break
+                        time.sleep(0.02)
+                    assert own_bindings, (
+                        "Actual /execute did not persist its owning session binding"
+                    )
+                    execution_response = client.get(
+                        f"/v1/workspaces/{identity['workspace_id']}/execution/{provider.key}"
+                    )
+                    execution_response.raise_for_status()
+                    setup["execution"] = execution_response.json()
+                    setup["workspace"] = own_bindings[-1]["data"]["executionWorkspace"]
+                    setup["admission"] = {
+                        "requestId": admission_request,
+                        "before": before_admission,
+                        "after": initial,
+                        "bindingEntry": own_bindings[-1],
+                        "externalGitHubAdapter": str(adapter),
+                        "adapterSha256": hashlib.sha256(
+                            adapter.read_bytes()
+                        ).hexdigest(),
+                        "wrapperArgv": release.command(state, repository, *cli_args),
+                    }
+                    (tmp_path / "setup.json").write_text(json.dumps(setup, indent=2))
+                    if unrelated_session:
+                        capture_unrelated_owner_session(
+                            release=release,
+                            tmp_path=tmp_path,
+                            repository=repository,
+                            state=state,
+                            env=env,
+                            client=client,
+                            workspace_id=identity["workspace_id"],
+                            setup=setup,
+                            provider=provider,
+                            cli=cli,
+                            rpc=rpc,
+                        )
+                        return
                     if checkpoint == "task-active":
                         capture_task_active_recovery(
                             release=release,
@@ -3769,6 +4077,16 @@ def test_killed_controller_recovers_original_active_task(
 ) -> None:
     """Original synchronous task must progress after its shared CLI is killed."""
     exercise_controller_recovery(installed_release, tmp_path, "task-active")
+
+
+def test_unrelated_owner_session_cannot_join_or_pause_bound_execution(
+    installed_release: InstalledRelease,
+    tmp_path: Path,
+) -> None:
+    """Fresh sibling CLI startup/input cannot acquire another session's execution."""
+    exercise_controller_recovery(
+        installed_release, tmp_path, "task-active", unrelated_session=True
+    )
 
 
 def test_repeated_child_kill_preserves_original_task_preparation(

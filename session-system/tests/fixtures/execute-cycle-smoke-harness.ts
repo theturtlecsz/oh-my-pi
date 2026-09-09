@@ -150,6 +150,9 @@ const fakeSessionManager = {
 	moveTo: async (cwd: string) => {
 		probe = path.resolve(cwd);
 	},
+	// Component simulator writes JSON synchronously; installed/native-manager tests own lazy-gate proof.
+	ensureOnDisk: async () => { await Bun.write(sessionBranchFile, JSON.stringify(getBranch())); },
+	flush: async () => {},
 };
 
 // A service/host smoke substitutes a controller. These are simulated model

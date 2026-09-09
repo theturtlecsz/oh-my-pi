@@ -8,6 +8,7 @@ import json
 import os
 import queue
 import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -29,15 +30,34 @@ import pytest
 class InstalledRelease:
     root: Path
     digest: str
+    github_adapter: Path | None = None
 
     def command(self, state: Path, workspace: Path, *arguments: str) -> list[str]:
-        return [
+        command = [
             str(self.root / "bin/omp"),
             str(state),
             str(workspace),
             self.digest,
             *arguments,
         ]
+        if self.github_adapter is not None and "--service" not in arguments:
+            bwrap = shutil.which("bwrap")
+            assert bwrap, "bubblewrap is required for the isolated GitHub fixture"
+            return [
+                bwrap,
+                "--bind",
+                "/",
+                "/",
+                "--dev-bind",
+                "/dev",
+                "/dev",
+                "--ro-bind",
+                str(self.github_adapter),
+                "/usr/bin/gh",
+                "--",
+                *command,
+            ]
+        return command
 
 
 @pytest.fixture
