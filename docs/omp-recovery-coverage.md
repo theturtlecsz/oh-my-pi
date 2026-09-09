@@ -378,9 +378,21 @@ pause was not demonstrated by this baseline.
 The positive observer waits for actual unrelated turn completion and a durable
 assistant result, not merely RPC acknowledgement. It preserves raw worker
 snapshots while distinguishing legitimate clock updates from ownership, request
-or output progress. Source verification passes 106 component tests with 475
+or output progress. Source verification passes 114 component tests with 517
 assertions, plus 21 shared publication tests with 170 assertions and supported
 checks. Full PostgreSQL smoke passes after preserving the original session
 history at its simulated crash cut instead of deleting the ownership record.
 Fresh thirteen-case installed qualification and exact-head CI are separate
 evidence gates; none of this closes all OMP-233 criteria or activates a release.
+
+The first installed candidate, `a42bab96b2`, stopped at three passes and one
+failure, with nine cases not run. Its queued-resume case exposed lazy session
+creation: the owning binding was memory-only while the first MAIN response was
+held and became visible on disk during shutdown. That is not sufficient crash
+recovery evidence. Explicit admission now uses the existing public new-session
+setup to await workspace relocation, `ensureOnDisk()` and setup error draining.
+Already-owned same-workspace resume retains its session; unbound same-cwd resume
+uses fresh setup. Native SessionManager regressions verify visibility before
+closure and setup-failure refusal. This establishes successful hot-append
+process-crash/page-cache visibility, not a universal later-I/O-failure barrier,
+fsync/power-loss durability or recovery for nonpersistent SDK sessions.

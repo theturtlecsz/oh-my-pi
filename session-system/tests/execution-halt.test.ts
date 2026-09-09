@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import { SessionManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import type { ExecutionGrantItemView } from "@oh-my-pi/pi-work-client";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
@@ -10,6 +10,7 @@ import { z } from "zod";
 import type { ExecutionSnapshot, WorkflowBackend } from "../extensions/workflow/backend";
 import * as gitModule from "../extensions/workflow/git";
 import { createWorkflowHost } from "../extensions/workflow/host";
+import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
 
 type StateChange = Parameters<WorkflowBackend["setExecutionState"]>[0];
 type InputHandler = (event: { originalText: string; source: string }, ctx: ExtensionContext) => Promise<unknown>;
@@ -23,11 +24,13 @@ type ToolHandler = (
 ) => Promise<{ content: Array<{ type: "text"; text: string }>; details: { success: boolean } }>;
 
 const directories: string[] = [];
+const nativeManagers: SessionManager[] = [];
 let originalProjectDir: string;
 beforeEach(() => { originalProjectDir = getProjectDir(); });
 
 afterEach(async () => {
 	vi.restoreAllMocks();
+	for (const manager of nativeManagers.splice(0)) await manager.close();
 	setProjectDir(originalProjectDir);
 	await Promise.all(directories.splice(0).map(directory => fs.rm(directory, { recursive: true, force: true })));
 });
@@ -72,6 +75,8 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		activeItem: item,
 	};
 	const stateChanges: StateChange[] = [];
+	let nativeSession: SessionManager | undefined;
+	const sentMessages: unknown[] = [];
 	const workspaceEffects: string[] = [];
 	const workspace = { grantId: "grant-1", key: "OMP-1", primaryRoot: directory, path: directory, branch: "execution/omp-1", baseline: item.initial_git_baseline, reused: false };
 	const branch: SessionEntry[] = bound ? [{ type: "custom", customType: "work-now", id: "original-binding", parentId: null, timestamp: new Date().toISOString(), data: { backend: "work", executionWorkspace: workspace } }] : [];
@@ -123,6 +128,8 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		},
 		workClient: {
 			healthReady: async () => ({ ready: true, service_fingerprint: "5".repeat(64) }),
+			workItem: async () => ({ work_id: item.work_id, state: "IN_PROGRESS", project_id: null, revision: { revision_id: item.claimed_revision_id } }),
+			workflow: async () => ({ relations: [] }),
 		},
 	} as unknown as WorkflowBackend;
 	const inputHandlers: InputHandler[] = [];
@@ -147,8 +154,11 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 			if (name === "before_agent_start") beforeStartHandlers.push(handler);
 			if (name === "session_switch") switchHandlers.push(handler as unknown as (event: { reason: string }, ctx: ExtensionContext) => Promise<unknown>);
 		},
-		appendEntry: (customType: string, data: unknown) => { branch.push({ type: "custom", customType, data, id: crypto.randomUUID(), parentId: branch.at(-1)?.id ?? null, timestamp: new Date().toISOString() }); },
-		sendMessage: () => {},
+		appendEntry: (customType: string, data: unknown) => {
+			if (nativeSession) nativeSession.appendCustomEntry(customType, data);
+			else branch.push({ type: "custom", customType, data, id: crypto.randomUUID(), parentId: branch.at(-1)?.id ?? null, timestamp: new Date().toISOString() });
+		},
+		sendMessage: (message: unknown) => { sentMessages.push(message); },
 		getSessionId: () => hostSessionId,
 		logger: { warn: () => {} },
 	} as unknown as ExtensionAPI;
@@ -181,14 +191,23 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 	let abortHook: (() => void) | undefined;
 	let manager = { getCwd: () => cwd, getSessionId: () => sessionId, getBranch: () => branch, moveTo: async (target: string) => { workspaceEffects.push("moveTo"); cwd = target; } };
 	const context = {
-		get cwd() { return cwd; },
+		get cwd() { return nativeSession?.getCwd() ?? cwd; },
 		taskDepth: 0,
 		abort: () => {
 			aborts += 1;
 			abortHook?.();
 		},
 		get sessionManager() { return manager; },
-		newSession: async () => { workspaceEffects.push("newSession"); return { cancelled: false }; },
+		newSession: async (options: Parameters<ExtensionCommandContext["newSession"]>[0]) => {
+			workspaceEffects.push("newSession");
+			if (nativeSession) {
+				await nativeSession.newSession({ parentSession: options?.parentSession });
+				hostSessionId = nativeSession.getSessionId();
+				for (const handler of switchHandlers) await handler({ reason: "new" }, context);
+				await options?.setup?.(nativeSession);
+			}
+			return { cancelled: false };
+		},
 		ui: {
 			notify: (message: string) => {
 				notifications.push(message);
@@ -198,6 +217,10 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		},
 	} as unknown as ExtensionCommandContext;
 	return {
+		backend,
+		context,
+		sentMessages,
+		useNativeSession: (native: SessionManager) => { nativeSession = native; manager = native; hostSessionId = native.getSessionId(); },
 		directory,
 		workspace,
 		stateCalls,
@@ -250,6 +273,88 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		},
 	};
 }
+
+async function nativeResumeHarness(differentCwd = false) {
+	const h = await makeHarness("paused", undefined, false);
+	const origin = differentCwd ? path.join(h.directory, "origin") : h.directory;
+	await fs.mkdir(origin, { recursive: true });
+	const sessionDir = path.join(h.directory, "native-sessions");
+	const native = SessionManager.create(origin, sessionDir);
+	nativeManagers.push(native);
+	const move = native.moveTo.bind(native);
+	vi.spyOn(native, "moveTo").mockImplementation(target => move(target, sessionDir));
+	h.useNativeSession(native);
+	vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({ agents: [{ name: "auditor", description: "Fixture auditor", systemPrompt: "", model: ["@audit"], output: { properties: { report: { type: "string" } } }, source: "bundled" }], projectAgentsDir: null });
+	vi.spyOn(gitModule, "inProgressGitOp").mockReturnValue(false);
+	vi.spyOn(gitModule, "dirtyPaths").mockReturnValue([]);
+	vi.spyOn(gitModule, "headCommit").mockReturnValue("1".repeat(40));
+	const tcb = await computeAuditTcb(h.context, h.backend.workClient!);
+	h.setGrant({ judge_sha256: tcb.judgeSha256, expires_at: new Date(Date.now() + 86400000).toISOString() });
+	return { h, native };
+}
+
+describe("execution session journal materialization", () => {
+	test("native flush alone stays lazy; ensureOnDisk publishes custom state before closure", async () => {
+		const { h, native } = await nativeResumeHarness();
+		const id = native.appendCustomEntry("work-now", { backend: "work", executionWorkspace: h.workspace });
+		await native.flush();
+		expect(native.getEntry(id)?.type).toBe("custom");
+		expect(await Bun.file(native.getSessionFile()!).exists()).toBe(false);
+		await native.ensureOnDisk();
+		await native.flush();
+		const saved = Bun.JSONL.parse(await Bun.file(native.getSessionFile()!).text()) as SessionEntry[];
+		expect(saved.find(entry => entry.id === id)?.type).toBe("custom");
+	});
+
+	for (const kind of ["same-cwd-unbound", "different-cwd", "foreign", "superseded"] as const) {
+		test(`${kind} explicit resume materializes its new owning frame before dispatch`, async () => {
+			const { h, native } = await nativeResumeHarness(kind === "different-cwd");
+			if (kind === "foreign" || kind === "superseded") {
+				native.appendCustomEntry("work-now", { backend: "work", executionWorkspace: { ...h.workspace, grantId: kind === "foreign" ? "another-grant" : h.workspace.grantId } });
+				if (kind === "superseded") native.appendCustomEntry("work-now", { backend: "work" });
+			}
+			const previousId = native.getSessionId();
+			await h.command("resume OMP-1");
+			expect(h.getSnapshot().grant.state).toBe("active");
+			expect(h.sentMessages).toHaveLength(1);
+			expect(native.getSessionId()).not.toBe(previousId);
+			expect(native.getHeader().parentSession).toBe(previousId);
+			expect(native.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant")).toBe(false);
+			const saved = Bun.JSONL.parse(await Bun.file(native.getSessionFile()!).text()) as SessionEntry[];
+			const binding = saved.findLast(entry => entry.type === "custom" && entry.customType === "work-now");
+			expect(binding?.type === "custom" ? binding.data : undefined).toMatchObject({ executionWorkspace: { grantId: h.getSnapshot().grant.grant_id, path: h.directory } });
+		});
+	}
+
+	test("owned in-place resume retains session and progress despite newer recovery baseline", async () => {
+		const { h, native } = await nativeResumeHarness();
+		native.appendCustomEntry("work-now", { backend: "work", executionWorkspace: h.workspace });
+		const progressId = native.appendCustomEntry("progress", { completed: "first step" });
+		await native.ensureOnDisk();
+		const previousId = native.getSessionId();
+		h.setItem({ current_git_baseline: "2".repeat(40) });
+		vi.spyOn(gitModule, "headCommit").mockReturnValue("2".repeat(40));
+		await h.command("resume OMP-1");
+		expect(h.getSnapshot().grant.state).toBe("active");
+		expect(h.sentMessages).toHaveLength(1);
+		expect(h.workspaceEffects).not.toContain("newSession");
+		expect(native.getSessionId()).toBe(previousId);
+		expect(native.getEntry(progressId)?.type).toBe("custom");
+	});
+
+	for (const failure of ["materialization", "drain"] as const) {
+		test(`setup ${failure} rejection blocks binding publication and dispatch`, async () => {
+			const { h, native } = await nativeResumeHarness();
+			vi.spyOn(native, failure === "materialization" ? "ensureOnDisk" : "flush").mockRejectedValue(new Error(`setup ${failure} refused`));
+			await h.command("resume OMP-1");
+			expect(h.notifications.some(message => message.includes(`setup ${failure} refused`))).toBe(true);
+			expect(h.getSnapshot().grant.state).toBe("paused");
+			expect(h.stateCalls).toEqual([]);
+			expect(h.sentMessages).toEqual([]);
+			expect(native.getEntries().filter(entry => entry.type === "custom" && entry.customType === "work-now")).toHaveLength(0);
+		});
+	}
+});
 
 describe("execution halt remains available when development breaks the auditor", () => {
 	test("unrelated owner input cannot abort its turn or pause another session's grant", async () => {

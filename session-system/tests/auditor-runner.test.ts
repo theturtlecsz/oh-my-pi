@@ -9,7 +9,7 @@ import { z } from "zod";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type Model, AssistantMessageEventStream } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
-import { AgentSession, SessionManager, Settings, type CustomEntry, type ExtensionAPI, type ExtensionContext, type PersistedTurnContinuationRequest } from "@oh-my-pi/pi-coding-agent";
+import { AgentSession, SessionManager, Settings, type CustomEntry, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type PersistedTurnContinuationRequest } from "@oh-my-pi/pi-coding-agent";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -2142,6 +2142,8 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		exec.items[0]!.current_git_baseline = head;
 		exec.activeItem!.initial_git_baseline = head;
 		exec.activeItem!.current_git_baseline = head;
+		exec.grant.repository = cwd;
+		const ownershipEntry = executionOwnershipEntry(exec, cwd, "OMP-176");
 
 		const mockBackend = {
 			cacheFile: temporaryCacheFile(),
@@ -2178,7 +2180,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const fakeCtx = {
 			cwd,
 			taskDepth: 0,
-			sessionManager: { getBranch: () => [] },
+			sessionManager: { getBranch: () => [ownershipEntry], getSessionId: () => "sess-1", getCwd: () => cwd },
 			ui: {
 				notify: (text: string) => { notifications.push(text); },
 				theme: { fg: (_c: string, t: string) => t },
@@ -3442,6 +3444,11 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			const fakeCtx = {
 				cwd: "/tmp/repo",
 				taskDepth: 0,
+				// Branch-routing fixture uses a nonpersistent SDK frame; native disk tests live separately.
+				newSession: async (options: Parameters<ExtensionCommandContext["newSession"]>[0]) => {
+					await options?.setup?.(SessionManager.inMemory("/tmp/repo"));
+					return { cancelled: false };
+				},
 				ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
 			} as unknown as ExtensionContext;
 
@@ -3700,6 +3707,10 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			const fakeCtx = {
 				cwd: inputCwd,
 				taskDepth: 0,
+				newSession: async (options: Parameters<ExtensionCommandContext["newSession"]>[0]) => {
+					await options?.setup?.(SessionManager.inMemory(inputCwd));
+					return { cancelled: false };
+				},
 				sessionManager: { getBranch: () => [] },
 				models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
 				modelRegistry: { getApiKey: () => Promise.resolve("key") },

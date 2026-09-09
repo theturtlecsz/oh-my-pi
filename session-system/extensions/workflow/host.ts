@@ -867,14 +867,23 @@ export function createWorkflowHost(cfg: HostConfig) {
 		workspace: ExecutionWorkspace,
 	): Promise<ExtensionCommandContext> {
 		const currentCwd = contextCwd(ctx);
-		if (resolve(currentCwd) === resolve(workspace.path)) {
+		const witness = ownExecutionWitness(ctx);
+		if (resolve(currentCwd) === resolve(workspace.path) && witness &&
+			witness.workspace.grantId === workspace.grantId && witness.workspace.path === workspace.path &&
+			witness.workspace.primaryRoot === workspace.primaryRoot && witness.workspace.branch === workspace.branch &&
+			ownsExecutionSession(ctx, witness, workspace.path)) {
 			return withRelocatedCwd(ctx, currentCwd);
 		}
 		executionRelocationInProgress = true;
 		try {
 			const moved = await ctx.newSession({
 				parentSession: piRef.getSessionId(),
-				setup: sessionManager => sessionManager.moveTo(workspace.path),
+				setup: async sessionManager => {
+					await sessionManager.moveTo(workspace.path);
+					await sessionManager.ensureOnDisk();
+					// Drain setup errors; later hot appends retain their existing error semantics.
+					await sessionManager.flush();
+				},
 			});
 			if (moved.cancelled) throw new Error("execution workspace session relocation was canceled");
 			const relocatedCwd = contextCwd(ctx);
