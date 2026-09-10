@@ -8,7 +8,7 @@ import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
 import { EventLoopKeepalive, recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
-import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, popLoopPhase, prompt, pushLoopPhase, stringProperty, untilAborted } from "@oh-my-pi/pi-utils";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobManager } from "../async";
 import type { Rule } from "../capability/rule";
 import { ModelRegistry } from "../config/model-registry";
@@ -133,6 +133,16 @@ export const BUDGET_STOP_GRACE_REQUESTS = 5;
 /** Steering notice injected when a subagent crosses its soft request budget. */
 export function buildBudgetNotice(requests: number, budget: number): string {
 	return `[budget notice] You have used ${requests} requests in this run (soft budget: ${budget}). Wrap up now: finish the current step and yield your final report. At ${Math.ceil(budget * 1.5)} requests the run is force-stopped and you will be asked to yield whatever you have.`;
+}
+
+function extensionAbortErrorMessage(value: unknown): string {
+	try {
+		return (
+			(typeof value === "object" && value !== null ? stringProperty(value, "message") : undefined) ?? String(value)
+		);
+	} catch {
+		return "Unprintable extension abort error";
+	}
 }
 
 /** Flatten whitespace and clip salvage text for the cancelled-child summary line. */
@@ -3520,7 +3530,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					{
 						getModel: () => session.model,
 						isIdle: () => !session.isStreaming,
-						abort: () => session.abort({ reason: USER_INTERRUPT_LABEL }),
+						abort: () => {
+							void session.abort({ reason: USER_INTERRUPT_LABEL }).catch(error => {
+								logger.error("Extension error", {
+									path: "<task-executor>",
+									event: "abort",
+									error: extensionAbortErrorMessage(error),
+								});
+							});
+						},
 						hasPendingMessages: () => session.queuedMessageCount > 0,
 						shutdown: () => {},
 						getContextUsage: () => session.getContextUsage(),

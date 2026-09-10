@@ -1,5 +1,6 @@
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
 import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { logger, stringProperty } from "@oh-my-pi/pi-utils";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import { KeybindingsManager } from "../../config/keybindings";
 import type {
@@ -32,6 +33,16 @@ import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, them
 import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "../../modes/types";
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
+
+function extensionAbortErrorMessage(value: unknown): string {
+	try {
+		return (
+			(typeof value === "object" && value !== null ? stringProperty(value, "message") : undefined) ?? String(value)
+		);
+	} catch {
+		return "Unprintable extension abort error";
+	}
+}
 
 const MAX_WIDGET_LINES = 10;
 const ASK_OTHER_OPTION = "Other (type your own)";
@@ -242,7 +253,20 @@ export class ExtensionUiController {
 		const contextActions: ExtensionContextActions = {
 			getModel: () => this.ctx.session.model,
 			isIdle: () => !this.ctx.session.isStreaming,
-			abort: () => this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL }),
+			abort: () => {
+				void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL }).catch(error => {
+					const message = extensionAbortErrorMessage(error);
+					try {
+						this.ctx.showError(`Extension abort failed: ${message}`);
+					} catch (reportError) {
+						logger.error("Extension abort error reporting failed", {
+							path: "<interactive>",
+							error: message,
+							reportError: extensionAbortErrorMessage(reportError),
+						});
+					}
+				});
+			},
 			hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
 			shutdown: () => {
 				// Defer the actual teardown to the main loop, which calls
@@ -447,7 +471,20 @@ export class ExtensionUiController {
 		const contextActions: ExtensionContextActions = {
 			getModel: () => this.ctx.session.model,
 			isIdle: () => !this.ctx.session.isStreaming,
-			abort: () => this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL }),
+			abort: () => {
+				void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL }).catch(error => {
+					const message = extensionAbortErrorMessage(error);
+					try {
+						this.ctx.showError(`Extension abort failed: ${message}`);
+					} catch (reportError) {
+						logger.error("Extension abort error reporting failed", {
+							path: "<interactive>",
+							error: message,
+							reportError: extensionAbortErrorMessage(reportError),
+						});
+					}
+				});
+			},
 			hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
 			shutdown: () => {
 				// Defer the actual teardown to the main loop, which calls
