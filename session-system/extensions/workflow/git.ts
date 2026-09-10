@@ -186,9 +186,10 @@ export function inProgressGitOp(cwd: string): boolean {
 		const top = runGit(cwd, ["rev-parse", "--git-dir"]);
 		if (!top.ok) return false;
 		const gitDir = isAbsolute(top.out) ? top.out : joinPath(cwd, top.out);
+		// REBASE_HEAD can survive a completed rebase as a historical pseudoref;
+		// the rebase directories, not that ref alone, identify an active operation.
 		const markers = [
 			"MERGE_HEAD",
-			"REBASE_HEAD",
 			"rebase-merge",
 			"rebase-apply",
 			"CHERRY_PICK_HEAD",
