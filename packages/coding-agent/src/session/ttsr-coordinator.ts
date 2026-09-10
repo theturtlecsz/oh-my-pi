@@ -9,7 +9,7 @@ import {
 	createToolScopedAbortReason,
 } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
-import { isRecord, prompt, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
+import { isRecord, prompt, relativePathWithinRoot, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Rule } from "../capability/rule";
 import type { Settings } from "../config/settings";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
@@ -26,13 +26,36 @@ interface TtsrContinueOptions {
 	onError?: () => void;
 }
 
+interface InterruptedAttempt {
+	generation: number;
+	timestamp: number;
+	coreIdle: Promise<void>;
+	cancellation: AbortController;
+	resume: Promise<void>;
+	resolve: () => void;
+}
+
+interface EventOwnership {
+	generation: number;
+	signal: AbortSignal;
+}
+
+interface AssistantProcessing {
+	message: AssistantMessage;
+	outcome: Promise<boolean>;
+}
+
 /** Capabilities the TTSR coordinator borrows from its owning session. */
 export interface TtsrCoordinatorHost {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
-	schedulePostPromptTask(task: (signal: AbortSignal) => Promise<void>, options?: { delayMs?: number }): void;
+	schedulePostPromptTask(
+		task: (signal: AbortSignal) => Promise<void>,
+		options?: { delayMs?: number; generation?: number; onSkip?: () => void },
+	): void;
+	emitNotice(level: "warning", message: string, source: string): void;
 	scheduleAgentContinue(options: TtsrContinueOptions): void;
 	promptGeneration(): number;
 }
@@ -44,7 +67,11 @@ export class TtsrCoordinator {
 	#pendingInjections: Rule[] = [];
 	#perToolInjections = new Map<string, Rule[]>();
 	#abortPending = false;
-	#retryToken = 0;
+	#attempt: InterruptedAttempt | undefined;
+	#assistantProcessing = new Map<number, AssistantProcessing>();
+	#recorded = new WeakSet<AssistantMessage>();
+	#eventOwnership = new WeakMap<AgentEvent, EventOwnership>();
+	#matchingCancellation = new AbortController();
 	#resumePromise: Promise<void> | undefined;
 	#resumeResolve: (() => void) | undefined;
 
@@ -65,12 +92,53 @@ export class TtsrCoordinator {
 
 	/** Current resume gate awaited by post-prompt recovery. */
 	get resumeGate(): Promise<void> | undefined {
-		return this.#resumePromise;
+		return this.#attempt?.resume ?? this.#resumePromise;
 	}
 
 	/** Resets stream buffers at turn start. */
 	onTurnStart(): void {
 		this.#manager?.resetBuffer();
+	}
+
+	/** Capture cancellation/generation before event dispatch can queue behind authority or hooks. */
+	onEventEntry(event: AgentEvent): void {
+		if (event.type === "message_update")
+			this.#eventOwnership.set(event, {
+				generation: this.#host.promptGeneration(),
+				signal: this.#matchingCancellation.signal,
+			});
+	}
+
+	/** Observe the existing handler, including any read-authority queue ahead of dispatch. */
+	observeProcessing(event: AgentEvent, processing: Promise<void>): void {
+		if (
+			event.type !== "message_end" ||
+			event.message.role !== "assistant" ||
+			event.message.stopReason !== "aborted" ||
+			!this.#manager?.hasRules()
+		)
+			return;
+		this.#assistantProcessing.set(event.message.timestamp, {
+			message: event.message,
+			outcome: processing.then(
+				() => true,
+				() => false,
+			),
+		});
+	}
+
+	/** Called only by the permitted assistant append path; handler success is separate. */
+	onAssistantRecorded(message: AssistantMessage): void {
+		this.#recorded.add(message);
+	}
+
+	/** Scope structural suppression to the interrupted assistant and owning generation. */
+	ownsInterruptedMessage(message: AssistantMessage): boolean {
+		return (
+			this.#abortPending &&
+			this.#attempt?.timestamp === message.timestamp &&
+			this.#attempt.generation === this.#host.promptGeneration()
+		);
 	}
 
 	/** Advances repeat-after-gap tracking at turn end. */
@@ -81,6 +149,12 @@ export class TtsrCoordinator {
 	/** Checks one streamed message update and reports whether TTSR consumed it by aborting. */
 	async checkMessageUpdate(event: AgentEvent): Promise<boolean> {
 		if (event.type !== "message_update" || !this.#manager?.hasRules()) return false;
+		const ownership = this.#eventOwnership.get(event) ?? {
+			generation: this.#host.promptGeneration(),
+			signal: this.#matchingCancellation.signal,
+		};
+		const ownsEvent = () => !ownership.signal.aborted && ownership.generation === this.#host.promptGeneration();
+		if (!ownsEvent()) return false;
 		const assistantEvent = event.assistantMessageEvent;
 		let matchContext: TtsrMatchContext | undefined;
 		let streamingToolCall: ToolCall | undefined;
@@ -95,11 +169,19 @@ export class TtsrCoordinator {
 		if (!matchContext || !("delta" in assistantEvent)) return false;
 		const targetMessageTimestamp = event.message.role === "assistant" ? event.message.timestamp : undefined;
 		const matches = this.#checkStream(assistantEvent.delta, matchContext, streamingToolCall);
+		if (!ownsEvent()) return false;
 		if (matches.length > 0 && this.#handleMatches(matches, matchContext, targetMessageTimestamp)) return true;
 		// AST rules use the reconstructed edit/write snapshot and are awaited so
 		// the manager self-throttles native matching.
 		if (matchContext.source === "tool" && this.#manager.hasAstRules()) {
-			const astMatches = await this.#checkAstStream(matchContext, streamingToolCall);
+			let astMatches: Rule[];
+			try {
+				astMatches = await untilAborted(ownership.signal, this.#checkAstStream(matchContext, streamingToolCall));
+			} catch (error) {
+				if (!ownsEvent()) return false;
+				throw error;
+			}
+			if (!ownsEvent()) return false;
 			if (astMatches.length > 0 && this.#handleMatches(astMatches, matchContext, targetMessageTimestamp))
 				return true;
 		}
@@ -109,7 +191,7 @@ export class TtsrCoordinator {
 	/** Settles the previous resume gate and queues any deferred injection. */
 	onAssistantMessageEnd(message: AssistantMessage): void {
 		// Gate on abortPending, not stopReason: unrelated aborts have no TTSR continuation.
-		if (!this.#abortPending) this.resolveResume();
+		if (!this.#attempt && !this.#abortPending) this.#resolveDeferred(this.#resumeResolve);
 		this.#queueDeferredInjectionIfNeeded(message);
 	}
 
@@ -142,10 +224,30 @@ export class TtsrCoordinator {
 
 	/** Resolves and clears the current resume gate. */
 	resolveResume(): void {
-		if (!this.#resumeResolve) return;
-		this.#resumeResolve();
+		this.#matchingCancellation.abort();
+		this.#matchingCancellation = new AbortController();
+		if (this.#attempt) this.#settleAttempt(this.#attempt);
+		this.#assistantProcessing.clear();
+		this.#resolveDeferred(this.#resumeResolve);
+	}
+
+	#resolveDeferred(resolve: (() => void) | undefined): void {
+		if (!resolve) return;
+		resolve();
+		if (this.#resumeResolve !== resolve) return;
 		this.#resumeResolve = undefined;
 		this.#resumePromise = undefined;
+	}
+
+	#settleAttempt(attempt: InterruptedAttempt): void {
+		attempt.cancellation.abort();
+		attempt.resolve();
+		if (this.#attempt !== attempt) return;
+		this.#attempt = undefined;
+		this.#assistantProcessing.delete(attempt.timestamp);
+		this.#abortPending = false;
+		this.#pendingInjections = [];
+		this.#perToolInjections.clear();
 	}
 
 	#ensureResumePromise(): void {
@@ -236,17 +338,6 @@ export class TtsrCoordinator {
 		this.#host.sessionManager.appendTtsrInjection(uniqueRuleNames);
 	}
 
-	#findAssistantIndex(targetTimestamp: number | undefined): number {
-		const messages = this.#host.agent.state.messages;
-		for (let index = messages.length - 1; index >= 0; index--) {
-			const message = messages[index];
-			if (message.role === "assistant" && (targetTimestamp === undefined || message.timestamp === targetTimestamp)) {
-				return index;
-			}
-		}
-		return -1;
-	}
-
 	#shouldInterrupt(matches: Rule[], matchContext: TtsrMatchContext): boolean {
 		const globalMode = this.#manager?.getSettings().interruptMode ?? "always";
 		for (const rule of matches) {
@@ -280,18 +371,19 @@ export class TtsrCoordinator {
 			timestamp: Date.now(),
 		});
 		this.#ensureResumePromise();
+		const resolve = this.#resumeResolve;
 		this.#host.scheduleAgentContinue({
 			delayMs: 1,
 			generation: this.#host.promptGeneration(),
-			onSkip: () => this.resolveResume(),
+			onSkip: () => this.#resolveDeferred(resolve),
 			shouldContinue: () => {
 				if (this.#host.agent.state.isStreaming || !this.#host.agent.hasQueuedMessages()) {
-					this.resolveResume();
+					this.#resolveDeferred(resolve);
 					return false;
 				}
 				return true;
 			},
-			onError: () => this.resolveResume(),
+			onError: () => this.#resolveDeferred(resolve),
 		});
 	}
 
@@ -393,11 +485,24 @@ export class TtsrCoordinator {
 			this.#host.emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
 			return false;
 		}
+		if (shouldInterrupt && this.#attempt) this.#settleAttempt(this.#attempt);
+		if (shouldInterrupt) this.#resolveDeferred(this.#resumeResolve);
 		this.#addPendingInjections(matches);
 		if (!shouldInterrupt) return false;
 
+		if (targetTimestamp === undefined) return false;
+		// Capture the original core request before abort can settle or replace it.
+		const { promise: resume, resolve } = Promise.withResolvers<void>();
+		const attempt: InterruptedAttempt = {
+			generation: this.#host.promptGeneration(),
+			timestamp: targetTimestamp,
+			coreIdle: this.#host.agent.waitForIdle(),
+			cancellation: new AbortController(),
+			resume,
+			resolve,
+		};
+		this.#attempt = attempt;
 		this.#abortPending = true;
-		this.#ensureResumePromise();
 		const abortReason = this.#formatAbortReason(matches);
 		this.#host.agent.abort(
 			matchedToolId
@@ -409,55 +514,68 @@ export class TtsrCoordinator {
 				: abortReason,
 		);
 		this.#host.emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
-		const retryToken = ++this.#retryToken;
-		const generation = this.#host.promptGeneration();
 		this.#host.schedulePostPromptTask(
-			async () => {
-				if (this.#retryToken !== retryToken) {
-					this.resolveResume();
-					return;
-				}
-				const targetAssistantIndex = this.#findAssistantIndex(targetTimestamp);
-				if (!this.#abortPending || this.#host.promptGeneration() !== generation || targetAssistantIndex === -1) {
-					this.#abortPending = false;
-					this.#pendingInjections = [];
-					this.#perToolInjections.clear();
-					this.resolveResume();
-					return;
-				}
-				this.#abortPending = false;
-				this.#perToolInjections.clear();
-				if (this.#manager?.getSettings().contextMode === "discard") {
-					this.#host.agent.replaceMessages(this.#host.agent.state.messages.slice(0, targetAssistantIndex));
-				}
-				const injection = this.#getInjectionContent();
-				if (injection) {
-					const details = { rules: injection.rules.map(rule => rule.name) };
-					this.#host.agent.appendMessage({
-						role: "custom",
-						customType: "ttsr-injection",
-						content: injection.content,
-						display: false,
-						details,
-						attribution: "agent",
-						timestamp: Date.now(),
-					});
-					this.#host.sessionManager.appendCustomMessageEntry(
-						"ttsr-injection",
-						injection.content,
-						false,
-						details,
-						"agent",
-					);
-					this.#markInjected(details.rules);
-				}
+			async taskSignal => {
+				const signal = AbortSignal.any([taskSignal, attempt.cancellation.signal]);
+				const ownsAttempt = () =>
+					!signal.aborted && this.#attempt === attempt && this.#host.promptGeneration() === attempt.generation;
 				try {
-					await this.#host.agent.continue();
+					await untilAborted(signal, attempt.coreIdle);
+					if (!ownsAttempt()) return;
+					const target = this.#assistantProcessing.get(attempt.timestamp);
+					if (!target || !(await untilAborted(signal, target.outcome)) || !this.#recorded.has(target.message)) {
+						if (ownsAttempt())
+							this.#host.emitNotice(
+								"warning",
+								"TTSR continuation stopped because the interrupted response was not successfully recorded.",
+								"ttsr",
+							);
+						return;
+					}
+					if (!ownsAttempt()) return;
+					const targetAssistantIndex = this.#host.agent.state.messages.indexOf(target.message);
+					if (targetAssistantIndex === -1) {
+						this.#host.emitNotice(
+							"warning",
+							"TTSR continuation stopped because the interrupted response is missing.",
+							"ttsr",
+						);
+						return;
+					}
+					this.#abortPending = false;
+					this.#perToolInjections.clear();
+					if (this.#manager?.getSettings().contextMode === "discard") {
+						this.#host.agent.replaceMessages(this.#host.agent.state.messages.slice(0, targetAssistantIndex));
+					}
+					const injection = this.#getInjectionContent();
+					if (injection) {
+						const details = { rules: injection.rules.map(rule => rule.name) };
+						this.#host.agent.appendMessage({
+							role: "custom",
+							customType: "ttsr-injection",
+							content: injection.content,
+							display: false,
+							details,
+							attribution: "agent",
+							timestamp: Date.now(),
+						});
+						this.#host.sessionManager.appendCustomMessageEntry(
+							"ttsr-injection",
+							injection.content,
+							false,
+							details,
+							"agent",
+						);
+						this.#markInjected(details.rules);
+					}
+					await untilAborted(signal, this.#host.agent.continue());
 				} catch {
-					this.resolveResume();
+					if (ownsAttempt()) this.#host.emitNotice("warning", "TTSR continuation could not complete.", "ttsr");
+				} finally {
+					this.#settleAttempt(attempt);
 				}
 			},
-			{ delayMs: 50 },
+			{ delayMs: 50, generation: attempt.generation, onSkip: () => this.#settleAttempt(attempt) },
 		);
 		return true;
 	}

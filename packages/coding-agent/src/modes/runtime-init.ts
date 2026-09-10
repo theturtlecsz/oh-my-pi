@@ -6,11 +6,22 @@
  * behavior, and UI context differ between callers — those stay as
  * caller-supplied hooks.
  */
+import { logger, stringProperty } from "@oh-my-pi/pi-utils";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
 import type { ExtensionError, ExtensionMode, ExtensionUIContext } from "../extensibility/extensions/types";
 import type { AgentSession } from "../session/agent-session";
 import { USER_INTERRUPT_LABEL } from "../session/messages";
+
+function extensionAbortErrorMessage(value: unknown): string {
+	try {
+		return (
+			(typeof value === "object" && value !== null ? stringProperty(value, "message") : undefined) ?? String(value)
+		);
+	} catch {
+		return "Unprintable extension abort error";
+	}
+}
 
 /** Action name for an extension-originated send failure. */
 export type ExtensionSendAction = "extension_send" | "extension_send_user";
@@ -116,7 +127,25 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 		{
 			getModel: () => session.model,
 			isIdle: () => !session.isStreaming,
-			abort: () => session.abort({ reason: USER_INTERRUPT_LABEL }),
+			abort: () => {
+				void session.abort({ reason: USER_INTERRUPT_LABEL }).catch(error => {
+					const normalized = error instanceof Error ? error : new Error(extensionAbortErrorMessage(error));
+					try {
+						reportRuntimeError({
+							extensionPath: "<runtime-init>",
+							event: "abort",
+							error: normalized.message,
+							stack: normalized.stack,
+						});
+					} catch (reportError) {
+						logger.error("Extension abort error reporting failed", {
+							path: "<runtime-init>",
+							error: normalized.message,
+							reportError: extensionAbortErrorMessage(reportError),
+						});
+					}
+				});
+			},
 			hasPendingMessages: () => session.queuedMessageCount > 0,
 			shutdown,
 			getContextUsage: () => session.getContextUsage(),

@@ -1,12 +1,32 @@
-import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Container, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
+import { logger } from "@oh-my-pi/pi-utils";
 import { KeybindingsManager } from "../../../src/config/keybindings";
+import { ModelRegistry } from "../../../src/config/model-registry";
+import { Settings } from "../../../src/config/settings";
+import { TtsrManager } from "../../../src/export/ttsr";
 import type { ExtensionAskDialogQuestion, ExtensionUIContext } from "../../../src/extensibility/extensions";
+import { ExtensionRuntime, loadExtensionFromFactory } from "../../../src/extensibility/extensions/loader";
+import { ExtensionRunner } from "../../../src/extensibility/extensions/runner";
+import type { ExtensionHandler, MessageEndEvent } from "../../../src/extensibility/extensions/types";
 import { AskDialogComponent } from "../../../src/modes/components/ask-dialog";
 import { CustomEditor } from "../../../src/modes/components/custom-editor";
 import { ExtensionUiController } from "../../../src/modes/controllers/extension-ui-controller";
 import { getEditorTheme, getThemeByName, setThemeInstance } from "../../../src/modes/theme/theme";
 import type { InteractiveModeContext } from "../../../src/modes/types";
+import { AgentSession } from "../../../src/session/agent-session";
+import { AuthStorage } from "../../../src/session/auth-storage";
+import { USER_INTERRUPT_LABEL } from "../../../src/session/messages";
+import { SessionManager } from "../../../src/session/session-manager";
+import { EventBus } from "../../../src/utils/event-bus";
 
 afterEach(() => {
 	setKeybindings(KeybindingsManager.inMemory());
@@ -350,4 +370,257 @@ describe("ExtensionUiController custom overlay", () => {
 		expect(harness.editorContainer.children).toEqual([harness.editor]);
 		expect(harness.editor.getText()).toBe("draft typed while factory is pending");
 	});
+});
+
+describe("ExtensionUiController real hook abort boundary", () => {
+	let directory: string;
+	let auth: AuthStorage;
+	let registry: ModelRegistry;
+	const sessions: AgentSession[] = [];
+
+	beforeAll(async () => {
+		directory = await fs.mkdtemp(path.join(os.tmpdir(), "interactive-abort-contract-"));
+		auth = await AuthStorage.create(path.join(directory, "auth.db"));
+		auth.setRuntimeApiKey("anthropic", "test-key");
+		registry = new ModelRegistry(auth, path.join(directory, "models.yml"));
+	});
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		for (const session of sessions.splice(0)) await session.dispose();
+	});
+	afterAll(async () => {
+		auth.close();
+		await fs.rm(directory, { recursive: true, force: true });
+	});
+
+	function message(text: string, stopReason: "stop" | "aborted" = "stop"): AssistantMessage {
+		return {
+			role: "assistant",
+			content: [{ type: "text", text }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "mock",
+			stopReason,
+			timestamp: 1720000000000,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
+	}
+
+	async function realHarness(route: "initial" | "rebind", handler: ExtensionHandler<MessageEndEvent>) {
+		const ttsrManager = new TtsrManager({
+			enabled: true,
+			contextMode: "discard",
+			interruptMode: "always",
+			repeatMode: "once",
+			repeatGap: 10,
+		});
+		ttsrManager.addRule({
+			name: "no-unwrap",
+			path: "/fixture/no-unwrap.md",
+			content: "Avoid unwrap",
+			condition: ["\\.unwrap\\("],
+			_source: { provider: "test", providerName: "test", path: "/fixture/no-unwrap.md", level: "project" },
+		});
+		let streams = 0;
+		const agent = new Agent({
+			initialState: { model: getBundledModel("anthropic", "claude-sonnet-4-5")!, tools: [] },
+			getApiKey: () => "test-key",
+			streamFn: (_model, _context, options) => {
+				streams++;
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					const partial = message("result.unwrap(");
+					options?.signal?.addEventListener(
+						"abort",
+						() => {
+							stream.push({ type: "error", reason: "aborted", error: message("result.unwrap(", "aborted") });
+						},
+						{ once: true },
+					);
+					stream.push({ type: "start", partial });
+					stream.push({ type: "text_delta", contentIndex: 0, delta: "result.unwrap(", partial });
+				});
+				return stream;
+			},
+		});
+		const manager = SessionManager.inMemory();
+		const runtime = new ExtensionRuntime();
+		const extension = await loadExtensionFromFactory(
+			pi => pi.on("message_end", handler),
+			directory,
+			new EventBus(),
+			runtime,
+			"interactive-abort-contract",
+		);
+		const runner = new ExtensionRunner([extension], runtime, directory, manager, registry);
+		const session = new AgentSession({
+			agent,
+			sessionManager: manager,
+			modelRegistry: registry,
+			extensionRunner: runner,
+			ttsrManager,
+			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+		});
+		sessions.push(session);
+		const editor = new CustomEditor(getEditorTheme());
+		const editorContainer = new Container();
+		editorContainer.addChild(editor);
+		const showError = vi.fn((_error: string) => {});
+		const ctx = {
+			session,
+			sessionManager: manager,
+			editor,
+			editorContainer,
+			showError,
+			ui: { requestRender: vi.fn(), setFocus: vi.fn(), terminal: { rows: 40 } },
+			setToolUIContext: vi.fn(),
+			syncComposerShape: vi.fn(),
+			present: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		const controller = new ExtensionUiController(ctx);
+		await controller.initHooksAndCustomTools();
+		if (route === "rebind") controller.initializeHookRunner(controller.getToolUIContext()!, true);
+		return { session, agent, manager, runner, showError, streams: () => streams };
+	}
+
+	for (const route of ["initial", "rebind"] as const) {
+		for (const form of ["await", "return"] as const) {
+			it(`${route} ${form} hook cancels synchronously and drains ordered records without a TTSR cycle`, async () => {
+				const retryElapsed = Promise.withResolvers<void>();
+				const wait = scheduler.wait.bind(scheduler);
+				vi.spyOn(scheduler, "wait").mockImplementation(async (delay, options) => {
+					await wait(delay, options);
+					if (delay === 50) retryElapsed.resolve();
+				});
+				const entered = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				const finished = Promise.withResolvers<void>();
+				const abortResults: unknown[] = [];
+				const abortPromises: Promise<void>[] = [];
+				let abortDrained = false;
+				const abortHandler: ExtensionHandler<MessageEndEvent> =
+					form === "await"
+						? async (_event, ctx) => {
+								const result = ctx.abort();
+								abortResults.push(result);
+								await result;
+							}
+						: (_event, ctx) => ctx.abort();
+				const f = await realHarness(route, async (event, ctx) => {
+					if (event.message.role !== "assistant") return;
+					entered.resolve();
+					await release.promise;
+					const result = abortHandler(event, ctx);
+					if (form === "return") abortResults.push(result);
+					expect(coreAbort).toHaveBeenLastCalledWith(USER_INTERRUPT_LABEL);
+					expect(f.session.isTtsrAbortPending).toBe(false);
+					expect(abortDrained).toBe(false);
+					await result;
+					finished.resolve();
+				});
+				const coreAbort = vi.spyOn(f.agent, "abort");
+				const realAbort = f.session.abort.bind(f.session);
+				vi.spyOn(f.session, "abort").mockImplementation(options => {
+					const pending = realAbort(options);
+					abortPromises.push(pending);
+					void pending.then(() => {
+						abortDrained = true;
+					});
+					return pending;
+				});
+				const prompt = f.session.prompt("Write Rust code");
+				await entered.promise;
+				// Keep the real retry timer pending behind the supported extension handler.
+				await retryElapsed.promise;
+				expect(f.streams()).toBe(1);
+				expect(
+					f.manager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant"),
+				).toBe(false);
+				release.resolve();
+				await finished.promise;
+				await prompt;
+				await Promise.all(abortPromises);
+				await f.session.waitForIdle();
+				expect(abortResults).toEqual([undefined]);
+				expect(abortPromises).toHaveLength(1);
+				expect(abortDrained).toBe(true);
+				expect(
+					f.manager.getEntries().find(entry => entry.type === "message" && entry.message.role === "assistant"),
+				).toMatchObject({ type: "message", message: { stopReason: "aborted", timestamp: 1720000000000 } });
+				expect(f.streams()).toBe(1);
+				expect(f.agent.state.isStreaming).toBe(false);
+				expect(
+					f.manager
+						.getEntries()
+						.filter(entry => entry.type === "message")
+						.map(entry => entry.message.role),
+				).toEqual(["user", "assistant"]);
+				expect(
+					f.manager
+						.getEntries()
+						.some(entry => entry.type === "custom_message" && entry.customType === "ttsr-injection"),
+				).toBe(false);
+				expect(f.showError).not.toHaveBeenCalled();
+			});
+		}
+		for (const [faultKind, fault] of [
+			["Error", new Error("abort dependency failed")],
+			["non-Error", "abort dependency failed"],
+			["null-prototype", Object.assign(Object.create(null), { message: "abort dependency failed" })],
+		] as const) {
+			for (const reporterKind of ["normal", "Error", "null-prototype"] as const) {
+				it(`${route} reports ${faultKind} abort rejection with ${reporterKind} UI reporter`, async () => {
+					const returned: unknown[] = [];
+					const f = await realHarness(route, (_event, ctx) => {
+						returned.push(ctx.abort());
+					});
+					const realAbort = f.session.abort.bind(f.session);
+					// Controlled dependency fault after the real ordinary abort has drained.
+					vi.spyOn(f.session, "abort").mockImplementation(async options => {
+						await realAbort(options);
+						throw fault;
+					});
+					const reported = Promise.withResolvers<void>();
+					f.showError.mockImplementation(() => {
+						if (reporterKind === "Error") throw new Error("UI reporter failed");
+						if (reporterKind === "null-prototype")
+							throw Object.assign(Object.create(null), { message: "UI reporter failed" });
+						reported.resolve();
+					});
+					const fallback = vi.spyOn(logger, "error").mockImplementation(() => {
+						reported.resolve();
+					});
+					const unhandled: unknown[] = [];
+					const onUnhandled = (error: unknown) => {
+						unhandled.push(error);
+					};
+					process.on("unhandledRejection", onUnhandled);
+					try {
+						await f.runner.emit({ type: "message_end", message: message("completed") });
+						await reported.promise;
+						await scheduler.wait(0);
+						expect(returned).toEqual([undefined]);
+						expect(f.showError).toHaveBeenCalledWith("Extension abort failed: abort dependency failed");
+						if (reporterKind !== "normal")
+							expect(fallback).toHaveBeenCalledWith("Extension abort error reporting failed", {
+								path: "<interactive>",
+								error: "abort dependency failed",
+								reportError: "UI reporter failed",
+							});
+						else expect(fallback).not.toHaveBeenCalled();
+						expect(unhandled).toEqual([]);
+					} finally {
+						process.off("unhandledRejection", onUnhandled);
+					}
+				});
+			}
+		}
+	}
 });

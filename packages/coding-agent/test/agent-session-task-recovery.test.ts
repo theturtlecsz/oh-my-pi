@@ -4,7 +4,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentEvent } from "@oh-my-pi/pi-agent-core";
-import { completeSimple } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, completeSimple } from "@oh-my-pi/pi-ai";
+import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as customTools from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools";
@@ -19,6 +20,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as artifacts from "@oh-my-pi/pi-coding-agent/session/artifacts";
 import { TOOL_EXECUTION_START_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
+import { shouldRenderAbortReason, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { loadSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
@@ -42,7 +44,7 @@ import {
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/types";
 import * as outputMeta from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { nativePlainReadProvenance, ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
-import { TempDir, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, TempDir, untilAborted } from "@oh-my-pi/pi-utils";
 import assignment from "../../../python/omp-work/tests/fixtures/task-active-assignment.md" with { type: "text" };
 import ownerResume from "./fixtures/task-recovery-owner-resume.md" with { type: "text" };
 import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
@@ -79,6 +81,7 @@ describe("native task recovery session integration", () => {
 			outputSchema?: unknown;
 			extensions?: ExtensionFactory[];
 			holdReadResponse?: boolean;
+			holdFirstReadBody?: boolean;
 			readHttpError?: "terminal" | "strict-once";
 			onReadHttpError?: () => void;
 		} = {},
@@ -101,6 +104,7 @@ describe("native task recovery session integration", () => {
 		const releaseReadResponse = Promise.withResolvers<void>();
 		const calls: WireRequest[] = [];
 		let readHttpErrorSent = false;
+		let readBodyHeld = false;
 		const call = (id: string, name: string, args: unknown) => ({
 			index: 0,
 			id,
@@ -113,6 +117,7 @@ describe("native task recovery session integration", () => {
 			async fetch(request) {
 				const input = (await request.json()) as WireRequest;
 				calls.push(input);
+				let holdBody = false;
 				const results = input.messages.filter(message => message.role === "tool");
 				let delta: {
 					content?: string;
@@ -139,6 +144,10 @@ describe("native task recovery session integration", () => {
 						delta = { tool_calls: [call("child-read", "read", { path: "result.txt" })] };
 					} else {
 						readRequestReached.resolve();
+						if (testOptions.holdFirstReadBody && !readBodyHeld) {
+							readBodyHeld = true;
+							holdBody = true;
+						}
 						if (testOptions.readHttpError && !readHttpErrorSent) {
 							readHttpErrorSent = true;
 							testOptions.onReadHttpError?.();
@@ -197,8 +206,23 @@ describe("native task recovery session integration", () => {
 					...chunk,
 					choices: [{ index: 0, delta: {}, finish_reason: delta.tool_calls ? "tool_calls" : "stop" }],
 				};
+				const body = `data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`;
+				let cancelled = false;
 				return new Response(
-					`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`,
+					holdBody
+						? new ReadableStream<Uint8Array>({
+								start(controller) {
+									void releaseReadResponse.promise.then(() => {
+										if (cancelled) return;
+										controller.enqueue(new TextEncoder().encode(body));
+										controller.close();
+									});
+								},
+								cancel() {
+									cancelled = true;
+								},
+							})
+						: body,
 					{ headers: { "Content-Type": "text/event-stream" } },
 				);
 			},
@@ -371,6 +395,197 @@ describe("native task recovery session integration", () => {
 			create({ ...options, extensions: [...(options?.extensions ?? []), ...(options?.agentId ? factories : [])] }),
 		);
 	}
+
+	for (const host of ["fresh", "revived"] as const) {
+		for (const form of ["await", "return"] as const) {
+			it(`${host} task host ${form} abort returns void and drains message-end persistence`, async () => {
+				let enabled = host === "fresh";
+				let handled = false;
+				let target: AssistantMessage | undefined;
+				let targetSessionId: string | undefined;
+				let child: AgentSession | undefined;
+				let returned: unknown = "not called";
+				let requested = false;
+				let drained = false;
+				let abortTask: Promise<void> | undefined;
+				const finished = Promise.withResolvers<void>();
+				const abort = AgentSession.prototype.abort;
+				vi.spyOn(AgentSession.prototype, "abort").mockImplementation(function (this: AgentSession, options) {
+					const task = abort.call(this, options);
+					if (this.sessionId === targetSessionId && options?.reason === USER_INTERRUPT_LABEL) {
+						child = this;
+						requested = true;
+						abortTask = task.then(() => {
+							drained = true;
+						});
+					}
+					return task;
+				});
+				installChildExtensions([
+					pi => {
+						const request = (event: extensions.MessageEndEvent, ctx: extensions.ExtensionContext) => {
+							if (!enabled || handled || event.message.role !== "assistant") return;
+							handled = true;
+							target = event.message;
+							targetSessionId = ctx.sessionManager.getSessionId();
+							returned = ctx.abort();
+							expect(returned).toBeUndefined();
+							expect(requested).toBe(true);
+							expect(drained).toBe(false);
+							finished.resolve();
+							return returned as void;
+						};
+						if (form === "await")
+							pi.on("message_end", async (event, ctx) => {
+								await request(event, ctx);
+							});
+						else pi.on("message_end", (event, ctx) => request(event, ctx));
+					},
+				]);
+				const f = await fixture(false, true, false, false, {
+					extensions: [
+						pi => {
+							pi.on("tool_call", event =>
+								event.taskResultOrigin ? { taskResultAuthority: async () => ({ ok: true }) } : undefined,
+							);
+						},
+					],
+				});
+				f.releaseChild.resolve();
+				f.releaseParent.resolve();
+				let run = f.run!;
+				if (host === "revived") {
+					await untilAborted(AbortSignal.timeout(10000), run);
+					const binding = f.manager
+						.getBranch()
+						.map(readTaskBinding)
+						.find(value => value !== undefined)!;
+					const lifecycle = AgentLifecycleManager.global();
+					const original = AgentRegistry.global().get(binding.child.registryId)!.session;
+					await lifecycle.park(binding.child.registryId);
+					const revived = await lifecycle.ensureLive(binding.child.registryId);
+					expect(revived).not.toBe(original);
+					expect(revived.sessionId).toBe(binding.child.sessionId);
+					enabled = true;
+					run = revived.prompt(assignment, { attribution: "agent" });
+					cleanups.push(async () => {
+						await run.catch(() => {});
+						await revived.dispose();
+					});
+				}
+				await untilAborted(AbortSignal.timeout(10000), finished.promise);
+				await untilAborted(AbortSignal.timeout(10000), run);
+				await untilAborted(AbortSignal.timeout(10000), abortTask!);
+				await child!.waitForIdle();
+				await child!.sessionManager.flush();
+				expect(drained).toBe(true);
+				const { entries } = await loadSessionFile(child!.sessionFile!);
+				const targetEntries = entries.filter(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "assistant" &&
+						entry.message.timestamp === target!.timestamp,
+				);
+				expect(targetEntries).toHaveLength(1);
+				expect(
+					entries.some(entry => entry.type === "custom_message" && entry.customType === "ttsr-injection"),
+				).toBe(false);
+				const requests = f.calls.filter(call => call.model === "child").length;
+				await child!.waitForIdle();
+				expect(f.calls.filter(call => call.model === "child")).toHaveLength(requests);
+				expect(child!.agent.state.isStreaming).toBe(false);
+			}, 30000);
+		}
+	}
+
+	it.each([
+		{ host: "fresh", thrown: new Error("task abort rejected"), sinkThrows: false },
+		{ host: "fresh", thrown: "task abort rejected", sinkThrows: true },
+		{ host: "revived", thrown: new Error("task abort rejected"), sinkThrows: false },
+		{ host: "revived", thrown: "task abort rejected", sinkThrows: true },
+		{
+			host: "fresh",
+			thrown: Object.assign(Object.create(null) as object, { message: "task abort rejected" }),
+			sinkThrows: false,
+		},
+		{
+			host: "revived",
+			thrown: Object.assign(Object.create(null) as object, { message: "task abort rejected" }),
+			sinkThrows: false,
+		},
+	])(
+		"$host task host reports abort rejection with throwing sink=$sinkThrows",
+		async ({ host, thrown, sinkThrows }) => {
+			const logs: Array<{ message: string; context?: Record<string, unknown> }> = [];
+			const reported = Promise.withResolvers<void>();
+			const removeThrowingSink = logger.registerLogSink(() => {
+				if (sinkThrows) throw new Error("sink rejected");
+			});
+			const removeSink = logger.registerLogSink(event => {
+				if (event.context?.error === "task abort rejected") {
+					logs.push(event);
+					reported.resolve();
+				}
+			});
+			cleanups.push(async () => {
+				removeThrowingSink();
+				removeSink();
+			});
+			let enabled = host === "fresh";
+			let invoked = false;
+			let returned: unknown = "not called";
+			const abort = AgentSession.prototype.abort;
+			vi.spyOn(AgentSession.prototype, "abort").mockImplementation(function (this: AgentSession, options) {
+				if (invoked && options?.reason === USER_INTERRUPT_LABEL) return Promise.reject(thrown);
+				return abort.call(this, options);
+			});
+			installChildExtensions([
+				pi => {
+					pi.on("message_end", (event, ctx) => {
+						if (!enabled || invoked || event.message.role !== "assistant") return;
+						invoked = true;
+						returned = ctx.abort();
+						return returned as void;
+					});
+				},
+			]);
+			const f = await fixture();
+			f.releaseChild.resolve();
+			f.releaseParent.resolve();
+			let run = f.run!;
+			if (host === "revived") {
+				await untilAborted(AbortSignal.timeout(10000), run);
+				const binding = f.manager
+					.getBranch()
+					.map(readTaskBinding)
+					.find(value => value !== undefined)!;
+				const lifecycle = AgentLifecycleManager.global();
+				await lifecycle.park(binding.child.registryId);
+				const revived = await lifecycle.ensureLive(binding.child.registryId);
+				enabled = true;
+				run = revived.prompt(assignment, { attribution: "agent" });
+				cleanups.push(async () => {
+					await run.catch(() => {});
+					await revived.dispose();
+				});
+			}
+			await untilAborted(AbortSignal.timeout(10000), reported.promise);
+			await untilAborted(AbortSignal.timeout(10000), run);
+			expect(returned).toBeUndefined();
+			expect(logs).toHaveLength(1);
+			expect(logs[0]).toMatchObject({
+				message: "Extension error",
+				context: {
+					path: host === "fresh" ? "<task-executor>" : "<runtime-init>",
+					error: "task abort rejected",
+				},
+			});
+			expect(
+				f.session.messages.some(message => message.role === "toolResult" && message.toolCallId === "original-task"),
+			).toBe(true);
+		},
+		30000,
+	);
 
 	async function readRecoveryFixture() {
 		const f = await fixture(false, true, false, false, {
@@ -992,6 +1207,152 @@ describe("native task recovery session integration", () => {
 		expect(reopenedChild.sessionId).toBe(snapshot.binding.child.sessionId);
 		await reopenedChild.dispose();
 	}, 30000);
+
+	it("TTSR queued read authority records the exact controlled target before completing its continuation", async () => {
+		const held = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const rule: Rule = {
+			name: "queued-no-unwrap",
+			path: "/tmp/queued-no-unwrap.md",
+			content: "Avoid unwrap",
+			condition: ["\\.unwrap\\("],
+			_source: { provider: "test", providerName: "test", path: "/tmp/queued-no-unwrap.md", level: "project" },
+		};
+		const create = sdk.createAgentSession;
+		vi.spyOn(sdk, "createAgentSession").mockImplementation(options =>
+			create({ ...options, ...(options?.agentId ? { rules: [rule] } : {}) }),
+		);
+		let child: AgentSession | undefined;
+		let target: AssistantMessage | undefined;
+		let partial: AssistantMessage | undefined;
+		let journal: SessionManager | undefined;
+		let stimulusSent = false;
+		let authorityHeld = false;
+		const f = await fixture(false, true, false, false, {
+			holdFirstReadBody: true,
+			extensions: [
+				pi => {
+					pi.on("tool_call", event =>
+						event.taskResultOrigin
+							? {
+									taskResultAuthority: async () => {
+										const binding = journal
+											?.getEntries()
+											.map(readTaskBinding)
+											.find(value => value !== undefined);
+										const candidate = binding
+											? AgentRegistry.global().get(binding.child.registryId)?.session
+											: undefined;
+										if (
+											!authorityHeld &&
+											candidate?.sessionManager
+												.getEntries()
+												.some(
+													entry =>
+														entry.type === "custom" && entry.customType === TASK_READ_CONTINUATION_READY,
+												)
+										) {
+											child = candidate;
+											if (!child.model) throw new Error("Real read child model missing");
+											vi.spyOn(child.agent, "continue");
+											partial = {
+												...createAssistantMessage("result.unwrap("),
+												api: child.model.api,
+												provider: child.model.provider,
+												model: child.model.id,
+												timestamp: Date.now() + 1000,
+											};
+											target = {
+												...partial,
+												stopReason: "aborted",
+												errorMessage: "TTSR controlled queued target",
+											};
+											// Normal HTTP deltas run after the SDK response fence. These explicit
+											// external events enter the real queue in the driver's existing context
+											// while its original response body and authority are both held.
+											stimulusSent = true;
+											authorityHeld = true;
+											child.agent.emitExternalEvent({
+												type: "message_update",
+												message: partial,
+												assistantMessageEvent: {
+													type: "text_delta",
+													contentIndex: 0,
+													delta: "result.unwrap(",
+													partial,
+												},
+											});
+											child.agent.emitExternalEvent({ type: "message_end", message: target });
+											held.resolve();
+											await release.promise;
+										}
+										return { ok: true };
+									},
+								}
+							: undefined,
+					);
+				},
+			],
+		});
+		journal = f.manager;
+		cleanups.push(async () => release.resolve());
+		f.releaseChild.resolve();
+		f.releaseParent.resolve();
+		await untilAborted(AbortSignal.timeout(10000), held.promise);
+		expect(stimulusSent).toBe(true);
+		expect(child).toBeDefined();
+		expect(child!.agent.state.isStreaming).toBe(true);
+		expect(child!.isTtsrAbortPending).toBe(false);
+		expect(target).toBeDefined();
+		expect(target!.errorId).toBeUndefined();
+		expect(
+			child!.sessionManager
+				.getEntries()
+				.some(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "assistant" &&
+						entry.message.timestamp === target!.timestamp,
+				),
+		).toBe(false);
+		expect(
+			child!.sessionManager
+				.getEntries()
+				.some(entry => entry.type === "custom_message" && entry.customType === "ttsr-injection"),
+		).toBe(false);
+		expect(child!.agent.continue).not.toHaveBeenCalled();
+		release.resolve();
+		await untilAborted(AbortSignal.timeout(10000), f.run!);
+		expect(shouldRenderAbortReason(target!)).toBe(false);
+		expect(child!.agent.continue).toHaveBeenCalledTimes(1);
+		const entries = child!.sessionManager.getEntries();
+		const targetIndex = entries.findIndex(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "assistant" &&
+				entry.message.timestamp === target!.timestamp,
+		);
+		const injectionIndexes = entries.flatMap((entry, index) =>
+			entry.type === "custom_message" && entry.customType === "ttsr-injection" ? [index] : [],
+		);
+		expect(targetIndex).toBeGreaterThanOrEqual(0);
+		expect(injectionIndexes).toHaveLength(1);
+		expect(injectionIndexes[0]!).toBeGreaterThan(targetIndex);
+		expect(
+			entries
+				.slice(injectionIndexes[0]! + 1)
+				.some(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "assistant" &&
+						entry.message.stopReason === "toolUse",
+				),
+		).toBe(true);
+		expect(f.calls.filter(call => call.model === "child")).toHaveLength(3);
+		expect(
+			f.calls.at(-1)?.messages.some(message => message.role === "tool" && message.tool_call_id === "original-task"),
+		).toBe(true);
+	}, 15000);
 
 	it("read response error cannot expose terminal hooks while its claim authority is pending", async () => {
 		const held = Promise.withResolvers<void>();

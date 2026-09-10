@@ -1589,6 +1589,7 @@ export class AgentSession {
 		});
 		this.#disconnectOwnedMcpManager = config.disconnectOwnedMcpManager;
 		const ttsrHost: TtsrCoordinatorHost = {
+			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			agent: this.agent,
 			sessionManager: this.sessionManager,
 			settings: this.settings,
@@ -2433,6 +2434,7 @@ export class AgentSession {
 	 * event/persistence pipeline during teardown.
 	 */
 	#handleAgentEvent = (event: AgentEvent): Promise<void> => {
+		this.#ttsr.onEventEntry(event);
 		const reading = this.#childTaskRecovery;
 		const read = reading?.read;
 		const originalReadTurn =
@@ -2467,6 +2469,7 @@ export class AgentSession {
 				});
 			read.responseEvents = processing.catch(() => {});
 		} else processing = this.#dispatchAgentEvent(event);
+		this.#ttsr.observeProcessing(event, processing);
 		this.#inFlightEventHandlers.add(processing);
 		const childScope = this.#childTaskRecovery;
 		if (childScope) {
@@ -3560,6 +3563,7 @@ export class AgentSession {
 				: undefined;
 		if (pendingOriginal) this.#assertOriginalTaskBootstrap(pendingOriginal);
 		const entryId = this.sessionManager.appendMessage(message, taskResult);
+		if (message.role === "assistant") this.#ttsr.onAssistantRecorded(message);
 		if (this.#ownsTaskReadMessage(message)) this.#advanceTaskReadLease(entryId);
 		if (pendingOriginal) {
 			const entry = this.sessionManager.getEntry(entryId);
@@ -3892,7 +3896,7 @@ export class AgentSession {
 			} else if (this.#pendingAbortErrorId) {
 				message.errorId = this.#pendingAbortErrorId;
 				this.#pendingAbortErrorId = undefined;
-			} else if (this.#ttsr.abortPending) {
+			} else if (this.#ttsr.ownsInterruptedMessage(message)) {
 				// A TTSR rule interruption is control flow, not a failure: the turn
 				// re-runs and the injection surfaces via `TtsrNotificationComponent`.
 				// Suppress the abort line while keeping the rule reason on the
