@@ -93,6 +93,7 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 	const stateCalls: StateChange[] = [];
 	let stateResponseHook: (() => void) | undefined;
 	const ensures: Array<{ cwd: string; key: string; baseline: string }> = [];
+	const workItemView = () => ({ work_id: item.work_id, state: "IN_PROGRESS", project_id: null, revision: { revision_id: item.claimed_revision_id } });
 	const backend = {
 		name: "work",
 		cacheFile: path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(directory, "cache.json")),
@@ -131,8 +132,8 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 		},
 		workClient: {
 			healthReady: async () => ({ ready: true, service_fingerprint: "5".repeat(64) }),
-			workItem: async () => ({ work_id: item.work_id, state: "IN_PROGRESS", project_id: null, revision: { revision_id: item.claimed_revision_id } }),
-			workflow: async () => ({ relations: [] }),
+			workItem: async () => workItemView(),
+			workflow: async () => ({ item: workItemView(), relations: [] }),
 		},
 	} as unknown as WorkflowBackend;
 	const inputHandlers: InputHandler[] = [];

@@ -925,6 +925,12 @@ describe("native auditor runner (OMP-168)", () => {
 		let failNextIssueLookup = false;
 		let suppressNextDelivery = false;
 		let keyedLookupsBeforeSuppression = 0;
+		const workItemView = () => ({
+			work_id: workId,
+			state: "IN_PROGRESS",
+			project_id: null,
+			revision: { revision_id: revisionId },
+		});
 		const mockBackend = {
 			cacheFile,
 			markerFile: ".work-project",
@@ -967,13 +973,8 @@ describe("native auditor runner (OMP-168)", () => {
 					service_fingerprint: "service-fp",
 					judge_manifest: { judge_sha256: "judge-sha" },
 				}),
-				workItem: async () => ({
-					work_id: workId,
-					state: "IN_PROGRESS",
-					project_id: null,
-					revision: { revision_id: revisionId },
-				}),
-				workflow: async () => ({ relations: [] }),
+				workItem: async () => workItemView(),
+				workflow: async () => ({ item: workItemView(), relations: [] }),
 			},
 		} as unknown as WorkflowBackend;
 
@@ -2008,6 +2009,12 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			cleanup: async () => ({ cleaned: true, detail: "test cleanup" }),
 		};
 		const issue = { id: "OMP-213", key: "OMP-213", title: "Recovery relocation", project: "Bookends" };
+		const workItemView = () => ({
+			work_id: "OMP-213",
+			state: "IN_PROGRESS",
+			project_id: null,
+			revision: { revision_id: "rev-1" },
+		});
 		const mockBackend = {
 			cacheFile: path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(cacheDir, "work-cache.json")),
 			markerFile: ".work-project",
@@ -2030,13 +2037,8 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 					service_fingerprint: "service-fp",
 					judge_manifest: { judge_sha256: "judge-sha" },
 				}),
-				workItem: async () => ({
-					work_id: "OMP-213",
-					state: "IN_PROGRESS",
-					project_id: null,
-					revision: { revision_id: "rev-1" },
-				}),
-				workflow: async () => ({ relations: [] }),
+				workItem: async () => workItemView(),
+				workflow: async () => ({ item: workItemView(), relations: [] }),
 			},
 		} as unknown as WorkflowBackend;
 
@@ -2155,28 +2157,29 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		exec.grant.repository = cwd;
 		const ownershipEntry = executionOwnershipEntry(exec, cwd, "OMP-176");
 
+		const workItemView = () => ({
+			work_id: "OMP-176",
+			state: "IN_PROGRESS",
+			project_id: null,
+			revision: { revision_id: "rev-1" },
+		});
 		const mockBackend = {
 			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
 			pendingDeliveries: async () => [],
-			findIssue: async (key: string) => ({ id: `uuid-${key}`, key, title: `Test ${key}`, project: "Bookends" }),
+			findIssue: async (key: string) => ({ id: key, key, title: `Test ${key}`, project: "Bookends" }),
 			executionChildren: async () => ({ umbrella: false, children: [] }),
 			getExecution: async () => exec,
-			currentNow: async () => ({ id: "uuid-176", key: "OMP-176", title: "Test", project: "Bookends" }),
+			currentNow: async () => ({ id: "OMP-176", key: "OMP-176", title: "Test", project: "Bookends" }),
 			setExecutionState: async () => ({
 				grant: { ...exec.grant, state: "stopped" as const, terminal_reason: "max_continuations_exceeded" },
 			}),
 			workClient: {
 				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
-				workItem: async () => ({
-					work_id: "uuid-176",
-					state: "IN_PROGRESS",
-					project_id: null,
-					revision: { revision_id: "rev-1" },
-				}),
-				workflow: async () => ({ relations: [] }),
+				workItem: async () => workItemView(),
+				workflow: async () => ({ item: workItemView(), relations: [] }),
 			},
 		} as unknown as WorkflowBackend;
 
@@ -2255,29 +2258,30 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		exec.grant.repository = cwd;
 		const ownershipEntry = executionOwnershipEntry(exec, cwd, "OMP-176");
 
+		const workItemView = () => ({
+			work_id: "OMP-176",
+			state: "IN_PROGRESS",
+			project_id: null,
+			revision: { revision_id: "rev-1" },
+		});
 		const mockBackend = {
 			cacheFile: temporaryCacheFile(),
 			markerFile: ".work-project",
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
 			pendingDeliveries: async () => [],
-			findIssue: async (key: string) => ({ id: `uuid-${key}`, key, title: `Test ${key}`, project: "Bookends" }),
+			findIssue: async (key: string) => ({ id: key, key, title: `Test ${key}`, project: "Bookends" }),
 			executionChildren: async () => ({ umbrella: false, children: [] }),
 			getExecution: async () => exec,
-			currentNow: async () => ({ id: "uuid-176", key: "OMP-176", title: "Test", project: "Bookends" }),
+			currentNow: async () => ({ id: "OMP-176", key: "OMP-176", title: "Test", project: "Bookends" }),
 			setExecutionState: async () => ({
 				grant: { ...exec.grant, state: "stopped" as const, terminal_reason: "max_continuations_exceeded" },
 			}),
 			getPendingExecutionClaims: async () => [],
 			workClient: {
 				healthReady: async () => ({ contract_sha256: "contract-sha", service_fingerprint: "service-fp", judge_manifest: { judge_sha256: "judge-sha" } }),
-				workItem: async () => ({
-					work_id: "uuid-176",
-					state: "IN_PROGRESS",
-					project_id: null,
-					revision: { revision_id: "rev-1" },
-				}),
-				workflow: async () => ({ relations: [] }),
+				workItem: async () => workItemView(),
+				workflow: async () => ({ item: workItemView(), relations: [] }),
 			},
 		} as unknown as WorkflowBackend;
 
