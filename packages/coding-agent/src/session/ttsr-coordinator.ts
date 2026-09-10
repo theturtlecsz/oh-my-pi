@@ -585,6 +585,10 @@ export class TtsrCoordinator {
 				} catch {
 					if (ownsAttempt()) this.#host.emitNotice("warning", "TTSR continuation could not complete.", "ttsr");
 				} finally {
+					if (ownsAttempt() && this.#abortPending) {
+						this.#matchingCancellation.abort();
+						this.#matchingCancellation = new AbortController();
+					}
 					this.#settleAttempt(attempt);
 				}
 			},

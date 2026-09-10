@@ -826,6 +826,17 @@ describe("AgentSession TTSR resume gate", () => {
 			});
 			return { ...message, stopReason: "aborted" as const };
 		};
+		const captureTextMatch = (timestamp: number, name: string, token: string): AgentEvent => {
+			manager.addRule({ ...testRule, name, condition: [token] });
+			const message = { ...makeMsg(token), timestamp };
+			const event: AgentEvent = {
+				type: "message_update",
+				message,
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: token, partial: message },
+			};
+			coordinator.onEventEntry(event);
+			return event;
+		};
 		const record = (message: AssistantMessage) => {
 			agent.appendMessage(message);
 			journal.appendMessage(message);
@@ -844,6 +855,7 @@ describe("AgentSession TTSR resume gate", () => {
 			notices,
 			emitSessionEvent,
 			trigger,
+			captureTextMatch,
 			record,
 			advanceGeneration: () => {
 				generation++;
@@ -851,28 +863,50 @@ describe("AgentSession TTSR resume gate", () => {
 		};
 	}
 
-	it.each(["absent-target", "absent-record", "rejected-after-record", "unrelated-same-timestamp"] as const)(
-		"recorded TTSR lifecycle surfaces %s without injection or a stranded gate",
-		async mode => {
-			const f = recordedLifecycleFixture();
-			const message = await f.trigger(101);
-			const processing = Promise.withResolvers<void>();
-			if (mode !== "absent-target")
-				f.coordinator.observeProcessing({ type: "message_end", message }, processing.promise);
-			if (mode === "rejected-after-record" || mode === "unrelated-same-timestamp") f.record(message);
-			if (mode === "unrelated-same-timestamp") f.agent.replaceMessages([{ ...message }]);
-			const running = f.tasks[0]!.run(new AbortController().signal);
-			f.core.resolve();
-			if (mode === "rejected-after-record") processing.reject(new Error("post-append processing failed"));
-			else processing.resolve();
-			await running;
-			expect(f.notices).toHaveLength(1);
-			expect(f.agent.continue).not.toHaveBeenCalled();
-			expect(f.journal.getEntries().some(entry => entry.type === "custom_message")).toBe(false);
-			expect(f.coordinator.resumeGate).toBeUndefined();
-			expect(f.coordinator.abortPending).toBe(false);
-		},
-	);
+	it.each([
+		"absent-target",
+		"absent-record",
+		"rejected-after-record",
+		"unrelated-same-timestamp",
+		"missing-index",
+		"core-idle-rejection",
+	] as const)("recorded TTSR lifecycle surfaces %s without injection or a stranded gate", async mode => {
+		const f = recordedLifecycleFixture();
+		const abort = vi.spyOn(f.agent, "abort");
+		const message = await f.trigger(101);
+		const late = f.captureTextMatch(101, "late-failed-rule", "lateFailedRule");
+		const processing = Promise.withResolvers<void>();
+		if (mode !== "absent-target")
+			f.coordinator.observeProcessing({ type: "message_end", message }, processing.promise);
+		if (["rejected-after-record", "unrelated-same-timestamp", "missing-index", "core-idle-rejection"].includes(mode))
+			f.record(message);
+		if (mode === "unrelated-same-timestamp") f.agent.replaceMessages([{ ...message }]);
+		if (mode === "missing-index") f.agent.replaceMessages([]);
+		// Attach the real task's rejection handling before rejecting either fixture promise.
+		const running = f.tasks[0]!.run(new AbortController().signal);
+		if (mode === "core-idle-rejection") f.core.reject(new Error("original core failed"));
+		else f.core.resolve();
+		if (mode === "rejected-after-record") processing.reject(new Error("post-append processing failed"));
+		else processing.resolve();
+		await running;
+		expect(f.notices).toHaveLength(1);
+		expect(f.agent.continue).not.toHaveBeenCalled();
+		expect(f.journal.getEntries().some(entry => entry.type === "custom_message")).toBe(false);
+		expect(f.coordinator.resumeGate).toBeUndefined();
+		expect(f.coordinator.abortPending).toBe(false);
+		expect(await f.coordinator.checkMessageUpdate(late)).toBe(false);
+		expect(f.tasks).toHaveLength(1);
+		expect(abort).toHaveBeenCalledTimes(1);
+		expect(f.emitSessionEvent).toHaveBeenCalledTimes(1);
+		f.coordinator.onTurnStart();
+		const fresh = f.captureTextMatch(103, "fresh-after-failure", "freshAfterFailure");
+		const checkDelta = vi.spyOn(f.manager, "checkDelta");
+		expect(await f.coordinator.checkMessageUpdate(fresh)).toBe(true);
+		expect(checkDelta.mock.results[0]?.value).toEqual([expect.objectContaining({ name: "fresh-after-failure" })]);
+		expect(f.tasks).toHaveLength(2);
+		expect(abort).toHaveBeenCalledTimes(2);
+		f.coordinator.resolveResume();
+	});
 
 	it.each(["before-wait", "during-core", "during-handler", "generation", "dispose", "skip"] as const)(
 		"recorded TTSR lifecycle cancels %s without waiting for a delayed handler",
@@ -902,6 +936,11 @@ describe("AgentSession TTSR resume gate", () => {
 			f.core.resolve();
 			await Promise.resolve();
 			expect(f.agent.continue).not.toHaveBeenCalled();
+			f.coordinator.onTurnStart();
+			const fresh = f.captureTextMatch(104, "fresh-after-cancel", "freshAfterCancel");
+			expect(await f.coordinator.checkMessageUpdate(fresh)).toBe(true);
+			expect(f.tasks).toHaveLength(2);
+			f.coordinator.resolveResume();
 		},
 	);
 
@@ -913,14 +952,39 @@ describe("AgentSession TTSR resume gate", () => {
 		f.core.resolve();
 		const old = f.tasks[0]!.run(new AbortController().signal);
 		await f.continued.promise;
+		const capturedC = f.captureTextMatch(202, "new-c-matching", "newCMatching");
 		const second = await f.trigger(202);
 		const newer = f.coordinator.resumeGate;
 		f.continuation.resolve();
 		await old;
+		expect(await f.coordinator.checkMessageUpdate(capturedC)).toBe(true);
+		expect(f.tasks).toHaveLength(2);
 		expect(f.coordinator.resumeGate).toBe(newer);
 		expect(f.coordinator.ownsInterruptedMessage(second)).toBe(true);
 		f.coordinator.resolveResume();
 		expect(f.coordinator.resumeGate).toBeUndefined();
+	});
+
+	it("recorded TTSR lifecycle successful settlement preserves admitted continuation matching", async () => {
+		const f = recordedLifecycleFixture();
+		const first = await f.trigger(211);
+		f.record(first);
+		f.coordinator.observeProcessing({ type: "message_end", message: first }, Promise.resolve());
+		f.core.resolve();
+		const running = f.tasks[0]!.run(new AbortController().signal);
+		await f.continued.promise;
+		const capturedContinuation = f.captureTextMatch(212, "continuation-rule", "continuationRule");
+		f.continuation.resolve();
+		await running;
+		expect(f.coordinator.resumeGate).toBeUndefined();
+		f.coordinator.onTurnStart();
+		const checkDelta = vi.spyOn(f.manager, "checkDelta");
+		expect(await f.coordinator.checkMessageUpdate(capturedContinuation)).toBe(true);
+		expect(checkDelta.mock.results[0]?.value).toEqual([expect.objectContaining({ name: "continuation-rule" })]);
+		expect(f.tasks).toHaveLength(2);
+		expect(f.agent.continue).toHaveBeenCalledTimes(1);
+		expect(f.notices).toEqual([]);
+		f.coordinator.resolveResume();
 	});
 
 	it("recorded TTSR lifecycle rejects a fresh same-timestamp text match after admission", async () => {
@@ -2890,4 +2954,279 @@ describe("same-message native AST", () => {
 		},
 		10000,
 	);
+});
+
+// Fault injection: omit one supported processing observation, while real persistence continues.
+describe("failed attempt retirement", () => {
+	it("failed attempt cannot interrupt a fresh user prompt when its old native AST result returns", async () => {
+		const trace: object[] = [];
+		const started = performance.now();
+		const record = (stage: string, detail: object = {}) =>
+			trace.push({ stage, ms: performance.now() - started, ...detail });
+		const ready = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+		const release = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+		const returnedB = Promise.withResolvers<void>();
+		const triggeredA = Promise.withResolvers<void>();
+		const freshStarted = Promise.withResolvers<void>();
+		const freshRelease = Promise.withResolvers<void>();
+		const manager = new TtsrManager({
+			enabled: true,
+			contextMode: "discard",
+			interruptMode: "always",
+			repeatMode: "once",
+			repeatGap: 10,
+		});
+		const names = ["failed-attempt-a", "failed-attempt-b"];
+		for (const [index, name] of names.entries())
+			manager.addRule({
+				name,
+				path: `/rehearsal/${name}.md`,
+				content: `Replace danger${index} with safe${index}.`,
+				astCondition: [`danger${index}($$$ARGS)`],
+				scope: [`tool:write(file${index}.ts)`],
+				_source: { provider: "test", providerName: "test", path: `/rehearsal/${name}.md`, level: "project" },
+			});
+		const actualCheck = manager.checkAstSnapshot.bind(manager);
+		const checkSpy = vi.spyOn(manager, "checkAstSnapshot").mockImplementation(async (snapshot, context) => {
+			const index = context.streamKey?.includes("failed-call-0") ? 0 : 1;
+			record("ast-enter", { index, snapshot, context });
+			const matches = await actualCheck(snapshot, context);
+			record("native-result", { index, names: matches.map(rule => rule.name) });
+			expect(matches.map(rule => rule.name)).toEqual([names[index]]);
+			ready[index]!.resolve();
+			await release[index]!.promise;
+			record("ast-return", { index });
+			if (index === 1) returnedB.resolve();
+			return matches;
+		});
+		let omitted = false;
+		let observationRestored = false;
+		const actualObserve = TtsrCoordinator.prototype.observeProcessing;
+		const observationSpy = vi.spyOn(TtsrCoordinator.prototype, "observeProcessing").mockImplementation(function (
+			this: TtsrCoordinator,
+			event,
+			processing,
+		) {
+			if (
+				!omitted &&
+				event.type === "message_end" &&
+				event.message.role === "assistant" &&
+				event.message.stopReason === "aborted" &&
+				event.message.timestamp === 1720000000100
+			) {
+				omitted = true;
+				record("fault-omit-first-aborted-observation", { timestamp: event.message.timestamp });
+				return;
+			}
+			return actualObserve.call(this, event, processing);
+		});
+		let timers = 0;
+		const schedulerSpy = vi.spyOn(scheduler, "wait").mockImplementation(async (delay, options) => {
+			if (delay === 50) timers++;
+			record("scheduler-enter", { delay });
+			await originalSchedulerWait(delay, options);
+			record("scheduler-complete", { delay });
+		});
+		const message = (
+			content: AssistantMessage["content"],
+			stopReason: AssistantMessage["stopReason"],
+			timestamp: number,
+		): AssistantMessage => ({
+			role: "assistant",
+			content,
+			stopReason,
+			timestamp,
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "mock",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		});
+		const calls: ToolCall[] = names.map((_name, index) => ({
+			type: "toolCall",
+			id: `failed-call-${index}`,
+			name: "write",
+			arguments: { path: `file${index}.ts`, content: `danger${index}();` },
+		}));
+		const tool: AgentTool = {
+			name: "write",
+			label: "Write",
+			description: "Rehearsal write",
+			parameters: type({ path: "string", content: "string" }),
+			matcherEntries: args => {
+				const value = args as { path: string; content: string };
+				return [{ path: value.path, digest: value.content }];
+			},
+			execute: async () => {
+				throw new Error("Interrupted tool must not execute");
+			},
+		};
+		let streams = 0;
+		let initialAborts = 0;
+		let freshAborts = 0;
+		const timestamps: number[] = [];
+		const notifications: string[][] = [];
+		const notices: string[] = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			convertToLlm,
+			initialState: { model: getBundledModel("anthropic", "claude-sonnet-4-5")!, tools: [tool] },
+			streamFn: (_model, _context, options) => {
+				streams++;
+				record("stream-start", { streams });
+				const stream = new AssistantMessageEventStream();
+				if (streams === 1)
+					queueMicrotask(() => {
+						const partial = message(calls, "toolUse", 1720000000100);
+						options?.signal?.addEventListener(
+							"abort",
+							() => {
+								initialAborts++;
+								record("initial-abort");
+								stream.push({ type: "error", reason: "aborted", error: { ...partial, stopReason: "aborted" } });
+							},
+							{ once: true },
+						);
+						stream.push({ type: "start", partial });
+						for (const [contentIndex, call] of calls.entries()) {
+							stream.push({ type: "toolcall_start", contentIndex, partial });
+							stream.push({
+								type: "toolcall_delta",
+								contentIndex,
+								delta: JSON.stringify(call.arguments),
+								partial,
+							});
+							stream.push({ type: "toolcall_end", contentIndex, toolCall: call, partial });
+						}
+					});
+				else
+					queueMicrotask(() => {
+						const partial = message([{ type: "text", text: "Independent answer." }], "stop", 1720000000200);
+						options?.signal?.addEventListener(
+							"abort",
+							() => {
+								freshAborts++;
+								record("fresh-user-stream-aborted");
+								stream.push({ type: "error", reason: "aborted", error: { ...partial, stopReason: "aborted" } });
+							},
+							{ once: true },
+						);
+						stream.push({ type: "start", partial });
+						void freshRelease.promise.then(() => stream.push({ type: "done", reason: "stop", message: partial }));
+					});
+				return stream;
+			},
+		});
+		const abortSpy = vi.spyOn(agent, "abort");
+		agent.subscribe(event => {
+			if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_delta")
+				timestamps.push(event.message.timestamp);
+			if (
+				event.type === "message_start" &&
+				event.message.role === "assistant" &&
+				event.message.timestamp === 1720000000200
+			) {
+				record("fresh-assistant-start");
+				freshStarted.resolve();
+			}
+			if (event.type === "message_end") record("core-message-end", { message: event.message });
+		});
+		const journal = SessionManager.inMemory();
+		const session = new AgentSession({
+			agent,
+			sessionManager: journal,
+			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+			modelRegistry: sharedModelRegistry,
+			ttsrManager: manager,
+		});
+		session.subscribe(event => {
+			if (event.type === "notice") {
+				notices.push(event.message);
+				record("notice", { message: event.message });
+			}
+			if (event.type === "ttsr_triggered") {
+				const matched = event.rules.map(rule => rule.name);
+				notifications.push(matched);
+				record("triggered", { names: matched });
+				if (matched.includes(names[0]!)) triggeredA.resolve();
+			}
+		});
+		let freshPrompt: Promise<boolean> | undefined;
+		const firstPrompt = session.prompt("First request.");
+		try {
+			await untilAborted(AbortSignal.timeout(3000), Promise.all(ready.map(gate => gate.promise)));
+			expect(initialAborts).toBe(0);
+			expect(timestamps).toEqual([1720000000100, 1720000000100]);
+			release[0]!.resolve();
+			await untilAborted(AbortSignal.timeout(3000), triggeredA.promise);
+			await untilAborted(AbortSignal.timeout(3000), firstPrompt);
+			await session.waitForIdle();
+			expect(omitted).toBe(true);
+			expect(notices).toHaveLength(1);
+			expect(session.isTtsrAbortPending).toBe(false);
+			expect(
+				journal
+					.getEntries()
+					.some(
+						entry =>
+							entry.type === "message" &&
+							entry.message.role === "assistant" &&
+							entry.message.timestamp === 1720000000100,
+					),
+			).toBe(true);
+			observationSpy.mockRestore();
+			observationRestored = true;
+			record("first-prompt-settled", { streams, notices, timers });
+			freshPrompt = session.prompt("Independent new user request.");
+			await untilAborted(AbortSignal.timeout(3000), freshStarted.promise);
+			record("release-old-b-into-fresh-prompt");
+			release[1]!.resolve();
+			await returnedB.promise;
+			await originalSchedulerWait(0);
+			record("fresh-prompt-after-old-b", { freshAborts, streams, timers, notices, notifications });
+			expect(freshAborts).toBe(0);
+			freshRelease.resolve();
+			await untilAborted(AbortSignal.timeout(3000), freshPrompt);
+			await session.waitForIdle();
+			expect(abortSpy).toHaveBeenCalledTimes(1);
+			expect(streams).toBe(2);
+			expect(timers).toBe(1);
+			expect(notifications).toEqual([[names[0]!]]);
+			expect(notices).toHaveLength(1);
+			expect(journal.getInjectedTtsrRules()).toEqual([]);
+			expect(
+				journal
+					.getEntries()
+					.some(entry => entry.type === "custom_message" && entry.customType === "ttsr-injection"),
+			).toBe(false);
+			expect(
+				journal
+					.getEntries()
+					.some(
+						entry =>
+							entry.type === "message" &&
+							entry.message.role === "assistant" &&
+							entry.message.timestamp === 1720000000200 &&
+							entry.message.stopReason === "stop",
+					),
+			).toBe(true);
+		} finally {
+			release.forEach(gate => {
+				gate.resolve();
+			});
+			freshRelease.resolve();
+			process.stdout.write(`FAILED_ATTEMPT_TRACE ${JSON.stringify(trace)}\n`);
+			await session.dispose();
+			if (!observationRestored) observationSpy.mockRestore();
+			checkSpy.mockRestore();
+			abortSpy.mockRestore();
+			schedulerSpy.mockRestore();
+		}
+	}, 10000);
 });
