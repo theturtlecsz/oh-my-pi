@@ -485,6 +485,17 @@ export class TtsrCoordinator {
 			this.#host.emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
 			return false;
 		}
+		if (
+			shouldInterrupt &&
+			this.#attempt?.generation === this.#host.promptGeneration() &&
+			this.#attempt.timestamp === targetTimestamp
+		) {
+			// Same-timestamp matches during continuation belong to the interrupted response; continuation has its own identity.
+			if (!this.#abortPending || this.#attempt.cancellation.signal.aborted) return false;
+			this.#addPendingInjections(matches);
+			this.#host.emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
+			return true;
+		}
 		if (shouldInterrupt && this.#attempt) this.#settleAttempt(this.#attempt);
 		if (shouldInterrupt) this.#resolveDeferred(this.#resumeResolve);
 		this.#addPendingInjections(matches);
@@ -543,6 +554,8 @@ export class TtsrCoordinator {
 						return;
 					}
 					this.#abortPending = false;
+					this.#matchingCancellation.abort();
+					this.#matchingCancellation = new AbortController();
 					this.#perToolInjections.clear();
 					if (this.#manager?.getSettings().contextMode === "discard") {
 						this.#host.agent.replaceMessages(this.#host.agent.state.messages.slice(0, targetAssistantIndex));
