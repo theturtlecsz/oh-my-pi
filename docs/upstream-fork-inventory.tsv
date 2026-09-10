@@ -10,7 +10,7 @@ path	scope	state	head_blob	behavior	classification
 .gitignore	shared	modified	9d4cbea998bc	session candidate: OMP-108; session candidate: OMP-47; session-system v1: canonical home for the Linear/omp session system	retained
 .windsurf/rules/caveman.md	fork-only	added	6d18ef51bc64	docs: record caveman mode rules and session-system merge note	retained
 .work-project	fork-only	added	7e6b8d33d560	session candidate: HOME-149	retained
-AGENTS.md	shared	modified	ca0dfff47d24	docs: record caveman mode rules and session-system merge note	retained
+AGENTS.md	shared	modified	fceedf0cafc7	docs: record caveman mode rules and session-system merge note; mandatory Antidote prerequisite for all new work	retained
 WATCHDOG.yml	fork-only	added	d465f1a99cf7	session close: HOME-137; session close: HOME-130; fix: route watchdog advisor to Terra via authenticated codex provider	retained
 bun.lock	shared	modified	d4f12438dcaa	feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147)	retained
 crates/pi-builtins/src/pgrep.rs	shared	modified	873a666ec7d3	session candidate: OMP-127	retained

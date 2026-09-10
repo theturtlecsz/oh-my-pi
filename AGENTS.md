@@ -1,5 +1,9 @@
 # Development Rules
 
+## Mandatory Prerequisite: Antidote
+
+Before starting ANY new work — including planning, implementation, and review — agents must read and apply the [Antidote](file:///home/thetu/.codex/skills/antidote/SKILL.md) skill. Favor root-cause fixes and reuse over symptom patching. All existing development rules, valid trust-boundary validation, and explicit user authorization remain strictly preserved.
+
 ## Default Context
 
 This repo contains multiple packages, but **`packages/coding-agent/`** is the primary focus. Unless otherwise specified, assume work refers to this package.
