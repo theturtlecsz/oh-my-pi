@@ -4159,18 +4159,56 @@ def complete_installed_predecessor_fixture(
         records.append(record)
         (root / "installed-completion-commands.json").write_text(json.dumps(records, indent=2))
         response.raise_for_status()
-        return envelope, response.json()["result"]
+        actual = response.json()
+        assert actual["receipt"]["state"] == "applied", record
+        result = actual["result"]
+        assert result.get("status") != "refused", record
+        return envelope, result
 
     def workflow() -> dict:
         response = client.get(f"/v1/work-items/{key}/workflow")
         response.raise_for_status()
         return response.json()
 
+    def deliver_pending_checkpoints() -> dict:
+        view = workflow()
+        latest: dict[str, dict] = {}
+        for delivery in view["checkpoint_deliveries"]:
+            prior = latest.get(delivery["event_id"])
+            if prior is None or delivery["delivery_sequence"] > prior["delivery_sequence"]:
+                latest[delivery["event_id"]] = delivery
+        for event in view["close_attempt_events"]:
+            delivered = latest.get(event["event_id"], {}).get("status") in ("delivered", "waived")
+            if event["requires_delivery"] and not delivered:
+                # This fixture's delivery sink receives the exact native text
+                # before the driver attests its digest; no acknowledgment is invented.
+                rendered = event["rendered_text"].encode("utf-8")
+                assert hashlib.sha256(rendered).hexdigest() == event["rendered_sha256"]
+                destination = root / f"installed-completion-event-{event['event_id']}.txt"
+                destination.write_bytes(rendered)
+                assert destination.read_bytes() == rendered
+                command("attest_checkpoint_delivery", {"event_id": event["event_id"],
+                    "owner_session_id": attempt["owner_session_id"],
+                    "rendered_sha256": event["rendered_sha256"], "status": "delivered"})
+        return workflow()
+
     before = workflow()
+    candidate = before["item"]["candidate"]
+    assert candidate["kind"] == "final"
+    attempt = next(a for a in before["close_attempts"]
+        if a["candidate_id"] == candidate["candidate_id"]
+        and a["execution_grant_id"] == setup["execution"]["grant"]["grant_id"])
+    # begin_execution_review freezes the candidate and verification, but the
+    # actual audit manifest is sealed by the next supported service command.
+    if before["audit_manifest"] is None:
+        verification = next(r for r in before["receipts"]
+            if r["kind"] == "verification" and r["candidate_id"] == candidate["candidate_id"])
+        _, sealed = command("seal_audit_manifest", {"attempt_id": attempt["attempt_id"],
+            "verification_receipt_id": verification["receipt_id"]})
+        assert sealed["status"] == "applied"
+        before = workflow()
     manifest = before["audit_manifest"]
-    assert manifest is not None and before["item"]["candidate"]["kind"] == "final"
-    attempt = next(a for a in before["close_attempts"] if a["attempt_id"] == manifest["attempt_id"])
-    assert attempt["execution_grant_id"] == setup["execution"]["grant"]["grant_id"]
+    assert manifest is not None and manifest["attempt_id"] == attempt["attempt_id"]
     assert any(r["kind"] == "push" and r["candidate_id"] == before["item"]["candidate"]["candidate_id"] for r in before["receipts"])
     _, reserved = command("reserve_auditor_launch", {"attempt_id": attempt["attempt_id"],
         "task_sha256": manifest["task_sha256"], "tool_call_id": "installed-predecessor-audit"})
@@ -4187,7 +4225,9 @@ def complete_installed_predecessor_fixture(
     _, settled = command("settle_auditor_launch", {"attempt_id": attempt["attempt_id"],
         "launch_id": reserved["launch"]["launch_id"], "transport_payload": content})
     assert settled["status"] == "applied" and settled["verdict"] == "PASS"
-    current = workflow()
+    # record_closeout_review itself refuses outstanding delivery debt, so
+    # deliver the seal/reserve/settle checkpoints before requesting closeout.
+    current = deliver_pending_checkpoints()
     if route == "work":
         item = current["item"]
         closeout = _receipt(item["work_id"], item["revision"]["revision_id"],
@@ -4195,18 +4235,20 @@ def complete_installed_predecessor_fixture(
             body={"observedResult": result_path.read_text(), "auditTransportSha256": hashlib.sha256(response.content).hexdigest()})
         command("record_closeout_review", {"receipt": closeout, "attempt_id": attempt["attempt_id"],
             "authorization_ref": attempt["authorization_ref"]})
-    current = workflow()
-    delivered = {r["event_id"] for r in current["checkpoint_deliveries"] if r["status"] in ("delivered", "waived")}
-    for event in current["close_attempt_events"]:
-        if event["requires_delivery"] and event["event_id"] not in delivered:
-            (root / f"installed-completion-event-{event['event_id']}.json").write_text(json.dumps(event, indent=2))
-            command("attest_checkpoint_delivery", {"event_id": event["event_id"],
-                "owner_session_id": attempt["owner_session_id"], "rendered_sha256": event["rendered_sha256"], "status": "delivered"})
-    current = workflow()
+    # Closeout records a new checkpoint; deliver it before complete_work.
+    current = deliver_pending_checkpoints()
     # Prove every builder input exists, so its negative-test fallback values cannot be used.
-    assert all(any(r["kind"] == kind for r in current["receipts"]) for kind in ("verification", "audit", "push"))
-    assert current["auditor_launches"] and current["audit_manifest"] == manifest
-    completion_evidence = _build_completion_evidence_from_view(current)
+    assert any(r["receipt_id"] == manifest["verification_receipt_id"]
+        and r["kind"] == "verification" for r in current["receipts"])
+    assert any(r["kind"] == "audit" and r["verdict"] == "PASS"
+        and r["payload"]["launch_id"] == reserved["launch"]["launch_id"]
+        for r in current["receipts"])
+    assert any(launch["launch_id"] == reserved["launch"]["launch_id"]
+        and launch["task_sha256"] == manifest["task_sha256"] for launch in current["auditor_launches"])
+    assert current["audit_manifest"] == manifest
+    push = next(r for r in current["receipts"] if r["kind"] == "push"
+        and r["candidate_id"] == candidate["candidate_id"])
+    completion_evidence = _build_completion_evidence_from_view(current, push["receipt_id"])
     execution = client.get(execution_url).json()
     assert execution["grant"]["grant_id"] == setup["execution"]["grant"]["grant_id"]
     if route == "execution":
