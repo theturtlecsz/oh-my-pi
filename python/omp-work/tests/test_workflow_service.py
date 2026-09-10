@@ -4,6 +4,10 @@ import json
 import os
 import secrets
 import socket
+import threading
+import time
+from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +23,7 @@ from omp_work.operations.database import bootstrap
 from omp_work.operations.fingerprints import service_runtime_fingerprint
 from omp_work.v1.canonical import sha256, text_sha256
 from omp_work.v1.server import create_app
+from omp_work.v1.store import PostgresWorkStore
 from pg_native import native_postgres, seed_authority
 
 pytestmark = pytest.mark.skipif(
@@ -257,11 +262,37 @@ def _push_receipt(
 
 
 def _execution_grant_audited_attempt(
-    service, workspace_id, title: str = "exec item"
+    service,
+    workspace_id,
+    title: str = "exec item",
+    *,
+    predecessor_ids: list[str] | None = None,
+    riders: list[dict] | None = None,
+    after_begin: Callable[[], None] | None = None,
+    owner_started_at: str | None = None,
+    authorization_kind: str = "execution",
 ) -> tuple[str, str, str, str, str, str, str, dict]:
     item = _create(service, workspace_id, title, description="The request description")
     work_id = item["work_id"]
     rev_id = item["revision_id"]
+    for predecessor_id in predecessor_ids or []:
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "put_relation",
+                "payload": {
+                    "relation": {
+                        "workspace_id": str(workspace_id),
+                        "source_work_id": predecessor_id,
+                        "target_work_id": str(work_id),
+                        "kind": "blocks",
+                        "active": True,
+                    }
+                },
+            },
+        )
+        assert status == 200, body
 
     grant_id = str(uuid4())
     judge_sha, judge_manifest = _tcb_manifest()
@@ -296,6 +327,7 @@ def _execution_grant_audited_attempt(
                             "The request description"
                         ),
                         "initial_git_baseline": head_commit,
+                        "active_blocker_ids": predecessor_ids or [],
                     }
                 ],
                 "expected_focus_version": 0,
@@ -305,6 +337,8 @@ def _execution_grant_audited_attempt(
         },
     )
     assert status == 200, body
+    if after_begin is not None:
+        after_begin()
 
     status, body = _command(
         service,
@@ -376,11 +410,12 @@ def _execution_grant_audited_attempt(
                 "attempt_id": attempt_id,
                 "authorization_ref": f"execution:{grant_id}:0:1",
                 "owner_session_id": "session-1",
-                "owner_session_started_at": datetime.now(timezone.utc).isoformat(),
+                "owner_session_started_at": owner_started_at or datetime.now(timezone.utc).isoformat(),
+                "riders": riders or [],
                 "owner_session_start_commit": head_commit,
                 "repository": "theturtlecsz/oh-my-pi",
                 "diff_sha256": "5" * 64,
-                "authorization_kind": "execution",
+                "authorization_kind": authorization_kind,
                 "execution_grant_id": grant_id,
                 "candidate_tree_sha": final_cand_sha,
                 "original_request_sha256": text_sha256("The request description"),
@@ -653,7 +688,7 @@ def _drain_deliveries(service, workspace_id, key: str = "OMP-1") -> None:
 
 
 def _audited_attempt(
-    service, workspace_id, title: str = "close target"
+    service, workspace_id, title: str = "close target", *, riders: list[dict] | None = None
 ) -> tuple[dict, dict, dict]:
     """Full happy path through PASS settle: returns (item, final, attempt-after-settle)."""
     item = _create(service, workspace_id, title)
@@ -661,7 +696,7 @@ def _audited_attempt(
     status, body = _finalize(service, workspace_id, item, plan["candidate_id"])
     assert status == 200, body
     final = body["result"]["candidate"]
-    status, body = _begin(service, workspace_id, item)
+    status, body = _begin(service, workspace_id, item, identity={"riders": riders} if riders else None)
     assert status == 200 and body["result"]["status"] == "applied", body
     attempt = body["result"]["attempt"]
     seal = _verify_and_seal(service, workspace_id, item, final, attempt)
@@ -2586,18 +2621,8 @@ def test_stale_service_refuses_writes_and_still_reads(
     assert status == 200
 
 
-def _close_ritual(
-    service,
-    workspace_id,
-    item: dict,
-    final: dict,
-    attempt: dict,
-    *,
-    done_ref: str | None = None,
-    cancellations: list[dict] | None = None,
-    operation_id=None,
-) -> tuple[int, dict]:
-    """Post-PASS closeout: record closeout review, drain, push, complete."""
+def _prepare_closeout(service, workspace_id, item: dict, final: dict, attempt: dict) -> None:
+    """Record supported closeout/push evidence without completing the work item."""
     _drain_deliveries(service, workspace_id, key=item["key"])
     status, body = _record_review(service, workspace_id, item, final, attempt)
     assert status == 200 and body["result"]["status"] == "applied", body
@@ -2614,6 +2639,21 @@ def _close_ritual(
         service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}}
     )
     assert status == 200, body
+
+
+def _close_ritual(
+    service,
+    workspace_id,
+    item: dict,
+    final: dict,
+    attempt: dict,
+    *,
+    done_ref: str | None = None,
+    cancellations: list[dict] | None = None,
+    operation_id=None,
+) -> tuple[int, dict]:
+    """Post-PASS closeout: record closeout review, drain, push, complete."""
+    _prepare_closeout(service, workspace_id, item, final, attempt)
     return _complete(
         service,
         workspace_id,
@@ -7375,3 +7415,1310 @@ def test_completion_evidence_idempotency_and_claim_race(service) -> None:
 
     applied_count = sum(1 for (st, bd) in (r1, r2) if st == 200 and bd.get("result", {}).get("status") == "applied")
     assert applied_count == 1, f"Expected exactly 1 applied completion, got {r1} and {r2}"
+
+
+
+def test_complete_execution_item_allows_retained_terminal_predecessor(service) -> None:
+    """A terminal predecessor's preserved edge must not prevent execution completion."""
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    predecessor = _create(service, workspace_id, "terminal predecessor")
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_work_state",
+            "payload": {"work_id": predecessor["work_id"], "state": "CANCELED"},
+        },
+    )
+    assert status == 200, body
+    (
+        grant_id,
+        work_id,
+        _revision_id,
+        _candidate_id,
+        attempt_id,
+        push_id,
+        judge_sha,
+        item,
+    ) = _execution_grant_audited_attempt(
+        service, workspace_id, predecessor_ids=[predecessor["work_id"]]
+    )
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": 3,
+                "work_id": work_id,
+                "attempt_id": attempt_id,
+                "evidence": _build_completion_evidence_from_view(workflow, push_id),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["state"] == "DONE"
+    after = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    assert after["relations"] == workflow["relations"]
+    assert after["item"]["state"] == "DONE"
+
+
+def test_complete_work_refuses_retained_nonterminal_predecessor(service) -> None:
+    """Otherwise-valid ordinary completion must not bypass an unfinished predecessor."""
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item, final, attempt = _audited_attempt(service, workspace_id)
+    predecessor = _create(service, workspace_id, "unfinished predecessor")
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "put_relation",
+            "payload": {
+                "relation": {
+                    "workspace_id": str(workspace_id),
+                    "source_work_id": predecessor["work_id"],
+                    "target_work_id": item["work_id"],
+                    "kind": "blocks",
+                    "active": True,
+                }
+            },
+        },
+    )
+    assert status == 200, body
+    _drain_deliveries(service, workspace_id, key=item["key"])
+    status, body = _record_review(service, workspace_id, item, final, attempt)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    push = _push_receipt(
+        item["work_id"],
+        item["revision_id"],
+        final["candidate_id"],
+        final["commit_sha"],
+        candidate_sha256=final["candidate_sha256"],
+        repository="/repo",
+    )
+    status, body = _command(
+        service, workspace_id, {"type": "append_evidence", "payload": {"receipt": push}}
+    )
+    assert status == 200, body
+    _drain_deliveries(service, workspace_id, key=item["key"])
+    before = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    status, body = _complete(
+        service, workspace_id, item, final, attempt["attempt_id"], key=item["key"]
+    )
+    assert status == 200 and body["result"]["status"] == "refused", body
+    assert body["result"]["event"]["reason_code"] == "completion_blocked"
+    after = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    assert after["item"] == before["item"]
+    assert after["relations"] == before["relations"]
+    assert after["close_attempts"] == before["close_attempts"]
+    assert after["checkpoint_deliveries"] == before["checkpoint_deliveries"]
+
+
+def _p3_relation(
+    service,
+    workspace_id,
+    source: dict,
+    target: dict,
+    kind: str = "blocks",
+    *,
+    remove: bool = False,
+) -> None:
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "remove_relation" if remove else "put_relation",
+            "payload": {
+                "relation": {
+                    "workspace_id": str(workspace_id),
+                    "source_work_id": source["work_id"],
+                    "target_work_id": target["work_id"],
+                    "kind": kind,
+                    "active": True,
+                }
+            },
+        },
+    )
+    assert status == 200, body
+
+
+def _p3_state(service, workspace_id, item: dict, state: str) -> None:
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_work_state",
+            "payload": {"work_id": item["work_id"], "state": state},
+        },
+    )
+    assert status == 200, body
+
+
+def _p3_workflow(service, workspace_id, item: dict) -> dict:
+    response = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _p3_terminal(service, workspace_id, state: str) -> dict:
+    if state == "DONE":
+        item, final, attempt = _audited_attempt(
+            service, workspace_id, "completed predecessor"
+        )
+        status, body = _close_ritual(service, workspace_id, item, final, attempt)
+        assert status == 200 and body["result"]["status"] == "applied", body
+    else:
+        item = _create(service, workspace_id, "predecessor")
+        _p3_state(service, workspace_id, item, state)
+    return item
+
+
+def _p3_ready(
+    service,
+    workspace_id,
+    *,
+    execution: bool = False,
+    predecessors: list[str] | None = None,
+    riders: list[dict] | None = None,
+    after_begin: Callable[[], None] | None = None,
+    owner_started_at: str | None = None,
+) -> dict:
+    if execution:
+        grant, work, revision, _candidate, attempt_id, _push, judge, item = (
+            _execution_grant_audited_attempt(
+                service,
+                workspace_id,
+                predecessor_ids=predecessors,
+                riders=riders,
+                after_begin=after_begin,
+                owner_started_at=owner_started_at,
+            )
+        )
+        item = dict(item, revision_id=revision)
+        view = _p3_workflow(service, workspace_id, item)
+        final = view["item"]["candidate"]
+        attempt = next(
+            a for a in view["close_attempts"] if a["attempt_id"] == attempt_id
+        )
+    else:
+        item, final, attempt = _audited_attempt(service, workspace_id, riders=riders)
+        grant = judge = None
+    _prepare_closeout(service, workspace_id, item, final, attempt)
+    return {
+        "item": item,
+        "final": final,
+        "attempt": attempt,
+        "grant": grant,
+        "judge": judge,
+    }
+
+
+def _p3_payload(service, workspace_id, ready: dict, **extra) -> dict:
+    view = _p3_workflow(service, workspace_id, ready["item"])
+    final = view["item"]["candidate"]
+    return {
+        "input": {
+            "work_id": ready["item"]["work_id"],
+            "current_revision_id": ready["item"]["revision"]["revision_id"]
+            if "revision" in ready["item"]
+            else ready["item"]["revision_id"],
+            "candidate": final,
+            "receipts": [
+                r
+                for r in view["receipts"]
+                if r["candidate_id"] == final["candidate_id"]
+            ],
+            "closeout_requested": True,
+        },
+        "attempt_id": ready["attempt"]["attempt_id"],
+        "done_authorization_ref": f"done:{uuid4()}",
+        "evidence": _build_completion_evidence_from_view(view),
+        **extra,
+    }
+
+
+def _p3_complete(
+    service, workspace_id, payload: dict, *, operation_id=None
+) -> tuple[int, dict]:
+    return _command(
+        service,
+        workspace_id,
+        {"type": "complete_work", "payload": payload},
+        operation_id=operation_id,
+    )
+
+
+@pytest.mark.parametrize("state", ["DONE", "CANCELED", "CANCELLED"])
+@pytest.mark.parametrize("execution", [False, True])
+def test_p3_terminal_edges_allow_both_complete_work_bindings(
+    service, state: str, execution: bool
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    predecessor = _p3_terminal(service, workspace_id, state)
+    ready = _p3_ready(
+        service,
+        workspace_id,
+        execution=execution,
+        predecessors=[predecessor["work_id"]] if execution else None,
+    )
+    if not execution:
+        _p3_relation(service, workspace_id, predecessor, ready["item"])
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    status, body = _p3_complete(
+        service, workspace_id, _p3_payload(service, workspace_id, ready)
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert (
+        after["item"]["state"] == "DONE" and after["relations"] == before["relations"]
+    )
+    assert _p3_workflow(service, workspace_id, predecessor)["item"]["state"] == state
+
+
+@pytest.mark.parametrize("execution", [False, True])
+def test_p3_validated_cancellation_projects_only_its_own_terminal_write(
+    service, execution: bool
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    predecessor = _p3_terminal(service, workspace_id, "CANCELED")
+    ready = _p3_ready(
+        service,
+        workspace_id,
+        execution=execution,
+        predecessors=[predecessor["work_id"]] if execution else None,
+    )
+    if not execution:
+        _p3_relation(service, workspace_id, predecessor, ready["item"])
+    _p3_state(service, workspace_id, predecessor, "BACKLOG")
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    payload = _p3_payload(
+        service,
+        workspace_id,
+        ready,
+        cancellations=[
+            {
+                "work_id": predecessor["work_id"],
+                "revision_id": predecessor["revision_id"],
+                "reason": "superseded within this validated batch",
+            }
+        ],
+    )
+    op = uuid4()
+    status, body = _p3_complete(service, workspace_id, payload, operation_id=op)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["canceled_work_ids"] == [predecessor["work_id"]]
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert (
+        after["item"]["state"] == "DONE" and after["relations"] == before["relations"]
+    )
+    assert (
+        _p3_workflow(service, workspace_id, predecessor)["item"]["state"] == "CANCELED"
+    )
+    status, replay = _p3_complete(service, workspace_id, payload, operation_id=op)
+    assert (
+        status == 200
+        and replay["receipt"]["state"] == "replayed"
+        and replay["result"] == body["result"]
+    )
+    assert _p3_workflow(service, workspace_id, ready["item"]) == after
+
+
+@pytest.mark.parametrize("execution", [False, True])
+@pytest.mark.parametrize(
+    "fault,reason",
+    [("cancel", "cancel_binding_invalid"), ("later-child", "child_receipt_invalid")],
+)
+def test_p3_invalid_batch_proof_wins_before_predecessor_refusal(
+    service, fault: str, reason: str, execution: bool
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    predecessor = _p3_terminal(service, workspace_id, "CANCELED")
+    ready = _p3_ready(
+        service,
+        workspace_id,
+        execution=execution,
+        predecessors=[predecessor["work_id"]] if execution else None,
+    )
+    if not execution:
+        _p3_relation(service, workspace_id, predecessor, ready["item"])
+    _p3_state(service, workspace_id, predecessor, "BACKLOG")
+    proof = {
+        "work_id": predecessor["work_id"],
+        "revision_id": predecessor["revision_id"],
+        "reason": "validated cancellation required",
+    }
+    extra = {}
+    if fault == "cancel":
+        proof["revision_id"] = str(uuid4())
+    else:
+        child = _create(service, workspace_id, "unproven later child")
+        _p3_relation(service, workspace_id, child, ready["item"], "parent")
+        extra["satisfied_work_ids"] = [child["work_id"]]
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    status, body = _p3_complete(
+        service,
+        workspace_id,
+        _p3_payload(service, workspace_id, ready, cancellations=[proof], **extra),
+    )
+    assert (
+        status == 200
+        and body["result"]["status"] == "refused"
+        and body["result"]["event"]["reason_code"] == reason
+    ), body
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert (
+        after["item"] == before["item"]
+        and after["close_attempts"] == before["close_attempts"]
+        and after["relations"] == before["relations"]
+    )
+    assert (
+        _p3_workflow(service, workspace_id, predecessor)["item"]["state"] == "BACKLOG"
+    )
+
+
+@pytest.mark.parametrize("execution", [False, True])
+@pytest.mark.parametrize("state", ["BACKLOG", "done", "cancelled", "UNFAMILIAR"])
+def test_p3_repairable_state_refusal_preserves_success_authorization(
+    service, execution: bool, state: str
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    predecessor = _p3_terminal(service, workspace_id, "CANCELED")
+    ready = _p3_ready(
+        service,
+        workspace_id,
+        execution=execution,
+        predecessors=[predecessor["work_id"]] if execution else None,
+    )
+    if not execution:
+        _p3_relation(service, workspace_id, predecessor, ready["item"])
+    _p3_state(service, workspace_id, predecessor, state)
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    payload = _p3_payload(service, workspace_id, ready)
+    status, body = _p3_complete(service, workspace_id, payload)
+    assert (
+        status == 200
+        and body["result"]["status"] == "refused"
+        and body["result"]["event"]["reason_code"] == "completion_blocked"
+    ), body
+    assert (
+        not body["result"]["event"]["requires_fresh_authorization"]
+        and not body["result"]["event"]["requires_delivery"]
+    )
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert (
+        after["item"] == before["item"]
+        and after["close_attempts"] == before["close_attempts"]
+        and after["checkpoint_deliveries"] == before["checkpoint_deliveries"]
+    )
+    _p3_state(service, workspace_id, predecessor, "CANCELED")
+    status, completed = _p3_complete(service, workspace_id, payload)
+    assert status == 200 and completed["result"]["status"] == "applied", completed
+
+
+@pytest.mark.parametrize("state", ["DONE", "CANCELLED"])
+def test_p3_execution_completion_keeps_other_terminal_spellings_nonblocking(
+    service, state: str
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    predecessor = _p3_terminal(service, workspace_id, state)
+    ready = _p3_ready(
+        service, workspace_id, execution=True, predecessors=[predecessor["work_id"]]
+    )
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": ready["grant"],
+                "expected_grant_version": 3,
+                "work_id": ready["item"]["work_id"],
+                "attempt_id": ready["attempt"]["attempt_id"],
+                "evidence": _build_completion_evidence_from_view(before),
+                "judge_sha256": ready["judge"],
+            },
+        },
+    )
+    assert status == 200 and body["result"]["state"] == "DONE", body
+    assert (
+        _p3_workflow(service, workspace_id, ready["item"])["relations"]
+        == before["relations"]
+    )
+
+
+def _p3_child_receipt(service, workspace_id, ready: dict, child: dict) -> None:
+    _p3_relation(service, workspace_id, child, ready["item"], "parent")
+    attempt = ready["attempt"]
+    receipt = _receipt(
+        child["work_id"],
+        child["revision_id"],
+        ready["final"]["candidate_id"],
+        "same_session_found_fixed",
+        body={
+            "attempt_id": attempt["attempt_id"],
+            "owner_session_id": attempt["owner_session_id"],
+            "base_commit": attempt["owner_session_start_commit"],
+            "fix_commit": ready["final"]["commit_sha"],
+            "candidate_sha256": ready["final"]["candidate_sha256"],
+            "finding": "same-session child fixed",
+            "verification": "disposable service fixture verifies child contract",
+        },
+    )
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "append_evidence", "payload": {"receipt": receipt}},
+    )
+    assert status == 200, body
+
+
+@pytest.mark.parametrize("execution", [False, True])
+def test_p3_validated_child_projects_done_without_removing_incoming_edge(
+    service, execution: bool
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    started = datetime.now(timezone.utc).isoformat()
+    if execution:
+        child = _p3_terminal(service, workspace_id, "CANCELED")
+        ready = _p3_ready(
+            service,
+            workspace_id,
+            execution=True,
+            predecessors=[child["work_id"]],
+            owner_started_at=started,
+        )
+        _p3_state(service, workspace_id, child, "BACKLOG")
+    else:
+        ready = _p3_ready(service, workspace_id)
+        child = _create(service, workspace_id, "satisfied blocking child")
+        _p3_state(service, workspace_id, child, "unfamiliar-child")
+        _p3_relation(service, workspace_id, child, ready["item"])
+    _p3_child_receipt(service, workspace_id, ready, child)
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    status, body = _p3_complete(
+        service,
+        workspace_id,
+        _p3_payload(
+            service, workspace_id, ready, satisfied_work_ids=[child["work_id"]]
+        ),
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert child["work_id"] in body["result"]["completed_work_ids"]
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert (
+        after["relations"] == before["relations"]
+        and _p3_workflow(service, workspace_id, child)["item"]["state"] == "DONE"
+    )
+
+
+@pytest.mark.parametrize("execution", [False, True])
+def test_p3_validated_blocking_rider_projects_done_only_for_complete_work(
+    service, execution: bool
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    rider = (
+        _p3_terminal(service, workspace_id, "CANCELED")
+        if execution
+        else _create(service, workspace_id, "blocking rider")
+    )
+    riders = [
+        {
+            "work_id": rider["work_id"],
+            "revision_id": rider["revision_id"],
+            "evidence": "the exact rider proof sealed in this real-service fixture",
+        }
+    ]
+    ready = _p3_ready(
+        service,
+        workspace_id,
+        execution=execution,
+        predecessors=[rider["work_id"]] if execution else None,
+        riders=riders,
+        after_begin=(lambda: _p3_state(service, workspace_id, rider, "BACKLOG"))
+        if execution
+        else None,
+    )
+    if not execution:
+        _p3_relation(service, workspace_id, rider, ready["item"])
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    if execution:
+        status, strict = _command(
+            service,
+            workspace_id,
+            {
+                "type": "complete_execution_item",
+                "payload": {
+                    "grant_id": ready["grant"],
+                    "expected_grant_version": 3,
+                    "work_id": ready["item"]["work_id"],
+                    "attempt_id": ready["attempt"]["attempt_id"],
+                    "evidence": _build_completion_evidence_from_view(before),
+                    "judge_sha256": ready["judge"],
+                },
+            },
+        )
+        assert status == 409 and strict["error"]["code"] == "completion_blocked", strict
+        assert _p3_workflow(service, workspace_id, ready["item"]) == before
+    status, body = _p3_complete(
+        service, workspace_id, _p3_payload(service, workspace_id, ready)
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert rider["work_id"] in body["result"]["completed_work_ids"]
+    assert _p3_workflow(service, workspace_id, rider)["item"]["state"] == "DONE"
+    assert (
+        _p3_workflow(service, workspace_id, ready["item"])["relations"]
+        == before["relations"]
+    )
+
+
+def test_p3_invalid_rider_proof_precedes_valid_blocker_cancellation(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    rider = _create(service, workspace_id, "drifting rider")
+    ready = _p3_ready(
+        service,
+        workspace_id,
+        riders=[
+            {
+                "work_id": rider["work_id"],
+                "revision_id": rider["revision_id"],
+                "evidence": "sealed before supported cancellation",
+            }
+        ],
+    )
+    blocker = _create(service, workspace_id, "cancelable predecessor")
+    _p3_relation(service, workspace_id, blocker, ready["item"])
+    _p3_state(service, workspace_id, rider, "CANCELED")
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    status, body = _p3_complete(
+        service,
+        workspace_id,
+        _p3_payload(
+            service,
+            workspace_id,
+            ready,
+            cancellations=[
+                {
+                    "work_id": blocker["work_id"],
+                    "revision_id": blocker["revision_id"],
+                    "reason": "valid cancellation does not hide invalid rider",
+                }
+            ],
+        ),
+    )
+    assert (
+        status == 200
+        and body["result"]["event"]["reason_code"] == "rider_binding_invalid"
+    ), body
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert (
+        after["item"] == before["item"]
+        and after["close_attempts"] == before["close_attempts"]
+        and after["relations"] == before["relations"]
+    )
+    assert _p3_workflow(service, workspace_id, blocker)["item"]["state"] == "BACKLOG"
+
+
+@pytest.mark.parametrize("route", ["complete_work", "complete_execution_item"])
+@pytest.mark.parametrize("change", ["add", "remove"])
+def test_p3_execution_completion_refuses_changed_terminal_source_set(
+    service, route: str, change: str
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    predecessor = _p3_terminal(service, workspace_id, "CANCELED")
+    ready = _p3_ready(
+        service, workspace_id, execution=True, predecessors=[predecessor["work_id"]]
+    )
+    if change == "remove":
+        _p3_relation(service, workspace_id, predecessor, ready["item"], remove=True)
+    else:
+        extra = _create(service, workspace_id, "new terminal predecessor")
+        _p3_state(service, workspace_id, extra, "CANCELED")
+        _p3_relation(service, workspace_id, extra, ready["item"])
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    execution_before = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{ready['grant']}",
+        headers=_owner_headers(workspace_id),
+    ).json()
+    if route == "complete_work":
+        status, body = _p3_complete(
+            service, workspace_id, _p3_payload(service, workspace_id, ready)
+        )
+        assert (
+            status == 200
+            and body["result"]["event"]["reason_code"] == "completion_blocked"
+        ), body
+        assert not body["result"]["event"]["requires_delivery"]
+    else:
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": route,
+                "payload": {
+                    "grant_id": ready["grant"],
+                    "expected_grant_version": 3,
+                    "work_id": ready["item"]["work_id"],
+                    "attempt_id": ready["attempt"]["attempt_id"],
+                    "evidence": _build_completion_evidence_from_view(before),
+                    "judge_sha256": ready["judge"],
+                },
+            },
+        )
+        assert status == 409 and body["error"]["code"] == "completion_blocked", body
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert (
+        after["item"] == before["item"]
+        and after["close_attempts"] == before["close_attempts"]
+        and after["checkpoint_deliveries"] == before["checkpoint_deliveries"]
+    )
+    execution_after = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{ready['grant']}",
+        headers=_owner_headers(workspace_id),
+    ).json()
+    assert execution_after == execution_before
+
+
+def _p3_begin_payload(
+    service, workspace_id, item: dict, predecessors: list[str]
+) -> dict:
+    judge, manifest = _tcb_manifest()
+    return {
+        "grant_id": str(uuid4()),
+        "provenance": {
+            "owner_input_id": str(uuid4()),
+            "owner_session_id": "session-1",
+            "normalized_command": f"/execute {item['key']}",
+            "workspace_id": str(workspace_id),
+            "repository": "theturtlecsz/oh-my-pi",
+            "nonce": str(uuid4()),
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "remote_ref": "refs/heads/main",
+        "mode": "single",
+        "items": [
+            {
+                "work_id": item["work_id"],
+                "revision_id": item["revision_id"],
+                "position": 0,
+                "original_request": "admitted pending work",
+                "original_request_sha256": text_sha256("admitted pending work"),
+                "initial_git_baseline": "0" * 40,
+                "active_blocker_ids": predecessors,
+            }
+        ],
+        "expected_focus_version": 0,
+        "judge_sha256": judge,
+        "judge_manifest": manifest,
+    }
+
+
+@pytest.mark.parametrize("state", ["DONE", "CANCELED", "CANCELLED"])
+def test_p3_admission_and_activation_retain_terminal_edges(service, state: str) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    predecessor = _p3_terminal(service, workspace_id, state)
+    item = _create(
+        service, workspace_id, "activation target", description="admitted pending work"
+    )
+    _p3_relation(service, workspace_id, predecessor, item)
+    before = _p3_workflow(service, workspace_id, item)
+    payload = _p3_begin_payload(service, workspace_id, item, [predecessor["work_id"]])
+    anchor = _create(
+        service, workspace_id, "first queued item", description="admitted pending work"
+    )
+    payload["mode"] = "queue"
+    payload["items"][0]["position"] = 1
+    payload["items"].insert(
+        0,
+        {
+            "work_id": anchor["work_id"],
+            "revision_id": anchor["revision_id"],
+            "position": 0,
+            "original_request": "admitted pending work",
+            "original_request_sha256": text_sha256("admitted pending work"),
+            "initial_git_baseline": "0" * 40,
+            "active_blocker_ids": [],
+        },
+    )
+    status, body = _command(
+        service, workspace_id, {"type": "begin_execution", "payload": payload}
+    )
+    assert status == 200, body
+    status, active = _command(
+        service,
+        workspace_id,
+        {
+            "type": "activate_execution_item",
+            "payload": {
+                "grant_id": payload["grant_id"],
+                "expected_grant_version": 1,
+                "position": 1,
+                "work_id": item["work_id"],
+                "expected_revision_id": item["revision_id"],
+                "git_baseline": "0" * 40,
+                "judge_sha256": payload["judge_sha256"],
+                "expected_focus_version": 1,
+                "expected_blocker_ids": [predecessor["work_id"]],
+            },
+        },
+    )
+    assert status == 200 and active["result"]["grant"]["grant_version"] == 2, active
+    assert _p3_workflow(service, workspace_id, item)["relations"] == before["relations"]
+
+
+@pytest.mark.parametrize(
+    "fault", ["snapshot", "reopen", "state-spelling", "edge-drift"]
+)
+def test_p3_admission_activation_refusals_preserve_grant_and_focus(
+    service, fault: str
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    predecessor = _p3_terminal(service, workspace_id, "CANCELED")
+    item = _create(
+        service, workspace_id, "guarded activation", description="admitted pending work"
+    )
+    _p3_relation(service, workspace_id, predecessor, item)
+    payload = _p3_begin_payload(
+        service,
+        workspace_id,
+        item,
+        [] if fault == "snapshot" else [predecessor["work_id"]],
+    )
+    if fault == "state-spelling":
+        _p3_state(service, workspace_id, predecessor, "canceled")
+    if fault in ("snapshot", "state-spelling"):
+        status, body = _command(
+            service, workspace_id, {"type": "begin_execution", "payload": payload}
+        )
+        assert status == 400 and body["error"]["code"] == "invalid_request", body
+        assert any("blocking" in d for d in body["error"]["diagnostics"]), body
+        with psycopg.connect(
+            **service.config.connection_kwargs("postgres"), autocommit=True
+        ) as conn:
+            assert (
+                conn.execute(
+                    "SELECT count(*) FROM omp_work.execution_grants WHERE workspace_id=%s",
+                    (workspace_id,),
+                ).fetchone()[0]
+                == 0
+            )
+        return
+    status, body = _command(
+        service, workspace_id, {"type": "begin_execution", "payload": payload}
+    )
+    assert status == 200, body
+    if fault == "reopen":
+        _p3_state(service, workspace_id, predecessor, "BACKLOG")
+    else:
+        _p3_relation(service, workspace_id, predecessor, item, remove=True)
+    before = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{payload['grant_id']}",
+        headers=_owner_headers(workspace_id),
+    ).json()
+    status, denied = _command(
+        service,
+        workspace_id,
+        {
+            "type": "activate_execution_item",
+            "payload": {
+                "grant_id": payload["grant_id"],
+                "expected_grant_version": 1,
+                "position": 0,
+                "work_id": item["work_id"],
+                "expected_revision_id": item["revision_id"],
+                "git_baseline": "0" * 40,
+                "judge_sha256": payload["judge_sha256"],
+                "expected_focus_version": 1,
+                "expected_blocker_ids": [predecessor["work_id"]],
+            },
+        },
+    )
+    assert status == 400 and denied["error"]["code"] == "invalid_request", denied
+    assert any("blocking" in d for d in denied["error"]["diagnostics"]), denied
+    assert (
+        service.client.get(
+            f"/v1/workspaces/{workspace_id}/execution/{payload['grant_id']}",
+            headers=_owner_headers(workspace_id),
+        ).json()
+        == before
+    )
+
+
+@pytest.mark.parametrize("kind", ["summary", "legacy"])
+def test_p3_complete_work_refuses_otherwise_valid_inconsistent_execution_binding(
+    service, kind: str
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    grant, work, revision, _candidate, attempt_id, _push, judge, item = (
+        _execution_grant_audited_attempt(service, workspace_id, authorization_kind=kind)
+    )
+    item = dict(item, revision_id=revision)
+    view = _p3_workflow(service, workspace_id, item)
+    final = view["item"]["candidate"]
+    attempt = next(a for a in view["close_attempts"] if a["attempt_id"] == attempt_id)
+    _prepare_closeout(service, workspace_id, item, final, attempt)
+    ready = {"item": item, "final": final, "attempt": attempt}
+    before = _p3_workflow(service, workspace_id, item)
+    status, body = _p3_complete(
+        service, workspace_id, _p3_payload(service, workspace_id, ready)
+    )
+    assert (
+        status == 200 and body["result"]["event"]["reason_code"] == "completion_blocked"
+    ), body
+    assert "inconsistent execution binding" in body["result"]["event"]["reason"]
+    after = _p3_workflow(service, workspace_id, item)
+    assert (
+        after["item"] == before["item"]
+        and after["close_attempts"] == before["close_attempts"]
+        and after["checkpoint_deliveries"] == before["checkpoint_deliveries"]
+    )
+
+
+def test_p3_missing_predecessor_is_rejected_by_real_relation_foreign_key(
+    service,
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id)
+    before = _p3_workflow(service, workspace_id, item)
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "put_relation",
+            "payload": {
+                "relation": {
+                    "workspace_id": str(workspace_id),
+                    "source_work_id": str(uuid4()),
+                    "target_work_id": item["work_id"],
+                    "kind": "blocks",
+                    "active": True,
+                }
+            },
+        },
+    )
+    assert status >= 400 and "error" in body, body
+    assert _p3_workflow(service, workspace_id, item) == before
+
+
+def _p3_bound_transactions(monkeypatch, workspace_id) -> None:
+    original = PostgresWorkStore._transaction
+
+    @contextmanager
+    def bounded(store, workspace, actor, *, serializable=False):
+        with original(store, workspace, actor, serializable=serializable) as cursor:
+            if str(workspace) == str(workspace_id):
+                cursor.execute("SET LOCAL statement_timeout = '3000ms'")
+            yield cursor
+
+    monkeypatch.setattr(PostgresWorkStore, "_transaction", bounded)
+
+
+def _p3_wait_for_database_lock(service) -> None:
+    deadline = time.monotonic() + 10
+    with psycopg.connect(
+        **service.config.connection_kwargs("postgres"), autocommit=True
+    ) as conn:
+        conn.execute("SET statement_timeout = '3000ms'")
+        while time.monotonic() < deadline:
+            if conn.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname=%s AND wait_event_type='Lock'",
+                (service.config.database,),
+            ).fetchone()[0]:
+                return
+            time.sleep(0.02)
+    pytest.fail("Concurrent command never reached an observed PostgreSQL lock wait")
+
+
+def _p3_operation_attempts(service, workspace_id, operation_id) -> list[tuple]:
+    with psycopg.connect(
+        **service.config.connection_kwargs("postgres"), autocommit=True
+    ) as conn:
+        return conn.execute(
+            "SELECT state, attempt_count, result_sha256 FROM omp_control.idempotent_commands WHERE workspace_id=%s AND operation_id=%s",
+            (workspace_id, operation_id),
+        ).fetchall()
+
+
+def test_p3_uncommitted_reopen_waits_then_refuses_without_consuming_success(
+    service, monkeypatch, record_property
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    _p3_bound_transactions(monkeypatch, workspace_id)
+    predecessor = _p3_terminal(service, workspace_id, "CANCELED")
+    ready = _p3_ready(service, workspace_id)
+    _p3_relation(service, workspace_id, predecessor, ready["item"])
+    payload = _p3_payload(service, workspace_id, ready)
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    written = threading.Event()
+    release = threading.Event()
+    results = {}
+    original = PostgresWorkStore._set_state
+
+    def hold_reopen(store, cursor, envelope):
+        result = original(store, cursor, envelope)
+        if (
+            str(envelope.workspace_id) == str(workspace_id)
+            and str(envelope.command.payload.work_id) == predecessor["work_id"]
+        ):
+            written.set()
+            assert release.wait(10), "reopen release timed out"
+        return result
+
+    monkeypatch.setattr(PostgresWorkStore, "_set_state", hold_reopen)
+
+    def reopen():
+        results["reopen"] = _command(
+            service,
+            workspace_id,
+            {
+                "type": "set_work_state",
+                "payload": {"work_id": predecessor["work_id"], "state": "BACKLOG"},
+            },
+        )
+
+    operation_id = uuid4()
+
+    def complete():
+        results["complete"] = _p3_complete(
+            service, workspace_id, payload, operation_id=operation_id
+        )
+
+    writer = threading.Thread(target=reopen)
+    reader = threading.Thread(target=complete)
+    try:
+        writer.start()
+        assert written.wait(10), "supported reopen never wrote its uncommitted state"
+        reader.start()
+        _p3_wait_for_database_lock(service)
+    finally:
+        release.set()
+        writer.join(15)
+        if reader.ident is not None:
+            reader.join(15)
+    assert not writer.is_alive() and not reader.is_alive(), (
+        "bounded concurrent commands did not settle"
+    )
+    assert results["reopen"][0] == 200
+    status, body = results["complete"]
+    assert (
+        status == 200
+        and body["result"]["status"] == "refused"
+        and body["result"]["event"]["reason_code"] == "completion_blocked"
+    ), body
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert (
+        after["item"] == before["item"]
+        and after["close_attempts"] == before["close_attempts"]
+        and after["checkpoint_deliveries"] == before["checkpoint_deliveries"]
+    )
+    attempts = _p3_operation_attempts(service, workspace_id, operation_id)
+    assert len(attempts) == 1 and 1 <= attempts[0][1] <= 3
+    record_property(
+        "p3_real_pg_observation",
+        json.dumps(
+            {
+                "case": "uncommitted reopen",
+                "operation": str(operation_id),
+                "result": body,
+                "committedAttemptCount": attempts[0][1],
+                "predecessorState": _p3_workflow(service, workspace_id, predecessor)[
+                    "item"
+                ]["state"],
+            }
+        ),
+    )
+
+
+def test_p3_three_real_serialization_conflicts_surface_unavailable_without_completion(
+    service, monkeypatch, record_property
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    _p3_bound_transactions(monkeypatch, workspace_id)
+    predecessor = _p3_terminal(service, workspace_id, "CANCELED")
+    ready = _p3_ready(service, workspace_id)
+    _p3_relation(service, workspace_id, predecessor, ready["item"])
+    payload = _p3_payload(service, workspace_id, ready)
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    original = PostgresWorkStore._observe_predecessors
+    conflicts = []
+    writes = []
+
+    def change_after_snapshot(store, cursor, workspace, work, terminal_post_state=None):
+        if str(workspace) != str(workspace_id) or str(work) != ready["item"]["work_id"]:
+            return original(store, cursor, workspace, work, terminal_post_state)
+        state = "CANCELLED" if len(writes) % 2 == 0 else "CANCELED"
+        result = {}
+
+        def change():
+            result["command"] = _command(
+                service,
+                workspace_id,
+                {
+                    "type": "set_work_state",
+                    "payload": {"work_id": predecessor["work_id"], "state": state},
+                },
+            )
+
+        thread = threading.Thread(target=change)
+        thread.start()
+        thread.join(10)
+        assert not thread.is_alive() and result["command"][0] == 200, result
+        writes.append(result["command"][1])
+        try:
+            return original(store, cursor, workspace, work, terminal_post_state)
+        except psycopg.Error as error:
+            conflicts.append(error.sqlstate)
+            raise
+
+    monkeypatch.setattr(
+        PostgresWorkStore, "_observe_predecessors", change_after_snapshot
+    )
+    operation_id = uuid4()
+    status, body = _p3_complete(
+        service, workspace_id, payload, operation_id=operation_id
+    )
+    assert (
+        status == 503
+        and body["error"]["code"] == "unavailable"
+        and body["error"]["diagnostics"] == ["retry_exhausted"]
+    ), body
+    assert conflicts == ["40001", "40001", "40001"] and len(writes) == 3
+    assert _p3_operation_attempts(service, workspace_id, operation_id) == []
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert (
+        after["item"] == before["item"]
+        and after["close_attempts"] == before["close_attempts"]
+        and after["checkpoint_deliveries"] == before["checkpoint_deliveries"]
+    )
+    record_property(
+        "p3_real_pg_observation",
+        json.dumps(
+            {
+                "case": "three real PG serialization errors",
+                "operation": str(operation_id),
+                "response": body,
+                "observedSqlstates": conflicts,
+                "committedMutationOperations": [
+                    r["receipt"]["operation_id"] for r in writes
+                ],
+                "persistedCompletionOperationRows": 0,
+            }
+        ),
+    )
+
+
+def test_p3_overlapping_edge_insert_can_serialize_after_successful_completion(
+    service, monkeypatch, record_property
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    _p3_bound_transactions(monkeypatch, workspace_id)
+    ready = _p3_ready(service, workspace_id)
+    predecessor = _create(service, workspace_id, "later incoming source")
+    payload = _p3_payload(service, workspace_id, ready)
+    observed = threading.Event()
+    release = threading.Event()
+    original = PostgresWorkStore._observe_predecessors
+    results = {}
+
+    def hold_after_observation(
+        store, cursor, workspace, work, terminal_post_state=None
+    ):
+        result = original(store, cursor, workspace, work, terminal_post_state)
+        if (
+            str(workspace) == str(workspace_id)
+            and str(work) == ready["item"]["work_id"]
+        ):
+            observed.set()
+            assert release.wait(10), "completion release timed out"
+        return result
+
+    monkeypatch.setattr(
+        PostgresWorkStore, "_observe_predecessors", hold_after_observation
+    )
+    completion_id = uuid4()
+    edge_id = uuid4()
+
+    def complete():
+        results["complete"] = _p3_complete(
+            service, workspace_id, payload, operation_id=completion_id
+        )
+
+    def edge():
+        results["edge"] = _command(
+            service,
+            workspace_id,
+            {
+                "type": "put_relation",
+                "payload": {
+                    "relation": {
+                        "workspace_id": str(workspace_id),
+                        "source_work_id": predecessor["work_id"],
+                        "target_work_id": ready["item"]["work_id"],
+                        "kind": "blocks",
+                        "active": True,
+                    }
+                },
+            },
+            operation_id=edge_id,
+        )
+
+    reader = threading.Thread(target=complete)
+    writer = threading.Thread(target=edge)
+    try:
+        reader.start()
+        assert observed.wait(10), "completion did not observe predecessor set"
+        writer.start()
+        _p3_wait_for_database_lock(service)
+    finally:
+        release.set()
+        reader.join(15)
+        if writer.ident is not None:
+            writer.join(15)
+    assert not reader.is_alive() and not writer.is_alive()
+    assert (
+        results["complete"][0] == 200
+        and results["complete"][1]["result"]["status"] == "applied"
+    ), results
+    assert results["edge"][0] == 200, results
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert after["item"]["state"] == "DONE" and any(
+        r["source_work_id"] == predecessor["work_id"]
+        and r["kind"] == "blocks"
+        and r["active"]
+        for r in after["relations"]
+    )
+    record_property(
+        "p3_real_pg_observation",
+        json.dumps(
+            {
+                "case": "completion serializes before overlapping edge",
+                "completion": results["complete"][1],
+                "edge": results["edge"][1],
+                "completionAttemptRows": _p3_operation_attempts(
+                    service, workspace_id, completion_id
+                ),
+                "edgeAttemptRows": _p3_operation_attempts(
+                    service, workspace_id, edge_id
+                ),
+            }
+        ),
+    )
+
+
+def test_p3_valid_cancellation_does_not_excuse_execution_predecessor_seal_drift(
+    service,
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    blocker = _p3_terminal(service, workspace_id, "CANCELED")
+    ready = _p3_ready(
+        service, workspace_id, execution=True, predecessors=[blocker["work_id"]]
+    )
+    _p3_state(service, workspace_id, blocker, "BACKLOG")
+    extra = _create(service, workspace_id, "additional historical source")
+    _p3_state(service, workspace_id, extra, "CANCELED")
+    _p3_relation(service, workspace_id, extra, ready["item"])
+    before = _p3_workflow(service, workspace_id, ready["item"])
+    status, body = _p3_complete(
+        service,
+        workspace_id,
+        _p3_payload(
+            service,
+            workspace_id,
+            ready,
+            cancellations=[
+                {
+                    "work_id": blocker["work_id"],
+                    "revision_id": blocker["revision_id"],
+                    "reason": "valid proof cannot alter admitted source set",
+                }
+            ],
+        ),
+    )
+    assert (
+        status == 200 and body["result"]["event"]["reason_code"] == "completion_blocked"
+    ), body
+    assert "blocking relations changed" in body["result"]["event"]["reason"]
+    after = _p3_workflow(service, workspace_id, ready["item"])
+    assert (
+        after["item"] == before["item"]
+        and after["close_attempts"] == before["close_attempts"]
+        and after["relations"] == before["relations"]
+    )
+    assert _p3_workflow(service, workspace_id, blocker)["item"]["state"] == "BACKLOG"
+
+
+def test_p3_complete_work_reads_immutable_execution_seal_without_waiting_on_grant_locks(
+    service, monkeypatch, record_property
+) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    ready = _p3_ready(service, workspace_id, execution=True)
+    payload = _p3_payload(service, workspace_id, ready)
+    _p3_bound_transactions(monkeypatch, workspace_id)
+    result = {}
+
+    def complete():
+        result["response"] = _p3_complete(service, workspace_id, payload)
+
+    thread = threading.Thread(target=complete)
+    with psycopg.connect(**service.config.connection_kwargs("postgres")) as holder:
+        holder.execute("SET LOCAL statement_timeout = '3000ms'")
+        holder.execute(
+            "SELECT grant_id FROM omp_work.execution_grants WHERE workspace_id=%s AND grant_id=%s FOR UPDATE",
+            (workspace_id, ready["grant"]),
+        )
+        holder.execute(
+            "SELECT item_id FROM omp_work.execution_grant_items WHERE workspace_id=%s AND grant_id=%s AND work_id=%s FOR UPDATE",
+            (workspace_id, ready["grant"], ready["item"]["work_id"]),
+        )
+        thread.start()
+        thread.join(2)
+        completed_while_locked = not thread.is_alive()
+    thread.join(12)
+    assert not thread.is_alive() and completed_while_locked, (
+        "complete_work blocked on an immutable grant/seal row lock"
+    )
+    status, body = result["response"]
+    assert status == 200 and body["result"]["status"] == "applied", body
+    record_property(
+        "p3_plain_seal_observation",
+        json.dumps(
+            {
+                "grant": ready["grant"],
+                "completedWhileGrantAndItemLocked": completed_while_locked,
+                "response": body,
+            }
+        ),
+    )

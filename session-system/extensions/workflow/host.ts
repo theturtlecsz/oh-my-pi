@@ -105,7 +105,7 @@ import {
 import { registerSessionLedger } from "./session-ledger";
 import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
-import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Candidate, type CloseAttempt, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Candidate, type CloseAttempt, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView, type WorkflowView } from "@oh-my-pi/pi-work-client";
 
 type ReviewAttemptIdentity = Partial<Pick<CloseAttempt, "revision_id" | "candidate_id" | "candidate_sha256" | "candidate_commit">>;
 type ReviewCandidateIdentity = Pick<Candidate, "candidate_id" | "candidate_sha256" | "commit_sha">;
@@ -1893,10 +1893,21 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if (tcb.judgeSha256 !== exec.grant.judge_sha256) {
 				return { ok: false, reason: "judge TCB drift" };
 			}
-			const targetIssue = await backend.findIssue(exec.activeItem.work_id);
-			const item = await backend.workClient!.workItem(targetIssue.key);
-			if (!item) {
-				return { ok: false, reason: "work item not found" };
+			let targetIssue: NowRef;
+			let item: WorkItemView;
+			let workflow: WorkflowView;
+			try {
+				targetIssue = await backend.findIssue(exec.activeItem.work_id);
+				item = await backend.workClient!.workItem(targetIssue.key);
+				if (!item || item.work_id !== exec.activeItem.work_id) {
+					return { ok: false, reason: "retryable recovery work item identity lookup failed" };
+				}
+				workflow = await backend.workClient!.workflow(targetIssue.key);
+				if (workflow.item.work_id !== item.work_id) {
+					return { ok: false, reason: "retryable predecessor workflow identity lookup failed" };
+				}
+			} catch (error) {
+				return { ok: false, reason: `retryable predecessor workflow lookup failed: ${String(error)}` };
 			}
 			const expectedRev = exec.activeItem.criteria_revision_id ?? exec.activeItem.claimed_revision_id;
 			if (item.revision.revision_id !== expectedRev) {
@@ -1910,10 +1921,27 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if (currentProjectId !== expectedProjectId) {
 				return { ok: false, reason: "project mismatch" };
 			}
-			const workflow = await backend.workClient!.workflow(targetIssue.key);
-			const activeBlockers = (workflow?.relations ?? []).filter(r => r.active && r.kind === "blocks" && r.target_work_id === item.work_id);
-			if (activeBlockers.length > 0) {
-				return { ok: false, reason: "active unfinished blockers present" };
+			const sourceIds = [...new Set(workflow.relations
+				.filter(r => r.active && r.kind === "blocks" && r.target_work_id === item.work_id)
+				.map(r => r.source_work_id))].sort();
+			const sealedSourceIds = [...(exec.activeItem.active_blocker_ids ?? [])].sort();
+			if (canonicalJson(sourceIds) !== canonicalJson(sealedSourceIds)) {
+				return { ok: false, reason: "predecessor source set differs from execution seal" };
+			}
+			for (const sourceId of sourceIds) {
+				let predecessor: WorkItemView;
+				try {
+					const sourceIssue = await backend.findIssue(sourceId);
+					predecessor = await backend.workClient!.workItem(sourceIssue.key);
+					if (!predecessor || predecessor.work_id !== sourceId) {
+						return { ok: false, reason: `retryable predecessor ${sourceId} keyed read identity mismatch` };
+					}
+				} catch (error) {
+					return { ok: false, reason: `retryable predecessor ${sourceId} keyed read failed: ${String(error)}` };
+				}
+				if (!["DONE", "CANCELED", "CANCELLED"].includes(predecessor.state)) {
+					return { ok: false, reason: `unfinished predecessor ${sourceId}: ${predecessor.state}` };
+				}
 			}
 			let expectedHead: string | undefined;
 			// Review can freeze and begin its attempt before checkpoint delivery

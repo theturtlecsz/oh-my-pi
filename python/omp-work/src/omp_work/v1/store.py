@@ -330,6 +330,7 @@ class PostgresWorkStore:
             "stamp_execution_plan",
             "set_execution_state",
             "complete_execution_item",
+            "complete_work",
         }
         conflict = False
         with self._transaction(
@@ -3150,6 +3151,33 @@ class PostgresWorkStore:
             expected_remote_ref=expected_remote_ref,
         )
 
+    def _observe_predecessors(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        work_id: UUID,
+        terminal_post_state: dict[str, str] | None = None,
+    ) -> tuple[list[str], bool]:
+        """Lock complete predecessor state in source order, retaining historical edges."""
+        cur.execute(
+            "SELECT source_work_id FROM omp_work.work_relations WHERE workspace_id=%s AND target_work_id=%s AND kind='blocks' AND active ORDER BY source_work_id",
+            (workspace_id, work_id),
+        )
+        source_ids = [str(row["source_work_id"]) for row in cur.fetchall()]
+        if not source_ids:
+            return source_ids, True
+        cur.execute(
+            "SELECT work_id,state FROM omp_work.work_items WHERE workspace_id=%s AND work_id = ANY(%s) ORDER BY work_id FOR SHARE",
+            (workspace_id, [UUID(source_id) for source_id in source_ids]),
+        )
+        states = {str(row["work_id"]): row["state"] for row in cur.fetchall()}
+        projected = terminal_post_state or {}
+        eligible = set(states) == set(source_ids) and all(
+            projected.get(source_id, states[source_id]) in ("DONE", "CANCELED", "CANCELLED")
+            for source_id in source_ids
+        )
+        return source_ids, eligible
+
     def _complete_work(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -3443,6 +3471,65 @@ class PostgresWorkStore:
                     ("fix or drop the invalid child, then /done again",),
                 )
             completed_children.append(str(child_id))
+
+        # Only this fully validated batch's actual terminal writes may project
+        # predecessor eligibility. Primary completion itself is not an exemption.
+        terminal_post_state = {str(proof.work_id): "CANCELED" for proof in cancel_proofs}
+        terminal_post_state.update({str(child_id): "DONE" for child_id in child_ids})
+        terminal_post_state.update({str(rider["work_id"]): "DONE" for rider in sealed_riders})
+        sealed_predecessors: list[str] | None = None
+        authorization_kind = live["authorization_kind"]
+        execution_grant_id = live["execution_grant_id"]
+        if authorization_kind == "execution" and execution_grant_id is not None:
+            try:
+                # Immutable execution seal only: do not lock the grant row or
+                # introduce current-grant/lease enforcement on this route.
+                cur.execute(
+                    "SELECT active_blocker_ids FROM omp_work.execution_grant_items WHERE workspace_id=%s AND grant_id=%s AND work_id=%s",
+                    (envelope.workspace_id, execution_grant_id, submitted.work_id),
+                )
+                grant_item = cur.fetchone()
+            except psycopg.Error as error:
+                if error.sqlstate in {"40001", "40P01"}:
+                    raise
+                raise WorkStoreError(
+                    "completion_blocked", ("execution predecessor binding could not be read",)
+                ) from error
+            seal = grant_item["active_blocker_ids"] if grant_item is not None else None
+            if not isinstance(seal, (list, tuple)) or any(
+                not isinstance(source_id, UUID) for source_id in seal
+            ):
+                return refused(
+                    "completion_blocked",
+                    "execution predecessor binding is missing or malformed",
+                    ("restore the execution binding, then /done again",),
+                    requires_fresh=False,
+                )
+            sealed_predecessors = sorted(str(source_id) for source_id in seal)
+        elif authorization_kind not in ("summary", "legacy") or execution_grant_id is not None:
+            return refused(
+                "completion_blocked",
+                "completion attempt has inconsistent execution binding",
+                ("resolve the execution binding, then /done again",),
+                requires_fresh=False,
+            )
+        current_predecessors, predecessors_terminal = self._observe_predecessors(
+            cur, envelope.workspace_id, submitted.work_id, terminal_post_state
+        )
+        if sealed_predecessors is not None and current_predecessors != sealed_predecessors:
+            return refused(
+                "completion_blocked",
+                "blocking relations changed since queue snapshot",
+                ("restore the sealed predecessor set, then /done again",),
+                requires_fresh=False,
+            )
+        if not predecessors_terminal:
+            return refused(
+                "completion_blocked",
+                "item has unfinished or missing blocking items",
+                ("resolve the blocking items, then /done again",),
+                requires_fresh=False,
+            )
         attempt_row = self._transition_attempt(
             cur,
             envelope.workspace_id,
@@ -3914,28 +4001,18 @@ class PostgresWorkStore:
                     ),
                 )
 
-            # Check active blockers
-            cur.execute(
-                "SELECT source_work_id FROM omp_work.work_relations WHERE workspace_id=%s AND target_work_id=%s AND kind='blocks' AND active ORDER BY source_work_id",
-                (envelope.workspace_id, claim.work_id),
+            current_blockers, predecessors_terminal = self._observe_predecessors(
+                cur, envelope.workspace_id, claim.work_id
             )
-            current_blockers = [str(r["source_work_id"]) for r in cur.fetchall()]
             expected_blockers = sorted(str(b) for b in claim.active_blocker_ids)
             if current_blockers != expected_blockers:
                 raise WorkStoreError(
-                    "invalid_request",
-                    ("blocking relations changed since queue snapshot",),
+                    "invalid_request", ("blocking relations changed since queue snapshot",)
                 )
-            if current_blockers:
-                cur.execute(
-                    "SELECT count(*) AS cnt FROM omp_work.work_items WHERE workspace_id=%s AND work_id = ANY(%s) AND state NOT IN ('DONE', 'CANCELED', 'CANCELLED')",
-                    (envelope.workspace_id, [UUID(b) for b in current_blockers]),
+            if not predecessors_terminal:
+                raise WorkStoreError(
+                    "invalid_request", ("item has unfinished blocking items",)
                 )
-                if cur.fetchone()["cnt"] > 0:
-                    raise WorkStoreError(
-                        "invalid_request",
-                        ("item has unfinished blocking items",),
-                    )
             item_id = uuid4()
             is_first = claim.position == 0
             initial_phase = "criteria_pending" if is_first else "pending"
@@ -4045,27 +4122,19 @@ class PostgresWorkStore:
                 "invalid_request", (f"work item state is {work_row['state']}",)
             )
 
-        # Check active blockers
-        cur.execute(
-            "SELECT source_work_id FROM omp_work.work_relations WHERE workspace_id=%s AND target_work_id=%s AND kind='blocks' AND active ORDER BY source_work_id",
-            (envelope.workspace_id, payload.work_id),
+        current_blockers, predecessors_terminal = self._observe_predecessors(
+            cur, envelope.workspace_id, payload.work_id
         )
-        current_blockers = [str(r["source_work_id"]) for r in cur.fetchall()]
         expected_blockers = sorted(str(b) for b in payload.expected_blocker_ids)
         stored_blockers = sorted(str(b) for b in (item.get("active_blocker_ids") or []))
         if current_blockers != expected_blockers or current_blockers != stored_blockers:
             raise WorkStoreError(
                 "invalid_request", ("blocking relations changed since queue snapshot",)
             )
-        if current_blockers:
-            cur.execute(
-                "SELECT count(*) AS cnt FROM omp_work.work_items WHERE workspace_id=%s AND work_id = ANY(%s) AND state NOT IN ('DONE', 'CANCELED', 'CANCELLED')",
-                (envelope.workspace_id, [UUID(b) for b in current_blockers]),
+        if not predecessors_terminal:
+            raise WorkStoreError(
+                "invalid_request", ("item has unfinished blocking items",)
             )
-            if cur.fetchone()["cnt"] > 0:
-                raise WorkStoreError(
-                    "invalid_request", ("item has unfinished blocking items",)
-                )
         # Check focus slot
         cur.execute(
             "SELECT version, work_id FROM omp_work.focus_slots WHERE workspace_id=%s AND owner_id=%s FOR UPDATE",
@@ -4776,12 +4845,15 @@ class PostgresWorkStore:
         ):
             raise WorkStoreError("completion_blocked", ("work item revision, candidate, or state mismatch",))
 
-        # Check active blockers
-        cur.execute(
-            "SELECT count(*) AS cnt FROM omp_work.work_relations WHERE workspace_id=%s AND target_work_id=%s AND kind='blocks' AND active",
-            (envelope.workspace_id, payload.work_id),
+        current_blockers, predecessors_terminal = self._observe_predecessors(
+            cur, envelope.workspace_id, payload.work_id
         )
-        if cur.fetchone()["cnt"] > 0:
+        stored_blockers = sorted(str(b) for b in (grant_item.get("active_blocker_ids") or []))
+        if current_blockers != stored_blockers:
+            raise WorkStoreError(
+                "completion_blocked", ("blocking relations changed since queue snapshot",)
+            )
+        if not predecessors_terminal:
             raise WorkStoreError("completion_blocked", ("active blockers present",))
 
         # Check candidate row
