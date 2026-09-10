@@ -142,6 +142,16 @@ class AuthorityResponseProxy:
         self.execution_prefix = ""
         self.records: list[dict] = []
         self.error: str | None = None
+        self.predecessor_read_path: str | None = None
+        self.fail_predecessor_read = False
+
+    def set_predecessor_read_fault(self, keyed_path: str, enabled: bool) -> None:
+        """Disconnect only an actual keyed predecessor GET; preserve upstream evidence."""
+        assert keyed_path.startswith("/v1/work-items/OMP-") and "/" not in keyed_path.removeprefix("/v1/work-items/")
+        with self.lock:
+            self.predecessor_read_path = keyed_path
+            self.fail_predecessor_read = enabled
+            self._save()
 
     def arm(self, output_path: Path, execution_prefix: str) -> None:
         assert not output_path.exists(), (
@@ -219,6 +229,32 @@ class AuthorityResponseProxy:
                         proxy._save()
                     self.close_connection = True
                     return
+                # The request still reaches the real service. Fault only transport
+                # delivery of this keyed GET, never fabricate a successful response.
+                predecessor_record: dict | None = None
+                with proxy.lock:
+                    predecessor_read = self.command == "GET" and route == proxy.predecessor_read_path
+                    if predecessor_read:
+                        disconnect = proxy.fail_predecessor_read
+                        predecessor_record = {
+                            "ordinal": len(proxy.records) + 1,
+                            "method": self.command, "path": self.path,
+                            "startedAt": started_at, "upstreamCompletedAt": time.time(),
+                            "status": status, "bodySha256": hashlib.sha256(payload).hexdigest(),
+                            "bodyBytes": len(payload), "predecessorRead": True,
+                            "transportDisconnected": disconnect,
+                            "held": False, "responseStarted": False, "responseBytesWritten": 0,
+                        }
+                        response_file = proxy.root / f"predecessor-read-{predecessor_record['ordinal']}.json"
+                        response_file.write_bytes(payload)
+                        predecessor_record["bodyFile"] = str(response_file)
+                        proxy.records.append(predecessor_record)
+                        proxy._save()
+                    else:
+                        disconnect = False
+                if disconnect:
+                    self.close_connection = True
+                    return
                 qualifying = (
                     self.command == "GET"
                     and bool(proxy.execution_prefix)
@@ -227,7 +263,7 @@ class AuthorityResponseProxy:
                         or route.startswith(proxy.execution_prefix + "/")
                     )
                 )
-                record: dict | None = None
+                record: dict | None = predecessor_record
                 withholding = False
                 if qualifying:
                     with proxy.lock:

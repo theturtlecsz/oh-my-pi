@@ -34,6 +34,7 @@ from installed_runtime_support import (
 from omp_work.operations.config import OperationsConfig
 from pg_native import native_postgres, seed_authority
 from psycopg.rows import dict_row
+from test_workflow_service import _build_completion_evidence_from_view, _receipt
 
 TaskFault = Literal[
     "child-request",
@@ -208,6 +209,16 @@ class RecoveryProvider:
         return request.get("model") == "local-task" and {"read", "yield"} <= names
 
     def respond(self, request: dict) -> dict:
+        if request.get("model") == "local-predecessor-audit":
+            artifact = Path(request["qualificationArtifact"]).resolve()
+            assert artifact.is_relative_to(self.root.resolve()) and artifact.name == "result.txt"
+            observed = artifact.read_text()
+            verdict = "PASS" if observed == "after\n" else "NEEDS_FIX"
+            report = (f"VERDICT: {verdict}\nFINDINGS\nObserved result.txt bytes: {observed!r}\n"
+                "ACCEPTANCE COVERAGE\nresult.txt contains after\nOUT OF SCOPE\nProduction acceptance\n"
+                "CHECKS RUN\nScripted local provider read actual installed-controller output file\n"
+                "REMAINING QUESTIONS\nnone")
+            return {"content": json.dumps({"verdict": verdict, "report": report})}
         if request.get("model") == "local-unrelated":
             return {"content": "Unrelated session completed its own request."}
         # A task may itself have work tools. Route by its explicitly configured
@@ -3222,6 +3233,8 @@ def exercise_controller_recovery(
     progress: bool = False,
     task_fault: TaskFault = "child-request",
     unrelated_session: bool = False,
+    predecessor_case: Literal["startup-read", "paused-read", "reopen"] | None = None,
+    completion_route: Literal["execution", "work"] | None = None,
 ) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -3275,7 +3288,7 @@ def exercise_controller_recovery(
     provider = RecoveryProvider(tmp_path, checkpoint, progress, task_fault)
     authority_proxy = (
         AuthorityResponseProxy(base_url, tmp_path)
-        if task_fault == "child-result-gap"
+        if task_fault == "child-result-gap" or predecessor_case is not None
         else None
     )
     with (
@@ -3393,6 +3406,7 @@ def exercise_controller_recovery(
                         str(release.root),
                         str(state),
                         str(repository),
+                        *(["CANCELLED" if predecessor_case == "paused-read" else "CANCELED"] if predecessor_case else []),
                     ],
                     source_root,
                     setup_env,
@@ -3474,6 +3488,11 @@ def exercise_controller_recovery(
                     )
                     execution_response.raise_for_status()
                     setup["execution"] = execution_response.json()
+                    if predecessor_case:
+                        assert setup["execution"]["active_item"]["active_blocker_ids"] == [setup["predecessor"]["source"]["id"]]
+                        predecessor_workflow = client.get(f"/v1/work-items/{provider.key}/workflow")
+                        predecessor_workflow.raise_for_status()
+                        setup["predecessor"]["retainedRelations"] = predecessor_workflow.json()["relations"]
                     setup["workspace"] = own_bindings[-1]["data"]["executionWorkspace"]
                     setup["admission"] = {
                         "requestId": admission_request,
@@ -3559,6 +3578,27 @@ def exercise_controller_recovery(
                         pause_response.raise_for_status()
                         paused = pause_response.json()["result"]["grant"]
                         assert paused["state"] == "paused"
+                        if predecessor_case == "paused-read":
+                            assert authority_proxy is not None
+                            keyed_path = f"/v1/work-items/{setup['predecessor']['source']['key']}"
+                            paused_before = client.get(execution_url).json()
+                            calls_before = len(provider.calls)
+                            authority_proxy.set_predecessor_read_fault(keyed_path, True)
+                            refused_request = rpc.send("prompt", message=f"/execute resume {provider.key}")
+                            refusal = rpc.until(lambda event: event.get("type") == "extension_ui_request"
+                                and "retryable predecessor" in str(event.get("message", ""))
+                                and "keyed read failed" in str(event.get("message", "")))
+                            paused_after = client.get(execution_url).json()
+                            assert paused_after == paused_before
+                            assert len(provider.calls) == calls_before
+                            fault_reads = [row for row in authority_proxy.snapshot() if row.get("transportDisconnected")]
+                            assert fault_reads and all(row["path"] == keyed_path and row["status"] == 200 for row in fault_reads)
+                            (tmp_path / "predecessor-paused-refusal.json").write_text(json.dumps({
+                                "rpcRequest": refused_request, "refusal": refusal,
+                                "before": paused_before, "after": paused_after,
+                                "requests": fault_reads, "providerCalls": calls_before,
+                            }, indent=2))
+                            authority_proxy.set_predecessor_read_fault(keyed_path, False)
                         request_id = rpc.send(
                             "prompt", message=f"/execute resume {provider.key}"
                         )
@@ -3769,6 +3809,46 @@ def exercise_controller_recovery(
                     "--model",
                     "local-recovery",
                 )
+                if predecessor_case in ("startup-read", "reopen"):
+                    assert authority_proxy is not None
+                    source = setup["predecessor"]["source"]
+                    keyed_path = f"/v1/work-items/{source['key']}"
+
+                    def predecessor_state(value: str) -> dict:
+                        response = client.post("/v1/commands", json={
+                            "api_version": "work.omp.dev/v1", "workspace_id": identity["workspace_id"],
+                            "operation_id": str(uuid4()), "request_id": str(uuid4()), "correlation_id": str(uuid4()),
+                            "command": {"type": "set_work_state", "payload": {"work_id": source["id"], "state": value}},
+                        })
+                        response.raise_for_status()
+                        return response.json()
+
+                    reopen_result = predecessor_state("BACKLOG") if predecessor_case == "reopen" else None
+                    authority_proxy.set_predecessor_read_fault(keyed_path, predecessor_case == "startup-read")
+                    blocked_log = tmp_path / "controller-predecessor-refused.stderr"
+                    with _process(release.command(state, repository, *restart_args), repository, env, blocked_log) as blocked:
+                        blocked_rpc = RpcProcess(blocked, blocked_log)
+                        refusal = blocked_rpc.until(lambda event: event.get("type") == "extension_ui_request"
+                            and "Execution recovery skipped:" in str(event.get("message", ""))
+                            and ("keyed read failed" if predecessor_case == "startup-read" else "unfinished predecessor") in str(event.get("message", "")))
+                        blocked_state = blocked_rpc.request("get_state")
+                        assert blocked_state["isStreaming"] is False
+                        refused_execution = client.get(execution_url).json()
+                        assert refused_execution == before_execution
+                        assert provider.recovery_calls == 0
+                        blocked_entries = read_complete_session(actual_session)
+                        assert execution_message_count(blocked_entries) == execution_message_count(entries)
+                        reads = [row for row in authority_proxy.snapshot() if row.get("predecessorRead")]
+                        assert reads and all(row["path"] == keyed_path and row["status"] == 200 for row in reads)
+                        assert any(row["transportDisconnected"] for row in reads) == (predecessor_case == "startup-read")
+                        (tmp_path / "predecessor-startup-refusal.json").write_text(json.dumps({
+                            "case": predecessor_case, "refusal": refusal, "before": before_execution,
+                            "after": refused_execution, "requests": reads, "reopenOperation": reopen_result,
+                            "providerRecoveryCalls": provider.recovery_calls,
+                        }, indent=2))
+                    authority_proxy.set_predecessor_read_fault(keyed_path, False)
+                    if predecessor_case == "reopen":
+                        (tmp_path / "predecessor-state-restored.json").write_text(json.dumps(predecessor_state("CANCELED"), indent=2))
                 with _process(
                     release.command(state, repository, *restart_args),
                     repository,
@@ -3984,6 +4064,15 @@ def exercise_controller_recovery(
                         "Recovered continuation changed its saved authority binding"
                     )
                     assert_local_candidate_unchanged()
+                    if predecessor_case:
+                        current_workflow = client.get(workflow_url)
+                        current_workflow.raise_for_status()
+                        assert current_workflow.json()["relations"] == setup["predecessor"]["retainedRelations"]
+                        assert after_execution["active_item"]["active_blocker_ids"] == [setup["predecessor"]["source"]["id"]]
+                        assert authority_proxy is not None
+                        restored_reads = [row for row in authority_proxy.snapshot() if row.get("predecessorRead") and not row["transportDisconnected"]]
+                        assert restored_reads
+                        evidence["predecessor"] = {"fixture": setup["predecessor"], "reads": authority_proxy.snapshot()}
                     assert provider.recovery_calls == (2 if progress else 1)
                     evidence["recoveredIdentity"] = recovered_identity
                     evidence["localCandidateUnchangedAfterRecovery"] = True
@@ -4040,6 +4129,159 @@ def exercise_controller_recovery(
                     (tmp_path / "recovery-evidence.json").write_text(
                         json.dumps(evidence, indent=2)
                     )
+                if completion_route is not None:
+                    assert checkpoint == "review" and predecessor_case is not None
+                    complete_installed_predecessor_fixture(
+                        client, identity["workspace_id"], provider.key, execution_url,
+                        setup, tmp_path, model_url, result_path, completion_route,
+                    )
+
+
+def complete_installed_predecessor_fixture(
+    client: httpx.Client, workspace_id: str, key: str, execution_url: str,
+    setup: dict, root: Path, model_url: str, result_path: Path,
+    route: Literal["execution", "work"],
+) -> None:
+    """Driver issues real completion to installed service after real controller recovery.
+
+    Reuse only pure payload builders; no TestClient, forged database state or
+    substituted native results. Scripted local provider supplies actual audit
+    transport, while installed WorkService creates/validates every receipt.
+    """
+    records: list[dict] = []
+
+    def command(kind: str, payload: dict) -> tuple[dict, dict]:
+        envelope = {"api_version": "work.omp.dev/v1", "workspace_id": workspace_id,
+            "operation_id": str(uuid4()), "request_id": str(uuid4()), "correlation_id": str(uuid4()),
+            "command": {"type": kind, "payload": payload}}
+        response = client.post("/v1/commands", json=envelope)
+        record = {"envelope": envelope, "status": response.status_code, "response": response.json()}
+        records.append(record)
+        (root / "installed-completion-commands.json").write_text(json.dumps(records, indent=2))
+        response.raise_for_status()
+        actual = response.json()
+        assert actual["receipt"]["state"] == "applied", record
+        result = actual["result"]
+        assert result.get("status") != "refused", record
+        return envelope, result
+
+    def workflow() -> dict:
+        response = client.get(f"/v1/work-items/{key}/workflow")
+        response.raise_for_status()
+        return response.json()
+
+    def deliver_pending_checkpoints() -> dict:
+        view = workflow()
+        latest: dict[str, dict] = {}
+        for delivery in view["checkpoint_deliveries"]:
+            prior = latest.get(delivery["event_id"])
+            if prior is None or delivery["delivery_sequence"] > prior["delivery_sequence"]:
+                latest[delivery["event_id"]] = delivery
+        for event in view["close_attempt_events"]:
+            delivered = latest.get(event["event_id"], {}).get("status") in ("delivered", "waived")
+            if event["requires_delivery"] and not delivered:
+                # This fixture's delivery sink receives the exact native text
+                # before the driver attests its digest; no acknowledgment is invented.
+                rendered = event["rendered_text"].encode("utf-8")
+                assert hashlib.sha256(rendered).hexdigest() == event["rendered_sha256"]
+                destination = root / f"installed-completion-event-{event['event_id']}.txt"
+                destination.write_bytes(rendered)
+                assert destination.read_bytes() == rendered
+                command("attest_checkpoint_delivery", {"event_id": event["event_id"],
+                    "owner_session_id": attempt["owner_session_id"],
+                    "rendered_sha256": event["rendered_sha256"], "status": "delivered"})
+        return workflow()
+
+    before = workflow()
+    candidate = before["item"]["candidate"]
+    assert candidate["kind"] == "final"
+    attempt = next(a for a in before["close_attempts"]
+        if a["candidate_id"] == candidate["candidate_id"]
+        and a["execution_grant_id"] == setup["execution"]["grant"]["grant_id"])
+    # begin_execution_review freezes the candidate and verification, but the
+    # actual audit manifest is sealed by the next supported service command.
+    if before["audit_manifest"] is None:
+        verification = next(r for r in before["receipts"]
+            if r["kind"] == "verification" and r["candidate_id"] == candidate["candidate_id"])
+        _, sealed = command("seal_audit_manifest", {"attempt_id": attempt["attempt_id"],
+            "verification_receipt_id": verification["receipt_id"]})
+        assert sealed["status"] == "applied"
+        before = workflow()
+    manifest = before["audit_manifest"]
+    assert manifest is not None and manifest["attempt_id"] == attempt["attempt_id"]
+    assert any(r["kind"] == "push" and r["candidate_id"] == before["item"]["candidate"]["candidate_id"] for r in before["receipts"])
+    _, reserved = command("reserve_auditor_launch", {"attempt_id": attempt["attempt_id"],
+        "task_sha256": manifest["task_sha256"], "tool_call_id": "installed-predecessor-audit"})
+    response = httpx.post(model_url + "/chat/completions", json={
+        "model": "local-predecessor-audit", "qualificationArtifact": str(result_path),
+        "messages": [], "stream": True,
+    }, trust_env=False, timeout=30)
+    response.raise_for_status()
+    (root / "installed-completion-audit.sse").write_bytes(response.content)
+    chunks = [json.loads(line.removeprefix("data: ")) for line in response.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"]
+    content = "".join(c["choices"][0]["delta"].get("content", "") for c in chunks)
+    assert json.loads(content)["verdict"] == "PASS"
+    _, settled = command("settle_auditor_launch", {"attempt_id": attempt["attempt_id"],
+        "launch_id": reserved["launch"]["launch_id"], "transport_payload": content})
+    assert settled["status"] == "applied" and settled["verdict"] == "PASS"
+    # record_closeout_review itself refuses outstanding delivery debt, so
+    # deliver the seal/reserve/settle checkpoints before requesting closeout.
+    current = deliver_pending_checkpoints()
+    if route == "work":
+        item = current["item"]
+        closeout = _receipt(item["work_id"], item["revision"]["revision_id"],
+            item["candidate"]["candidate_id"], "closeout",
+            body={"observedResult": result_path.read_text(), "auditTransportSha256": hashlib.sha256(response.content).hexdigest()})
+        command("record_closeout_review", {"receipt": closeout, "attempt_id": attempt["attempt_id"],
+            "authorization_ref": attempt["authorization_ref"]})
+    # Closeout records a new checkpoint; deliver it before complete_work.
+    current = deliver_pending_checkpoints()
+    # Prove every builder input exists, so its negative-test fallback values cannot be used.
+    assert any(r["receipt_id"] == manifest["verification_receipt_id"]
+        and r["kind"] == "verification" for r in current["receipts"])
+    assert any(r["kind"] == "audit" and r["verdict"] == "PASS"
+        and r["payload"]["launch_id"] == reserved["launch"]["launch_id"]
+        for r in current["receipts"])
+    assert any(launch["launch_id"] == reserved["launch"]["launch_id"]
+        and launch["task_sha256"] == manifest["task_sha256"] for launch in current["auditor_launches"])
+    assert current["audit_manifest"] == manifest
+    push = next(r for r in current["receipts"] if r["kind"] == "push"
+        and r["candidate_id"] == candidate["candidate_id"])
+    completion_evidence = _build_completion_evidence_from_view(current, push["receipt_id"])
+    execution = client.get(execution_url).json()
+    assert execution["grant"]["grant_id"] == setup["execution"]["grant"]["grant_id"]
+    if route == "execution":
+        kind = "complete_execution_item"
+        payload = {"grant_id": execution["grant"]["grant_id"],
+            "expected_grant_version": execution["grant"]["grant_version"],
+            "work_id": current["item"]["work_id"], "attempt_id": attempt["attempt_id"],
+            "judge_sha256": execution["grant"]["judge_sha256"], "evidence": completion_evidence}
+    else:
+        kind = "complete_work"
+        payload = {"input": {"work_id": current["item"]["work_id"],
+            "current_revision_id": current["item"]["revision"]["revision_id"],
+            "candidate": current["item"]["candidate"],
+            "receipts": [r for r in current["receipts"] if r["candidate_id"] == current["item"]["candidate"]["candidate_id"]],
+            "closeout_requested": True}, "attempt_id": attempt["attempt_id"],
+            "done_authorization_ref": "done:installed-predecessor-fixture", "evidence": completion_evidence}
+    envelope, completed = command(kind, payload)
+    assert completed["state"] == "DONE" and completed["type"] == kind
+    after = workflow()
+    assert after["item"]["state"] == "DONE"
+    assert after["relations"] == setup["predecessor"]["retainedRelations"]
+    source = client.get(f"/v1/work-items/{setup['predecessor']['source']['key']}")
+    source.raise_for_status()
+    assert source.json()["state"] == setup["predecessor"]["state"]
+    replay = client.post("/v1/commands", json=envelope)
+    replay.raise_for_status()
+    assert replay.json()["result"] == completed
+    assert workflow() == after
+    (root / "installed-completion-evidence.json").write_text(json.dumps({
+        "issuer": "test driver via real HTTP; controller performed preceding recovery",
+        "route": kind, "before": before, "after": after, "executionBeforeCompletion": execution,
+        "completion": completed, "replay": replay.json(), "predecessor": source.json(),
+    }, indent=2))
 
 
 def test_killed_controller_recovers_frozen_candidate_continuation(
@@ -4173,3 +4415,38 @@ def test_first_run_completed_child_recovers_missing_parent_result(
     raise AssertionError(
         "First-run completion checkpoint not reached in three fresh attempts; preserved misses are not recovery evidence"
     )
+
+
+def test_terminal_predecessor_startup_keyed_read_failure_is_retryable(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """A real final keyed-read disconnect must not dispatch or lose the saved startup intent."""
+    exercise_controller_recovery(installed_release, tmp_path, "persisted", predecessor_case="startup-read")
+
+
+def test_terminal_predecessor_paused_resume_keyed_read_failure_is_retryable(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """A failed keyed read must retain the paused grant; restored reads resume it once."""
+    exercise_controller_recovery(installed_release, tmp_path, "resume", predecessor_case="paused-read")
+
+
+def test_reopened_predecessor_refuses_installed_startup_until_terminal_again(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Supported CANCELED-to-BACKLOG reopen blocks recovery without removing its historical edge."""
+    exercise_controller_recovery(installed_release, tmp_path, "persisted", predecessor_case="reopen")
+
+
+def test_retained_terminal_predecessor_completes_installed_execution_route(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Installed service execution completion accepts retained edge after real controller recovery."""
+    exercise_controller_recovery(installed_release, tmp_path, "review", predecessor_case="startup-read", completion_route="execution")
+
+
+def test_retained_terminal_predecessor_completes_installed_work_route(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Installed service complete_work accepts same sealed edge and preserves actual completion replay."""
+    exercise_controller_recovery(installed_release, tmp_path, "review", predecessor_case="startup-read", completion_route="work")
