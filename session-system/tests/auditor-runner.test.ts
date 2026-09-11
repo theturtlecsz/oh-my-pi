@@ -4263,10 +4263,11 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 
 		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
 		const sentMessages: Array<{ customType?: string; content?: string }> = [];
+		let currentPiSessionId: string | undefined;
 
 		const fakePi = {
 			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
-			getSessionId: () => sessionManager.getSessionId(),
+			getSessionId: () => currentPiSessionId ?? sessionManager.getSessionId(),
 			zod: z,
 			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
 				if (spec.name === "work") registeredExecute = spec.execute;
@@ -4464,6 +4465,9 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			settleCalls,
 			cancelCalls,
 			getRegisteredExecute: () => registeredExecute!,
+			setPiSessionId: (id: string | undefined) => {
+				currentPiSessionId = id;
+			},
 		};
 	}
 
@@ -4700,6 +4704,49 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			const res = await f.getRegisteredExecute()("call-6", { action: "run_audit", work: "OMP-199" }, new AbortController().signal, () => {}, f.fakeCtx);
 			expect(res.content[0]?.text).toContain("REFUSED — a closeout audit requires Chris to literally enter /summary in this owner session");
 
+			await f.sessionManager.flush();
+			const opened = await SessionManager.open(f.sessionFile);
+			const launchEntries = opened.getEntries().filter(e => e.type === "custom" && e.customType === "work-now-audit-launch");
+			expect(launchEntries).toHaveLength(0);
+		} finally {
+			await f.sessionManager.close();
+			f.repo.cleanup();
+		}
+	});
+
+	test("independent Pi session drift leaves zero audit-launch entries after reload", async () => {
+		const f = await setupM2Fixture();
+		const mockOutput = JSON.stringify({ report: "VERDICT: PASS\n(clean)" });
+
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async () => {
+			// Manager session remains fixed while Pi session ID drifts independently
+			f.setPiSessionId("drifted-pi-session-id");
+			return {
+				index: 0,
+				id: "att-199",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: mockOutput,
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+				resolvedModel: "openai/gpt-5.2",
+			} as executorModule.SingleResult;
+		});
+
+		try {
+			await f.getRegisteredExecute()("call-7", { action: "begin_execution_review", work: "OMP-199", body: "evidence" }, new AbortController().signal, () => {}, f.fakeCtx);
+
+			// Settlement proceeded, payload and budget remain untouched
+			expect(f.settleCalls).toHaveLength(1);
+			expect("resolvedModel" in (f.settleCalls[0].payload as Record<string, unknown>)).toBe(false);
+			expect("resolvedModelIsFallback" in (f.settleCalls[0].payload as Record<string, unknown>)).toBe(false);
+
+			// But no audit-launch entry was written to the session file
 			await f.sessionManager.flush();
 			const opened = await SessionManager.open(f.sessionFile);
 			const launchEntries = opened.getEntries().filter(e => e.type === "custom" && e.customType === "work-now-audit-launch");

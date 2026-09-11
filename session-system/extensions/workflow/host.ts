@@ -727,10 +727,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 	}
 
 	function isAuditOriginCurrent(origin: AuditLaunchOrigin): boolean {
-		if (!origin.sessionId || !origin.manager) return false;
+		if (!origin.sessionId || !origin.manager || !origin.piSessionId) return false;
+		if (origin.piSessionId !== origin.sessionId) return false;
 		if (origin.ctx.sessionManager !== origin.manager) return false;
 		if (origin.manager.getSessionId?.() !== origin.sessionId) return false;
-		if (piRef.getSessionId?.() !== origin.sessionId) return false;
+		if (piRef.getSessionId?.() !== origin.piSessionId) return false;
 		if (origin.isExecution) {
 			return !!origin.witness && ownsExecutionSession(origin.ctx, origin.witness);
 		}
