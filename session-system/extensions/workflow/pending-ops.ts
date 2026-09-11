@@ -24,6 +24,7 @@
  *   sessions attempting the same intent produce one winner; the loser reads
  *   the winner's file and continues with ITS envelope — no second operation.
  */
+import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { payloadHash } from "@oh-my-pi/pi-work-client";
@@ -98,7 +99,7 @@ export async function claimPendingOp(dir: string, intent: string, make: () => un
  *  tmp+rename) so post-crash recovery returns it without re-sending. */
 export async function resolvePendingOp(path: string, record: PendingRecord, result: unknown): Promise<void> {
 	const resolved: PendingRecord = { ...record, result, resolved_at: new Date().toISOString() };
-	const tmp = `${path}.tmp`;
+	const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
 	await writeFile(tmp, JSON.stringify(resolved), { mode: 0o600 });
 	await rename(tmp, path);
 }
@@ -147,20 +148,20 @@ export async function ackOps(dir: string, delivered: ReadonlySet<string>, now = 
 	}
 }
 
-export async function readPendingClaims(dir: string): Promise<{ records: PendingRecord[]; unreadable: string[] }> {
+export async function readPendingClaims(dir: string): Promise<{ claims: Array<{ path: string; record: PendingRecord }>; unreadable: string[] }> {
 	await ensureDir(dir);
 	const names = await readdir(dir);
-	const records: PendingRecord[] = [];
+	const claims: Array<{ path: string; record: PendingRecord }> = [];
 	const unreadable: string[] = [];
 	for (const name of names) {
 		if (!name.endsWith(".json") || name.endsWith(".tmp")) continue;
 		const fullPath = join(dir, name);
 		const record = await readRecord(fullPath);
 		if (record) {
-			records.push(record);
+			claims.push({ path: fullPath, record });
 		} else {
 			unreadable.push(fullPath);
 		}
 	}
-	return { records, unreadable };
+	return { claims, unreadable };
 }

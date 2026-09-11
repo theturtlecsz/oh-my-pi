@@ -24,6 +24,7 @@ import {
 	payloadHash,
 	type ProjectHealth,
 	sha256Hex,
+	type StoredOperation,
 	type UUID,
 	WorkClient,
 	WorkError,
@@ -2023,16 +2024,83 @@ export function createWorkBackend(
 				if (acked.has(deliveredOps[i]!)) deliveredOps.splice(i, 1);
 			}
 		},
-		async getPendingExecutionClaims() {
-			const { records, unreadable } = await readPendingClaims(pendingDir);
+		async getPendingExecutionClaims(grantId?: UUID) {
+			const { claims, unreadable } = await readPendingClaims(pendingDir);
 			if (unreadable.length > 0) {
 				throw new Error(`unreadable pending claim(s): ${unreadable.join(", ")} — refusing recovery to prevent duplicate execution`);
 			}
+			if (grantId !== undefined) {
+				for (const c of claims) {
+					const env = c.record.envelope as CommandEnvelope | undefined;
+					if (!env || typeof env !== "object" || !env.command || typeof env.command !== "object" || !("type" in env.command)) {
+						continue;
+					}
+					const cmd = env.command as Command;
+					if (cmd.type !== "seal_execution_criteria") continue;
+					if (env.workspace_id !== config.workspaceId) continue;
+					if (cmd.payload.grant_id !== grantId) continue;
+
+					const expectedIntent = intentFingerprint("intent", config.workspaceId, config.ownerId, cmd.type, scrubVolatile(cmd.type, cmd.payload));
+					if (basename(c.path) !== `${expectedIntent}.json`) continue;
+
+					if (c.record.result !== undefined) continue;
+
+					if (typeof env.operation_id !== "string") {
+						throw new Error(
+							`unresolved pending claim ${c.path} (op unknown, ${cmd.type}) for grant ${grantId}: missing operation_id; automatic recovery refused; use stop/cancel or repair the claim`,
+						);
+					}
+
+					let stored: StoredOperation;
+					try {
+						stored = await client.operation(env.operation_id);
+					} catch (error) {
+						const reason = error instanceof Error ? error.message : String(error);
+						throw new Error(
+							`unresolved pending claim ${c.path} (op ${env.operation_id}, ${cmd.type}) for grant ${grantId}: ${reason}; automatic recovery refused; use stop/cancel or repair the claim`,
+						);
+					}
+
+					const receipt = stored?.receipt;
+					const expectedRequestSha256 = payloadHash({
+						api_version: env.api_version,
+						workspace_id: env.workspace_id,
+						command: env.command,
+					});
+					const matchesIdentity =
+						receipt &&
+						receipt.operation_id === env.operation_id &&
+						receipt.request_id === env.request_id &&
+						stored.command_type === "seal_execution_criteria" &&
+						receipt.request_sha256 === expectedRequestSha256;
+
+					const isApplied = receipt && (receipt.state === "applied" || receipt.state === "replayed");
+					const hasResult = stored?.result !== null && stored?.result !== undefined;
+
+					if (!matchesIdentity || !isApplied || !hasResult) {
+						let reason = "unknown outcome";
+						if (!matchesIdentity) {
+							reason = "identity mismatch";
+						} else if (!isApplied) {
+							reason = `state is ${receipt?.state}`;
+						} else if (!hasResult) {
+							reason = "result is null";
+						}
+						throw new Error(
+							`unresolved pending claim ${c.path} (op ${env.operation_id}, ${cmd.type}) for grant ${grantId}: ${reason}; automatic recovery refused; use stop/cancel or repair the claim`,
+						);
+					}
+
+					await resolvePendingOp(c.path, c.record, stored.result);
+					c.record.result = stored.result;
+					c.record.resolved_at = new Date().toISOString();
+				}
+			}
 			const results: Array<{ command: Command; result?: CommandResult }> = [];
-			for (const r of records) {
-				const env = r.envelope as CommandEnvelope | undefined;
+			for (const { record } of claims) {
+				const env = record.envelope as CommandEnvelope | undefined;
 				const cmd = env?.command;
-				const res = r.result as CommandResult | undefined;
+				const res = record.result as CommandResult | undefined;
 				if (cmd && (cmd.type === "set_execution_state" || cmd.type === "begin_execution")) {
 					results.push({ command: cmd, result: res });
 				}

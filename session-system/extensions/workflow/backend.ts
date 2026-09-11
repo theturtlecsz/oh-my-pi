@@ -16,6 +16,7 @@ import type {
 	ExecutionJudgeManifest,
 	ExecutionMode,
 	ExecutionProvenanceEnvelope,
+	UUID,
 	WorkClient,
 } from "@oh-my-pi/pi-work-client";
 
@@ -683,7 +684,7 @@ export interface WorkflowBackend {
 		evidence: CompletionEvidence;
 		judgeSha256: string;
 	}): Promise<ExecutionSnapshot>;
-	getPendingExecutionClaims?(): Promise<Array<{ command: Command; result?: CommandResult }>>;
+	getPendingExecutionClaims?(grantId?: UUID): Promise<Array<{ command: Command; result?: CommandResult }>>;
 }
 
 /** Thrown by createBatch after a partial publish — the host formats the exact
