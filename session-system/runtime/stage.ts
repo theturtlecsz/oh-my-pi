@@ -123,6 +123,7 @@ export async function stageRelease(options: StageReleaseOptions): Promise<Staged
 	if (bunVersion !== options.expectedBunVersion) {
 		throw new Error(`Bun version mismatch: expected ${options.expectedBunVersion}, found ${bunVersion}`);
 	}
+	await fs.symlink("bun", path.join(destination, "bin/bunx"));
 	await copyExecutable(path.join(source, "session-system/runtime/omp.sh"), path.join(destination, "bin/omp"));
 	const natives: StagedReleaseManifest["natives"] = [];
 	for (const input of options.nativeAddonPaths) {
