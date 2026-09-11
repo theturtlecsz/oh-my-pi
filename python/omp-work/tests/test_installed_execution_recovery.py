@@ -11,7 +11,7 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Literal
@@ -3226,6 +3226,361 @@ def capture_unrelated_owner_session(
         evidence_file.write_text(json.dumps(evidence, indent=2))
 
 
+def _perform_committed_response_loss_cut(
+    *,
+    release: InstalledRelease,
+    tmp_path: Path,
+    state: Path,
+    repository: Path,
+    env: dict[str, str],
+    client: httpx.Client,
+    authority_proxy: AuthorityResponseProxy,
+    cli: subprocess.Popen,
+    service: subprocess.Popen,
+    provider: RecoveryProvider,
+    committed_post_loss: str,
+    read_progress_operations: Callable[..., list[dict]],
+    identity: dict,
+    own_path: Path,
+    initial: dict,
+    paused_version: int | None = None,
+) -> None:
+    assert authority_proxy.held.wait(45), "Controller did not issue selected POST"
+    held = [
+        row
+        for row in authority_proxy.snapshot()
+        if row.get("commandType") == committed_post_loss and row.get("held")
+    ]
+    assert len(held) == 1, f"Expected 1 held POST, got {len(held)}"
+    cut = held[0]
+    assert not cut["responseStarted"] and cut["responseBytesWritten"] == 0
+    envelope = json.loads(Path(cut["requestFile"]).read_bytes())
+    upstream = json.loads(Path(cut["bodyFile"]).read_bytes())
+    assert upstream.get("receipt", {}).get("state") == "applied", (
+        f"Upstream receipt not applied: {upstream}"
+    )
+    assert upstream.get("result", {}).get("status") != "refused", (
+        f"Upstream result refused: {upstream}"
+    )
+    operation_id = envelope["operation_id"]
+
+    committed = read_progress_operations(committed_post_loss)
+    held_ops = [row for row in committed if row["operation_id"] == operation_id]
+    assert len(held_ops) == 1, (
+        f"Expected exactly 1 committed row for held operation {operation_id}, got {len(held_ops)} in {committed}"
+    )
+    held_op = held_ops[0]
+    if committed_post_loss in {"seal_execution_criteria", "stamp_execution_plan"}:
+        assert len(committed) == 1, (
+            f"Expected exactly 1 committed row for {committed_post_loss}, got {len(committed)}"
+        )
+    elif committed_post_loss == "set_execution_state":
+        assert len(committed) == 2, (
+            f"Expected exactly 2 committed rows (pause + resume) for set_execution_state, got {len(committed)}"
+        )
+    assert held_op["state"] == "applied"
+    assert held_op["request_id"] == envelope["request_id"]
+    assert CommandResponse.model_validate(upstream) == CommandResponse.model_validate(
+        {"receipt": upstream["receipt"], "result": held_op["response"]}
+    )
+    assert held_op["result_sha256"] == upstream["receipt"]["result_sha256"]
+    assert held_op["request_sha256"] == upstream["receipt"]["request_sha256"]
+
+    execution_url = f"/v1/workspaces/{identity['workspace_id']}/execution/{provider.key}"
+    visible_response = client.get(execution_url)
+    visible_response.raise_for_status()
+    visible = visible_response.json()
+    assert visible["grant"]["grant_version"] == envelope["command"]["payload"]["expected_grant_version"] + 1
+    if committed_post_loss == "seal_execution_criteria":
+        assert visible["active_item"]["phase"] == "planning"
+        assert visible["active_item"]["criteria_revision_id"] == upstream["result"]["revision"]["revision_id"]
+    elif committed_post_loss == "stamp_execution_plan":
+        assert visible["active_item"]["phase"] == "executing"
+        assert visible["active_item"]["plan_stamp"] == upstream["result"]["item"]["plan_stamp"]
+    elif committed_post_loss == "set_execution_state":
+        assert visible["grant"]["state"] == "active"
+        if paused_version is not None:
+            assert visible["grant"]["grant_version"] == paused_version + 1
+
+    journal_dir = state / "config/omp-work/pending-operations"
+    claims = [
+        (path, json.loads(path.read_bytes()))
+        for path in journal_dir.glob("*.json")
+        if path.is_file()
+    ]
+    matching_claims = [
+        (path, record)
+        for path, record in claims
+        if record.get("envelope", {}).get("operation_id") == operation_id
+    ]
+    assert len(matching_claims) == 1, (
+        f"Expected 1 matching claim for {operation_id}, found {len(matching_claims)} in {claims}"
+    )
+    claim_path, claim = matching_claims[0]
+    assert claim["envelope"] == envelope and "result" not in claim
+    claim_bytes = claim_path.read_bytes()
+
+    commit_confirmed_at = time.time()
+    post_started_at = cut["startedAt"]
+    cut_duration = commit_confirmed_at - post_started_at
+    assert cut_duration < 8.0, (
+        f"Observer cut exceeded 8s budget: {cut_duration}s >= 8.0s"
+    )
+    evidence = {
+        "request": envelope,
+        "upstream": upstream,
+        "databaseBeforeKill": committed,
+        "executionBeforeKill": visible,
+        "claimPath": str(claim_path),
+        "claimSha256": hashlib.sha256(claim_bytes).hexdigest(),
+        "rawClaim": json.loads(claim_bytes.decode("utf-8")),
+        "postStartedAt": post_started_at,
+        "upstreamCompletedAt": cut["upstreamCompletedAt"],
+        "commitConfirmedAt": commit_confirmed_at,
+        "controllerPid": cli.pid,
+        "servicePid": service.pid,
+        "session": str(own_path),
+        "cut": cut,
+        "cutDurationMs": round(cut_duration * 1000, 2),
+    }
+    (tmp_path / "authority-committed-before-kill.json").write_text(
+        json.dumps(evidence, indent=2)
+    )
+    assert cli.poll() is None and service.poll() is None
+    os.killpg(cli.pid, signal.SIGKILL)
+    assert cli.wait(timeout=10) == -signal.SIGKILL
+    evidence["controllerKilledAt"] = time.time()
+    assert service.poll() is None and read_progress_operations(committed_post_loss) == committed
+    assert claim_path.read_bytes() == claim_bytes
+    authority_proxy.discard_held_command_response()
+    provider.restarting = True
+
+    restart_args = (
+        "--mode",
+        "rpc",
+        "--session",
+        str(own_path),
+        "--provider",
+        "qualification",
+        "--model",
+        "local-recovery",
+    )
+    restart_log = tmp_path / "controller-committed-restart.stderr"
+    with _process(
+        release.command(state, repository, *restart_args),
+        repository,
+        env,
+        restart_log,
+    ) as restarted:
+        restarted_rpc = RpcProcess(restarted, restart_log)
+        assert restarted_rpc.request("get_state")["sessionId"] == initial["sessionId"]
+
+        restarted_rpc.request("prompt", message=f"/execute resume {provider.key}")
+        resume_deadline = time.monotonic() + 10
+        while (
+            restarted_rpc.request("get_state")["isStreaming"]
+            and time.monotonic() < resume_deadline
+        ):
+            time.sleep(0.05)
+        assert not restarted_rpc.request("get_state")["isStreaming"]
+
+        deadline = time.monotonic() + 30
+        resolution_observations = []
+        resolved_claim_observed = False
+        unresolved: list[dict] = []
+        initial_rpc_state = restarted_rpc.request("get_state")
+        assert initial_rpc_state["sessionId"] == initial["sessionId"]
+        current_state = initial_rpc_state
+        last_state_poll = time.monotonic()
+        prev_obs_tuple = None
+        while True:
+            now_mono = time.monotonic()
+            if now_mono - last_state_poll >= 1.0:
+                current_state = restarted_rpc.request("get_state")
+                assert current_state["sessionId"] == initial["sessionId"]
+                last_state_poll = now_mono
+            records = [
+                json.loads(path.read_bytes())
+                for path in journal_dir.glob("*.json")
+                if path.is_file()
+            ]
+            original_claims = [
+                row
+                for row in records
+                if row.get("envelope", {}).get("operation_id") == operation_id
+            ]
+            unresolved = [
+                row for row in original_claims if "result" not in row
+            ]
+            if any("result" in row for row in original_claims):
+                resolved_claim_observed = True
+            current_committed = read_progress_operations(committed_post_loss)
+            is_streaming = current_state.get("isStreaming", False)
+
+            obs_tuple = (
+                json.dumps(original_claims, sort_keys=True),
+                json.dumps(current_committed, sort_keys=True),
+                is_streaming,
+            )
+            if prev_obs_tuple is None or obs_tuple != prev_obs_tuple:
+                observation_entry = {
+                    "observedAt": time.time(),
+                    "isStreaming": is_streaming,
+                    "originalClaims": original_claims,
+                    "committedRows": current_committed,
+                }
+                if prev_obs_tuple is None:
+                    observation_entry["rpcState"] = initial_rpc_state
+                resolution_observations.append(observation_entry)
+                prev_obs_tuple = obs_tuple
+
+            if (not unresolved and resolved_claim_observed) or time.monotonic() >= deadline:
+                if resolution_observations and "rpcState" not in resolution_observations[-1]:
+                    final_state = restarted_rpc.request("get_state")
+                    resolution_observations.append({
+                        "observedAt": time.time(),
+                        "isStreaming": final_state.get("isStreaming", False),
+                        "originalClaims": original_claims,
+                        "committedRows": current_committed,
+                        "rpcState": final_state,
+                    })
+                break
+            time.sleep(0.05)
+        (tmp_path / "authority-committed-startup-resolution.json").write_text(
+            json.dumps(resolution_observations, indent=2)
+        )
+        assert resolved_claim_observed, (
+            "Actual startup/resume did not legitimately resolve original claim with a recorded result"
+        )
+        assert not unresolved, (
+            "Actual startup/resume left original committed operation journal unresolved"
+        )
+        assert provider.error is None, provider.error
+
+        stored_op = client.get(f"/v1/operations/{operation_id}").json()
+        assert stored_op["result"] == held_op["response"]
+        resolved_claims = [row for row in original_claims if "result" in row]
+        assert resolved_claims[0]["result"] == stored_op["result"]
+
+        restarted_rpc.request("prompt", message=f"/execute resume {provider.key}")
+        resume_deadline = time.monotonic() + 10
+        while (
+            restarted_rpc.request("get_state")["isStreaming"]
+            and time.monotonic() < resume_deadline
+        ):
+            time.sleep(0.05)
+        assert not restarted_rpc.request("get_state")["isStreaming"]
+
+        assert read_progress_operations(committed_post_loss) == committed
+        observed = client.get(execution_url)
+        observed.raise_for_status()
+        observed_exec = observed.json()
+        assert observed_exec["grant"]["grant_id"] == visible["grant"]["grant_id"]
+        if committed_post_loss == "seal_execution_criteria":
+            assert observed_exec["active_item"]["criteria_revision_id"] == visible["active_item"]["criteria_revision_id"]
+            assert observed_exec["active_item"]["phase"] == "planning"
+        elif committed_post_loss == "stamp_execution_plan":
+            assert observed_exec["active_item"]["phase"] == "executing"
+            assert observed_exec["active_item"]["plan_stamp"] == visible["active_item"]["plan_stamp"]
+            assert upstream["result"]["receipt"]["kind"] == "plan"
+            candidate_id = upstream["result"]["candidate"]["candidate_id"]
+            workflow_view = client.get(f"/v1/work-items/{provider.key}/workflow").json()
+            plan_receipts = [
+                r
+                for r in workflow_view.get("receipts", [])
+                if r.get("kind") == "plan"
+                and r.get("candidate_id") == str(candidate_id)
+            ]
+            assert len(plan_receipts) == 1, f"Expected exactly one plan receipt, got {plan_receipts}"
+            assert plan_receipts[0]["receipt_id"] == upstream["result"]["receipt"]["receipt_id"]
+            assert plan_receipts[0]["payload"] == upstream["result"]["receipt"]["payload"]
+        elif committed_post_loss == "set_execution_state":
+            assert observed_exec["grant"]["state"] == "active"
+            assert observed_exec["grant"]["grant_version"] == visible["grant"]["grant_version"]
+            all_set_ops = read_progress_operations("set_execution_state")
+            recovery_set_ops = [
+                row
+                for row in all_set_ops
+                if (row.get("response") or {}).get("reason") == "session_start_recovery"
+            ]
+            assert len(recovery_set_ops) == 0, f"Expected no duplicate session_start_recovery, got {recovery_set_ops}"
+            resumed_entries = [
+                json.loads(line)
+                for line in own_path.read_text().splitlines()
+                if line.strip()
+            ]
+            continuations = [
+                entry
+                for entry in resumed_entries
+                if entry.get("type") == "custom_message"
+                and entry.get("customType") == "work-execute"
+                and entry.get("details", {}).get("executionContinuation", {}).get("postVersion")
+                == visible["grant"]["grant_version"]
+            ]
+            assert len(continuations) == 1, (
+                f"Expected exactly 1 continuation for postVersion {visible['grant']['grant_version']}, got {len(continuations)}"
+            )
+
+        remaining = [
+            json.loads(path.read_bytes())
+            for path in journal_dir.glob("*.json")
+            if path.is_file()
+        ]
+        assert not any(
+            row.get("envelope", {}).get("operation_id") == operation_id
+            and "result" not in row
+            for row in remaining
+        ), "Original journal remains unresolved"
+
+        command_records = [
+            row
+            for row in authority_proxy.snapshot()
+            if row.get("commandType") == committed_post_loss
+        ]
+        original_response = next(
+            row for row in command_records if row["ordinal"] == cut["ordinal"]
+        )
+        assert (
+            not original_response["responseStarted"]
+            and original_response["responseBytesWritten"] == 0
+        )
+        for row in command_records:
+            actual_envelope = json.loads(Path(row["requestFile"]).read_bytes())
+            assert actual_envelope == envelope, "Recovery minted a replacement operation"
+
+        evidence["replayPostCount"] = len(command_records) - 1
+        assert evidence["replayPostCount"] == 0, (
+            f"Expected zero replay POST, got {evidence['replayPostCount']}"
+        )
+
+        operation_gets = authority_proxy.operation_gets_snapshot()
+        restarted_operation_gets = [
+            row
+            for row in operation_gets
+            if row["path"] == f"/v1/operations/{operation_id}"
+            and row["startedAt"] >= evidence["controllerKilledAt"]
+        ]
+        assert len(restarted_operation_gets) >= 1, (
+            f"Expected restarted CLI to make GET for operation {operation_id}, got {operation_gets}"
+        )
+        assert restarted_operation_gets[0]["status"] == 200
+        evidence["restartedOperationGets"] = restarted_operation_gets
+
+        evidence["startupResolutionObservations"] = resolution_observations
+        evidence.update(
+            {
+                "databaseAfterRepeatedResume": read_progress_operations(committed_post_loss),
+                "proxyAfterRepeatedResume": command_records,
+                "remainingJournal": remaining,
+                "restartPid": restarted.pid,
+                "serviceAlive": service.poll() is None,
+            }
+        )
+        (tmp_path / "authority-committed-reconciled.json").write_text(
+            json.dumps(evidence, indent=2)
+        )
+
+
 def exercise_controller_recovery(
     release: InstalledRelease,
     tmp_path: Path,
@@ -3236,8 +3591,14 @@ def exercise_controller_recovery(
     unrelated_session: bool = False,
     predecessor_case: Literal["startup-read", "paused-read", "reopen"] | None = None,
     completion_route: Literal["execution", "work"] | None = None,
-    committed_post_loss: bool = False,
+    committed_post_loss: (
+        Literal["seal_execution_criteria", "stamp_execution_plan", "set_execution_state"] | bool | None
+    ) = None,
 ) -> None:
+    if committed_post_loss is True:
+        committed_post_loss = "seal_execution_criteria"
+    elif not committed_post_loss:
+        committed_post_loss = None
     repository = tmp_path / "repository"
     repository.mkdir()
     state = tmp_path / "runtime"
@@ -3287,14 +3648,19 @@ def exercise_controller_recovery(
         port=pg_port,
     )
 
-    def read_progress_operations() -> list[dict]:
+    def read_progress_operations(command_type: str | None = None) -> list[dict]:
+        target_command = command_type or (
+            committed_post_loss
+            if isinstance(committed_post_loss, str)
+            else "seal_execution_criteria"
+        )
         # Read only the disposable service's real idempotency receipts.
         with psycopg.connect(
             **config.connection_kwargs("postgres"), row_factory=dict_row
         ) as connection:
             return connection.execute(
-                "SELECT operation_id::text, request_id::text, request_sha256, result_sha256, state, response FROM omp_control.idempotent_commands WHERE workspace_id=%s AND command_type='seal_execution_criteria' ORDER BY operation_id",
-                (identity["workspace_id"],),
+                "SELECT operation_id::text, request_id::text, request_sha256, result_sha256, state, response FROM omp_control.idempotent_commands WHERE workspace_id=%s AND command_type=%s ORDER BY operation_id",
+                (identity["workspace_id"], target_command),
             ).fetchall()
 
     base_url = f"http://127.0.0.1:{service_port}"
@@ -3455,9 +3821,9 @@ def exercise_controller_recovery(
             with httpx.Client(
                 base_url=base_url, headers=headers, trust_env=False
             ) as client:
-                if committed_post_loss:
+                if committed_post_loss and committed_post_loss != "set_execution_state":
                     assert authority_proxy is not None
-                    authority_proxy.arm_committed_command("seal_execution_criteria")
+                    authority_proxy.arm_committed_command(committed_post_loss)
                 with _process(
                     release.command(state, repository, *cli_args),
                     repository,
@@ -3522,284 +3888,28 @@ def exercise_controller_recovery(
                         "wrapperArgv": release.command(state, repository, *cli_args),
                     }
                     (tmp_path / "setup.json").write_text(json.dumps(setup, indent=2))
-                    if committed_post_loss:
+                    if committed_post_loss in {
+                        "seal_execution_criteria",
+                        "stamp_execution_plan",
+                    }:
                         assert authority_proxy is not None
-                        assert authority_proxy.held.wait(45), "Controller did not issue selected POST"
-                        held = [
-                            row
-                            for row in authority_proxy.snapshot()
-                            if row.get("commandType") == "seal_execution_criteria"
-                            and row.get("held")
-                        ]
-                        assert len(held) == 1, f"Expected 1 held POST, got {len(held)}"
-                        cut = held[0]
-                        assert (
-                            not cut["responseStarted"]
-                            and cut["responseBytesWritten"] == 0
+                        _perform_committed_response_loss_cut(
+                            release=release,
+                            tmp_path=tmp_path,
+                            state=state,
+                            repository=repository,
+                            env=env,
+                            client=client,
+                            authority_proxy=authority_proxy,
+                            cli=cli,
+                            service=service,
+                            provider=provider,
+                            committed_post_loss=committed_post_loss,
+                            read_progress_operations=read_progress_operations,
+                            identity=identity,
+                            own_path=own_path,
+                            initial=initial,
                         )
-                        envelope = json.loads(Path(cut["requestFile"]).read_bytes())
-                        upstream = json.loads(Path(cut["bodyFile"]).read_bytes())
-                        assert upstream.get("receipt", {}).get("state") == "applied", (
-                            f"Upstream receipt not applied: {upstream}"
-                        )
-                        assert upstream.get("result", {}).get("status") != "refused", (
-                            f"Upstream result refused: {upstream}"
-                        )
-                        operation_id = envelope["operation_id"]
-
-                        committed = read_progress_operations()
-                        assert len(committed) == 1 and committed[0]["operation_id"] == operation_id
-                        assert committed[0]["state"] == "applied"
-                        assert committed[0]["request_id"] == envelope["request_id"]
-                        assert CommandResponse.model_validate(upstream) == CommandResponse.model_validate(
-                            {"receipt": upstream["receipt"], "result": committed[0]["response"]}
-                        )
-                        assert committed[0]["result_sha256"] == upstream["receipt"]["result_sha256"]
-                        assert committed[0]["request_sha256"] == upstream["receipt"]["request_sha256"]
-
-                        execution_url = f"/v1/workspaces/{identity['workspace_id']}/execution/{provider.key}"
-                        visible_response = client.get(execution_url)
-                        visible_response.raise_for_status()
-                        visible = visible_response.json()
-                        assert visible["active_item"]["phase"] == "planning"
-                        assert visible["grant"]["grant_version"] == envelope["command"]["payload"]["expected_grant_version"] + 1
-                        assert visible["active_item"]["criteria_revision_id"] == upstream["result"]["revision"]["revision_id"]
-
-                        journal_dir = state / "config/omp-work/pending-operations"
-                        claims = [
-                            (path, json.loads(path.read_bytes()))
-                            for path in journal_dir.glob("*.json")
-                            if path.is_file()
-                        ]
-                        matching_claims = [
-                            (path, record)
-                            for path, record in claims
-                            if record.get("envelope", {}).get("operation_id") == operation_id
-                        ]
-                        assert len(matching_claims) == 1, (
-                            f"Expected 1 matching claim for {operation_id}, found {len(matching_claims)} in {claims}"
-                        )
-                        claim_path, claim = matching_claims[0]
-                        assert claim["envelope"] == envelope and "result" not in claim
-                        claim_bytes = claim_path.read_bytes()
-
-                        commit_confirmed_at = time.time()
-                        post_started_at = cut["startedAt"]
-                        cut_duration = commit_confirmed_at - post_started_at
-                        assert cut_duration < 8.0, (
-                            f"Observer cut exceeded 8s budget: {cut_duration}s >= 8.0s"
-                        )
-                        evidence = {
-                            "request": envelope,
-                            "upstream": upstream,
-                            "databaseBeforeKill": committed,
-                            "executionBeforeKill": visible,
-                            "claimPath": str(claim_path),
-                            "claimSha256": hashlib.sha256(claim_bytes).hexdigest(),
-                            "rawClaim": json.loads(claim_bytes.decode("utf-8")),
-                            "postStartedAt": post_started_at,
-                            "upstreamCompletedAt": cut["upstreamCompletedAt"],
-                            "commitConfirmedAt": commit_confirmed_at,
-                            "controllerPid": cli.pid,
-                            "servicePid": service.pid,
-                            "session": str(own_path),
-                            "cut": cut,
-                            "cutDurationMs": round(cut_duration * 1000, 2),
-                        }
-                        (tmp_path / "authority-committed-before-kill.json").write_text(
-                            json.dumps(evidence, indent=2)
-                        )
-                        assert cli.poll() is None and service.poll() is None
-                        os.killpg(cli.pid, signal.SIGKILL)
-                        assert cli.wait(timeout=10) == -signal.SIGKILL
-                        evidence["controllerKilledAt"] = time.time()
-                        assert service.poll() is None and read_progress_operations() == committed
-                        assert claim_path.read_bytes() == claim_bytes
-                        authority_proxy.discard_held_command_response()
-                        provider.restarting = True
-
-                        restart_args = (
-                            "--mode",
-                            "rpc",
-                            "--session",
-                            str(own_path),
-                            "--provider",
-                            "qualification",
-                            "--model",
-                            "local-recovery",
-                        )
-                        restart_log = tmp_path / "controller-committed-restart.stderr"
-                        with _process(
-                            release.command(state, repository, *restart_args),
-                            repository,
-                            env,
-                            restart_log,
-                        ) as restarted:
-                            restarted_rpc = RpcProcess(restarted, restart_log)
-                            assert restarted_rpc.request("get_state")["sessionId"] == initial["sessionId"]
-
-                            restarted_rpc.request("prompt", message=f"/execute resume {provider.key}")
-                            resume_deadline = time.monotonic() + 10
-                            while (
-                                restarted_rpc.request("get_state")["isStreaming"]
-                                and time.monotonic() < resume_deadline
-                            ):
-                                time.sleep(0.05)
-                            assert not restarted_rpc.request("get_state")["isStreaming"]
-
-                            deadline = time.monotonic() + 30
-                            resolution_observations = []
-                            resolved_claim_observed = False
-                            unresolved: list[dict] = []
-                            initial_rpc_state = restarted_rpc.request("get_state")
-                            assert initial_rpc_state["sessionId"] == initial["sessionId"]
-                            current_state = initial_rpc_state
-                            last_state_poll = time.monotonic()
-                            prev_obs_tuple = None
-                            while True:
-                                now_mono = time.monotonic()
-                                if now_mono - last_state_poll >= 1.0:
-                                    current_state = restarted_rpc.request("get_state")
-                                    assert current_state["sessionId"] == initial["sessionId"]
-                                    last_state_poll = now_mono
-                                records = [
-                                    json.loads(path.read_bytes())
-                                    for path in journal_dir.glob("*.json")
-                                    if path.is_file()
-                                ]
-                                original_claims = [
-                                    row
-                                    for row in records
-                                    if row.get("envelope", {}).get("operation_id") == operation_id
-                                ]
-                                unresolved = [
-                                    row for row in original_claims if "result" not in row
-                                ]
-                                if any("result" in row for row in original_claims):
-                                    resolved_claim_observed = True
-                                current_committed = read_progress_operations()
-                                is_streaming = current_state.get("isStreaming", False)
-
-                                obs_tuple = (
-                                    json.dumps(original_claims, sort_keys=True),
-                                    json.dumps(current_committed, sort_keys=True),
-                                    is_streaming,
-                                )
-                                if prev_obs_tuple is None or obs_tuple != prev_obs_tuple:
-                                    observation_entry = {
-                                        "observedAt": time.time(),
-                                        "isStreaming": is_streaming,
-                                        "originalClaims": original_claims,
-                                        "committedRows": current_committed,
-                                    }
-                                    if prev_obs_tuple is None:
-                                        observation_entry["rpcState"] = initial_rpc_state
-                                    resolution_observations.append(observation_entry)
-                                    prev_obs_tuple = obs_tuple
-
-                                if (not unresolved and resolved_claim_observed) or time.monotonic() >= deadline:
-                                    if resolution_observations and "rpcState" not in resolution_observations[-1]:
-                                        final_state = restarted_rpc.request("get_state")
-                                        resolution_observations.append({
-                                            "observedAt": time.time(),
-                                            "isStreaming": final_state.get("isStreaming", False),
-                                            "originalClaims": original_claims,
-                                            "committedRows": current_committed,
-                                            "rpcState": final_state,
-                                        })
-                                    break
-                                time.sleep(0.05)
-                            (tmp_path / "authority-committed-startup-resolution.json").write_text(
-                                json.dumps(resolution_observations, indent=2)
-                            )
-                            assert resolved_claim_observed, (
-                                "Actual startup/resume did not legitimately resolve original claim with a recorded result"
-                            )
-                            assert not unresolved, (
-                                "Actual startup/resume left original committed operation journal unresolved"
-                            )
-                            assert provider.error is None, provider.error
-
-                            stored_op = client.get(f"/v1/operations/{operation_id}").json()
-                            assert stored_op["result"] == committed[0]["response"]
-                            resolved_claims = [row for row in original_claims if "result" in row]
-                            assert resolved_claims[0]["result"] == stored_op["result"]
-
-                            restarted_rpc.request("prompt", message=f"/execute resume {provider.key}")
-                            resume_deadline = time.monotonic() + 10
-                            while (
-                                restarted_rpc.request("get_state")["isStreaming"]
-                                and time.monotonic() < resume_deadline
-                            ):
-                                time.sleep(0.05)
-                            assert not restarted_rpc.request("get_state")["isStreaming"]
-
-                            assert read_progress_operations() == committed
-                            observed = client.get(execution_url)
-                            observed.raise_for_status()
-                            observed_exec = observed.json()
-                            assert observed_exec["grant"]["grant_id"] == visible["grant"]["grant_id"]
-                            assert observed_exec["active_item"]["criteria_revision_id"] == visible["active_item"]["criteria_revision_id"]
-                            assert observed_exec["active_item"]["phase"] == "planning"
-
-                            remaining = [
-                                json.loads(path.read_bytes())
-                                for path in journal_dir.glob("*.json")
-                                if path.is_file()
-                            ]
-                            assert not any(
-                                row.get("envelope", {}).get("operation_id") == operation_id
-                                and "result" not in row
-                                for row in remaining
-                            ), "Original journal remains unresolved"
-
-                            command_records = [
-                                row
-                                for row in authority_proxy.snapshot()
-                                if row.get("commandType") == "seal_execution_criteria"
-                            ]
-                            original_response = next(
-                                row for row in command_records if row["ordinal"] == cut["ordinal"]
-                            )
-                            assert (
-                                not original_response["responseStarted"]
-                                and original_response["responseBytesWritten"] == 0
-                            )
-                            for row in command_records:
-                                actual_envelope = json.loads(Path(row["requestFile"]).read_bytes())
-                                assert actual_envelope == envelope, "Recovery minted a replacement operation"
-
-                            evidence["replayPostCount"] = len(command_records) - 1
-                            assert evidence["replayPostCount"] == 0, (
-                                f"Expected zero replay POST, got {evidence['replayPostCount']}"
-                            )
-
-                            operation_gets = authority_proxy.operation_gets_snapshot()
-                            restarted_operation_gets = [
-                                row
-                                for row in operation_gets
-                                if row["path"] == f"/v1/operations/{operation_id}"
-                                and row["startedAt"] >= evidence["controllerKilledAt"]
-                            ]
-                            assert len(restarted_operation_gets) >= 1, (
-                                f"Expected restarted CLI to make GET for operation {operation_id}, got {operation_gets}"
-                            )
-                            assert restarted_operation_gets[0]["status"] == 200
-                            evidence["restartedOperationGets"] = restarted_operation_gets
-
-                            evidence["startupResolutionObservations"] = resolution_observations
-                            evidence.update(
-                                {
-                                    "databaseAfterRepeatedResume": read_progress_operations(),
-                                    "proxyAfterRepeatedResume": command_records,
-                                    "remainingJournal": remaining,
-                                    "restartPid": restarted.pid,
-                                    "serviceAlive": service.poll() is None,
-                                }
-                            )
-                            (tmp_path / "authority-committed-reconciled.json").write_text(
-                                json.dumps(evidence, indent=2)
-                            )
                         return
                     if unrelated_session:
                         capture_unrelated_owner_session(
@@ -3873,6 +3983,29 @@ def exercise_controller_recovery(
                         pause_response.raise_for_status()
                         paused = pause_response.json()["result"]["grant"]
                         assert paused["state"] == "paused"
+                        if committed_post_loss == "set_execution_state":
+                            assert authority_proxy is not None
+                            authority_proxy.arm_committed_command("set_execution_state")
+                            rpc.send("prompt", message=f"/execute resume {provider.key}")
+                            _perform_committed_response_loss_cut(
+                                release=release,
+                                tmp_path=tmp_path,
+                                state=state,
+                                repository=repository,
+                                env=env,
+                                client=client,
+                                authority_proxy=authority_proxy,
+                                cli=cli,
+                                service=service,
+                                provider=provider,
+                                committed_post_loss="set_execution_state",
+                                read_progress_operations=read_progress_operations,
+                                identity=identity,
+                                own_path=own_path,
+                                initial=initial,
+                                paused_version=paused["grant_version"],
+                            )
+                            return
                         if predecessor_case == "paused-read":
                             assert authority_proxy is not None
                             keyed_path = f"/v1/work-items/{setup['predecessor']['source']['key']}"
@@ -4741,4 +4874,20 @@ def test_committed_criteria_post_response_loss_reconciles_same_operation(
     installed_release: InstalledRelease, tmp_path: Path
 ) -> None:
     """Controller death after real commit must reconcile original journal without duplicate transition."""
-    exercise_controller_recovery(installed_release, tmp_path, "review", committed_post_loss=True)
+    exercise_controller_recovery(installed_release, tmp_path, "review", committed_post_loss="seal_execution_criteria")
+
+
+def test_committed_plan_stamp_post_response_loss_reconciles_same_operation(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Controller death after plan stamp commit must reconcile original journal without duplicate receipt."""
+    exercise_controller_recovery(installed_release, tmp_path, "review", committed_post_loss="stamp_execution_plan")
+
+
+def test_committed_resume_post_response_loss_reconciles_same_operation(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Controller death after paused-resume set_execution_state commit must reconcile original journal without duplicate transition."""
+    exercise_controller_recovery(
+        installed_release, tmp_path, "resume", committed_post_loss="set_execution_state"
+    )

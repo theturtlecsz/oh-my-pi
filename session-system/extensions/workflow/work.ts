@@ -516,6 +516,12 @@ export function buildCompletionEvidence(
 	};
 }
 
+type GrantBoundCommand = Extract<Command, { payload: { grant_id: UUID } }>;
+
+function isGrantBoundCommand(cmd: Command): cmd is GrantBoundCommand {
+	return "grant_id" in cmd.payload && typeof (cmd.payload as { grant_id?: unknown }).grant_id === "string";
+}
+
 export function createWorkBackend(
 	config: WorkClientConfig,
 	token: () => string | null,
@@ -1991,7 +1997,7 @@ export function createWorkBackend(
 				grant_id: input.grantId,
 				expected_grant_version: input.expectedGrantVersion,
 				target_state: input.targetState,
-				reason: input.reason,
+				reason: input.reason ?? null,
 				judge_sha256: input.judgeSha256,
 			});
 			if (result.type !== "set_execution_state") throw new Error(`unexpected result ${result.type}`);
@@ -2036,7 +2042,7 @@ export function createWorkBackend(
 						continue;
 					}
 					const cmd = env.command as Command;
-					if (cmd.type !== "seal_execution_criteria") continue;
+					if (!isGrantBoundCommand(cmd)) continue;
 					if (env.workspace_id !== config.workspaceId) continue;
 					if (cmd.payload.grant_id !== grantId) continue;
 
@@ -2071,7 +2077,7 @@ export function createWorkBackend(
 						receipt &&
 						receipt.operation_id === env.operation_id &&
 						receipt.request_id === env.request_id &&
-						stored.command_type === "seal_execution_criteria" &&
+						stored.command_type === cmd.type &&
 						receipt.request_sha256 === expectedRequestSha256;
 
 					const isApplied = receipt && (receipt.state === "applied" || receipt.state === "replayed");

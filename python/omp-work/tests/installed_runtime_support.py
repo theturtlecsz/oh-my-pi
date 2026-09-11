@@ -151,7 +151,11 @@ class AuthorityResponseProxy:
 
     def arm_committed_command(self, command_type: str) -> None:
         """Hold one real successful command response; caller independently verifies commit."""
-        assert command_type == "seal_execution_criteria"
+        assert command_type in {
+            "seal_execution_criteria",
+            "stamp_execution_plan",
+            "set_execution_state",
+        }
         with self.lock:
             assert self.committed_command is None
             self.committed_command = command_type
