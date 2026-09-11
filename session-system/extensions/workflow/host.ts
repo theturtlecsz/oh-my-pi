@@ -1739,7 +1739,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 			const owns = () => !!witness && ownsExecutionSession(ctx, witness, witness.workspace.path);
 			if (!witness || witness.workspace.grantId !== intent.grantId || !owns()) return { ok: false, reason: "Execution session ownership is unavailable" };
 			try {
-				await backend.getPendingExecutionClaims?.();
+				await backend.getPendingExecutionClaims?.(intent.grantId);
 			} catch (error) {
 				return { ok: false, reason: `Recovery blocked by unreadable claim: ${String(error)}` };
 			}
@@ -2183,6 +2183,14 @@ export function createWorkflowHost(cfg: HostConfig) {
 								const preflight = await validateExecutionRecoveryPreflight(sessionCtx, backend, exec, "active");
 								if (!ownsExecutionSession(sessionCtx, startupWitness, startupWitness.workspace.path)) return;
 								if (preflight.ok) {
+									let pendingClaims: Array<{ command: Command; result?: CommandResult }>;
+									try {
+										pendingClaims = (await backend.getPendingExecutionClaims?.(exec.grant.grant_id)) ?? [];
+									} catch (error) {
+										if (ownsExecutionSession(sessionCtx, startupWitness, startupWitness.workspace.path)) sessionCtx.ui.notify(`Recovery blocked by unreadable claim: ${String(error)}`, "error");
+										return;
+									}
+									if (!ownsExecutionSession(sessionCtx, startupWitness, startupWitness.workspace.path)) return;
 									const curVersion = exec.grant.grant_version;
 									const mismatchedIntent = [...outboxEntries.values()].find(entry =>
 										entry.grantId === exec.grant.grant_id && entry.postVersion >= curVersion
@@ -2222,14 +2230,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 											pendingOutbox,
 										);
 									} else {
-										let pendingClaims: Array<{ command: Command; result?: CommandResult }>;
-										try {
-											pendingClaims = (await backend.getPendingExecutionClaims?.()) ?? [];
-										} catch (error) {
-											if (ownsExecutionSession(sessionCtx, startupWitness, startupWitness.workspace.path)) sessionCtx.ui.notify(`Recovery blocked by unreadable claim: ${String(error)}`, "error");
-											return;
-										}
-										if (!ownsExecutionSession(sessionCtx, startupWitness, startupWitness.workspace.path)) return;
 										const committedClaim = pendingClaims.find(c => {
 											if (c.command.type !== "set_execution_state") return false;
 											const payload = c.command.payload;

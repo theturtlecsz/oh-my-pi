@@ -141,9 +141,27 @@ class AuthorityResponseProxy:
         self.output_path: Path | None = None
         self.execution_prefix = ""
         self.records: list[dict] = []
+        self.operation_gets: list[dict] = []
         self.error: str | None = None
         self.predecessor_read_path: str | None = None
         self.fail_predecessor_read = False
+        self.committed_command: str | None = None
+        self.command_claimed = False
+        self.discard_command_response = False
+
+    def arm_committed_command(self, command_type: str) -> None:
+        """Hold one real successful command response; caller independently verifies commit."""
+        assert command_type == "seal_execution_criteria"
+        with self.lock:
+            assert self.committed_command is None
+            self.committed_command = command_type
+            self.release.clear()
+
+    def discard_held_command_response(self) -> None:
+        """After controller death, close original socket without delivering response bytes."""
+        with self.lock:
+            self.discard_command_response = True
+        self.release.set()
 
     def set_predecessor_read_fault(self, keyed_path: str, enabled: bool) -> None:
         """Disconnect only an actual keyed predecessor GET; preserve upstream evidence."""
@@ -172,10 +190,21 @@ class AuthorityResponseProxy:
         with self.lock:
             return [dict(record) for record in self.records]
 
+    def operation_gets_snapshot(self) -> list[dict]:
+        with self.lock:
+            return [dict(record) for record in self.operation_gets]
+
     def _save(self) -> None:
         # Caller holds lock. Never write request/response headers or bearer tokens.
         (self.root / "authority-proxy.json").write_text(
-            json.dumps({"requests": self.records, "error": self.error}, indent=2)
+            json.dumps(
+                {
+                    "requests": self.records,
+                    "operationGets": self.operation_gets,
+                    "error": self.error,
+                },
+                indent=2,
+            )
         )
 
     @contextlib.contextmanager
@@ -255,6 +284,19 @@ class AuthorityResponseProxy:
                 if disconnect:
                     self.close_connection = True
                     return
+                if self.command == "GET" and route.startswith("/v1/operations/"):
+                    with proxy.lock:
+                        proxy.operation_gets.append(
+                            {
+                                "ordinal": len(proxy.operation_gets) + 1,
+                                "method": self.command,
+                                "path": self.path,
+                                "status": status,
+                                "startedAt": started_at,
+                                "completedAt": time.time(),
+                            }
+                        )
+                        proxy._save()
                 qualifying = (
                     self.command == "GET"
                     and bool(proxy.execution_prefix)
@@ -265,6 +307,51 @@ class AuthorityResponseProxy:
                 )
                 record: dict | None = predecessor_record
                 withholding = False
+                command_type = None
+                if self.command == "POST" and route == "/v1/commands":
+                    try:
+                        command_type = json.loads(body).get("command", {}).get("type")
+                    except (ValueError, AttributeError):
+                        pass
+                if command_type == proxy.committed_command and command_type is not None:
+                    with proxy.lock:
+                        try:
+                            command_response = json.loads(payload)
+                            applied = (
+                                command_response.get("receipt", {}).get("state") == "applied"
+                                and command_response.get("result", {}).get("status") != "refused"
+                            )
+                        except (ValueError, AttributeError):
+                            applied = False
+                        withholding = not proxy.command_claimed and 200 <= status < 300 and applied
+                        if withholding:
+                            proxy.command_claimed = True
+                        ordinal = len(proxy.records) + 1
+                        request_file = proxy.root / f"authority-held-{ordinal}-request.json"
+                        response_file = proxy.root / f"authority-held-{ordinal}.json"
+                        request_file.write_bytes(body)
+                        response_file.write_bytes(payload)
+                        record = {
+                            "ordinal": ordinal,
+                            "method": self.command,
+                            "path": self.path,
+                            "startedAt": started_at,
+                            "upstreamCompletedAt": time.time(),
+                            "status": status,
+                            "commandType": command_type,
+                            "requestFile": str(request_file),
+                            "requestSha256": hashlib.sha256(body).hexdigest(),
+                            "bodyFile": str(response_file),
+                            "bodySha256": hashlib.sha256(payload).hexdigest(),
+                            "bodyBytes": len(payload),
+                            "held": withholding,
+                            "responseStarted": False,
+                            "responseBytesWritten": 0,
+                        }
+                        proxy.records.append(record)
+                        proxy._save()
+                        if withholding:
+                            proxy.held.set()
                 if qualifying:
                     with proxy.lock:
                         artifact_present = (
@@ -305,6 +392,13 @@ class AuthorityResponseProxy:
                         proxy.error = (
                             "Authority withholding exceeded bounded observation timeout"
                         )
+                        proxy._save()
+                    self.close_connection = True
+                    return
+                if withholding and command_type is not None and proxy.discard_command_response:
+                    with proxy.lock:
+                        assert record is not None
+                        record["discardedAfterControllerDeath"] = True
                         proxy._save()
                     self.close_connection = True
                     return
