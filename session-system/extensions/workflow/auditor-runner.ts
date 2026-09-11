@@ -14,6 +14,8 @@ export interface NativeAuditRunResult {
 	started: boolean;
 	payload?: string;
 	error?: string;
+	resolvedModel?: string;
+	resolvedModelIsFallback?: boolean;
 }
 
 export type NativeAuditRunner = (
@@ -132,6 +134,8 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: A
 				started,
 				payload,
 				error: result.error || result.stderr || undefined,
+				resolvedModel: result.resolvedModel,
+				resolvedModelIsFallback: result.resolvedModelIsFallback,
 			};
 		} catch (error) {
 			return {

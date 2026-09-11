@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import type { ToolCallEventResult } from "@oh-my-pi/pi-coding-agent/extensibility/shared-events";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { WORK_CONTRACT_SHA256, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope } from "@oh-my-pi/pi-work-client";
+import { WORK_CONTRACT_SHA256, sha256Hex, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope } from "@oh-my-pi/pi-work-client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { z } from "zod";
@@ -4232,5 +4232,481 @@ describe("dead execution context and terminal work suppression (OMP-247)", () =>
 		expect(savedCache.executingIssue).toBeUndefined();
 		expect(savedCache.executionWorkspace).toBeUndefined();
 		expect(savedCache.obligationHandoff).toBeUndefined();
+	});
+});
+
+describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)", () => {
+	const defaultAuditor: AgentDefinition = {
+		name: "auditor",
+		description: "Auditor agent",
+		systemPrompt: "Audit prompt",
+		model: ["@audit"],
+		output: { properties: { report: { type: "string" } } },
+		source: "bundled",
+	};
+
+	function mockDiscovery(agent: AgentDefinition = defaultAuditor) {
+		return vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
+			agents: [agent],
+			projectAgentsDir: null,
+		});
+	}
+
+	async function setupM2Fixture(options: {
+		onReserve?: () => { status: string; launchId: string };
+	} = {}) {
+		const repo = makeTempRepo();
+		const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), "m2-sessions-"));
+		const sessionManager = SessionManager.create(repo.dir, sessionDir);
+		await sessionManager.ensureOnDisk();
+		const sessionFile = sessionManager.getSessionFile()!;
+
+		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
+		const sentMessages: Array<{ customType?: string; content?: string }> = [];
+
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			getSessionId: () => sessionManager.getSessionId(),
+			zod: z,
+			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
+				if (spec.name === "work") registeredExecute = spec.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: () => {},
+			sendMessage: (message: { customType?: string; content?: string }) => { sentMessages.push(message); },
+			appendEntry: (customType: string, data?: unknown) => {
+				sessionManager.appendCustomEntry(customType, data);
+			},
+		} as unknown as ExtensionAPI;
+
+		const fakeCtx = {
+			cwd: repo.dir,
+			taskDepth: 0,
+			sessionManager,
+			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			ui: {
+				notify: () => {},
+				theme: { fg: (_c: string, t: string) => t },
+				setStatus: () => {},
+			},
+		} as unknown as ExtensionContext;
+
+		mockDiscovery();
+		const tcb = await computeAuditTcb(fakeCtx, {
+			healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "prospective-fp-199", judge_manifest: { judge_sha256: "judge-sha" } }),
+		} as unknown as WorkClient);
+
+		const exec: ExecutionSnapshot = {
+			grant: {
+				grant_id: "grant-199",
+				workspace_id: "ws-1",
+				owner_id: "owner-1",
+				repository: repo.dir,
+				remote_ref: "refs/heads/execution/omp-199",
+				state: "active",
+				mode: "single",
+				grant_version: 4,
+				max_continuations: 8,
+				max_close_attempts: 5,
+				max_no_progress: 3,
+				continuations_scheduled: 0,
+				authorization_hash: "auth-hash",
+				judge_sha256: tcb.judgeSha256,
+				created_at: new Date().toISOString(),
+				expires_at: new Date(Date.now() + 86400000).toISOString(),
+			},
+			items: [
+				{
+					item_id: "item-199",
+					workspace_id: "ws-1",
+					grant_id: "grant-199",
+					work_id: "uuid-199",
+					position: 0,
+					phase: "executing",
+					claimed_revision_id: "rev-1",
+					original_request: "test request",
+					original_request_sha256: "0".repeat(64),
+					criteria_sha256: "0".repeat(64),
+					plan_stamp_sha256: "0".repeat(64),
+					plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-199" },
+					close_attempts_started: 0,
+					consecutive_no_progress: 0,
+					initial_git_baseline: repo.headSha,
+					current_git_baseline: repo.headSha,
+				},
+			],
+			activeItem: {
+				item_id: "item-199",
+				workspace_id: "ws-1",
+				grant_id: "grant-199",
+				work_id: "uuid-199",
+				position: 0,
+				phase: "executing",
+				claimed_revision_id: "rev-1",
+				original_request: "test request",
+				original_request_sha256: "0".repeat(64),
+				criteria_sha256: "0".repeat(64),
+				plan_stamp_sha256: "0".repeat(64),
+				plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-199" },
+				close_attempts_started: 0,
+				consecutive_no_progress: 0,
+				initial_git_baseline: repo.headSha,
+				current_git_baseline: repo.headSha,
+			},
+		};
+
+		const ownershipEntry = executionOwnershipEntry(exec, repo.dir, "OMP-199");
+		sessionManager.appendCustomEntry(ownershipEntry.customType, ownershipEntry.data);
+
+		const settleCalls: Array<{ work: unknown; launchId: unknown; payload: unknown }> = [];
+		const cancelCalls: Array<{ work: unknown; launchId: unknown }> = [];
+		let reserveIndex = 0;
+
+		const mockBackend = {
+			cacheFile: repo.cacheFile,
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			findIssue: async () => ({ id: "uuid-199", key: "OMP-199", title: "Test 199", project: "The Bookends" }),
+			issueDetail: async () => ({ key: "OMP-199", attemptSnapshot: undefined }),
+			executionChildren: async () => ({ umbrella: false, children: [] }),
+			getExecution: async () => exec,
+			setExecutionState: async () => exec,
+			finalizeExecutionCandidate: async () => ({ candidate_id: "cand-199", candidate_sha256: "cand-sha", commit_sha: "1".repeat(40) }),
+			appendEvidence: async () => ({ receipt_id: "receipt-199" }),
+			beginCloseAttempt: async () => ({ status: "applied", attemptId: "att-199", event: { requiresDelivery: false } }),
+			sealAuditManifest: async () => ({ status: "applied" }),
+			sealedAuditTask: async () => ({ taskSha256: "task-sha-275", taskBody: "task body 275" }),
+			reserveAuditorLaunch: async () => {
+				reserveIndex++;
+				if (options.onReserve) return options.onReserve();
+				return { status: "reserved", launchId: `launch-${reserveIndex}` };
+			},
+			settleAuditorLaunch: async (work: unknown, launchId: unknown, payload: unknown) => {
+				settleCalls.push({ work, launchId, payload });
+				const payloadStr = typeof payload === "object" && payload !== null && "payload" in payload ? String((payload as { payload: unknown }).payload) : "";
+				const verdict = payloadStr.includes("NEEDS_FIX") ? "NEEDS_FIX" : "PASS";
+				return { verdict, event: { renderedText: verdict } };
+			},
+			cancelAuditorLaunch: async (work: unknown, launchId: unknown) => {
+				cancelCalls.push({ work, launchId });
+				return { status: "applied", event: { requiresDelivery: false } };
+			},
+			recordCloseoutReview: async () => ({ status: "applied" }),
+			completeExecutionItem: async () => {
+				exec.activeItem!.phase = "completed";
+				return exec;
+			},
+			workClient: {
+				healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "prospective-fp-199", judge_manifest: { judge_sha256: "judge-sha" } }),
+				workflow: async () => ({
+					receipts: [
+						{ receipt_id: "verif-199", kind: "verification", payload_sha256: "0".repeat(64), artifact_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199" },
+						{ receipt_id: "audit-199", kind: "audit", verdict: "PASS", independent: true, issuer: "work-service/auditor-settle", payload: { manifest_id: "man-199", launch_id: "launch-1" }, payload_sha256: "0".repeat(64), artifact_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199" },
+						{ receipt_id: "receipt-199", kind: "push", payload: { repository: "theturtlecsz/oh-my-pi", remote_url: "https://github.com/theturtlecsz/oh-my-pi.git" }, payload_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199", remote_ref: "refs/heads/execution/omp-199", remote_commit: "1".repeat(40) },
+					],
+					auditor_launches: [
+						{ launch_id: "launch-1", tool_call_id: "call-1", task_sha256: "0".repeat(64), manifest_id: "man-199", attempt_id: "att-199" },
+					],
+					audit_manifest: {
+						manifest_id: "man-199",
+						manifest_version: 1,
+						verification_receipt_id: "verif-199",
+						task_sha256: "0".repeat(64),
+						attempt_id: "att-199",
+					},
+					item: {
+						work_id: "uuid-199",
+						revision: { revision_id: "rev-199" },
+						candidate: {
+							candidate_id: "cand-199",
+							candidate_sha256: "cand-sha",
+							commit_sha: "1".repeat(40),
+							kind: "final",
+						},
+					},
+					close_attempts: [
+						{ attempt_id: "att-199", candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199", judge_sha256: exec.grant.judge_sha256 },
+					],
+				}),
+			},
+		} as unknown as WorkflowBackend;
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/execution/omp-199", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
+		vi.spyOn(gitModule, "verifyMergeConfirmation").mockReturnValue({ confirmed: true, detail: "PR merged and origin/main contains candidate" });
+		vi.spyOn(gitModule, "rangeDiffSha256").mockReturnValue("diff-sha-199");
+
+		return {
+			repo: {
+				...repo,
+				cleanup: () => {
+					fs.rmSync(sessionDir, { recursive: true, force: true });
+					repo.cleanup();
+				},
+			},
+			sessionManager,
+			sessionFile,
+			sessionDir,
+			fakeCtx,
+			fakePi,
+			exec,
+			settleCalls,
+			cancelCalls,
+			getRegisteredExecute: () => registeredExecute!,
+		};
+	}
+
+	test("persisted consumer contract after reload binds launch to selector attribution and payload sha", async () => {
+		const f = await setupM2Fixture();
+		const mockOutput = JSON.stringify({ report: "VERDICT: PASS\n(all clean)" });
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0,
+			id: "att-199",
+			agent: "auditor",
+			agentSource: "bundled",
+			task: "task",
+			exitCode: 0,
+			output: mockOutput,
+			stderr: "",
+			truncated: false,
+			durationMs: 10,
+			tokens: 10,
+			requests: 1,
+			resolvedModel: "openai/gpt-5.2",
+			resolvedModelIsFallback: true,
+		} as executorModule.SingleResult);
+
+		try {
+			const res = await f.getRegisteredExecute()("call-1", { action: "begin_execution_review", work: "OMP-199", body: "verification evidence" }, new AbortController().signal, () => {}, f.fakeCtx);
+			expect(res.content[0]?.text).toContain("Execution grant completed");
+
+			await f.sessionManager.flush();
+			const opened = await SessionManager.open(f.sessionFile);
+			const launchEntries = opened.getEntries().filter(e => e.type === "custom" && e.customType === "work-now-audit-launch");
+			expect(launchEntries).toHaveLength(1);
+			const data = launchEntries[0].data as Record<string, unknown>;
+			expect(data.launch_id).toBe("launch-1");
+			expect(data.attempt_id).toBe("att-199");
+			expect(data.task_sha256).toBe("task-sha-275");
+			expect(data.payload_sha256).toBe(sha256Hex(mockOutput));
+			expect(data.resolvedModel).toBe("openai/gpt-5.2");
+			expect(data.resolvedModelIsFallback).toBe(true);
+			expect(data.attribution).toBe("session-reported-selector");
+			expect(data.session_id).toBe(f.sessionManager.getSessionId());
+			expect(typeof data.at).toBe("string");
+
+			// Acceptance criterion 5: Entry never feeds settleAuditorLaunch transport payload or verdict
+			expect(f.settleCalls).toHaveLength(1);
+			expect(f.settleCalls[0].payload).toEqual({ payload: mockOutput });
+			expect("resolvedModel" in (f.settleCalls[0].payload as Record<string, unknown>)).toBe(false);
+			expect("resolvedModelIsFallback" in (f.settleCalls[0].payload as Record<string, unknown>)).toBe(false);
+		} finally {
+			await f.sessionManager.close();
+			f.repo.cleanup();
+		}
+	});
+
+	test("unknown fields remain absent on reload when runner omits model attribution", async () => {
+		const f = await setupM2Fixture();
+		const mockOutput = JSON.stringify({ report: "VERDICT: PASS\n(clean)" });
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0,
+			id: "att-199",
+			agent: "auditor",
+			agentSource: "bundled",
+			task: "task",
+			exitCode: 0,
+			output: mockOutput,
+			stderr: "",
+			truncated: false,
+			durationMs: 10,
+			tokens: 10,
+			requests: 1,
+		} as executorModule.SingleResult);
+
+		try {
+			const res = await f.getRegisteredExecute()("call-2", { action: "begin_execution_review", work: "OMP-199", body: "verification evidence" }, new AbortController().signal, () => {}, f.fakeCtx);
+			expect(res.content[0]?.text).toContain("Execution grant completed");
+
+			await f.sessionManager.flush();
+			const opened = await SessionManager.open(f.sessionFile);
+			const launchEntries = opened.getEntries().filter(e => e.type === "custom" && e.customType === "work-now-audit-launch");
+			expect(launchEntries).toHaveLength(1);
+			const data = launchEntries[0].data as Record<string, unknown>;
+			expect("resolvedModel" in data).toBe(false);
+			expect("resolvedModelIsFallback" in data).toBe(false);
+			expect(data.launch_id).toBe("launch-1");
+			expect(data.attempt_id).toBe("att-199");
+			expect(data.task_sha256).toBe("task-sha-275");
+			expect(data.payload_sha256).toBe(sha256Hex(mockOutput));
+		} finally {
+			await f.sessionManager.close();
+			f.repo.cleanup();
+		}
+	});
+
+	test("multiple launches under same attempt record distinct reloaded entries keyed by launch_id", async () => {
+		let launchCounter = 0;
+		const f = await setupM2Fixture({
+			onReserve: () => {
+				launchCounter++;
+				return { status: "reserved", launchId: `launch-${launchCounter}` };
+			},
+		});
+		const mockOutput = JSON.stringify({ report: "VERDICT: NEEDS_FIX\nFinding 1" });
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0,
+			id: "att-199",
+			agent: "auditor",
+			agentSource: "bundled",
+			task: "task",
+			exitCode: 0,
+			output: mockOutput,
+			stderr: "",
+			truncated: false,
+			durationMs: 10,
+			tokens: 10,
+			requests: 1,
+			resolvedModel: "openai/gpt-5.2",
+			resolvedModelIsFallback: false,
+		} as executorModule.SingleResult);
+
+		try {
+			// First launch returns NEEDS_FIX
+			const res1 = await f.getRegisteredExecute()("call-3a", { action: "begin_execution_review", work: "OMP-199", body: "evidence 1" }, new AbortController().signal, () => {}, f.fakeCtx);
+			expect(res1.content[0]?.text).toContain("Finding 1");
+
+			// Second launch under same attempt
+			const res2 = await f.getRegisteredExecute()("call-3b", { action: "begin_execution_review", work: "OMP-199", body: "evidence 2" }, new AbortController().signal, () => {}, f.fakeCtx);
+			expect(res2.content[0]?.text).toContain("Finding 1");
+
+			await f.sessionManager.flush();
+			const opened = await SessionManager.open(f.sessionFile);
+			const launchEntries = opened.getEntries().filter(e => e.type === "custom" && e.customType === "work-now-audit-launch");
+			expect(launchEntries).toHaveLength(2);
+			const data1 = launchEntries[0].data as Record<string, unknown>;
+			const data2 = launchEntries[1].data as Record<string, unknown>;
+			expect(data1.launch_id).toBe("launch-1");
+			expect(data2.launch_id).toBe("launch-2");
+			expect(data1.attempt_id).toBe("att-199");
+			expect(data2.attempt_id).toBe("att-199");
+			expect(data1.launch_id).not.toBe(data2.launch_id);
+		} finally {
+			await f.sessionManager.close();
+			f.repo.cleanup();
+		}
+	});
+
+	test("before-start cancellation appends nothing and releases reservation without journal record", async () => {
+		const f = await setupM2Fixture();
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0,
+			id: "att-199",
+			agent: "auditor",
+			agentSource: "bundled",
+			task: "task",
+			exitCode: 0,
+			output: "",
+			stderr: "",
+			truncated: false,
+			durationMs: 10,
+			tokens: 0,
+			requests: 0, // started = false
+		} as executorModule.SingleResult);
+
+		try {
+			const res = await f.getRegisteredExecute()("call-4", { action: "begin_execution_review", work: "OMP-199", body: "evidence" }, new AbortController().signal, () => {}, f.fakeCtx);
+			expect(res.content[0]?.text).toContain("Auditor launch failed before start");
+
+			expect(f.cancelCalls).toHaveLength(1);
+			expect(f.cancelCalls[0].launchId).toBe("launch-1");
+
+			await f.sessionManager.flush();
+			const opened = await SessionManager.open(f.sessionFile);
+			const launchEntries = opened.getEntries().filter(e => e.type === "custom" && e.customType === "work-now-audit-launch");
+			expect(launchEntries).toHaveLength(0);
+		} finally {
+			await f.sessionManager.close();
+			f.repo.cleanup();
+		}
+	});
+
+	test("real async session drift leaves zero entries in either session file", async () => {
+		const f = await setupM2Fixture();
+		const mockOutput = JSON.stringify({ report: "VERDICT: PASS\n(clean)" });
+		const originalSessionFile = f.sessionFile;
+		const originalSessionId = f.sessionManager.getSessionId();
+		let newSessionFile: string | undefined;
+		let newSessionId: string | undefined;
+
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async () => {
+			// Session ID drifts in-place while subprocess is in flight
+			await f.sessionManager.newSession();
+			await f.sessionManager.ensureOnDisk();
+			newSessionFile = f.sessionManager.getSessionFile();
+			newSessionId = f.sessionManager.getSessionId();
+			return {
+				index: 0,
+				id: "att-199",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: mockOutput,
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+				resolvedModel: "openai/gpt-5.2",
+			} as executorModule.SingleResult;
+		});
+
+		try {
+			await f.getRegisteredExecute()("call-5", { action: "begin_execution_review", work: "OMP-199", body: "evidence" }, new AbortController().signal, () => {}, f.fakeCtx);
+
+			expect(newSessionId).toBeDefined();
+			expect(newSessionId).not.toBe(originalSessionId);
+			expect(newSessionFile).toBeDefined();
+			expect(newSessionFile).not.toBe(originalSessionFile);
+
+			await f.sessionManager.flush();
+
+			const originalOpened = await SessionManager.open(originalSessionFile);
+			expect(originalOpened.getEntries().filter(e => e.type === "custom" && e.customType === "work-now-audit-launch")).toHaveLength(0);
+
+			const newOpened = await SessionManager.open(newSessionFile!);
+			expect(newOpened.getEntries().filter(e => e.type === "custom" && e.customType === "work-now-audit-launch")).toHaveLength(0);
+		} finally {
+			await f.sessionManager.close();
+			f.repo.cleanup();
+		}
+	});
+
+	test("manual run_audit refuses without owner /summary input and writes zero launch entries", async () => {
+		const f = await setupM2Fixture();
+		try {
+			const res = await f.getRegisteredExecute()("call-6", { action: "run_audit", work: "OMP-199" }, new AbortController().signal, () => {}, f.fakeCtx);
+			expect(res.content[0]?.text).toContain("REFUSED — a closeout audit requires Chris to literally enter /summary in this owner session");
+
+			await f.sessionManager.flush();
+			const opened = await SessionManager.open(f.sessionFile);
+			const launchEntries = opened.getEntries().filter(e => e.type === "custom" && e.customType === "work-now-audit-launch");
+			expect(launchEntries).toHaveLength(0);
+		} finally {
+			await f.sessionManager.close();
+			f.repo.cleanup();
+		}
 	});
 });
