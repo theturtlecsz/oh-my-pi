@@ -348,3 +348,73 @@ def test_corrupted_disposable_release_is_refused_before_runtime_launch(
         hashlib.sha256((selected.root / "manifest.json").read_bytes()).hexdigest()
         == selected.digest
     )
+
+
+def test_bundled_bunx_runs_declared_local_executable_without_global_bun(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    release = installed_release
+    state = tmp_path / "runtime"
+    workspace = tmp_path / "candidate"
+    workspace.mkdir()
+    launcher_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+
+    smoke = _run(
+        release.command(state, workspace, "--smoke-test"), workspace, launcher_env
+    )
+    assert "smoke-test: ok" in smoke
+
+    source_root = Path(__file__).resolve().parents[3]
+    helper = (
+        source_root
+        / "session-system/tests/fixtures/installed-recovery-setup.ts"
+    )
+    setup_args = [str(release.root / "bin/bun"), str(helper)]
+    managed_env = cast(
+        dict[str, str],
+        json.loads(
+            _run(
+                [
+                    *setup_args,
+                    "environment",
+                    str(release.root),
+                    str(state),
+                    str(workspace),
+                ],
+                source_root,
+                launcher_env,
+            )
+        ),
+    )
+
+    bunx_path = shutil.which("bunx", path=managed_env["PATH"])
+    assert bunx_path is not None, "missing bundled alias"
+    assert Path(bunx_path).is_relative_to(release.root)
+
+    check_result = subprocess.run(
+        ["bunx", "--no-install", "biome", "check", "."],
+        cwd=release.root / "source/packages/work-client",
+        env=managed_env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert check_result.returncode == 0, check_result.stderr[-6000:]
+
+    _run(
+        release.command(state, workspace, "--service", "hash"),
+        workspace,
+        launcher_env,
+    )
+    assert (
+        hashlib.sha256((release.root / "manifest.json").read_bytes()).hexdigest()
+        == release.digest
+    )
+
+    manifest = json.loads((release.root / "manifest.json").read_text())
+    assert any(
+        entry.get("path") == "bin/bunx"
+        and entry.get("kind") == "symlink"
+        and entry.get("target") == "bun"
+        for entry in manifest.get("files", [])
+    ), "manifest files entry for bin/bunx symlink -> bun missing"
