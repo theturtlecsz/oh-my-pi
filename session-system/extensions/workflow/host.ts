@@ -705,6 +705,71 @@ export function createWorkflowHost(cfg: HostConfig) {
 		state.executionWorkspace = own ? { ...own.workspace } : undefined;
 	}
 
+	interface AuditLaunchOrigin {
+		ctx: ExtensionContext;
+		manager: ExtensionContext["sessionManager"];
+		sessionId?: string;
+		piSessionId?: string;
+		witness?: OwnExecutionWitness;
+		isExecution: boolean;
+	}
+
+	function captureAuditLaunchOrigin(ctx: ExtensionContext, isExecution = false): AuditLaunchOrigin {
+		const manager = ctx.sessionManager;
+		return {
+			ctx,
+			manager,
+			sessionId: manager?.getSessionId?.(),
+			piSessionId: piRef.getSessionId?.(),
+			witness: isExecution ? ownExecutionWitness(ctx) : undefined,
+			isExecution,
+		};
+	}
+
+	function isAuditOriginCurrent(origin: AuditLaunchOrigin): boolean {
+		if (!origin.sessionId || !origin.manager || !origin.piSessionId) return false;
+		if (origin.piSessionId !== origin.sessionId) return false;
+		if (origin.ctx.sessionManager !== origin.manager) return false;
+		if (origin.manager.getSessionId?.() !== origin.sessionId) return false;
+		if (piRef.getSessionId?.() !== origin.piSessionId) return false;
+		if (origin.isExecution) {
+			return !!origin.witness && ownsExecutionSession(origin.ctx, origin.witness);
+		}
+		return ownerSession(origin.ctx);
+	}
+
+	function recordAuditLaunch(
+		origin: AuditLaunchOrigin,
+		launchId: string,
+		attemptId: string,
+		taskSha256: string,
+		auditRun: NativeAuditRunResult,
+	): void {
+		if (!isAuditOriginCurrent(origin)) return;
+		const payloadSha256 =
+			auditRun.payload && auditRun.payload.trim().length > 0
+				? sha256Hex(auditRun.payload)
+				: undefined;
+		const data: Record<string, unknown> = {
+			launch_id: launchId,
+			attempt_id: attemptId,
+			task_sha256: taskSha256,
+			...(payloadSha256 !== undefined ? { payload_sha256: payloadSha256 } : {}),
+			...(auditRun.resolvedModel !== undefined ? { resolvedModel: auditRun.resolvedModel } : {}),
+			...(auditRun.resolvedModelIsFallback !== undefined
+				? { resolvedModelIsFallback: auditRun.resolvedModelIsFallback }
+				: {}),
+			attribution: "session-reported-selector",
+			session_id: origin.sessionId,
+			at: new Date().toISOString(),
+		};
+		try {
+			piRef.appendEntry(`${cfg.entryType}-audit-launch`, data);
+		} catch {
+			/* journal failure cannot strand a reserved launch */
+		}
+	}
+
 	function hasIntakeScanHeadings(text: string): boolean {
 		const headingRegex = (title: string) =>
 			new RegExp(`(?:^|\\n)\\s*(?:#{1,6}\\s+|\\*\\*|\\*|[-*]\\s+\\*\\*)?\\s*(?:\\d+\\.\\s+)?${title}\\s*(?:\\*\\*|\\*|:)?\\s*(?:\\n|$)`, "i");
@@ -3478,6 +3543,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								return deny(`Audit launch refused by the ledger:\n${reservation.event?.renderedText ?? "unknown reservation refusal"}`);
 							}
 
+							const origin = captureAuditLaunchOrigin(ctx);
 							let auditRun: NativeAuditRunResult;
 							try {
 								auditRun = await runner(issue.auditTask.taskBody, snapshot.attemptId, _signal);
@@ -3498,6 +3564,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 								}
 								return deny(`Auditor launch failed before start: ${auditRun.error ?? "runner cancelled before dispatch"}`);
 							}
+
+							recordAuditLaunch(origin, reservation.launchId, snapshot.attemptId, issue.auditTask.taskSha256, auditRun);
 
 							const transportPayload = auditRun.payload && auditRun.payload.trim().length > 0 ? { payload: auditRun.payload } : { failed: true };
 							const settleOutcome = await backend.settleAuditorLaunch(params.work, reservation.launchId, transportPayload);
@@ -4278,6 +4346,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								if (resv.status === "refused" || !resv.launchId) {
 									return deny(`Reserve launch refused: ${resv.event.renderedText}`);
 								}
+								const origin = captureAuditLaunchOrigin(ctx, true);
 								const auditRun = await runner(sealedTask.taskBody, attemptId, _signal);
 								if (!auditRun.started) {
 									// OMP-251: the auditor never dispatched a model request —
@@ -4296,6 +4365,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 									}
 									return deny(`Auditor launch failed before start: ${auditRun.error ?? "runner cancelled before dispatch"}`);
 								}
+								recordAuditLaunch(origin, resv.launchId, attemptId, sealedTask.taskSha256, auditRun);
 								const settle = await backend.settleAuditorLaunch(
 									targetIssue.key,
 									resv.launchId,
