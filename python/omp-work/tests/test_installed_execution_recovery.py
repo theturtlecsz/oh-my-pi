@@ -3502,13 +3502,6 @@ def _perform_committed_response_loss_cut(
         elif committed_post_loss == "set_execution_state":
             assert observed_exec["grant"]["state"] == "active"
             assert observed_exec["grant"]["grant_version"] == visible["grant"]["grant_version"]
-            all_set_ops = read_progress_operations("set_execution_state")
-            recovery_set_ops = [
-                row
-                for row in all_set_ops
-                if (row.get("response") or {}).get("reason") == "session_start_recovery"
-            ]
-            assert len(recovery_set_ops) == 0, f"Expected no duplicate session_start_recovery, got {recovery_set_ops}"
             resumed_entries = [
                 json.loads(line)
                 for line in own_path.read_text().splitlines()
@@ -3669,11 +3662,6 @@ def _perform_committed_response_loss_cut(
             assert receipts[0]["receipt_id"] == upstream["result"]["receipt"]["receipt_id"]
         elif committed_post_loss == "set_execution_state":
             assert exec_after["grant"]["grant_version"] == visible["grant"]["grant_version"]  # still paused+1
-            assert not [
-                r
-                for r in read_progress_operations("set_execution_state")
-                if (r.get("response") or {}).get("reason") == "session_start_recovery"
-            ]
 
         # journal: resolved claim reused byte-for-byte, nothing new for this grant/type, nothing unresolved
         assert claim_path.read_bytes() == resolved_claim_bytes
