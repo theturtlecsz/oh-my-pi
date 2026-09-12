@@ -516,10 +516,21 @@ export function buildCompletionEvidence(
 	};
 }
 
-type GrantBoundCommand = Extract<Command, { payload: { grant_id: UUID } }>;
+/** Execution mutations reconciled at startup/resume. Only types whose client
+ *  payload emits every service-model field, so payloadHash(envelope) equals the
+ *  stored receipt request_sha256 (canonical.py command_sha256 over model_dump),
+ *  and which are whole-process qualified (test_installed_execution_recovery.py).
+ *  begin_execution / activate_execution_item omit defaulted keys
+ *  (project_id, expected_project_id, expected_blocker_ids) and
+ *  complete_execution_item is not installed-qualified: those claims stay
+ *  skipped here exactly as before OMP-277. */
+type ReconciledExecutionCommand = Extract<
+	Command,
+	{ type: "seal_execution_criteria" | "stamp_execution_plan" | "set_execution_state" }
+>;
 
-function isGrantBoundCommand(cmd: Command): cmd is GrantBoundCommand {
-	return "grant_id" in cmd.payload && typeof (cmd.payload as { grant_id?: unknown }).grant_id === "string";
+function isReconciledExecutionCommand(cmd: Command): cmd is ReconciledExecutionCommand {
+	return cmd.type === "seal_execution_criteria" || cmd.type === "stamp_execution_plan" || cmd.type === "set_execution_state";
 }
 
 export function createWorkBackend(
@@ -2042,7 +2053,7 @@ export function createWorkBackend(
 						continue;
 					}
 					const cmd = env.command as Command;
-					if (!isGrantBoundCommand(cmd)) continue;
+					if (!isReconciledExecutionCommand(cmd)) continue;
 					if (env.workspace_id !== config.workspaceId) continue;
 					if (cmd.payload.grant_id !== grantId) continue;
 

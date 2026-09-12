@@ -3354,6 +3354,11 @@ def _perform_committed_response_loss_cut(
     assert claim_path.read_bytes() == claim_bytes
     authority_proxy.discard_held_command_response()
     provider.restarting = True
+    candidate_id = (
+        upstream.get("result", {}).get("candidate", {}).get("candidate_id")
+        if committed_post_loss == "stamp_execution_plan"
+        else None
+    )
 
     restart_args = (
         "--mode",
@@ -3578,6 +3583,164 @@ def _perform_committed_response_loss_cut(
         )
         (tmp_path / "authority-committed-reconciled.json").write_text(
             json.dumps(evidence, indent=2)
+        )
+
+        # ---- second real process kill + restart (criteria 1/2: "two restarts") ----
+        # Anchor invariants to the state AFTER the first restart: startup recovery may
+        # legitimately have reserved once (session_start_recovery) on restart 1.
+        db_before_second = read_progress_operations(committed_post_loss)
+        set_ops_before_second = read_progress_operations("set_execution_state")
+        exec_before_second_resp = client.get(execution_url)
+        exec_before_second_resp.raise_for_status()
+        exec_before_second = exec_before_second_resp.json()
+        resolved_claim_bytes = claim_path.read_bytes()
+        journal_before_second = sorted(p.name for p in journal_dir.glob("*.json"))
+        proxy_cmd_before_second = len(
+            [r for r in authority_proxy.snapshot() if r.get("commandType") == committed_post_loss]
+        )
+        proxy_set_before_second = len(
+            [r for r in authority_proxy.snapshot() if r.get("commandType") == "set_execution_state"]
+        )
+        session_lines_before_second = [
+            json.loads(l) for l in own_path.read_text().splitlines() if l.strip()
+        ]
+
+        def _continuations(entries: list[dict], post_version: int) -> list[dict]:
+            return [
+                e
+                for e in entries
+                if e.get("type") == "custom_message"
+                and e.get("customType") == "work-execute"
+                and e.get("details", {}).get("executionContinuation", {}).get("postVersion") == post_version
+            ]
+
+        continuations_before_second = len(
+            _continuations(session_lines_before_second, exec_before_second["grant"]["grant_version"])
+        )
+
+        assert restarted.poll() is None and service.poll() is None
+        os.killpg(restarted.pid, signal.SIGKILL)
+        assert restarted.wait(timeout=10) == -signal.SIGKILL
+        second_killed_at = time.time()
+        assert service.poll() is None
+        assert read_progress_operations(committed_post_loss) == committed
+        assert claim_path.read_bytes() == resolved_claim_bytes
+
+    second_log = tmp_path / "controller-committed-restart-2.stderr"  # matches CI glob controller-*.stderr
+    with _process(
+        release.command(state, repository, *restart_args),
+        repository,
+        env,
+        second_log,
+    ) as second:
+        second_rpc = RpcProcess(second, second_log)
+        assert cli.pid != evidence["restartPid"] != second.pid != cli.pid
+        assert second_rpc.request("get_state")["sessionId"] == initial["sessionId"]
+        second_rpc.request("prompt", message=f"/execute resume {provider.key}")
+        deadline = time.monotonic() + 10
+        while second_rpc.request("get_state")["isStreaming"] and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not second_rpc.request("get_state")["isStreaming"]
+        time.sleep(1.0)  # same settle window as the existing controller-again pattern (line ~4511)
+        assert provider.error is None, provider.error
+
+        # durable rows: unchanged identities, no extra row, no new reservation
+        assert read_progress_operations(committed_post_loss) == committed
+        assert read_progress_operations("set_execution_state") == set_ops_before_second
+        assert client.get(f"/v1/operations/{operation_id}").json()["result"] == held_op["response"]
+        exec_after_resp = client.get(execution_url)
+        exec_after_resp.raise_for_status()
+        exec_after = exec_after_resp.json()
+        assert exec_after["grant"]["grant_id"] == visible["grant"]["grant_id"]
+        assert exec_after["grant"]["grant_version"] == exec_before_second["grant"]["grant_version"]
+        assert exec_after["grant"]["state"] == "active"
+        if committed_post_loss == "seal_execution_criteria":
+            assert exec_after["active_item"]["phase"] == "planning"
+            assert exec_after["active_item"]["criteria_revision_id"] == visible["active_item"]["criteria_revision_id"]
+        elif committed_post_loss == "stamp_execution_plan":
+            assert exec_after["active_item"]["phase"] == "executing"
+            assert exec_after["active_item"]["plan_stamp"] == visible["active_item"]["plan_stamp"]
+            receipts = [
+                r
+                for r in client.get(f"/v1/work-items/{provider.key}/workflow").json().get("receipts", [])
+                if r.get("kind") == "plan" and r.get("candidate_id") == str(candidate_id)
+            ]
+            assert len(receipts) == 1, f"Expected exactly one plan receipt, got {receipts}"
+            assert receipts[0]["receipt_id"] == upstream["result"]["receipt"]["receipt_id"]
+        elif committed_post_loss == "set_execution_state":
+            assert exec_after["grant"]["grant_version"] == visible["grant"]["grant_version"]  # still paused+1
+            assert not [
+                r
+                for r in read_progress_operations("set_execution_state")
+                if (r.get("response") or {}).get("reason") == "session_start_recovery"
+            ]
+
+        # journal: resolved claim reused byte-for-byte, nothing new for this grant/type, nothing unresolved
+        assert claim_path.read_bytes() == resolved_claim_bytes
+        journal_after = [
+            json.loads(p.read_bytes())
+            for p in journal_dir.glob("*.json")
+            if p.is_file()
+        ]
+        assert not any(
+            r.get("envelope", {}).get("operation_id") == operation_id and "result" not in r
+            for r in journal_after
+        )
+        assert sorted(p.name for p in journal_dir.glob("*.json")) == journal_before_second
+
+        # wire: zero replay POST, zero new set_execution_state POST from the CLI, no re-fetch of a resolved claim
+        cmd_after = [
+            r
+            for r in authority_proxy.snapshot()
+            if r.get("commandType") == committed_post_loss
+        ]
+        assert len(cmd_after) == proxy_cmd_before_second
+        for row in cmd_after:
+            assert json.loads(Path(row["requestFile"]).read_bytes()) == envelope
+        assert len([r for r in authority_proxy.snapshot() if r.get("commandType") == "set_execution_state"]) == proxy_set_before_second
+        gets_after_second = [
+            g
+            for g in authority_proxy.operation_gets_snapshot()
+            if g["path"] == f"/v1/operations/{operation_id}" and g["startedAt"] >= second_killed_at
+        ]
+        assert gets_after_second == []  # claim already carries result -> work.ts skips before any GET
+
+        # session: exactly the same single continuation for the recovered postVersion
+        session_after = [
+            json.loads(l)
+            for l in own_path.read_text().splitlines()
+            if l.strip()
+        ]
+        assert (
+            len(_continuations(session_after, exec_before_second["grant"]["grant_version"]))
+            == continuations_before_second
+            == 1
+        )
+
+        (tmp_path / "authority-committed-second-restart.json").write_text(
+            json.dumps(
+                {
+                    "firstRestartPid": evidence["restartPid"],
+                    "secondKilledAt": second_killed_at,
+                    "secondRestartPid": second.pid,
+                    "controllerPid": cli.pid,
+                    "servicePid": service.pid,
+                    "databaseBeforeSecondKill": db_before_second,
+                    "databaseAfterSecondRestart": read_progress_operations(committed_post_loss),
+                    "setStateRowsBeforeSecondKill": set_ops_before_second,
+                    "setStateRowsAfterSecondRestart": read_progress_operations("set_execution_state"),
+                    "executionBeforeSecondKill": exec_before_second,
+                    "executionAfterSecondRestart": exec_after,
+                    "resolvedClaimSha256": hashlib.sha256(resolved_claim_bytes).hexdigest(),
+                    "proxyCommandRecordsAfterSecondRestart": cmd_after,
+                    "operationGetsAfterSecondKill": gets_after_second,
+                    "continuationCountForRecoveredVersion": continuations_before_second,
+                    "remainingJournal": journal_after,
+                    "serviceAlive": service.poll() is None,
+                },
+                indent=2,
+                default=str,
+            )
         )
 
 
