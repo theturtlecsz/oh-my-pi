@@ -314,28 +314,30 @@ describe("pending-ops claim lifecycle and housekeeping", () => {
 		}));
 		const otherOwnerBytesBefore = await Bun.file(otherOwnerClaim.path).text();
 
-		// 4. Claim for non-seal operation (matching workspace, owner, grant, but non-seal command with omitted default/optional field)
-		const nonSealCommand = {
-			type: "set_execution_state" as const,
+		// 4. Claim for non-execution operation (matching workspace, owner, but non-execution command without grant_id)
+		const nonExecutionCommand = {
+			type: "revise_work" as const,
 			payload: {
-				grant_id: grantId,
-				expected_grant_version: 3,
-				phase: "planning" as const,
+				work_id: "00000000-0000-7000-8000-000000000001",
+				revision: {
+					title: "revised title",
+					description: "revised desc",
+				},
 			},
 		};
-		const nonSealIntent = intentFingerprint("intent", workspaceId, ownerId, nonSealCommand.type, nonSealCommand.payload);
-		const nonSealClaim = await claimPendingOp(tempDir, nonSealIntent, () => ({
+		const nonExecutionIntent = intentFingerprint("intent", workspaceId, ownerId, nonExecutionCommand.type, nonExecutionCommand.payload);
+		const nonExecutionClaim = await claimPendingOp(tempDir, nonExecutionIntent, () => ({
 			api_version: "work.omp.dev/v1",
 			workspace_id: workspaceId,
 			operation_id: "00000000-0000-7000-8000-000000000050",
 			request_id: "00000000-0000-7000-8000-000000000051",
 			correlation_id: "00000000-0000-7000-8000-000000000099",
-			command: nonSealCommand,
+			command: nonExecutionCommand,
 		}));
-		const nonSealBytesBefore = await Bun.file(nonSealClaim.path).text();
+		const nonExecutionBytesBefore = await Bun.file(nonExecutionClaim.path).text();
 
 		// Reconcile for grantId:
-		// Should resolve appliedClaim; otherGrantClaim, otherOwnerClaim, and nonSealClaim must NOT be touched or fetched.
+		// Should resolve appliedClaim; otherGrantClaim, otherOwnerClaim, and nonExecutionClaim must NOT be touched or fetched.
 		await backend.getPendingExecutionClaims!(grantId);
 
 		expect(operationsRequested).toEqual([appliedOpId]);
@@ -344,10 +346,10 @@ describe("pending-ops claim lifecycle and housekeeping", () => {
 		const appliedClaimAfter = JSON.parse(await Bun.file(appliedClaim.path).text()) as { result?: { type: string } };
 		expect(appliedClaimAfter.result?.type).toBe("seal_execution_criteria");
 
-		// Other-grant, other-principal, and non-seal claims must remain untouched byte-identical
+		// Other-grant, other-principal, and non-execution claims must remain untouched byte-identical
 		expect(await Bun.file(otherGrantClaim.path).text()).toBe(otherGrantBytesBefore);
 		expect(await Bun.file(otherOwnerClaim.path).text()).toBe(otherOwnerBytesBefore);
-		expect(await Bun.file(nonSealClaim.path).text()).toBe(nonSealBytesBefore);
+		expect(await Bun.file(nonExecutionClaim.path).text()).toBe(nonExecutionBytesBefore);
 
 		// 5. Test 400 / missing row refusal:
 		const missingCommand = {
@@ -484,6 +486,671 @@ describe("pending-ops claim lifecycle and housekeeping", () => {
 			request_id: reqId,
 			correlation_id: "00000000-0000-7000-8000-000000000099",
 			command,
+		}));
+		const bytesBefore = await Bun.file(claim.path).text();
+
+		let thrown: Error | null = null;
+		try {
+			await backend.getPendingExecutionClaims!(grantId);
+		} catch (err) {
+			thrown = err as Error;
+		}
+
+		expect(thrown).not.toBeNull();
+		expect(thrown!.message).toContain(`unresolved pending claim ${claim.path}`);
+		expect(thrown!.message).toContain("identity mismatch");
+		expect(thrown!.message).toContain("automatic recovery refused; use stop/cancel or repair the claim");
+
+		expect(operationGetCount).toBe(1);
+		expect(postCount).toBe(0);
+		expect(await Bun.file(claim.path).text()).toBe(bytesBefore);
+	});
+
+	test("getPendingExecutionClaims reconciles applied non-seal execution claim without POST", async () => {
+		const workspaceId = "00000000-0000-7000-8000-000000000000";
+		const ownerId = "00000000-0000-7000-8000-000000000002";
+		const grantId = "00000000-0000-7000-8000-000000000003";
+
+		const stampOpId = "00000000-0000-7000-8000-000000000060";
+		const stampReqId = "00000000-0000-7000-8000-000000000061";
+		const stateOpId = "00000000-0000-7000-8000-000000000070";
+		const stateReqId = "00000000-0000-7000-8000-000000000071";
+
+		let postCount = 0;
+		const operationsRequested: string[] = [];
+
+		const stampCommand = {
+			type: "stamp_execution_plan" as const,
+			payload: {
+				grant_id: grantId,
+				expected_grant_version: 2,
+				work_id: "00000000-0000-7000-8000-000000000001",
+				revision_id: "00000000-0000-7000-8000-000000000002",
+				candidate_id: "00000000-0000-7000-8000-000000000004",
+				plan_file: "plan.md",
+				plan_body: "plan body",
+				plan_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				approach: ["step 1"],
+				verification: ["verify 1"],
+				paths: ["file.ts"],
+				candidate_sha256: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+				judge_sha256: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+			},
+		};
+		const stampHash = payloadHash({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			command: stampCommand,
+		});
+
+		// set_execution_state with reason: null (schema default alignment)
+		const stateCommand = {
+			type: "set_execution_state" as const,
+			payload: {
+				grant_id: grantId,
+				expected_grant_version: 3,
+				target_state: "active" as const,
+				reason: null,
+				judge_sha256: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+			},
+		};
+		const stateHash = payloadHash({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			command: stateCommand,
+		});
+
+		const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+			const url = String(input);
+			if (init?.method === "POST" || url.endsWith("/v1/commands")) {
+				postCount++;
+				return new Response(JSON.stringify({ error: "unexpected_post" }), { status: 500 });
+			}
+			if (url.includes(`/v1/operations/${stampOpId}`)) {
+				operationsRequested.push(stampOpId);
+				return new Response(
+					JSON.stringify({
+						receipt: {
+							operation_id: stampOpId,
+							request_id: stampReqId,
+							state: "applied",
+							request_sha256: stampHash,
+							result_sha256: "1111",
+							diagnostics: [],
+						},
+						command_type: "stamp_execution_plan",
+						request_id: stampReqId,
+						correlation_id: "00000000-0000-7000-8000-000000000099",
+						result: {
+							type: "stamp_execution_plan",
+							item: { plan_stamp: "stamp-123" },
+							receipt: { kind: "plan", receipt_id: "00000000-0000-7000-8000-000000000088", payload: {} },
+							candidate: { candidate_id: "00000000-0000-7000-8000-000000000004" },
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.includes(`/v1/operations/${stateOpId}`)) {
+				operationsRequested.push(stateOpId);
+				return new Response(
+					JSON.stringify({
+						receipt: {
+							operation_id: stateOpId,
+							request_id: stateReqId,
+							state: "applied",
+							request_sha256: stateHash,
+							result_sha256: "2222",
+							diagnostics: [],
+						},
+						command_type: "set_execution_state",
+						request_id: stateReqId,
+						correlation_id: "00000000-0000-7000-8000-000000000099",
+						result: {
+							type: "set_execution_state",
+							grant: { grant_id: grantId, grant_version: 4, state: "active" },
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response("not found", { status: 404 });
+		};
+
+		const backend = createWorkBackend(
+			{
+				baseUrl: "http://127.0.0.1:9999",
+				workspaceId,
+				ownerId,
+			},
+			() => "mock-token",
+			mockFetch as never,
+			tempDir,
+		);
+
+		const stampIntent = intentFingerprint("intent", workspaceId, ownerId, stampCommand.type, stampCommand.payload);
+		const stampClaim = await claimPendingOp(tempDir, stampIntent, () => ({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			operation_id: stampOpId,
+			request_id: stampReqId,
+			correlation_id: "00000000-0000-7000-8000-000000000099",
+			command: stampCommand,
+		}));
+
+		const stateIntent = intentFingerprint("intent", workspaceId, ownerId, stateCommand.type, stateCommand.payload);
+		const stateClaim = await claimPendingOp(tempDir, stateIntent, () => ({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			operation_id: stateOpId,
+			request_id: stateReqId,
+			correlation_id: "00000000-0000-7000-8000-000000000099",
+			command: stateCommand,
+		}));
+
+		const recovered = await backend.getPendingExecutionClaims!(grantId);
+
+		expect(postCount).toBe(0);
+		expect(operationsRequested).toContain(stampOpId);
+		expect(operationsRequested).toContain(stateOpId);
+
+		const stampAfter = JSON.parse(await Bun.file(stampClaim.path).text()) as { result?: { type: string } };
+		expect(stampAfter.result?.type).toBe("stamp_execution_plan");
+
+		const stateAfter = JSON.parse(await Bun.file(stateClaim.path).text()) as { result?: { type: string } };
+		expect(stateAfter.result?.type).toBe("set_execution_state");
+
+		// Preserves result projection: set_execution_state is returned; stamp_execution_plan is resolved on disk but not in host projection
+		const returnedSetState = recovered.find(r => r.command.type === "set_execution_state");
+		expect(returnedSetState).toBeDefined();
+		expect(returnedSetState!.result?.type).toBe("set_execution_state");
+		const returnedStamp = recovered.find(r => r.command.type === "stamp_execution_plan");
+		expect(returnedStamp).toBeUndefined();
+	});
+
+	test("getPendingExecutionClaims refuses claim when stored operation command_type mismatches actual claim type", async () => {
+		const workspaceId = "00000000-0000-7000-8000-000000000000";
+		const ownerId = "00000000-0000-7000-8000-000000000002";
+		const grantId = "00000000-0000-7000-8000-000000000003";
+		const opId = "00000000-0000-7000-8000-000000000080";
+		const reqId = "00000000-0000-7000-8000-000000000081";
+
+		let postCount = 0;
+		let operationGetCount = 0;
+
+		const command = {
+			type: "stamp_execution_plan" as const,
+			payload: {
+				grant_id: grantId,
+				expected_grant_version: 2,
+				work_id: "00000000-0000-7000-8000-000000000001",
+				revision_id: "00000000-0000-7000-8000-000000000002",
+				candidate_id: "00000000-0000-7000-8000-000000000004",
+				plan_file: "plan.md",
+				plan_body: "plan body",
+				plan_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				approach: ["step 1"],
+				verification: ["verify 1"],
+				paths: ["file.ts"],
+				candidate_sha256: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+				judge_sha256: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+			},
+		};
+		const canonicalHash = payloadHash({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			command,
+		});
+
+		const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+			const url = String(input);
+			if (init?.method === "POST" || url.endsWith("/v1/commands")) {
+				postCount++;
+				return new Response(JSON.stringify({ error: "unexpected_post" }), { status: 500 });
+			}
+			if (url.includes(`/v1/operations/${opId}`)) {
+				operationGetCount++;
+				return new Response(
+					JSON.stringify({
+						receipt: {
+							operation_id: opId,
+							request_id: reqId,
+							state: "applied",
+							request_sha256: canonicalHash,
+							result_sha256: "9999",
+							diagnostics: [],
+						},
+						// Mismatched stored command_type: seal_execution_criteria instead of stamp_execution_plan
+						command_type: "seal_execution_criteria",
+						request_id: reqId,
+						correlation_id: "00000000-0000-7000-8000-000000000099",
+						result: {
+							type: "seal_execution_criteria",
+							grant: { grant_id: grantId, grant_version: 3, state: "active" },
+							revision: { revision_id: "00000000-0000-7000-8000-000000000021" },
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response("not found", { status: 404 });
+		};
+
+		const backend = createWorkBackend(
+			{
+				baseUrl: "http://127.0.0.1:9999",
+				workspaceId,
+				ownerId,
+			},
+			() => "mock-token",
+			mockFetch as never,
+			tempDir,
+		);
+
+		const intent = intentFingerprint("intent", workspaceId, ownerId, command.type, command.payload);
+		const claim = await claimPendingOp(tempDir, intent, () => ({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			operation_id: opId,
+			request_id: reqId,
+			correlation_id: "00000000-0000-7000-8000-000000000099",
+			command,
+		}));
+		const bytesBefore = await Bun.file(claim.path).text();
+
+		let thrown: Error | null = null;
+		try {
+			await backend.getPendingExecutionClaims!(grantId);
+		} catch (err) {
+			thrown = err as Error;
+		}
+
+		expect(thrown).not.toBeNull();
+		expect(thrown!.message).toContain(`unresolved pending claim ${claim.path}`);
+		expect(thrown!.message).toContain("identity mismatch");
+		expect(thrown!.message).toContain("automatic recovery refused; use stop/cancel or repair the claim");
+
+		expect(operationGetCount).toBe(1);
+		expect(postCount).toBe(0);
+		expect(await Bun.file(claim.path).text()).toBe(bytesBefore);
+	});
+
+	test("getPendingExecutionClaims leaves unadmitted grant-bound claims untouched and unfetched", async () => {
+		const workspaceId = "00000000-0000-7000-8000-000000000000";
+		const ownerId = "00000000-0000-7000-8000-000000000002";
+		const grantId = "00000000-0000-7000-8000-000000000003";
+
+		const activateOpId = "00000000-0000-7000-8000-000000000010";
+		const activateReqId = "00000000-0000-7000-8000-000000000011";
+		const beginOpId = "00000000-0000-7000-8000-000000000020";
+		const beginReqId = "00000000-0000-7000-8000-000000000021";
+		const completeOpId = "00000000-0000-7000-8000-000000000030";
+		const completeReqId = "00000000-0000-7000-8000-000000000031";
+
+		let postCount = 0;
+		const operationsRequested: string[] = [];
+
+		// activate_execution_item omitting expected_project_id / expected_blocker_ids (project-less client form)
+		const activateCommand = {
+			type: "activate_execution_item" as const,
+			payload: {
+				grant_id: grantId,
+				expected_grant_version: 1,
+				position: 0,
+				work_id: "00000000-0000-7000-8000-000000000001",
+				expected_revision_id: "00000000-0000-7000-8000-000000000002",
+				git_baseline: "abcdef0123456789abcdef0123456789abcdef01",
+				judge_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				expected_focus_version: 1,
+			},
+		};
+		// Service computes hash over model_dump which includes defaulted fields
+		const activateServiceSha256 = payloadHash({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			command: {
+				type: "activate_execution_item" as const,
+				payload: {
+					...activateCommand.payload,
+					expected_project_id: null,
+					expected_blocker_ids: [],
+				},
+			},
+		});
+
+		// begin_execution omitting items[0].project_id and active_blocker_ids
+		const beginCommand = {
+			type: "begin_execution" as const,
+			payload: {
+				grant_id: grantId,
+				provenance: {
+					owner_input_id: "00000000-0000-7000-8000-000000000040",
+					owner_session_id: "00000000-0000-7000-8000-000000000041",
+					normalized_command: "test",
+					workspace_id: workspaceId,
+					repository: "/repo",
+					nonce: "nonce",
+					issued_at: "2026-09-12T10:00:00.000Z",
+				},
+				remote_ref: "refs/heads/main",
+				mode: "single" as const,
+				items: [
+					{
+						work_id: "00000000-0000-7000-8000-000000000001",
+						revision_id: "00000000-0000-7000-8000-000000000002",
+						position: 0,
+						original_request: "req",
+						original_request_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+						initial_git_baseline: "abcdef0123456789abcdef0123456789abcdef01",
+					},
+				],
+				expected_focus_version: 1,
+				judge_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				judge_manifest: {
+					auditor_agent_sha256: "1111111111111111111111111111111111111111111111111111111111111111",
+					host_sha256: "2222222222222222222222222222222222222222222222222222222222222222",
+					adapter_sha256: "3333333333333333333333333333333333333333333333333333333333333333",
+					freeze_sha256: "4444444444444444444444444444444444444444444444444444444444444444",
+					runner_sha256: "5555555555555555555555555555555555555555555555555555555555555555",
+					executor_sha256: "6666666666666666666666666666666666666666666666666666666666666666",
+					contract_sha256: "7777777777777777777777777777777777777777777777777777777777777777",
+					service_fingerprint: "8888888888888888888888888888888888888888888888888888888888888888",
+					service_code_fingerprint: "9999999999999999999999999999999999999999999999999999999999999999",
+					service_migration_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				},
+			},
+		};
+		const beginServiceSha256 = payloadHash({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			command: {
+				type: "begin_execution" as const,
+				payload: {
+					...beginCommand.payload,
+					items: [
+						{
+							...beginCommand.payload.items[0],
+							project_id: null,
+							active_blocker_ids: [],
+						},
+					],
+				},
+			},
+		});
+
+		// complete_execution_item
+		const completeCommand = {
+			type: "complete_execution_item" as const,
+			payload: {
+				grant_id: grantId,
+				expected_grant_version: 1,
+				work_id: "00000000-0000-7000-8000-000000000001",
+				attempt_id: "00000000-0000-7000-8000-000000000050",
+				evidence: {
+					runner: {
+						issuer: "work-service/auditor-settle",
+						launch_id: "00000000-0000-7000-8000-000000000051",
+						tool_call_id: "call_1",
+						task_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+						judge_sha256: null,
+					},
+					subject: {
+						work_id: "00000000-0000-7000-8000-000000000001",
+						revision_id: "00000000-0000-7000-8000-000000000002",
+						candidate_id: "00000000-0000-7000-8000-000000000052",
+						candidate_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+						candidate_commit: "0123456789abcdef0123456789abcdef01234567",
+					},
+					check: {
+						definition: "sealed_audit_manifest",
+						version: 1,
+						manifest_id: "00000000-0000-7000-8000-000000000053",
+						task_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+					},
+					result: "PASS" as const,
+					artifacts: [],
+					delivery: {
+						repository: "/repo",
+						remote_url: "https://example.invalid/repo.git",
+						remote_ref: "refs/heads/main",
+						candidate_commit: "0123456789abcdef0123456789abcdef01234567",
+						remote_commit: "0123456789abcdef0123456789abcdef01234567",
+					},
+				},
+				judge_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			},
+		};
+		const completeSha256 = payloadHash({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			command: completeCommand,
+		});
+
+		const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+			const url = String(input);
+			if (init?.method === "POST" || url.endsWith("/v1/commands")) {
+				postCount++;
+				return new Response(JSON.stringify({ error: "unexpected_post" }), { status: 500 });
+			}
+			if (url.includes(`/v1/operations/${activateOpId}`)) {
+				operationsRequested.push(activateOpId);
+				return new Response(
+					JSON.stringify({
+						receipt: {
+							operation_id: activateOpId,
+							request_id: activateReqId,
+							state: "applied",
+							request_sha256: activateServiceSha256,
+							result_sha256: "1111",
+							diagnostics: [],
+						},
+						command_type: "activate_execution_item",
+						request_id: activateReqId,
+						correlation_id: "00000000-0000-7000-8000-000000000099",
+						result: {
+							type: "activate_execution_item",
+							grant: { grant_id: grantId, grant_version: 2, state: "active" },
+							item: { work_id: "00000000-0000-7000-8000-000000000001", phase: "planning" },
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.includes(`/v1/operations/${beginOpId}`)) {
+				operationsRequested.push(beginOpId);
+				return new Response(
+					JSON.stringify({
+						receipt: {
+							operation_id: beginOpId,
+							request_id: beginReqId,
+							state: "applied",
+							request_sha256: beginServiceSha256,
+							result_sha256: "2222",
+							diagnostics: [],
+						},
+						command_type: "begin_execution",
+						request_id: beginReqId,
+						correlation_id: "00000000-0000-7000-8000-000000000099",
+						result: {
+							type: "begin_execution",
+							grant: { grant_id: grantId, grant_version: 1, state: "active" },
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url.includes(`/v1/operations/${completeOpId}`)) {
+				operationsRequested.push(completeOpId);
+				return new Response(
+					JSON.stringify({
+						receipt: {
+							operation_id: completeOpId,
+							request_id: completeReqId,
+							state: "applied",
+							request_sha256: completeSha256,
+							result_sha256: "3333",
+							diagnostics: [],
+						},
+						command_type: "complete_execution_item",
+						request_id: completeReqId,
+						correlation_id: "00000000-0000-7000-8000-000000000099",
+						result: {
+							type: "complete_execution_item",
+							grant: { grant_id: grantId, grant_version: 2, state: "completed" },
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response("not found", { status: 404 });
+		};
+
+		const backend = createWorkBackend(
+			{
+				baseUrl: "http://127.0.0.1:9999",
+				workspaceId,
+				ownerId,
+			},
+			() => "mock-token",
+			mockFetch as never,
+			tempDir,
+		);
+
+		const activateIntent = intentFingerprint("intent", workspaceId, ownerId, activateCommand.type, activateCommand.payload);
+		const activateClaim = await claimPendingOp(tempDir, activateIntent, () => ({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			operation_id: activateOpId,
+			request_id: activateReqId,
+			correlation_id: "00000000-0000-7000-8000-000000000099",
+			command: activateCommand,
+		}));
+		const activateBytesBefore = await Bun.file(activateClaim.path).text();
+
+		const beginIntent = intentFingerprint("intent", workspaceId, ownerId, beginCommand.type, beginCommand.payload);
+		const beginClaim = await claimPendingOp(tempDir, beginIntent, () => ({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			operation_id: beginOpId,
+			request_id: beginReqId,
+			correlation_id: "00000000-0000-7000-8000-000000000099",
+			command: beginCommand,
+		}));
+		const beginBytesBefore = await Bun.file(beginClaim.path).text();
+
+		const completeIntent = intentFingerprint("intent", workspaceId, ownerId, completeCommand.type, completeCommand.payload);
+		const completeClaim = await claimPendingOp(tempDir, completeIntent, () => ({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			operation_id: completeOpId,
+			request_id: completeReqId,
+			correlation_id: "00000000-0000-7000-8000-000000000099",
+			command: completeCommand,
+		}));
+		const completeBytesBefore = await Bun.file(completeClaim.path).text();
+
+		const recovered = await backend.getPendingExecutionClaims!(grantId);
+
+		expect(postCount).toBe(0);
+		expect(operationsRequested).toEqual([]);
+		expect(await Bun.file(activateClaim.path).text()).toBe(activateBytesBefore);
+		expect(await Bun.file(beginClaim.path).text()).toBe(beginBytesBefore);
+		expect(await Bun.file(completeClaim.path).text()).toBe(completeBytesBefore);
+
+		// Returned projection preserves lines 2110–2112: begin_execution included with undefined result
+		const returnedBegin = recovered.find(r => r.command.type === "begin_execution");
+		expect(returnedBegin).toBeDefined();
+		expect(returnedBegin!.result).toBeUndefined();
+		expect(recovered.find(r => r.command.type === "activate_execution_item")).toBeUndefined();
+		expect(recovered.find(r => r.command.type === "complete_execution_item")).toBeUndefined();
+	});
+
+	test("pre-OMP-277 set_execution_state claim without reason key is refused as identity mismatch", async () => {
+		const workspaceId = "00000000-0000-7000-8000-000000000000";
+		const ownerId = "00000000-0000-7000-8000-000000000002";
+		const grantId = "00000000-0000-7000-8000-000000000003";
+		const opId = "00000000-0000-7000-8000-000000000090";
+		const reqId = "00000000-0000-7000-8000-000000000091";
+
+		let postCount = 0;
+		let operationGetCount = 0;
+
+		// Pre-upgrade claim payload has no 'reason' property
+		const legacyCommand = {
+			type: "set_execution_state" as const,
+			payload: {
+				grant_id: grantId,
+				expected_grant_version: 2,
+				target_state: "active" as const,
+				judge_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			},
+		};
+
+		// Service computes receipt request_sha256 including reason: null from Pydantic model_dump
+		const serviceCommand = {
+			type: "set_execution_state" as const,
+			payload: {
+				...legacyCommand.payload,
+				reason: null,
+			},
+		};
+		const serviceHash = payloadHash({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			command: serviceCommand,
+		});
+
+		const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+			const url = String(input);
+			if (init?.method === "POST" || url.endsWith("/v1/commands")) {
+				postCount++;
+				return new Response(JSON.stringify({ error: "unexpected_post" }), { status: 500 });
+			}
+			if (url.includes(`/v1/operations/${opId}`)) {
+				operationGetCount++;
+				return new Response(
+					JSON.stringify({
+						receipt: {
+							operation_id: opId,
+							request_id: reqId,
+							state: "applied",
+							request_sha256: serviceHash,
+							result_sha256: "4444",
+							diagnostics: [],
+						},
+						command_type: "set_execution_state",
+						request_id: reqId,
+						correlation_id: "00000000-0000-7000-8000-000000000099",
+						result: {
+							type: "set_execution_state",
+							grant: { grant_id: grantId, grant_version: 3, state: "active" },
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response("not found", { status: 404 });
+		};
+
+		const backend = createWorkBackend(
+			{
+				baseUrl: "http://127.0.0.1:9999",
+				workspaceId,
+				ownerId,
+			},
+			() => "mock-token",
+			mockFetch as never,
+			tempDir,
+		);
+
+		const intent = intentFingerprint("intent", workspaceId, ownerId, legacyCommand.type, legacyCommand.payload);
+		const claim = await claimPendingOp(tempDir, intent, () => ({
+			api_version: "work.omp.dev/v1",
+			workspace_id: workspaceId,
+			operation_id: opId,
+			request_id: reqId,
+			correlation_id: "00000000-0000-7000-8000-000000000099",
+			command: legacyCommand,
 		}));
 		const bytesBefore = await Bun.file(claim.path).text();
 

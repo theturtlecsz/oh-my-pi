@@ -516,6 +516,23 @@ export function buildCompletionEvidence(
 	};
 }
 
+/** Execution mutations reconciled at startup/resume. Only types whose client
+ *  payload emits every service-model field, so payloadHash(envelope) equals the
+ *  stored receipt request_sha256 (canonical.py command_sha256 over model_dump),
+ *  and which are whole-process qualified (test_installed_execution_recovery.py).
+ *  begin_execution / activate_execution_item omit defaulted keys
+ *  (project_id, expected_project_id, expected_blocker_ids) and
+ *  complete_execution_item is not installed-qualified: those claims stay
+ *  skipped here exactly as before OMP-277. */
+type ReconciledExecutionCommand = Extract<
+	Command,
+	{ type: "seal_execution_criteria" | "stamp_execution_plan" | "set_execution_state" }
+>;
+
+function isReconciledExecutionCommand(cmd: Command): cmd is ReconciledExecutionCommand {
+	return cmd.type === "seal_execution_criteria" || cmd.type === "stamp_execution_plan" || cmd.type === "set_execution_state";
+}
+
 export function createWorkBackend(
 	config: WorkClientConfig,
 	token: () => string | null,
@@ -1991,7 +2008,7 @@ export function createWorkBackend(
 				grant_id: input.grantId,
 				expected_grant_version: input.expectedGrantVersion,
 				target_state: input.targetState,
-				reason: input.reason,
+				reason: input.reason ?? null,
 				judge_sha256: input.judgeSha256,
 			});
 			if (result.type !== "set_execution_state") throw new Error(`unexpected result ${result.type}`);
@@ -2036,7 +2053,7 @@ export function createWorkBackend(
 						continue;
 					}
 					const cmd = env.command as Command;
-					if (cmd.type !== "seal_execution_criteria") continue;
+					if (!isReconciledExecutionCommand(cmd)) continue;
 					if (env.workspace_id !== config.workspaceId) continue;
 					if (cmd.payload.grant_id !== grantId) continue;
 
@@ -2071,7 +2088,7 @@ export function createWorkBackend(
 						receipt &&
 						receipt.operation_id === env.operation_id &&
 						receipt.request_id === env.request_id &&
-						stored.command_type === "seal_execution_criteria" &&
+						stored.command_type === cmd.type &&
 						receipt.request_sha256 === expectedRequestSha256;
 
 					const isApplied = receipt && (receipt.state === "applied" || receipt.state === "replayed");
