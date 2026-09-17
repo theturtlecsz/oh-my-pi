@@ -130,6 +130,7 @@ _COMMAND_TYPES = frozenset(
         "issue_frontier_exception",
         "put_provider_account",
         "register_rate_card",
+        "quote_budget",
     }
 )
 

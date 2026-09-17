@@ -4,6 +4,8 @@
 
 ### Added
 
+- Immutable provider budget-quote authority with `quote_budget` command, append-only `budget_quotes` table, and optional `quote_id` reservation binding on `reserve_budget` (OMP-233).
+
 - Immutable rate-card authority with `register_rate_card` command, workspace rate-cards query endpoints, and provider-account rate card version qualification and compatibility enforcement.
 - Exact historical `WorkRevision` resolution by work item key + revision selector (revision number or UUID) via `GET /v1/work-items/{key}/revisions/{revision_selector}`, and full revision list via `GET /v1/work-items/{key}/revisions`.
 - Exact immutable `EvidenceReceiptView` resolution by UUID via `GET /v1/receipts/{receipt_id}` enforcing `work.read` scope and workspace RLS.

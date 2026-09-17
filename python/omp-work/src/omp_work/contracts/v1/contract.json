@@ -73,7 +73,8 @@
     "expire_budget",
     "issue_frontier_exception",
     "put_provider_account",
-    "register_rate_card"
+    "register_rate_card",
+    "quote_budget"
   ],
   "error_codes": [
     "invalid_request",

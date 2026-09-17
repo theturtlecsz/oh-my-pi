@@ -75,6 +75,7 @@ class WorkService:
         "issue_frontier_exception": "work.operate",
         "put_provider_account": "work.operate",
         "register_rate_card": "work.operate",
+        "quote_budget": "work.execute",
     }
 
     def __init__(self, store: WorkStore) -> None:

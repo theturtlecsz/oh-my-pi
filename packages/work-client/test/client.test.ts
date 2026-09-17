@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { payloadHash, WORK_CONTRACT_SHA256, WorkClient, WorkError } from "../src/index";
+import { type BudgetQuote, payloadHash, WORK_CONTRACT_SHA256, WorkClient, WorkError } from "../src/index";
 
 const ENV = {
 	api_version: "work.omp.dev/v1" as const,
@@ -1124,6 +1124,116 @@ test("executes register_rate_card and decodes typed RateCardResult", async () =>
 		expect(res.result.rate_card.provider).toBe("anthropic");
 		expect(res.result.rate_card.qualification).toBe("qualified");
 	}
+});
+
+test("executes quote_budget and reserve_budget with quote_id", async () => {
+	const quoteId = "00000000-0000-7000-8000-000000000030";
+	const accountId = "00000000-0000-7000-8000-000000000020";
+	const rateCardId = "00000000-0000-7000-8000-000000000040";
+	const workId = "00000000-0000-7000-8000-000000000050";
+	const dummyQuote: BudgetQuote = {
+		quote_id: quoteId,
+		workspace_id: ENV.workspace_id,
+		work_id: workId,
+		revision_id: null,
+		candidate_id: null,
+		attempt_id: null,
+		grant_id: null,
+		role: "implement",
+		launch_id: null,
+		account_id: accountId,
+		account_evidence_observed_at: "2026-09-17T00:00:00+00:00",
+		provider: "gemini",
+		model: "gemini-3.8-flash",
+		effort: "high",
+		rate_card_id: rateCardId,
+		rate_card_version: "v1",
+		currency: "USD",
+		usage_ceiling: { input: 1000, output: 200 },
+		worst_case_amount: "0.006",
+		evidence_sha256: "a".repeat(64),
+		quote_sha256: "b".repeat(64),
+		quoted_at: "2026-09-17T00:00:00+00:00",
+	};
+
+	let capturedReservePayload: any = null;
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (_input, init) => {
+			const body = JSON.parse(String(init?.body));
+			if (body.command.type === "quote_budget") {
+				return Response.json({
+					receipt: RECEIPT,
+					result: {
+						type: "quote_budget",
+						quote: dummyQuote,
+					},
+				});
+			}
+			if (body.command.type === "reserve_budget") {
+				capturedReservePayload = body.command.payload;
+				return Response.json({
+					receipt: RECEIPT,
+					result: {
+						type: "reserve_budget",
+						scope_id: body.command.payload.scope_id,
+						reservation_id: "00000000-0000-7000-8000-000000000010",
+						fence: 1,
+						state: "reserved_unsent",
+					},
+				});
+			}
+			return Response.json({ error: "unexpected" }, { status: 500 });
+		},
+	);
+
+	const quoteRes = await client.execute({
+		...ENV,
+		command: {
+			type: "quote_budget",
+			payload: {
+				work_id: workId,
+				role: "implement",
+				provider: "gemini",
+				model: "gemini-3.8-flash",
+				effort: "high",
+				currency: "USD",
+				usage_ceiling: { input: 1000, output: 200 },
+			},
+		},
+	});
+	expect(quoteRes.result.type).toBe("quote_budget");
+	if (quoteRes.result.type === "quote_budget") {
+		expect(quoteRes.result.quote.quote_id).toBe(quoteId);
+		expect(quoteRes.result.quote.worst_case_amount).toBe("0.006");
+		expect(quoteRes.result.quote.rate_card_id).toBe(rateCardId);
+	}
+
+	const reserveRes = await client.execute({
+		...ENV,
+		command: {
+			type: "reserve_budget",
+			payload: {
+				scope_id: "00000000-0000-7000-8000-000000000001",
+				account_id: accountId,
+				logical_call_id: "00000000-0000-7000-8000-000000000002",
+				transport_attempt_id: "00000000-0000-7000-8000-000000000003",
+				provider: "gemini",
+				model: "gemini-3.8-flash",
+				effort: "high",
+				resource: "native_quota",
+				worst_case_drawdown: "0.006",
+				context_limit: 128000,
+				output_limit: 8192,
+				expires_at: "2026-09-17T01:00:00Z",
+				quote_id: quoteId,
+			},
+		},
+	});
+	expect(reserveRes.result.type).toBe("reserve_budget");
+	expect(capturedReservePayload.quote_id).toBe(quoteId);
 });
 
 test("executes record_stage_preflight and decodes typed result and workflow stage_preflights", async () => {

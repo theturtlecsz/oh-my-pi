@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `quote_budget` command and `BudgetQuoteResult` type, and optional `quote_id` on `ReserveBudgetPayload` (OMP-233).
+
 - Added `rateCards()` and `rateCard(rateCardId)` query methods and `register_rate_card` command execution for immutable rate-card authority.
 - Added `revision(key, selector)`, `revisions(key)`, `receipt(receipt_id)`, and `workItems({ cursor, limit })` client methods with keyset pagination support and selector parsing.
 - Added `events({ cursor, limit, afterSequence, throughSequence })` and `repositories({ cursor, limit })` client methods with keyset pagination support.

@@ -825,6 +825,7 @@ export type ReserveBudgetPayload = {
 	output_limit: number;
 	expires_at: string;
 	launch_id?: UUID | null;
+	quote_id?: UUID | null;
 };
 export type ClaimBudgetPayload = {
 	reservation_id: UUID;
@@ -892,6 +893,47 @@ export type RegisterRateCardPayload = {
 	evidence_source: string;
 	observed_at: string;
 	qualification: RateCardQualification;
+};
+
+export type BudgetQuote = {
+	quote_id: UUID;
+	workspace_id: UUID;
+	work_id: UUID;
+	revision_id?: UUID | null;
+	candidate_id?: UUID | null;
+	attempt_id?: UUID | null;
+	grant_id?: UUID | null;
+	role: StageLaunchRole;
+	launch_id?: UUID | null;
+	account_id: UUID;
+	account_evidence_observed_at: string;
+	provider: string;
+	model: string;
+	effort: string;
+	rate_card_id: UUID;
+	rate_card_version: string;
+	currency: string;
+	usage_ceiling: Record<string, number>;
+	worst_case_amount: string;
+	evidence_sha256: string;
+	quote_sha256: string;
+	quoted_at: string;
+};
+
+export type QuoteBudgetPayload = {
+	work_id: UUID;
+	revision_id?: UUID | null;
+	candidate_id?: UUID | null;
+	attempt_id?: UUID | null;
+	grant_id?: UUID | null;
+	role: StageLaunchRole;
+	launch_id?: UUID | null;
+	account_id?: UUID | null;
+	provider: string;
+	model: string;
+	effort: string;
+	currency: string;
+	usage_ceiling: Record<string, number>;
 };
 
 export type CommandSmokeResult = { command_type: string; passed: boolean };
@@ -1094,6 +1136,7 @@ export type Command =
 	| { type: "issue_frontier_exception"; payload: IssueFrontierExceptionPayload }
 	| { type: "put_provider_account"; payload: PutProviderAccountPayload }
 	| { type: "register_rate_card"; payload: RegisterRateCardPayload }
+	| { type: "quote_budget"; payload: QuoteBudgetPayload }
 	| { type: "associate_candidate_source"; payload: AssociateCandidateSourcePayload }
 	| { type: "attest_checkpoint_delivery"; payload: AttestCheckpointDeliveryPayload }
 	| { type: "record_closeout_review"; payload: RecordCloseoutReviewPayload }
@@ -1156,10 +1199,16 @@ export type RateCardResult = {
 	rate_card: RateCard;
 };
 
+export type BudgetQuoteResult = {
+	type: "quote_budget";
+	quote: BudgetQuote;
+};
+
 export type CommandResult =
 	| BudgetResult
 	| ProviderAccountResult
 	| RateCardResult
+	| BudgetQuoteResult
 	| { type: "create_work_batch"; items: CreatedWorkItem[] }
 	| { type: "create_same_session_child"; item: CreatedWorkItem; receipt: EvidenceReceipt }
 	| { type: "revise_work"; revision_id: UUID; changed: boolean }

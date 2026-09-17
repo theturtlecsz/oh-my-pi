@@ -318,6 +318,31 @@ class ProviderAccount(StrictModel):
     concurrency_limit: int = Field(ge=1)
 
 
+class BudgetQuote(StrictModel):
+    quote_id: UUID
+    workspace_id: UUID
+    work_id: UUID
+    revision_id: UUID | None = None
+    candidate_id: UUID | None = None
+    attempt_id: UUID | None = None
+    grant_id: UUID | None = None
+    role: StageLaunchRole
+    launch_id: UUID | None = None
+    account_id: UUID
+    account_evidence_observed_at: datetime
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    effort: str = Field(min_length=1)
+    rate_card_id: UUID
+    rate_card_version: str = Field(min_length=1)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    usage_ceiling: dict[str, int]
+    worst_case_amount: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    quote_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    quoted_at: datetime
+
+
 class BudgetScope(StrictModel):
     scope_id: UUID
     workspace_id: UUID
@@ -1245,6 +1270,7 @@ class ReserveBudgetPayload(StrictModel):
     output_limit: int = Field(gt=0)
     expires_at: datetime
     launch_id: UUID | None = None
+    quote_id: UUID | None = None
 
 
 class ClaimBudgetPayload(StrictModel):
@@ -1356,6 +1382,44 @@ class RegisterRateCardPayload(StrictModel):
                 raise ValueError(f"invalid decimal value for unit price '{key}': {val}")
             if not dec.is_finite() or dec < 0:
                 raise ValueError(f"unit price '{key}' must be finite and non-negative")
+        return self
+
+
+class QuoteBudgetPayload(StrictModel):
+    work_id: UUID
+    revision_id: UUID | None = None
+    candidate_id: UUID | None = None
+    attempt_id: UUID | None = None
+    grant_id: UUID | None = None
+    role: StageLaunchRole
+    launch_id: UUID | None = None
+    account_id: UUID | None = None
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    effort: str = Field(min_length=1)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    usage_ceiling: dict[str, int]
+
+    @model_validator(mode="after")
+    def validate_invariants(self) -> QuoteBudgetPayload:
+        if not self.provider.strip():
+            raise ValueError("provider cannot be blank")
+        if not self.model.strip():
+            raise ValueError("model cannot be blank")
+        if not self.effort.strip():
+            raise ValueError("effort cannot be blank")
+        if not self.usage_ceiling:
+            raise ValueError("usage_ceiling cannot be empty")
+        has_positive = False
+        for key, val in self.usage_ceiling.items():
+            if not key or not key.strip():
+                raise ValueError("usage_ceiling keys cannot be blank")
+            if not isinstance(val, int) or isinstance(val, bool) or val < 0:
+                raise ValueError(f"usage_ceiling value for '{key}' must be an integer >= 0")
+            if val > 0:
+                has_positive = True
+        if not has_positive:
+            raise ValueError("usage_ceiling must contain at least one value > 0")
         return self
 
 
@@ -1772,6 +1836,11 @@ class RegisterRateCardCommand(StrictModel):
     payload: RegisterRateCardPayload
 
 
+class QuoteBudgetCommand(StrictModel):
+    type: Literal["quote_budget"]
+    payload: QuoteBudgetPayload
+
+
 class AssociateCandidateSourceCommand(StrictModel):
     type: Literal["associate_candidate_source"]
     payload: AssociateCandidateSourcePayload
@@ -1842,6 +1911,7 @@ Command = Annotated[
     | IssueFrontierExceptionCommand
     | PutProviderAccountCommand
     | RegisterRateCardCommand
+    | QuoteBudgetCommand
     | AssociateCandidateSourceCommand
     | AttestCheckpointDeliveryCommand
     | RecordCloseoutReviewCommand

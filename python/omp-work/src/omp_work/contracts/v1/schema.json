@@ -3564,6 +3564,194 @@
       "title": "BindingManifest",
       "type": "object"
     },
+    "BudgetQuote": {
+      "$defs": {
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "account_evidence_observed_at": {
+          "format": "date-time",
+          "title": "Account Evidence Observed At",
+          "type": "string"
+        },
+        "account_id": {
+          "format": "uuid",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "attempt_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempt Id"
+        },
+        "candidate_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "effort": {
+          "minLength": 1,
+          "title": "Effort",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grant Id"
+        },
+        "launch_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Launch Id"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "quote_id": {
+          "format": "uuid",
+          "title": "Quote Id",
+          "type": "string"
+        },
+        "quote_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Quote Sha256",
+          "type": "string"
+        },
+        "quoted_at": {
+          "format": "date-time",
+          "title": "Quoted At",
+          "type": "string"
+        },
+        "rate_card_id": {
+          "format": "uuid",
+          "title": "Rate Card Id",
+          "type": "string"
+        },
+        "rate_card_version": {
+          "minLength": 1,
+          "title": "Rate Card Version",
+          "type": "string"
+        },
+        "revision_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision Id"
+        },
+        "role": {
+          "$ref": "#/$defs/StageLaunchRole"
+        },
+        "usage_ceiling": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Usage Ceiling",
+          "type": "object"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        },
+        "worst_case_amount": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Worst Case Amount",
+          "type": "string"
+        }
+      },
+      "required": [
+        "quote_id",
+        "workspace_id",
+        "work_id",
+        "role",
+        "account_id",
+        "account_evidence_observed_at",
+        "provider",
+        "model",
+        "effort",
+        "rate_card_id",
+        "rate_card_version",
+        "currency",
+        "usage_ceiling",
+        "worst_case_amount",
+        "evidence_sha256",
+        "quote_sha256",
+        "quoted_at"
+      ],
+      "title": "BudgetQuote",
+      "type": "object"
+    },
     "BudgetScope": {
       "$defs": {
         "BudgetScopeKind": {
@@ -8020,6 +8208,154 @@
           "title": "PutRelationPayload",
           "type": "object"
         },
+        "QuoteBudgetCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/QuoteBudgetPayload"
+            },
+            "type": {
+              "const": "quote_budget",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "QuoteBudgetCommand",
+          "type": "object"
+        },
+        "QuoteBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Account Id"
+            },
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "title": "Currency",
+              "type": "string"
+            },
+            "effort": {
+              "minLength": 1,
+              "title": "Effort",
+              "type": "string"
+            },
+            "grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grant Id"
+            },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
+            "model": {
+              "minLength": 1,
+              "title": "Model",
+              "type": "string"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision Id"
+            },
+            "role": {
+              "$ref": "#/$defs/StageLaunchRole"
+            },
+            "usage_ceiling": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usage Ceiling",
+              "type": "object"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "role",
+            "provider",
+            "model",
+            "effort",
+            "currency",
+            "usage_ceiling"
+          ],
+          "title": "QuoteBudgetPayload",
+          "type": "object"
+        },
         "RateCardQualification": {
           "enum": [
             "unqualified",
@@ -8984,6 +9320,19 @@
               "minLength": 1,
               "title": "Provider",
               "type": "string"
+            },
+            "quote_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quote Id"
             },
             "resource": {
               "$ref": "#/$defs/BudgetResource"
@@ -10290,6 +10639,7 @@
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
               "put_provider_account": "#/$defs/PutProviderAccountCommand",
               "put_relation": "#/$defs/PutRelationCommand",
+              "quote_budget": "#/$defs/QuoteBudgetCommand",
               "reconcile_stage_launch": "#/$defs/ReconcileStageLaunchCommand",
               "reconcile_stage_preflight": "#/$defs/ReconcileStagePreflightCommand",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewCommand",
@@ -10416,6 +10766,9 @@
             },
             {
               "$ref": "#/$defs/RegisterRateCardCommand"
+            },
+            {
+              "$ref": "#/$defs/QuoteBudgetCommand"
             },
             {
               "$ref": "#/$defs/AssociateCandidateSourceCommand"
@@ -17072,6 +17425,307 @@
       "title": "PutRelationPayload",
       "type": "object"
     },
+    "QuoteBudgetCommand": {
+      "$defs": {
+        "QuoteBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Account Id"
+            },
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "title": "Currency",
+              "type": "string"
+            },
+            "effort": {
+              "minLength": 1,
+              "title": "Effort",
+              "type": "string"
+            },
+            "grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grant Id"
+            },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
+            "model": {
+              "minLength": 1,
+              "title": "Model",
+              "type": "string"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision Id"
+            },
+            "role": {
+              "$ref": "#/$defs/StageLaunchRole"
+            },
+            "usage_ceiling": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usage Ceiling",
+              "type": "object"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "role",
+            "provider",
+            "model",
+            "effort",
+            "currency",
+            "usage_ceiling"
+          ],
+          "title": "QuoteBudgetPayload",
+          "type": "object"
+        },
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/QuoteBudgetPayload"
+        },
+        "type": {
+          "const": "quote_budget",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "QuoteBudgetCommand",
+      "type": "object"
+    },
+    "QuoteBudgetPayload": {
+      "$defs": {
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Account Id"
+        },
+        "attempt_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempt Id"
+        },
+        "candidate_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "effort": {
+          "minLength": 1,
+          "title": "Effort",
+          "type": "string"
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grant Id"
+        },
+        "launch_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Launch Id"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "revision_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision Id"
+        },
+        "role": {
+          "$ref": "#/$defs/StageLaunchRole"
+        },
+        "usage_ceiling": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Usage Ceiling",
+          "type": "object"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "role",
+        "provider",
+        "model",
+        "effort",
+        "currency",
+        "usage_ceiling"
+      ],
+      "title": "QuoteBudgetPayload",
+      "type": "object"
+    },
     "RateCard": {
       "$defs": {
         "RateCardQualification": {
@@ -20149,6 +20803,19 @@
               "title": "Provider",
               "type": "string"
             },
+            "quote_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Quote Id"
+            },
             "resource": {
               "$ref": "#/$defs/BudgetResource"
             },
@@ -20271,6 +20938,19 @@
           "minLength": 1,
           "title": "Provider",
           "type": "string"
+        },
+        "quote_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quote Id"
         },
         "resource": {
           "$ref": "#/$defs/BudgetResource"

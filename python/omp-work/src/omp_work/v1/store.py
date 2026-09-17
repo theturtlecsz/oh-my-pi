@@ -62,6 +62,7 @@ from .models import (
     OperationReceipt,
     OperationState,
     PutProviderAccountPayload,
+    QuoteBudgetPayload,
     RegisterRateCardPayload,
     BudgetScopeCursorPayload,
     RelationEdge,
@@ -94,6 +95,7 @@ _STAGE_PREFLIGHT_RECONCILIATION_FIELDS = "reconciliation_id,workspace_id,transpo
 _SOURCE_VERSION_FIELDS = "candidate_id,workspace_id,work_id,revision_id,repository_id,source_version_id,snapshot_id,base_commit,analyzed_commit,tree_sha,source_manifest_sha256,snapshot_manifest_sha256,content_sha256,association_sha256,producer,producer_receipt_sha256,created_at"
 _PROVIDER_ACCOUNT_FIELDS = "account_id,workspace_id,provider,account_identity,entitlement_evidence,evidence_observed_at,billing_mode,rate_card_version,observed_balance,balance_provenance,reset_at,concurrency_limit"
 _RATE_CARD_FIELDS = "rate_card_id,workspace_id,provider,version,billing_modes,effective_from,effective_until,currency,unit_prices,evidence_sha256,evidence_source,observed_at,qualification,registered_at"
+_BUDGET_QUOTE_FIELDS = "quote_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,launch_id,account_id,account_evidence_observed_at,provider,model,effort,rate_card_id,rate_card_version,currency,usage_ceiling,worst_case_amount,evidence_sha256,quote_sha256,quoted_at"
 _LIVE_STATES = tuple(sorted(state.value for state in LIVE_CLOSE_ATTEMPT_STATES))
 _CLOSE_COMMANDS = {
     "begin_close_attempt",
@@ -132,6 +134,21 @@ def _rate_card_json(row: dict[str, object] | None) -> dict[str, object] | None:
     res = _row_json(row)
     if res is not None and unit_prices is not None:
         res["unit_prices"] = unit_prices
+    return res
+
+
+def _budget_quote_json(row: dict[str, object] | None) -> dict[str, object] | None:
+    if row is None:
+        return None
+    usage_ceiling = row.get("usage_ceiling")
+    if isinstance(usage_ceiling, str):
+        usage_ceiling = json.loads(usage_ceiling)
+    res = _row_json(row)
+    if res is not None:
+        if usage_ceiling is not None:
+            res["usage_ceiling"] = usage_ceiling
+        if "worst_case_amount" in row and row["worst_case_amount"] is not None:
+            res["worst_case_amount"] = format(Decimal(str(row["worst_case_amount"])), "f")
     return res
 
 
@@ -398,6 +415,7 @@ class PostgresWorkStore:
             "issue_frontier_exception",
             "put_provider_account",
             "register_rate_card",
+            "quote_budget",
         }
         conflict = False
         with self._transaction(
@@ -524,6 +542,8 @@ class PostgresWorkStore:
                     result = self._put_provider_account(cur, envelope)
                 elif command.type == "register_rate_card":
                     result = self._register_rate_card(cur, envelope)
+                elif command.type == "quote_budget":
+                    result = self._quote_budget(cur, envelope)
                 elif command.type == "associate_candidate_source":
                     result = self._associate_candidate_source(cur, envelope)
                 elif command.type == "attest_checkpoint_delivery":
@@ -3012,6 +3032,48 @@ class PostgresWorkStore:
             raise WorkStoreError("invalid_request", ("unknown_account_evidence",))
         if account["provider"] != payload.provider:
             raise WorkStoreError("invalid_request", ("account_provider_mismatch",))
+        if payload.quote_id is not None:
+            cur.execute(
+                f"SELECT {_BUDGET_QUOTE_FIELDS} FROM omp_work.budget_quotes WHERE workspace_id=%s AND quote_id=%s",
+                (envelope.workspace_id, payload.quote_id),
+            )
+            quote = cur.fetchone()
+            if quote is None:
+                raise WorkStoreError("invalid_request", ("quote_missing",))
+            if quote["account_id"] != payload.account_id:
+                raise WorkStoreError("invalid_request", ("quote_account_mismatch",))
+            if (
+                quote["provider"] != payload.provider
+                or quote["model"] != payload.model
+                or quote["effort"] != payload.effort
+            ):
+                raise WorkStoreError("invalid_request", ("quote_route_mismatch",))
+            if quote["launch_id"] != payload.launch_id:
+                raise WorkStoreError("invalid_request", ("quote_launch_mismatch",))
+            if self._money(payload.worst_case_drawdown) != self._money(str(quote["worst_case_amount"])):
+                raise WorkStoreError("invalid_request", ("quote_amount_mismatch",))
+            if (
+                account["evidence_observed_at"] != quote["account_evidence_observed_at"]
+                or account["rate_card_version"] != quote["rate_card_version"]
+            ):
+                raise WorkStoreError("stale_evidence", ("quote_stale_account",))
+            cur.execute(
+                """
+                SELECT (clock_timestamp() < effective_from OR (effective_until IS NOT NULL AND clock_timestamp() >= effective_until)) AS not_effective
+                FROM omp_work.rate_cards
+                WHERE workspace_id=%s AND rate_card_id=%s
+                """,
+                (envelope.workspace_id, quote["rate_card_id"]),
+            )
+            card_check = cur.fetchone()
+            if card_check is None or card_check["not_effective"]:
+                raise WorkStoreError("invalid_request", ("rate_card_not_effective",))
+            cur.execute(
+                "SELECT 1 FROM omp_work.budget_reservations WHERE quote_id=%s",
+                (payload.quote_id,),
+            )
+            if cur.fetchone() is not None:
+                raise WorkStoreError("invalid_request", ("quote_already_reserved",))
         amount = self._money(payload.worst_case_drawdown)
         chain = self._lock_budget_chain(cur, envelope.workspace_id, payload.scope_id)
         cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (str(payload.account_id),))
@@ -3031,43 +3093,49 @@ class PostgresWorkStore:
         fence = int(cur.fetchone()["fence"])
         self._apply_budget_transition(cur, chain, key, held_delta=amount)
         reservation_id = UUID(str(envelope.operation_id))
-        cur.execute(
-            """
-            INSERT INTO omp_work.budget_reservations(
-                reservation_id, workspace_id, scope_id, account_id,
-                logical_call_id, transport_attempt_id, fence, state,
-                resource, worst_case_drawdown, provider, model,
-                effort, context_limit, output_limit, expires_at,
-                launch_id
+        try:
+            cur.execute(
+                """
+                INSERT INTO omp_work.budget_reservations(
+                    reservation_id, workspace_id, scope_id, account_id,
+                    logical_call_id, transport_attempt_id, fence, state,
+                    resource, worst_case_drawdown, provider, model,
+                    effort, context_limit, output_limit, expires_at,
+                    launch_id, quote_id
+                )
+                SELECT
+                    %s, %s, %s, %s,
+                    %s, %s, %s, 'reserved_unsent',
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s
+                WHERE clock_timestamp() < %s
+                """,
+                (
+                    reservation_id,
+                    envelope.workspace_id,
+                    payload.scope_id,
+                    payload.account_id,
+                    payload.logical_call_id,
+                    payload.transport_attempt_id,
+                    fence,
+                    payload.resource.value,
+                    payload.worst_case_drawdown,
+                    payload.provider,
+                    payload.model,
+                    payload.effort,
+                    payload.context_limit,
+                    payload.output_limit,
+                    payload.expires_at,
+                    payload.launch_id,
+                    payload.quote_id,
+                    payload.expires_at,
+                ),
             )
-            SELECT
-                %s, %s, %s, %s,
-                %s, %s, %s, 'reserved_unsent',
-                %s, %s, %s, %s,
-                %s, %s, %s, %s,
-                %s
-            WHERE clock_timestamp() < %s
-            """,
-            (
-                reservation_id,
-                envelope.workspace_id,
-                payload.scope_id,
-                payload.account_id,
-                payload.logical_call_id,
-                payload.transport_attempt_id,
-                fence,
-                payload.resource.value,
-                payload.worst_case_drawdown,
-                payload.provider,
-                payload.model,
-                payload.effort,
-                payload.context_limit,
-                payload.output_limit,
-                payload.expires_at,
-                payload.launch_id,
-                payload.expires_at,
-            ),
-        )
+        except psycopg.errors.UniqueViolation as e:
+            if payload.quote_id is not None and "quote" in str(e).lower():
+                raise WorkStoreError("invalid_request", ("quote_already_reserved",)) from e
+            raise
         if cur.rowcount != 1:
             raise WorkStoreError("invalid_request", ("reservation_already_expired",))
         return {"type": "reserve_budget", "reservation_id": str(reservation_id), "transport_attempt_id": str(payload.transport_attempt_id), "fence": fence, "state": "reserved_unsent"}
@@ -3441,6 +3509,216 @@ class PostgresWorkStore:
             }
         except psycopg.errors.UniqueViolation:
             raise WorkStoreError("revision_conflict", ("rate_card_identity_conflict",))
+
+    def _quote_budget(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload: QuoteBudgetPayload = envelope.command.payload
+
+        # 1. Lock work chain and bind stage identities
+        self._lock_work_chain(cur, envelope.workspace_id, payload.work_id)
+        self._bind_stage_identities(cur, envelope.workspace_id, payload, require_active=False)
+
+        # 2. Stage launch validation if launch_id provided
+        if payload.launch_id is not None:
+            cur.execute(
+                f"SELECT {_STAGE_LAUNCH_FIELDS} FROM omp_work.stage_launches WHERE workspace_id=%s AND launch_id=%s",
+                (envelope.workspace_id, payload.launch_id),
+            )
+            launch = cur.fetchone()
+            if launch is None:
+                raise WorkStoreError("stale_evidence", ("unknown native stage launch",))
+            if launch["status"] != StageLaunchStatus.RESERVED.value:
+                raise WorkStoreError("stale_evidence", (f"stage launch is {launch['status']}",))
+            if launch["work_id"] != payload.work_id:
+                raise WorkStoreError("stale_evidence", ("stage launch is not bound to the work item",))
+            effective_provider = launch["resolved_provider"] or launch["requested_provider"]
+            effective_model = launch["resolved_model"] or launch["requested_model"]
+            effective_effort = launch["requested_effort"]
+            if (
+                payload.provider != effective_provider
+                or payload.model != effective_model
+                or payload.effort != effective_effort
+            ):
+                raise WorkStoreError("stale_evidence", ("stage launch route mismatch",))
+
+        # 3. Account selection
+        if payload.account_id is not None:
+            cur.execute(
+                f"SELECT {_PROVIDER_ACCOUNT_FIELDS} FROM omp_work.provider_accounts WHERE workspace_id=%s AND account_id=%s",
+                (envelope.workspace_id, payload.account_id),
+            )
+            account = cur.fetchone()
+            if account is None:
+                raise WorkStoreError("invalid_request", ("provider_account_missing",))
+            if account["provider"] != payload.provider:
+                raise WorkStoreError("invalid_request", ("account_provider_mismatch",))
+        else:
+            cur.execute(
+                f"SELECT {_PROVIDER_ACCOUNT_FIELDS} FROM omp_work.provider_accounts WHERE workspace_id=%s AND provider=%s ORDER BY account_id",
+                (envelope.workspace_id, payload.provider),
+            )
+            accounts = cur.fetchall()
+            if len(accounts) == 0:
+                raise WorkStoreError("invalid_request", ("provider_account_missing",))
+            if len(accounts) > 1:
+                raise WorkStoreError("invalid_request", ("account_selection_ambiguous",))
+            account = accounts[0]
+
+        # 4. Account fail-closed
+        if account["balance_provenance"] == "unknown":
+            raise WorkStoreError("invalid_request", ("unknown_account_evidence",))
+
+        # 5. Rate card lookup & validation
+        if account["rate_card_version"] is None:
+            raise WorkStoreError("invalid_request", ("rate_card_unpriced",))
+
+        cur.execute(
+            f"""
+            SELECT {_RATE_CARD_FIELDS},
+                   (clock_timestamp() < effective_from OR (effective_until IS NOT NULL AND clock_timestamp() >= effective_until)) AS not_effective
+            FROM omp_work.rate_cards
+            WHERE workspace_id=%s AND provider=%s AND version=%s
+            """,
+            (envelope.workspace_id, account["provider"], account["rate_card_version"]),
+        )
+        card = cur.fetchone()
+        if card is None:
+            raise WorkStoreError("invalid_request", ("rate_card_missing",))
+        qual = (
+            card["qualification"].value
+            if hasattr(card["qualification"], "value")
+            else str(card["qualification"])
+        )
+        if qual != "qualified":
+            raise WorkStoreError("invalid_request", ("rate_card_unqualified",))
+        billing_modes = card["billing_modes"]
+        if account["billing_mode"] not in billing_modes:
+            raise WorkStoreError("invalid_request", ("rate_card_incompatible",))
+        if card["not_effective"]:
+            raise WorkStoreError("invalid_request", ("rate_card_not_effective",))
+
+        # 6. Currency match
+        if payload.currency != card["currency"]:
+            raise WorkStoreError("invalid_request", ("currency_mismatch",))
+
+        # 7. Categories check
+        unit_prices = card["unit_prices"]
+        if isinstance(unit_prices, str):
+            unit_prices = json.loads(unit_prices)
+        ceiling_keys = set(payload.usage_ceiling.keys())
+        priced_keys = set(unit_prices.keys())
+        if not ceiling_keys.issubset(priced_keys):
+            raise WorkStoreError("invalid_request", ("rate_card_unknown_category",))
+        if not priced_keys.issubset(ceiling_keys):
+            raise WorkStoreError("invalid_request", ("usage_ceiling_incomplete",))
+
+        # 8. Amount calculation
+        total_amount = Decimal("0")
+        for k, count in payload.usage_ceiling.items():
+            unit_price = self._money(str(unit_prices[k]))
+            total_amount += Decimal(count) * unit_price
+        worst_case_amount_str = format(total_amount, "f")
+
+        # 9. Compute quote_sha256
+        role_val = (
+            payload.role.value
+            if hasattr(payload.role, "value")
+            else str(payload.role)
+        )
+        account_obs_iso = (
+            account["evidence_observed_at"].isoformat()
+            if hasattr(account["evidence_observed_at"], "isoformat")
+            else str(account["evidence_observed_at"])
+        )
+        quote_hash_data = {
+            "account_evidence_observed_at": account_obs_iso,
+            "account_id": str(account["account_id"]),
+            "attempt_id": str(payload.attempt_id) if payload.attempt_id else None,
+            "candidate_id": str(payload.candidate_id) if payload.candidate_id else None,
+            "currency": payload.currency,
+            "effort": payload.effort,
+            "evidence_sha256": card["evidence_sha256"],
+            "grant_id": str(payload.grant_id) if payload.grant_id else None,
+            "launch_id": str(payload.launch_id) if payload.launch_id else None,
+            "model": payload.model,
+            "provider": payload.provider,
+            "rate_card_id": str(card["rate_card_id"]),
+            "rate_card_version": account["rate_card_version"],
+            "revision_id": str(payload.revision_id) if payload.revision_id else None,
+            "role": role_val,
+            "usage_ceiling": payload.usage_ceiling,
+            "work_id": str(payload.work_id),
+            "workspace_id": str(envelope.workspace_id),
+            "worst_case_amount": worst_case_amount_str,
+        }
+        quote_sha256_val = sha256(quote_hash_data)
+
+        # 10. INSERT into omp_work.budget_quotes
+        quote_id = envelope.operation_id
+        cur.execute(
+            f"""
+            INSERT INTO omp_work.budget_quotes (
+                quote_id,
+                workspace_id,
+                work_id,
+                revision_id,
+                candidate_id,
+                attempt_id,
+                grant_id,
+                role,
+                launch_id,
+                account_id,
+                account_evidence_observed_at,
+                provider,
+                model,
+                effort,
+                rate_card_id,
+                rate_card_version,
+                currency,
+                usage_ceiling,
+                worst_case_amount,
+                evidence_sha256,
+                quote_sha256,
+                quoted_at
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, clock_timestamp()
+            )
+            RETURNING {_BUDGET_QUOTE_FIELDS}
+            """,
+            (
+                quote_id,
+                envelope.workspace_id,
+                payload.work_id,
+                payload.revision_id,
+                payload.candidate_id,
+                payload.attempt_id,
+                payload.grant_id,
+                role_val,
+                payload.launch_id,
+                account["account_id"],
+                account["evidence_observed_at"],
+                payload.provider,
+                payload.model,
+                payload.effort,
+                card["rate_card_id"],
+                account["rate_card_version"],
+                payload.currency,
+                json.dumps(payload.usage_ceiling),
+                Decimal(worst_case_amount_str),
+                card["evidence_sha256"],
+                quote_sha256_val,
+            ),
+        )
+        row = cur.fetchone()
+        return {
+            "type": "quote_budget",
+            "quote": _budget_quote_json(row),
+        }
 
     def _bind_stage_identities(
         self,

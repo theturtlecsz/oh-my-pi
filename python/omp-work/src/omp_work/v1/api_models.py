@@ -9,6 +9,7 @@ from pydantic import Field
 from .models import (
     AuditManifest,
     AuditorLaunch,
+    BudgetQuote,
     BudgetScope,
     CandidateSourceVersion,
     StageLaunch,
@@ -401,6 +402,11 @@ class RateCardResult(StrictModel):
     rate_card: RateCard
 
 
+class BudgetQuoteResult(StrictModel):
+    type: Literal["quote_budget"]
+    quote: BudgetQuote
+
+
 class AuthorityView(StrictModel):
     authority: Literal["linear", "work"]
     epoch_id: UUID | None = None
@@ -434,6 +440,7 @@ CommandResult = Annotated[
     | BudgetResult
     | ProviderAccountResult
     | RateCardResult
+    | BudgetQuoteResult
     | BeginExecutionResult
     | ActivateExecutionItemResult
     | SealExecutionCriteriaResult
