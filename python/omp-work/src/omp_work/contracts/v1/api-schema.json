@@ -1420,7 +1420,8 @@
             "claim_budget",
             "settle_budget",
             "cancel_budget",
-            "issue_frontier_exception"
+            "issue_frontier_exception",
+            "expire_budget"
           ],
           "title": "Type",
           "type": "string"
@@ -3806,7 +3807,8 @@
                 "claim_budget",
                 "settle_budget",
                 "cancel_budget",
-                "issue_frontier_exception"
+                "issue_frontier_exception",
+                "expire_budget"
               ],
               "title": "Type",
               "type": "string"
@@ -6434,6 +6436,7 @@
               "create_budget_scope": "#/$defs/BudgetResult",
               "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
+              "expire_budget": "#/$defs/BudgetResult",
               "finalize_candidate": "#/$defs/FinalizeCandidateResult",
               "handoff_stage_launch": "#/$defs/StageLaunchResult",
               "issue_frontier_exception": "#/$defs/BudgetResult",
@@ -13446,7 +13449,8 @@
                 "claim_budget",
                 "settle_budget",
                 "cancel_budget",
-                "issue_frontier_exception"
+                "issue_frontier_exception",
+                "expire_budget"
               ],
               "title": "Type",
               "type": "string"
@@ -16090,6 +16094,7 @@
                   "create_budget_scope": "#/$defs/BudgetResult",
                   "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
+                  "expire_budget": "#/$defs/BudgetResult",
                   "finalize_candidate": "#/$defs/FinalizeCandidateResult",
                   "handoff_stage_launch": "#/$defs/StageLaunchResult",
                   "issue_frontier_exception": "#/$defs/BudgetResult",

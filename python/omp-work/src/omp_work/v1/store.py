@@ -358,6 +358,7 @@ class PostgresWorkStore:
             "claim_budget",
             "settle_budget",
             "cancel_budget",
+            "expire_budget",
             "issue_frontier_exception",
         }
         conflict = False
@@ -467,6 +468,8 @@ class PostgresWorkStore:
                     result = self._settle_budget(cur, envelope)
                 elif command.type == "cancel_budget":
                     result = self._cancel_budget(cur, envelope)
+                elif command.type == "expire_budget":
+                    result = self._expire_budget(cur, envelope)
                 elif command.type == "issue_frontier_exception":
                     result = self._issue_frontier_exception(cur, envelope)
                 elif command.type == "associate_candidate_source":
@@ -2905,6 +2908,9 @@ class PostgresWorkStore:
 
     def _reserve_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
+        cur.execute("SELECT clock_timestamp() >= %s AS expired", (payload.expires_at,))
+        if cur.fetchone()["expired"]:
+            raise WorkStoreError("invalid_request", ("reservation_already_expired",))
         amount = self._money(payload.worst_case_drawdown)
         chain = self._lock_budget_chain(cur, envelope.workspace_id, payload.scope_id)
         cur.execute("SELECT * FROM omp_work.provider_accounts WHERE workspace_id=%s AND account_id=%s", (envelope.workspace_id, payload.account_id))
@@ -2928,7 +2934,42 @@ class PostgresWorkStore:
         fence = int(cur.fetchone()["fence"])
         self._apply_budget_transition(cur, chain, key, held_delta=amount)
         reservation_id = UUID(str(envelope.operation_id))
-        cur.execute("INSERT INTO omp_work.budget_reservations(reservation_id,workspace_id,scope_id,account_id,logical_call_id,transport_attempt_id,fence,state,resource,worst_case_drawdown,provider,model,effort,context_limit,output_limit,expires_at) VALUES(%s,%s,%s,%s,%s,%s,%s,'reserved_unsent',%s,%s,%s,%s,%s,%s,%s,%s)", (reservation_id, envelope.workspace_id, payload.scope_id, payload.account_id, payload.logical_call_id, payload.transport_attempt_id, fence, payload.resource.value, payload.worst_case_drawdown, payload.provider, payload.model, payload.effort, payload.context_limit, payload.output_limit, payload.expires_at))
+        cur.execute(
+            """
+            INSERT INTO omp_work.budget_reservations(
+                reservation_id, workspace_id, scope_id, account_id,
+                logical_call_id, transport_attempt_id, fence, state,
+                resource, worst_case_drawdown, provider, model,
+                effort, context_limit, output_limit, expires_at
+            )
+            SELECT
+                %s, %s, %s, %s,
+                %s, %s, %s, 'reserved_unsent',
+                %s, %s, %s, %s,
+                %s, %s, %s, %s
+            WHERE clock_timestamp() < %s
+            """,
+            (
+                reservation_id,
+                envelope.workspace_id,
+                payload.scope_id,
+                payload.account_id,
+                payload.logical_call_id,
+                payload.transport_attempt_id,
+                fence,
+                payload.resource.value,
+                payload.worst_case_drawdown,
+                payload.provider,
+                payload.model,
+                payload.effort,
+                payload.context_limit,
+                payload.output_limit,
+                payload.expires_at,
+                payload.expires_at,
+            ),
+        )
+        if cur.rowcount != 1:
+            raise WorkStoreError("invalid_request", ("reservation_already_expired",))
         return {"type": "reserve_budget", "reservation_id": str(reservation_id), "transport_attempt_id": str(payload.transport_attempt_id), "fence": fence, "state": "reserved_unsent"}
 
     def _claim_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
@@ -2937,7 +2978,12 @@ class PostgresWorkStore:
         row = cur.fetchone()
         if row is None or row["fence"] != payload.fence or row["state"] != "reserved_unsent":
             raise WorkStoreError("invalid_request", ("reservation_fence_or_state_invalid",))
-        cur.execute("UPDATE omp_work.budget_reservations SET state='potentially_sent',claimed_at=clock_timestamp() WHERE reservation_id=%s", (payload.reservation_id,))
+        cur.execute(
+            "UPDATE omp_work.budget_reservations SET state='potentially_sent', claimed_at=clock_timestamp() WHERE reservation_id=%s AND state='reserved_unsent' AND clock_timestamp() < expires_at",
+            (payload.reservation_id,),
+        )
+        if cur.rowcount != 1:
+            raise WorkStoreError("invalid_request", ("reservation_expired",))
         return {"type": "claim_budget", "reservation_id": str(payload.reservation_id), "fence": payload.fence, "state": "potentially_sent"}
 
     def _settle_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
@@ -3008,6 +3054,79 @@ class PostgresWorkStore:
         self._apply_budget_transition(cur, chain, row["resource"], held_delta=-worst_case)
         cur.execute("UPDATE omp_work.budget_reservations SET state='cancelled_unsent',settled_at=clock_timestamp() WHERE reservation_id=%s", (payload.reservation_id,))
         return {"type": "cancel_budget", "reservation_id": str(payload.reservation_id), "state": "cancelled_unsent"}
+
+    def _expire_budget(
+        self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute(
+            "SELECT * FROM omp_work.budget_reservations WHERE workspace_id=%s AND reservation_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.reservation_id),
+        )
+        row = cur.fetchone()
+        if (
+            row is None
+            or row["fence"] != payload.fence
+            or row["transport_attempt_id"] != payload.transport_attempt_id
+            or row["logical_call_id"] != payload.logical_call_id
+        ):
+            raise WorkStoreError("invalid_request", ("reservation_identity_invalid",))
+        if row["state"] != payload.expected_state:
+            raise WorkStoreError("invalid_request", ("reservation_state_mismatch",))
+
+        cur.execute(
+            "SELECT clock_timestamp() >= expires_at AS expired FROM omp_work.budget_reservations WHERE reservation_id=%s",
+            (payload.reservation_id,),
+        )
+        if not cur.fetchone()["expired"]:
+            raise WorkStoreError("invalid_request", ("reservation_not_expired",))
+
+        chain = self._lock_budget_chain(cur, envelope.workspace_id, row["scope_id"])
+        worst_case = self._money(str(row["worst_case_drawdown"]))
+        key = row["resource"]
+
+        if payload.expected_state == "reserved_unsent":
+            self._apply_budget_transition(cur, chain, key, held_delta=-worst_case)
+            cur.execute(
+                """
+                UPDATE omp_work.budget_reservations
+                SET state='cancelled_unsent', provenance='unknown', outcome='timeout', settled_at=clock_timestamp()
+                WHERE reservation_id=%s
+                """,
+                (payload.reservation_id,),
+            )
+            return {
+                "type": "expire_budget",
+                "reservation_id": str(payload.reservation_id),
+                "transport_attempt_id": str(payload.transport_attempt_id),
+                "fence": payload.fence,
+                "state": "cancelled_unsent",
+                "actual_drawdown": None,
+            }
+
+        self._apply_budget_transition(
+            cur,
+            chain,
+            key,
+            held_delta=-worst_case,
+            unresolved_delta=worst_case,
+        )
+        cur.execute(
+            """
+            UPDATE omp_work.budget_reservations
+            SET state='unresolved', actual_drawdown=%s, provenance='unknown', outcome='timeout', settled_at=clock_timestamp()
+            WHERE reservation_id=%s
+            """,
+            (str(worst_case), payload.reservation_id),
+        )
+        return {
+            "type": "expire_budget",
+            "reservation_id": str(payload.reservation_id),
+            "transport_attempt_id": str(payload.transport_attempt_id),
+            "fence": payload.fence,
+            "state": "unresolved",
+            "actual_drawdown": str(worst_case),
+        }
 
     def _issue_frontier_exception(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload; exception_id = UUID(str(envelope.operation_id))

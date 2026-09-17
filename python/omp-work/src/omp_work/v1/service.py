@@ -66,6 +66,7 @@ class WorkService:
         "claim_budget": "work.execute",
         "settle_budget": "work.execute",
         "cancel_budget": "work.execute",
+        "expire_budget": "work.execute",
         "issue_frontier_exception": "work.operate",
     }
 

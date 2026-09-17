@@ -976,6 +976,14 @@ class CancelBudgetPayload(StrictModel):
     verified_unsent: bool = False
 
 
+class ExpireBudgetPayload(StrictModel):
+    reservation_id: UUID
+    logical_call_id: UUID
+    transport_attempt_id: UUID
+    fence: int = Field(ge=1)
+    expected_state: Literal["reserved_unsent", "potentially_sent"]
+
+
 class IssueFrontierExceptionPayload(StrictModel):
     scope_id: UUID
     question: str = Field(min_length=1)
@@ -1357,6 +1365,11 @@ class CancelBudgetCommand(StrictModel):
     payload: CancelBudgetPayload
 
 
+class ExpireBudgetCommand(StrictModel):
+    type: Literal["expire_budget"]
+    payload: ExpireBudgetPayload
+
+
 class IssueFrontierExceptionCommand(StrictModel):
     type: Literal["issue_frontier_exception"]
     payload: IssueFrontierExceptionPayload
@@ -1423,6 +1436,7 @@ Command = Annotated[
     | ClaimBudgetCommand
     | SettleBudgetCommand
     | CancelBudgetCommand
+    | ExpireBudgetCommand
     | IssueFrontierExceptionCommand
     | AssociateCandidateSourceCommand
     | AttestCheckpointDeliveryCommand

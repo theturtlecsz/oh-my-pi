@@ -114,6 +114,7 @@ _COMMAND_TYPES = frozenset(
         "claim_budget",
         "settle_budget",
         "cancel_budget",
+        "expire_budget",
         "issue_frontier_exception",
     }
 )

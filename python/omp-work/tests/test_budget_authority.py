@@ -42,9 +42,27 @@ def _setup(service):
     return workspace_id, account_id, scope_id
 
 
-def _reserve(service, workspace_id, account_id, scope_id, *, operation_id=None, amount="1.00", logical_call_id=None, transport_attempt_id=None):
+def _reserve(service, workspace_id, account_id, scope_id, *, operation_id=None, amount="1.00", logical_call_id=None, transport_attempt_id=None, expires_at="2030-01-01T00:00:00+00:00"):
     attempt = transport_attempt_id or uuid4()
-    return _command(service, workspace_id, {"type": "reserve_budget", "payload": {"scope_id": str(scope_id), "account_id": str(account_id), "logical_call_id": str(logical_call_id or uuid4()), "transport_attempt_id": str(attempt), "provider": "fixture", "model": "cheap", "effort": "low", "resource": "included_credit", "worst_case_drawdown": amount, "context_limit": 1000, "output_limit": 100, "expires_at": "2030-01-01T00:00:00+00:00"}}, operation_id=operation_id)
+    return _command(service, workspace_id, {"type": "reserve_budget", "payload": {"scope_id": str(scope_id), "account_id": str(account_id), "logical_call_id": str(logical_call_id or uuid4()), "transport_attempt_id": str(attempt), "provider": "fixture", "model": "cheap", "effort": "low", "resource": "included_credit", "worst_case_drawdown": amount, "context_limit": 1000, "output_limit": 100, "expires_at": expires_at}}, operation_id=operation_id)
+
+
+def _expire(service, workspace_id, reservation_id, logical_call_id, transport_attempt_id, fence, expected_state, *, operation_id=None):
+    return _command(
+        service,
+        workspace_id,
+        {
+            "type": "expire_budget",
+            "payload": {
+                "reservation_id": str(reservation_id),
+                "logical_call_id": str(logical_call_id),
+                "transport_attempt_id": str(transport_attempt_id),
+                "fence": fence,
+                "expected_state": expected_state,
+            },
+        },
+        operation_id=operation_id,
+    )
 
 
 def test_budget_reservation_claim_settlement_and_unknown_evidence_are_durable(service):
@@ -503,3 +521,373 @@ def test_injected_aggregate_drift_below_zero_aborts_transaction(service):
     assert root_scope["held"].get("included_credit", "0") == "0"
     assert root_scope["spent"].get("included_credit", "0") == "0"
     assert reservation["state"] == "reserved_unsent"
+
+
+def test_reserve_rejects_already_expired_reservation(service):
+    workspace_id, account_id, scope_id = _setup(service)
+    status, denied = _reserve(
+        service,
+        workspace_id,
+        account_id,
+        scope_id,
+        expires_at="2020-01-01T00:00:00+00:00",
+    )
+    assert status == 400
+    assert denied["error"]["code"] == "invalid_request"
+    assert "reservation_already_expired" in denied["error"]["diagnostics"]
+
+    scope, _ = _inspect_accounting(service, scope_id)
+    assert scope["held"].get("included_credit", "0") == "0"
+    assert scope["spent"].get("included_credit", "0") == "0"
+    assert scope["unresolved"].get("included_credit", "0") == "0"
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        assert conn.execute("SELECT count(*) FROM omp_work.budget_reservations WHERE workspace_id = %s", (workspace_id,)).fetchone()[0] == 0
+
+
+def test_claim_refuses_after_expiry_without_mutation(service):
+    workspace_id, account_id, scope_id = _setup(service)
+    status, res = _reserve(service, workspace_id, account_id, scope_id, amount="0.50")
+    assert status == 200, res
+    res_id, fence = res["result"]["reservation_id"], res["result"]["fence"]
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_reservations SET expires_at = clock_timestamp() - interval '1 second' WHERE reservation_id = %s", (res_id,))
+
+    status, denied = _command(service, workspace_id, {"type": "claim_budget", "payload": {"reservation_id": res_id, "fence": fence}})
+    assert status == 400
+    assert denied["error"]["code"] == "invalid_request"
+    assert "reservation_expired" in denied["error"]["diagnostics"]
+
+    scope, reservation = _inspect_accounting(service, scope_id, res_id)
+    assert scope["held"].get("included_credit") == "0.50"
+    assert scope["spent"].get("included_credit", "0") == "0"
+    assert scope["unresolved"].get("included_credit", "0") == "0"
+    assert reservation["state"] == "reserved_unsent"
+
+
+def test_expire_reserved_unsent_releases_all_levels_exactly_once(service):
+    workspace_id, account_id, root_id = _setup(service)
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_scopes SET limits = '{\"included_credit\": \"10.00\"}' WHERE scope_id = %s", (root_id,))
+
+    mid_id, leaf_id = uuid4(), uuid4()
+    _command(service, workspace_id, {"type": "create_budget_scope", "payload": {"scope_id": str(mid_id), "parent_scope_id": str(root_id), "kind": "session", "policy_version": "economy-v1", "limits": {"included_credit": "10.00"}}})
+    _command(service, workspace_id, {"type": "create_budget_scope", "payload": {"scope_id": str(leaf_id), "parent_scope_id": str(mid_id), "kind": "session", "policy_version": "economy-v1", "limits": {"included_credit": "10.00"}}})
+
+    call_id, attempt_id = uuid4(), uuid4()
+    status, res = _reserve(service, workspace_id, account_id, leaf_id, amount="3.00", logical_call_id=call_id, transport_attempt_id=attempt_id)
+    assert status == 200, res
+    res_id, fence = res["result"]["reservation_id"], res["result"]["fence"]
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_reservations SET expires_at = clock_timestamp() - interval '1 second' WHERE reservation_id = %s", (res_id,))
+
+    expire_op = uuid4()
+    status, expired = _expire(service, workspace_id, res_id, call_id, attempt_id, fence, "reserved_unsent", operation_id=expire_op)
+    assert status == 200, expired
+    assert expired["result"]["state"] == "cancelled_unsent"
+    assert expired["result"]["actual_drawdown"] is None
+
+    for sid in (root_id, mid_id, leaf_id):
+        scope, _ = _inspect_accounting(service, sid)
+        assert scope["held"].get("included_credit", "0") == "0"
+        assert scope["spent"].get("included_credit", "0") == "0"
+        assert scope["unresolved"].get("included_credit", "0") == "0"
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), row_factory=dict_row, autocommit=True) as conn:
+        row = conn.execute("SELECT state, actual_drawdown, outcome, provenance, settled_at FROM omp_work.budget_reservations WHERE reservation_id = %s", (res_id,)).fetchone()
+        assert row["state"] == "cancelled_unsent"
+        assert row["actual_drawdown"] is None
+        assert row["outcome"] == "timeout"
+        assert row["provenance"] == "unknown"
+        assert row["settled_at"] is not None
+
+    # Same operation replays
+    status, replay = _expire(service, workspace_id, res_id, call_id, attempt_id, fence, "reserved_unsent", operation_id=expire_op)
+    assert status == 200 and replay["receipt"]["state"] == "replayed"
+    for sid in (root_id, mid_id, leaf_id):
+        scope, _ = _inspect_accounting(service, sid)
+        assert scope["held"].get("included_credit", "0") == "0"
+
+    # Fresh operation against terminal state refuses without double accounting
+    status, fresh_refusal = _expire(service, workspace_id, res_id, call_id, attempt_id, fence, "reserved_unsent")
+    assert status == 400
+    assert fresh_refusal["error"]["code"] == "invalid_request"
+    assert "reservation_state_mismatch" in fresh_refusal["error"]["diagnostics"]
+    for sid in (root_id, mid_id, leaf_id):
+        scope, _ = _inspect_accounting(service, sid)
+        assert scope["held"].get("included_credit", "0") == "0"
+
+    # Cancel and settle on the row refuse
+    status, cancel_refused = _command(service, workspace_id, {"type": "cancel_budget", "payload": {"reservation_id": res_id, "fence": fence, "verified_unsent": True}})
+    assert status == 400
+    status, settle_refused = _settle(service, workspace_id, res_id, attempt_id, fence, amount="1.00")
+    assert status == 400
+
+
+def test_expire_potentially_sent_preserves_charge_then_settlement_reconciles(service):
+    workspace_id, account_id, root_id = _setup(service)
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_scopes SET limits = '{\"included_credit\": \"10.00\"}' WHERE scope_id = %s", (root_id,))
+
+    mid_id, leaf_id = uuid4(), uuid4()
+    _command(service, workspace_id, {"type": "create_budget_scope", "payload": {"scope_id": str(mid_id), "parent_scope_id": str(root_id), "kind": "session", "policy_version": "economy-v1", "limits": {"included_credit": "10.00"}}})
+    _command(service, workspace_id, {"type": "create_budget_scope", "payload": {"scope_id": str(leaf_id), "parent_scope_id": str(mid_id), "kind": "session", "policy_version": "economy-v1", "limits": {"included_credit": "10.00"}}})
+
+    call_id, attempt_id = uuid4(), uuid4()
+    status, res = _reserve(service, workspace_id, account_id, leaf_id, amount="2.00", logical_call_id=call_id, transport_attempt_id=attempt_id)
+    assert status == 200, res
+    res_id, fence = res["result"]["reservation_id"], res["result"]["fence"]
+
+    status, claimed = _command(service, workspace_id, {"type": "claim_budget", "payload": {"reservation_id": res_id, "fence": fence}})
+    assert status == 200 and claimed["result"]["state"] == "potentially_sent"
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_reservations SET expires_at = clock_timestamp() - interval '1 second' WHERE reservation_id = %s", (res_id,))
+
+    status, expired = _expire(service, workspace_id, res_id, call_id, attempt_id, fence, "potentially_sent")
+    assert status == 200, expired
+    assert expired["result"]["state"] == "unresolved"
+    assert expired["result"]["actual_drawdown"] == "2.00"
+
+    for sid in (root_id, mid_id, leaf_id):
+        scope, _ = _inspect_accounting(service, sid)
+        assert scope["held"].get("included_credit", "0") == "0"
+        assert scope["spent"].get("included_credit", "0") == "0"
+        assert scope["unresolved"].get("included_credit") == "2.00"
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), row_factory=dict_row, autocommit=True) as conn:
+        row = conn.execute("SELECT state, actual_drawdown, outcome, provenance FROM omp_work.budget_reservations WHERE reservation_id = %s", (res_id,)).fetchone()
+        assert row["state"] == "unresolved"
+        assert str(row["actual_drawdown"]) == "2.00"
+        assert row["outcome"] == "timeout"
+        assert row["provenance"] == "unknown"
+
+    # Set parent limit so that adding another reservation exceeding remaining fails
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_scopes SET limits = '{\"included_credit\": \"2.50\"}' WHERE scope_id = %s", (root_id,))
+
+    status, denied = _reserve(service, workspace_id, account_id, leaf_id, amount="1.00")
+    assert status == 409
+    assert denied["error"]["code"] == "budget_exhausted"
+
+    # Later settlement reconciles: subtracts stored prior (2.00) and adds final actual (1.75)
+    status, settled = _settle(service, workspace_id, res_id, attempt_id, fence, amount="1.75")
+    assert status == 200 and settled["result"]["state"] == "settled"
+
+    for sid in (root_id, mid_id, leaf_id):
+        scope, _ = _inspect_accounting(service, sid)
+        assert scope["held"].get("included_credit", "0") == "0"
+        assert scope["unresolved"].get("included_credit", "0") == "0"
+        assert scope["spent"].get("included_credit") == "1.75"
+
+
+def test_expire_not_yet_expired_refuses_without_counter_change(service):
+    workspace_id, account_id, scope_id = _setup(service)
+    call_id, attempt_id = uuid4(), uuid4()
+    status, res = _reserve(service, workspace_id, account_id, scope_id, amount="0.50", logical_call_id=call_id, transport_attempt_id=attempt_id)
+    assert status == 200, res
+    res_id, fence = res["result"]["reservation_id"], res["result"]["fence"]
+
+    # Expiry before expiration time refuses
+    status, denied = _expire(service, workspace_id, res_id, call_id, attempt_id, fence, "reserved_unsent")
+    assert status == 400
+    assert denied["error"]["code"] == "invalid_request"
+    assert "reservation_not_expired" in denied["error"]["diagnostics"]
+
+    scope, reservation = _inspect_accounting(service, scope_id, res_id)
+    assert scope["held"].get("included_credit") == "0.50"
+    assert reservation["state"] == "reserved_unsent"
+
+    # Claim, then attempt expire on potentially_sent while still nonexpired
+    status, claimed = _command(service, workspace_id, {"type": "claim_budget", "payload": {"reservation_id": res_id, "fence": fence}})
+    assert status == 200
+
+    status, denied_sent = _expire(service, workspace_id, res_id, call_id, attempt_id, fence, "potentially_sent")
+    assert status == 400
+    assert denied_sent["error"]["code"] == "invalid_request"
+    assert "reservation_not_expired" in denied_sent["error"]["diagnostics"]
+
+    scope, reservation = _inspect_accounting(service, scope_id, res_id)
+    assert scope["held"].get("included_credit") == "0.50"
+    assert scope["unresolved"].get("included_credit", "0") == "0"
+    assert reservation["state"] == "potentially_sent"
+
+
+def test_expire_binds_identity_and_workspace(service):
+    workspace_id, account_id, scope_id = _setup(service)
+    call_id, attempt_id = uuid4(), uuid4()
+    status, res = _reserve(service, workspace_id, account_id, scope_id, amount="0.50", logical_call_id=call_id, transport_attempt_id=attempt_id)
+    assert status == 200, res
+    res_id, fence = res["result"]["reservation_id"], res["result"]["fence"]
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_reservations SET expires_at = clock_timestamp() - interval '1 second' WHERE reservation_id = %s", (res_id,))
+
+    # Wrong fence
+    status, denied = _expire(service, workspace_id, res_id, call_id, attempt_id, fence + 1, "reserved_unsent")
+    assert status == 400 and "reservation_identity_invalid" in denied["error"]["diagnostics"]
+
+    # Wrong transport_attempt_id
+    status, denied = _expire(service, workspace_id, res_id, call_id, uuid4(), fence, "reserved_unsent")
+    assert status == 400 and "reservation_identity_invalid" in denied["error"]["diagnostics"]
+
+    # Wrong logical_call_id
+    status, denied = _expire(service, workspace_id, res_id, uuid4(), attempt_id, fence, "reserved_unsent")
+    assert status == 400 and "reservation_identity_invalid" in denied["error"]["diagnostics"]
+
+    # Wrong expected_state
+    status, denied = _expire(service, workspace_id, res_id, call_id, attempt_id, fence, "potentially_sent")
+    assert status == 400 and "reservation_state_mismatch" in denied["error"]["diagnostics"]
+
+    # Wrong workspace
+    ws2 = uuid4()
+    _grant(service, ws2)
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING", (ws2,))
+    status, denied = _expire(service, ws2, res_id, call_id, attempt_id, fence, "reserved_unsent")
+    assert status == 400 and "reservation_identity_invalid" in denied["error"]["diagnostics"]
+
+    # Stored state unchanged
+    scope, reservation = _inspect_accounting(service, scope_id, res_id)
+    assert scope["held"].get("included_credit") == "0.50"
+    assert scope["spent"].get("included_credit", "0") == "0"
+    assert reservation["state"] == "reserved_unsent"
+
+
+def test_expire_committed_replay_through_fresh_client_and_conflict(service):
+    workspace_id, account_id, scope_id = _setup(service)
+    call_id, attempt_id = uuid4(), uuid4()
+    status, res = _reserve(service, workspace_id, account_id, scope_id, amount="0.50", logical_call_id=call_id, transport_attempt_id=attempt_id)
+    assert status == 200, res
+    res_id, fence = res["result"]["reservation_id"], res["result"]["fence"]
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_reservations SET expires_at = clock_timestamp() - interval '1 second' WHERE reservation_id = %s", (res_id,))
+
+    op = uuid4()
+    status, expired = _expire(service, workspace_id, res_id, call_id, attempt_id, fence, "reserved_unsent", operation_id=op)
+    assert status == 200, expired
+    stored_result = expired["result"]
+
+    fresh_service = SimpleNamespace(
+        client=TestClient(create_app(service.config, capabilities_dir=service.capabilities)),
+        capabilities=service.capabilities,
+        config=service.config,
+    )
+    status, replay = _expire(fresh_service, workspace_id, res_id, call_id, attempt_id, fence, "reserved_unsent", operation_id=op)
+    assert status == 200
+    assert replay["receipt"]["state"] == "replayed"
+    assert replay["result"] == stored_result
+
+    scope, reservation = _inspect_accounting(service, scope_id, res_id)
+    assert scope["held"].get("included_credit", "0") == "0"
+    assert reservation["state"] == "cancelled_unsent"
+
+    # Changed payload under same operation id conflicts
+    status, conflict = _expire(fresh_service, workspace_id, res_id, uuid4(), attempt_id, fence, "reserved_unsent", operation_id=op)
+    assert status == 409
+    assert conflict["error"]["code"] == "idempotency_conflict"
+
+    scope, _ = _inspect_accounting(service, scope_id)
+    assert scope["held"].get("included_credit", "0") == "0"
+
+
+def test_concurrent_claim_and_expire_have_one_winner(service):
+    # (a) Backdated reservation: claim vs expire -> expire wins
+    workspace_id, account_id, scope_id = _setup(service)
+    call_id, attempt_id = uuid4(), uuid4()
+    status, res = _reserve(service, workspace_id, account_id, scope_id, amount="0.50", logical_call_id=call_id, transport_attempt_id=attempt_id)
+    assert status == 200, res
+    res_id, fence = res["result"]["reservation_id"], res["result"]["fence"]
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_reservations SET expires_at = clock_timestamp() - interval '1 second' WHERE reservation_id = %s", (res_id,))
+
+    barrier_a = threading.Barrier(2)
+    results_a = {}
+
+    def worker_claim_a():
+        barrier_a.wait()
+        results_a["claim"] = _command(service, workspace_id, {"type": "claim_budget", "payload": {"reservation_id": res_id, "fence": fence}})
+
+    def worker_expire_a():
+        barrier_a.wait()
+        results_a["expire"] = _expire(service, workspace_id, res_id, call_id, attempt_id, fence, "reserved_unsent")
+
+    t1 = threading.Thread(target=worker_claim_a)
+    t2 = threading.Thread(target=worker_expire_a)
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    statuses_a = [results_a["claim"][0], results_a["expire"][0]]
+    assert sorted(statuses_a) == [200, 400]
+    assert results_a["expire"][0] == 200
+    assert results_a["claim"][0] == 400
+
+    scope, reservation = _inspect_accounting(service, scope_id, res_id)
+    assert scope["held"].get("included_credit", "0") == "0"
+    assert reservation["state"] == "cancelled_unsent"
+
+    # (b) Far-future reservation: claim vs expire -> claim wins
+    status, res2 = _reserve(service, workspace_id, account_id, scope_id, amount="0.50")
+    assert status == 200, res2
+    res2_id, fence2 = res2["result"]["reservation_id"], res2["result"]["fence"]
+    call2_id, attempt2_id = uuid4(), uuid4()
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_reservations SET logical_call_id = %s, transport_attempt_id = %s WHERE reservation_id = %s", (call2_id, attempt2_id, res2_id))
+
+    barrier_b = threading.Barrier(2)
+    results_b = {}
+
+    def worker_claim_b():
+        barrier_b.wait()
+        results_b["claim"] = _command(service, workspace_id, {"type": "claim_budget", "payload": {"reservation_id": res2_id, "fence": fence2}})
+
+    def worker_expire_b():
+        barrier_b.wait()
+        results_b["expire"] = _expire(service, workspace_id, res2_id, call2_id, attempt2_id, fence2, "reserved_unsent")
+
+    t3 = threading.Thread(target=worker_claim_b)
+    t4 = threading.Thread(target=worker_expire_b)
+    t3.start(); t4.start()
+    t3.join(); t4.join()
+
+    statuses_b = [results_b["claim"][0], results_b["expire"][0]]
+    assert sorted(statuses_b) == [200, 400]
+    assert results_b["claim"][0] == 200
+    assert results_b["expire"][0] == 400
+
+    scope2, reservation2 = _inspect_accounting(service, scope_id, res2_id)
+    assert scope2["held"].get("included_credit") == "0.50"
+    assert reservation2["state"] == "potentially_sent"
+
+
+def test_late_provider_settlement_on_expired_row_wins_then_expire_refuses(service):
+    workspace_id, account_id, scope_id = _setup(service)
+    call_id, attempt_id = uuid4(), uuid4()
+    status, res = _reserve(service, workspace_id, account_id, scope_id, amount="0.80", logical_call_id=call_id, transport_attempt_id=attempt_id)
+    assert status == 200, res
+    res_id, fence = res["result"]["reservation_id"], res["result"]["fence"]
+
+    status, claimed = _command(service, workspace_id, {"type": "claim_budget", "payload": {"reservation_id": res_id, "fence": fence}})
+    assert status == 200
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("UPDATE omp_work.budget_reservations SET expires_at = clock_timestamp() - interval '1 second' WHERE reservation_id = %s", (res_id,))
+
+    # Late provider settlement arrives before expiry command is issued
+    status, settled = _settle(service, workspace_id, res_id, attempt_id, fence, amount="0.75", provenance="provider_observed")
+    assert status == 200 and settled["result"]["state"] == "settled"
+
+    # Subsequent expiry command refuses due to state mismatch
+    status, denied = _expire(service, workspace_id, res_id, call_id, attempt_id, fence, "potentially_sent")
+    assert status == 400
+    assert denied["error"]["code"] == "invalid_request"
+    assert "reservation_state_mismatch" in denied["error"]["diagnostics"]
+
+    scope, reservation = _inspect_accounting(service, scope_id, res_id)
+    assert scope["held"].get("included_credit", "0") == "0"
+    assert scope["unresolved"].get("included_credit", "0") == "0"
+    assert scope["spent"].get("included_credit") == "0.75"
+    assert reservation["state"] == "settled"

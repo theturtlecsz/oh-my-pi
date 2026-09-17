@@ -330,7 +330,7 @@ class AttestCutoverPlanResult(StrictModel):
 
 
 class BudgetResult(StrictModel):
-    type: Literal["create_budget_scope", "reserve_budget", "claim_budget", "settle_budget", "cancel_budget", "issue_frontier_exception"]
+    type: Literal["create_budget_scope", "reserve_budget", "claim_budget", "settle_budget", "cancel_budget", "issue_frontier_exception", "expire_budget"]
     scope_id: UUID | None = None
     parent_scope_id: UUID | None = None
     reservation_id: UUID | None = None

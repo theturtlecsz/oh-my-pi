@@ -6819,6 +6819,67 @@
           "title": "ExecutionProvenanceEnvelope",
           "type": "object"
         },
+        "ExpireBudgetCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ExpireBudgetPayload"
+            },
+            "type": {
+              "const": "expire_budget",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ExpireBudgetCommand",
+          "type": "object"
+        },
+        "ExpireBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_state": {
+              "enum": [
+                "reserved_unsent",
+                "potentially_sent"
+              ],
+              "title": "Expected State",
+              "type": "string"
+            },
+            "fence": {
+              "minimum": 1,
+              "title": "Fence",
+              "type": "integer"
+            },
+            "logical_call_id": {
+              "format": "uuid",
+              "title": "Logical Call Id",
+              "type": "string"
+            },
+            "reservation_id": {
+              "format": "uuid",
+              "title": "Reservation Id",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reservation_id",
+            "logical_call_id",
+            "transport_attempt_id",
+            "fence",
+            "expected_state"
+          ],
+          "title": "ExpireBudgetPayload",
+          "type": "object"
+        },
         "FinalizeCandidateCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8620,6 +8681,7 @@
               "create_budget_scope": "#/$defs/CreateBudgetScopeCommand",
               "create_same_session_child": "#/$defs/CreateSameSessionChildCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
+              "expire_budget": "#/$defs/ExpireBudgetCommand",
               "finalize_candidate": "#/$defs/FinalizeCandidateCommand",
               "handoff_stage_launch": "#/$defs/HandoffStageLaunchCommand",
               "issue_frontier_exception": "#/$defs/IssueFrontierExceptionCommand",
@@ -8721,6 +8783,9 @@
             },
             {
               "$ref": "#/$defs/CancelBudgetCommand"
+            },
+            {
+              "$ref": "#/$defs/ExpireBudgetCommand"
             },
             {
               "$ref": "#/$defs/IssueFrontierExceptionCommand"
@@ -14062,6 +14127,111 @@
         "issued_at"
       ],
       "title": "ExecutionProvenanceEnvelope",
+      "type": "object"
+    },
+    "ExpireBudgetCommand": {
+      "$defs": {
+        "ExpireBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_state": {
+              "enum": [
+                "reserved_unsent",
+                "potentially_sent"
+              ],
+              "title": "Expected State",
+              "type": "string"
+            },
+            "fence": {
+              "minimum": 1,
+              "title": "Fence",
+              "type": "integer"
+            },
+            "logical_call_id": {
+              "format": "uuid",
+              "title": "Logical Call Id",
+              "type": "string"
+            },
+            "reservation_id": {
+              "format": "uuid",
+              "title": "Reservation Id",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reservation_id",
+            "logical_call_id",
+            "transport_attempt_id",
+            "fence",
+            "expected_state"
+          ],
+          "title": "ExpireBudgetPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ExpireBudgetPayload"
+        },
+        "type": {
+          "const": "expire_budget",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ExpireBudgetCommand",
+      "type": "object"
+    },
+    "ExpireBudgetPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_state": {
+          "enum": [
+            "reserved_unsent",
+            "potentially_sent"
+          ],
+          "title": "Expected State",
+          "type": "string"
+        },
+        "fence": {
+          "minimum": 1,
+          "title": "Fence",
+          "type": "integer"
+        },
+        "logical_call_id": {
+          "format": "uuid",
+          "title": "Logical Call Id",
+          "type": "string"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "transport_attempt_id": {
+          "format": "uuid",
+          "title": "Transport Attempt Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reservation_id",
+        "logical_call_id",
+        "transport_attempt_id",
+        "fence",
+        "expected_state"
+      ],
+      "title": "ExpireBudgetPayload",
       "type": "object"
     },
     "FinalizeCandidateCommand": {
