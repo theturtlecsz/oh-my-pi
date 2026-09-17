@@ -6729,3 +6729,692 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 		}
 	});
 });
+
+describe("native audit preflight unification", () => {
+	const defaultAuditor: AgentDefinition = {
+		name: "auditor",
+		description: "Auditor agent",
+		systemPrompt: "Audit prompt",
+		model: ["@audit"],
+		output: { properties: { report: { type: "string" } } },
+		source: "bundled",
+	};
+
+	function mockDiscovery(agent: AgentDefinition = defaultAuditor) {
+		return vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
+			agents: [agent],
+			projectAgentsDir: null,
+		});
+	}
+
+	async function setupUnificationFixture(options: {
+		preflightBeginResult?: BeginStagePreflightResult;
+		missingWorkClient?: boolean;
+		onReserveAuditor?: () => { status: string; launchId: string };
+		mode?: "owner" | "execution_review";
+		boundAuditPolicySha?: string;
+		stageLaunchStatus?: "reserved" | "handed_off" | "settled";
+	} = {}) {
+		const repo = makeTempRepo();
+		const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), "unification-sessions-"));
+		const sessionManager = SessionManager.create(repo.dir, sessionDir);
+		await sessionManager.ensureOnDisk();
+		const sessionFile = sessionManager.getSessionFile()!;
+
+		const cachePath = path.join(os.homedir(), ".omp", "agent", repo.cacheFile);
+		fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+		fs.writeFileSync(
+			cachePath,
+			JSON.stringify({
+				issueId: "uuid-199",
+				identifier: "OMP-199",
+				title: "Test 199",
+			}),
+		);
+
+		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
+		const callLog: string[] = [];
+		const handlers = new Map<string, Array<(e: unknown, ctx: ExtensionContext) => Promise<unknown>>>();
+
+		const fakePi = {
+			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
+			getSessionId: () => sessionManager.getSessionId(),
+			zod: z,
+			registerTool: (spec: { name: string; execute: typeof registeredExecute }) => {
+				if (spec.name === "work") registeredExecute = spec.execute;
+			},
+			registerMessageRenderer: () => {},
+			registerCommand: () => {},
+			registerFlag: () => {},
+			on: (event: string, handler: (e: unknown, ctx: ExtensionContext) => Promise<unknown>) => {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			sendMessage: () => {},
+			appendEntry: (customType: string, data?: unknown) => {
+				sessionManager.appendCustomEntry(customType, data);
+			},
+		} as unknown as ExtensionAPI;
+
+		const fakeCtx = {
+			cwd: repo.dir,
+			taskDepth: 0,
+			sessionManager,
+			models: createAuditorTestModelQuery(),
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			abort: () => {},
+			ui: {
+				notify: () => {},
+				theme: { fg: (_c: string, t: string) => t },
+				setStatus: () => {},
+			},
+		} as unknown as ExtensionContext;
+
+		mockDiscovery();
+		const tcb = await computeAuditTcb(fakeCtx, {
+			healthReady: async () => ({ ready: true, contract_sha256: "contract-sha", service_fingerprint: "prospective-fp-199", judge_manifest: { judge_sha256: "judge-sha" } }),
+		} as unknown as WorkClient);
+
+		const exec: ExecutionSnapshot = {
+			grant: {
+				grant_id: "grant-199",
+				workspace_id: "ws-1",
+				owner_id: "owner-1",
+				repository: repo.dir,
+				remote_ref: "refs/heads/execution/omp-199",
+				state: "active",
+				mode: "single",
+				grant_version: 4,
+				max_continuations: 8,
+				max_close_attempts: 5,
+				max_no_progress: 3,
+				continuations_scheduled: 0,
+				authorization_hash: "auth-hash",
+				judge_sha256: tcb.judgeSha256,
+				created_at: new Date().toISOString(),
+				expires_at: new Date(Date.now() + 86400000).toISOString(),
+			},
+			items: [
+				{
+					item_id: "item-199",
+					workspace_id: "ws-1",
+					grant_id: "grant-199",
+					work_id: "uuid-199",
+					position: 0,
+					phase: "executing",
+					claimed_revision_id: "rev-1",
+					original_request: "test request",
+					original_request_sha256: "0".repeat(64),
+					criteria_sha256: "0".repeat(64),
+					plan_stamp_sha256: "0".repeat(64),
+					plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-199" },
+					close_attempts_started: 0,
+					consecutive_no_progress: 0,
+					initial_git_baseline: repo.headSha,
+					current_git_baseline: repo.headSha,
+				},
+			],
+			activeItem: {
+				item_id: "item-199",
+				workspace_id: "ws-1",
+				grant_id: "grant-199",
+				work_id: "uuid-199",
+				position: 0,
+				phase: "executing",
+				claimed_revision_id: "rev-1",
+				original_request: "test request",
+				original_request_sha256: "0".repeat(64),
+				criteria_sha256: "0".repeat(64),
+				plan_stamp_sha256: "0".repeat(64),
+				plan_stamp: { paths: ["python/omp-work/src/omp_work/v1/store.py"], candidate_id: "cand-199" },
+				close_attempts_started: 0,
+				consecutive_no_progress: 0,
+				initial_git_baseline: repo.headSha,
+				current_git_baseline: repo.headSha,
+			},
+		};
+
+		const ownershipEntry = executionOwnershipEntry(exec, repo.dir, "OMP-199");
+		if (options.mode === "execution_review") {
+			sessionManager.appendCustomEntry(ownershipEntry.customType, {
+				...ownershipEntry.data,
+				issueId: "uuid-199",
+				identifier: "OMP-199",
+				title: "Test 199",
+				project: "The Bookends",
+			});
+		} else {
+			sessionManager.appendCustomEntry("work-now", {
+				backend: "work",
+				issueId: "uuid-199",
+				identifier: "OMP-199",
+				title: "Test 199",
+				project: "The Bookends",
+			});
+		}
+
+		const settleCalls: Array<{ work: unknown; launchId: unknown; payload: unknown }> = [];
+		const reserveCalls: Array<{ key: string; taskSha256: string; toolCallId: string }> = [];
+		let reserveIndex = 0;
+
+		const mockBackend = {
+			cacheFile: repo.cacheFile,
+			markerFile: ".work-project",
+			evidenceKinds: ["verification", "closeout"],
+			scopeFix: "",
+			pendingDeliveries: async () => [],
+			currentNow: async () => ({ id: "uuid-199", key: "OMP-199", title: "Test 199", project: "The Bookends" }),
+			findIssue: async () => ({ id: "uuid-199", key: "OMP-199", title: "Test 199", project: "The Bookends" }),
+			issueDetail: async () => ({
+				key: "OMP-199",
+				attemptSnapshot: {
+					attemptId: "att-199",
+					state: "audit_ready",
+					candidateId: "cand-199",
+					candidateSha: "cand-sha",
+					candidateCommit: "1".repeat(40),
+					remainingLaunches: 3,
+					remainingReports: 2,
+					hasManifest: true,
+					isLaunchable: true,
+					nextAction: "run native audit",
+				},
+				auditTask: {
+					attemptId: "att-199",
+					attemptState: "audit_ready",
+					taskBody: "audit task body 199",
+					taskSha256: "task-sha-199",
+				},
+			}),
+			executionChildren: async () => ({ umbrella: false, children: [] }),
+			getExecution: async () => exec,
+			setExecutionState: async () => exec,
+			finalizeExecutionCandidate: async () => ({ candidate_id: "cand-199", candidate_sha256: "cand-sha", commit_sha: "1".repeat(40) }),
+			appendEvidence: async () => ({ receipt_id: "receipt-199" }),
+			summaryGate: async () => ({
+				ok: true,
+				planHash: "plan-hash-199",
+				auditBaseCommit: repo.headSha,
+				auditBaseDirtyPaths: [],
+				issue: { id: "uuid-199", key: "OMP-199" },
+			}),
+			readCarrier: (c?: unknown) => ({ commitSha: "1".repeat(40), ...(typeof c === "object" && c ? c : {}) }),
+			beginCloseAttempt: async () => {
+				callLog.push("beginCloseAttempt");
+				return { status: "applied", attemptId: "att-199", event: { requiresDelivery: false } };
+			},
+			sealAuditManifest: async () => {
+				callLog.push("sealAuditManifest");
+				return { status: "applied" };
+			},
+			sealedAuditTask: async () => ({ taskSha256: "task-sha-199", taskBody: "audit task body 199" }),
+			reserveAuditorLaunch: async (key: string, taskSha256: string, toolCallId: string) => {
+				reserveIndex++;
+				callLog.push("reserveAuditorLaunch");
+				reserveCalls.push({ key, taskSha256, toolCallId });
+				if (options.onReserveAuditor) return options.onReserveAuditor();
+				return { status: "reserved", launchId: `auditor-launch-${reserveIndex}` };
+			},
+			settleAuditorLaunch: async (work: unknown, launchId: unknown, payload: unknown) => {
+				callLog.push("settleAuditorLaunch");
+				settleCalls.push({ work, launchId, payload });
+				const payloadStr = typeof payload === "object" && payload !== null && "payload" in payload ? String((payload as { payload: unknown }).payload) : "";
+				const verdict = payloadStr.includes("NEEDS_FIX") ? "NEEDS_FIX" : "PASS";
+				return { verdict, event: { renderedText: verdict } };
+			},
+			cancelAuditorLaunch: async () => {
+				callLog.push("cancelAuditorLaunch");
+				return { status: "applied", event: { requiresDelivery: false } };
+			},
+			recordCloseoutReview: async () => ({ status: "applied" }),
+			completeExecutionItem: async () => {
+				exec.activeItem!.phase = "completed";
+				return exec;
+			},
+			workClient: options.missingWorkClient ? undefined : {
+				healthReady: async () => ({
+					ready: true,
+					contract_sha256: "contract-sha",
+					service_fingerprint: "prospective-fp-199",
+					judge_manifest: {
+						judge_sha256: "judge-sha",
+						audit_policy_sha256: options.boundAuditPolicySha ?? tcb.policySha256,
+					},
+				}),
+				workflow: async () => ({
+					receipts: [
+						{ receipt_id: "verif-199", kind: "verification", payload_sha256: "0".repeat(64), artifact_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199" },
+						{ receipt_id: "receipt-199", kind: "push", payload: { repository: "theturtlecsz/oh-my-pi", remote_url: "https://github.com/theturtlecsz/oh-my-pi.git" }, payload_sha256: "0".repeat(64), candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199", remote_ref: "refs/heads/execution/omp-199", remote_commit: "1".repeat(40) },
+					],
+					auditor_launches: [],
+					audit_manifest: {
+						manifest_id: "man-199",
+						manifest_version: 1,
+						verification_receipt_id: "verif-199",
+						task_sha256: "task-sha-199",
+						attempt_id: "att-199",
+					},
+					item: {
+						work_id: "uuid-199",
+						revision: { revision_id: "rev-199" },
+						candidate: {
+							candidate_id: "cand-199",
+							candidate_sha256: "cand-sha",
+							commit_sha: "1".repeat(40),
+							kind: "final",
+						},
+					},
+					close_attempts: [
+						{ attempt_id: "att-199", candidate_id: "cand-199", revision_id: "rev-199", work_id: "uuid-199", judge_sha256: tcb.judgeSha256 },
+					],
+				}),
+			},
+		} as unknown as WorkflowBackend;
+
+		if (!options.missingWorkClient) {
+			attachStageLaunchFixture(mockBackend, repo.dir, { callLog });
+			if (options.stageLaunchStatus) {
+				const origReserveStageLaunch = mockBackend.reserveStageLaunch.bind(mockBackend);
+				mockBackend.reserveStageLaunch = async (input: Parameters<typeof mockBackend.reserveStageLaunch>[0]) => {
+					const res = await origReserveStageLaunch(input);
+					return {
+						...res,
+						status: options.stageLaunchStatus!,
+					};
+				};
+			}
+			if (options.preflightBeginResult) {
+				mockBackend.beginStagePreflight = async () => {
+					callLog.push("beginStagePreflight");
+					return options.preflightBeginResult!;
+				};
+			}
+		}
+
+		createWorkflowHost({
+			backend: mockBackend,
+			teamNoun: "the ledger",
+			entryType: "work-now",
+			acceptEntry: () => true,
+		})(fakePi);
+
+		const startHandlers = handlers.get("session_start") ?? [];
+		for (const h of startHandlers) {
+			await h({}, fakeCtx);
+		}
+
+		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/execution/omp-199", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
+		vi.spyOn(gitModule, "verifyMergeConfirmation").mockReturnValue({ confirmed: true, detail: "PR merged and origin/main contains candidate" });
+		vi.spyOn(gitModule, "rangeDiffSha256").mockReturnValue("diff-sha-199");
+
+		const authorizeSummary = async () => {
+			const inputHandlers = handlers.get("input") ?? [];
+			for (const h of inputHandlers) {
+				await h({ source: "user", originalText: "/summary" }, fakeCtx);
+			}
+		};
+
+		return {
+			repo: {
+				...repo,
+				cleanup: () => {
+					fs.rmSync(sessionDir, { recursive: true, force: true });
+					repo.cleanup();
+				},
+			},
+			sessionManager,
+			sessionFile,
+			fakeCtx,
+			fakePi,
+			exec,
+			callLog,
+			reserveCalls,
+			settleCalls,
+			authorizeSummary,
+			getRegisteredExecute: () => registeredExecute!,
+		};
+	}
+
+	test("contract: owner closeout audit uses native dispatch preflight and reserves auditor launch only after successful stage run", async () => {
+		const f = await setupUnificationFixture();
+		await f.authorizeSummary();
+
+		const mockOutput = JSON.stringify({ report: "VERDICT: PASS\n(clean audit report)" });
+		let providerCalled = false;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: { onNativeStageHandoff?: () => Promise<void> | void }) => {
+			providerCalled = true;
+			await options?.onNativeStageHandoff?.();
+			return {
+				index: 0,
+				id: "att-199",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: mockOutput,
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+				resolvedModel: "openai-codex/gpt-5.6-sol:medium",
+				resolvedModelIsFallback: false,
+			} as executorModule.SingleResult;
+		});
+
+		try {
+			const res = await f.getRegisteredExecute()("call-owner-audit", { action: "run_audit", work: "OMP-199" }, new AbortController().signal, () => {}, f.fakeCtx);
+			expect(res.content[0]?.text).toContain("PASS");
+			expect(providerCalled).toBe(true);
+
+			// Preflight lifecycle occurred through WorkService
+			expect(f.callLog).toContain("beginStagePreflight");
+			expect(f.callLog).toContain("admitStagePreflight");
+			expect(f.callLog).toContain("recordStagePreflight");
+
+			// Stage launch was reserved and settled before auditor launch reservation
+			expect(f.callLog).toContain("reserveStageLaunch");
+			expect(f.callLog).toContain("settleStageLaunch");
+			expect(f.callLog).toContain("reserveAuditorLaunch");
+			expect(f.callLog).toContain("settleAuditorLaunch");
+
+			// Auditor launch reservation occurred strictly AFTER stage launch settled
+			const settleStageIdx = f.callLog.indexOf("settleStageLaunch");
+			const reserveAuditorIdx = f.callLog.indexOf("reserveAuditorLaunch");
+			expect(settleStageIdx).toBeGreaterThan(-1);
+			expect(reserveAuditorIdx).toBeGreaterThan(settleStageIdx);
+
+			expect(f.reserveCalls).toHaveLength(1);
+			expect(f.settleCalls).toHaveLength(1);
+		} finally {
+			await f.sessionManager.close();
+			f.repo.cleanup();
+		}
+	});
+
+	test("contract: owner closeout audit denies before auditor reservation when stage run does not start", async () => {
+		const f = await setupUnificationFixture();
+		await f.authorizeSummary();
+
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0,
+			id: "att-199",
+			agent: "auditor",
+			agentSource: "bundled",
+			task: "task",
+			exitCode: 1,
+			output: "",
+			stderr: "",
+			truncated: false,
+			durationMs: 10,
+			tokens: 0,
+			requests: 0,
+			error: "transport connection reset",
+		} as executorModule.SingleResult);
+
+		try {
+			const res = await f.getRegisteredExecute()("call-owner-audit-fail", { action: "run_audit", work: "OMP-199" }, new AbortController().signal, () => {}, f.fakeCtx);
+			expect(res.content[0]?.text).toContain("Auditor launch failed before start: transport connection reset");
+			expect(f.callLog).toContain("reserveStageLaunch");
+			expect(f.callLog).toContain("cancelStageLaunch:launch-1");
+
+			// Auditor launch is NEVER reserved if stage run did not start
+			expect(f.callLog).not.toContain("reserveAuditorLaunch");
+			expect(f.reserveCalls).toHaveLength(0);
+			expect(f.settleCalls).toHaveLength(0);
+		} finally {
+			await f.sessionManager.close();
+			f.repo.cleanup();
+		}
+	});
+
+	test("contract: dispatched preflight replay yields zero provider calls and zero auditor reservations", async () => {
+		const replayedPreflightResult: BeginStagePreflightResult = {
+			type: "begin_stage_preflight",
+			status: "replayed",
+			intent: {
+				intent_id: "intent-replayed",
+				workspace_id: "ws-1",
+				work_id: "uuid-199",
+				revision_id: "rev-199",
+				candidate_id: "cand-199",
+				attempt_id: "att-199",
+				grant_id: "grant-199",
+				role: "audit",
+				tool_call_id: "native-audit-att-199",
+				task_sha256: "0".repeat(64),
+				probe_sha256: "0".repeat(64),
+				transport_attempt_id: crypto.randomUUID(),
+				ordinal: 0,
+				requested_selector: "openai-codex/gpt-5.6-sol:medium",
+				requested_provider: "openai-codex",
+				requested_model: "gpt-5.6-sol",
+				requested_api: "openai-codex-responses",
+				requested_effort: "medium",
+				requested_wire_model: "gpt-5.6-sol",
+				is_fallback: false,
+				logical_sha256: "0".repeat(64),
+				group_sha256: "0".repeat(64),
+				host_owner_id: "00000000-0000-0000-0000-000000000001",
+				dispatched_at: new Date().toISOString(),
+				dispatch_operation_id: null,
+				dispatch_owner_id: null,
+				cancelled_at: null,
+				cancelled_by: null,
+				cancel_reason: null,
+				status: "dispatched",
+				created_at: new Date().toISOString(),
+				settled_at: null,
+			},
+			preflight: undefined,
+		};
+
+		// 1. Owner closeout path
+		const fOwner = await setupUnificationFixture({ preflightBeginResult: replayedPreflightResult });
+		await fOwner.authorizeSummary();
+		const runSubprocessSpyOwner = vi.spyOn(executorModule, "runSubprocess");
+
+		try {
+			const resOwner = await fOwner.getRegisteredExecute()("call-replayed-owner", { action: "run_audit", work: "OMP-199" }, new AbortController().signal, () => {}, fOwner.fakeCtx);
+			expect(resOwner.content[0]?.text).toContain("Native audit stage blocked");
+			expect(resOwner.content[0]?.text).toContain("provider effect uncertain");
+			expect(runSubprocessSpyOwner).not.toHaveBeenCalled();
+			expect(fOwner.reserveCalls).toHaveLength(0);
+			expect(fOwner.settleCalls).toHaveLength(0);
+		} finally {
+			await fOwner.sessionManager.close();
+			fOwner.repo.cleanup();
+		}
+
+		// 2. Execution-review path
+		const fExec = await setupUnificationFixture({ preflightBeginResult: replayedPreflightResult, mode: "execution_review" });
+		const runSubprocessSpyExec = vi.spyOn(executorModule, "runSubprocess");
+
+		try {
+			const resExec = await fExec.getRegisteredExecute()("call-replayed-exec", { action: "begin_execution_review", work: "OMP-199", body: "review body" }, new AbortController().signal, () => {}, fExec.fakeCtx);
+			expect(resExec.content[0]?.text).toContain("Native audit stage blocked");
+			expect(resExec.content[0]?.text).toContain("provider effect uncertain");
+			expect(runSubprocessSpyExec).not.toHaveBeenCalled();
+			expect(fExec.reserveCalls).toHaveLength(0);
+			expect(fExec.settleCalls).toHaveLength(0);
+		} finally {
+			await fExec.sessionManager.close();
+			fExec.repo.cleanup();
+		}
+	});
+
+	test("contract: owner handed-off replay yields zero provider calls and zero auditor reservations", async () => {
+		// 1. Owner closeout path
+		const fOwner = await setupUnificationFixture({ stageLaunchStatus: "handed_off" });
+		await fOwner.authorizeSummary();
+		const runSubprocessSpyOwner = vi.spyOn(executorModule, "runSubprocess");
+
+		try {
+			const resOwner = await fOwner.getRegisteredExecute()("call-handed-off-owner", { action: "run_audit", work: "OMP-199" }, new AbortController().signal, () => {}, fOwner.fakeCtx);
+			expect(resOwner.content[0]?.text).toContain("Native audit stage blocked");
+			expect(resOwner.content[0]?.text).toContain("uncertain after a committed handoff");
+			expect(runSubprocessSpyOwner).not.toHaveBeenCalled();
+			expect(fOwner.callLog).toContain("reserveStageLaunch");
+			expect(fOwner.callLog).not.toContain("reserveAuditorLaunch");
+			expect(fOwner.callLog).not.toContain("settleAuditorLaunch");
+			expect(fOwner.reserveCalls).toHaveLength(0);
+			expect(fOwner.settleCalls).toHaveLength(0);
+		} finally {
+			await fOwner.sessionManager.close();
+			fOwner.repo.cleanup();
+		}
+
+		// 2. Execution-review path
+		const fExec = await setupUnificationFixture({ stageLaunchStatus: "handed_off", mode: "execution_review" });
+		const runSubprocessSpyExec = vi.spyOn(executorModule, "runSubprocess");
+
+		try {
+			const resExec = await fExec.getRegisteredExecute()("call-handed-off-exec", { action: "begin_execution_review", work: "OMP-199", body: "review body" }, new AbortController().signal, () => {}, fExec.fakeCtx);
+			expect(resExec.content[0]?.text).toContain("Native audit stage blocked");
+			expect(resExec.content[0]?.text).toContain("uncertain after a committed handoff");
+			expect(runSubprocessSpyExec).not.toHaveBeenCalled();
+			expect(fExec.callLog).toContain("reserveStageLaunch");
+			expect(fExec.callLog).not.toContain("reserveAuditorLaunch");
+			expect(fExec.callLog).not.toContain("settleAuditorLaunch");
+			expect(fExec.reserveCalls).toHaveLength(0);
+			expect(fExec.settleCalls).toHaveLength(0);
+		} finally {
+			await fExec.sessionManager.close();
+			fExec.repo.cleanup();
+		}
+	});
+
+	test("contract: missing WorkService/native dispatch prerequisite refuses before provider/auditor reservation", async () => {
+		// 1. Owner closeout path
+		const fOwner = await setupUnificationFixture({ missingWorkClient: true });
+		await fOwner.authorizeSummary();
+		const runSubprocessSpyOwner = vi.spyOn(executorModule, "runSubprocess");
+
+		try {
+			const resOwner = await fOwner.getRegisteredExecute()("call-missing-ws-owner", { action: "run_audit", work: "OMP-199" }, new AbortController().signal, () => {}, fOwner.fakeCtx);
+			expect(resOwner.content[0]?.text).toContain("Native audit stage blocked: native stage dispatch requires WorkService");
+			expect(runSubprocessSpyOwner).not.toHaveBeenCalled();
+			expect(fOwner.reserveCalls).toHaveLength(0);
+			expect(fOwner.settleCalls).toHaveLength(0);
+		} finally {
+			await fOwner.sessionManager.close();
+			fOwner.repo.cleanup();
+		}
+
+		// 2. Execution-review path
+		const fExec = await setupUnificationFixture({ missingWorkClient: true, mode: "execution_review" });
+		const runSubprocessSpyExec = vi.spyOn(executorModule, "runSubprocess");
+
+		try {
+			const resExec = await fExec.getRegisteredExecute()("call-missing-ws-exec", { action: "begin_execution_review", work: "OMP-199", body: "review body" }, new AbortController().signal, () => {}, fExec.fakeCtx);
+			expect(resExec.content[0]?.text).toContain("Native audit stage blocked: native stage dispatch requires WorkService");
+			expect(runSubprocessSpyExec).not.toHaveBeenCalled();
+			expect(fExec.reserveCalls).toHaveLength(0);
+			expect(fExec.settleCalls).toHaveLength(0);
+		} finally {
+			await fExec.sessionManager.close();
+			fExec.repo.cleanup();
+		}
+	});
+
+	test("contract: execution-review has no direct provider fallback and retains bound route/policy drift refusal", async () => {
+		// Policy drift refusal
+		const f = await setupUnificationFixture({ mode: "execution_review" });
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess");
+
+		const driftedSettings = Settings.isolated({
+			modelRoles: {
+				audit: "openai-codex/gpt-5.6-sol:high",
+			},
+		});
+		const driftedModels = createAuditorTestModelQuery(driftedSettings);
+		vi.spyOn(gitModule, "pushCandidate").mockImplementation(async () => {
+			f.fakeCtx.models = driftedModels;
+			return { status: "pushed", remoteRef: "refs/heads/execution/omp-199", remoteCommit: "1".repeat(40), priorTip: f.repo.headSha };
+		});
+
+		try {
+			const res = await f.getRegisteredExecute()("call-drift", { action: "begin_execution_review", work: "OMP-199", body: "evidence" }, new AbortController().signal, () => {}, f.fakeCtx);
+			expect(res.content[0]?.text).toContain("audit policy drifted during execution review");
+			expect(runSubprocessSpy).not.toHaveBeenCalled();
+			expect(f.reserveCalls).toHaveLength(0);
+			expect(f.settleCalls).toHaveLength(0);
+		} finally {
+			await f.sessionManager.close();
+			f.repo.cleanup();
+		}
+	});
+
+	test("contract: successful audit still settles one auditor launch and returns existing verdict/report behavior", async () => {
+		// 1. Owner closeout with PASS verdict
+		const fOwner = await setupUnificationFixture();
+		await fOwner.authorizeSummary();
+		const passOutput = JSON.stringify({ report: "VERDICT: PASS\nAll criteria satisfied." });
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: { onNativeStageHandoff?: () => Promise<void> | void }) => {
+			await options?.onNativeStageHandoff?.();
+			return {
+				index: 0,
+				id: "att-199",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: passOutput,
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+				resolvedModel: "openai-codex/gpt-5.6-sol:medium",
+				resolvedModelIsFallback: false,
+			} as executorModule.SingleResult;
+		});
+
+		try {
+			const res = await fOwner.getRegisteredExecute()("call-owner-pass", { action: "run_audit", work: "OMP-199" }, new AbortController().signal, () => {}, fOwner.fakeCtx);
+			expect(fOwner.settleCalls).toHaveLength(1);
+			expect(fOwner.settleCalls[0].payload).toEqual({ payload: passOutput });
+			expect(res.content[0]?.text).toBe("PASS");
+		} finally {
+			await fOwner.sessionManager.close();
+			fOwner.repo.cleanup();
+		}
+
+		// 2. Owner closeout with NEEDS_FIX verdict (includes ## Auditor Report suffix)
+		const fFix = await setupUnificationFixture();
+		await fFix.authorizeSummary();
+		const fixOutput = JSON.stringify({ report: "VERDICT: NEEDS_FIX\nFix issue A." });
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: { onNativeStageHandoff?: () => Promise<void> | void }) => {
+			await options?.onNativeStageHandoff?.();
+			return {
+				index: 0,
+				id: "att-199",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: fixOutput,
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+				resolvedModel: "openai-codex/gpt-5.6-sol:medium",
+				resolvedModelIsFallback: false,
+			} as executorModule.SingleResult;
+		});
+
+		try {
+			const res = await fFix.getRegisteredExecute()("call-owner-fix", { action: "run_audit", work: "OMP-199" }, new AbortController().signal, () => {}, fFix.fakeCtx);
+			expect(fFix.settleCalls).toHaveLength(1);
+			expect(fFix.settleCalls[0].payload).toEqual({ payload: fixOutput });
+			expect(res.content[0]?.text).toContain("NEEDS_FIX");
+			expect(res.content[0]?.text).toContain("## Auditor Report");
+			expect(res.content[0]?.text).toContain(fixOutput);
+		} finally {
+			await fFix.sessionManager.close();
+			fFix.repo.cleanup();
+		}
+	});
+});

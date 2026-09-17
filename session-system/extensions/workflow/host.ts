@@ -110,12 +110,38 @@ import {
 import { registerSessionLedger } from "./session-ledger";
 import { registerKnowledgeBridge, type KnowledgeBridge } from "./knowledge-bridge";
 import { loadKnowledgeConfig, type KnowledgeClientConfig, type WorkClientConfig } from "./config";
-import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
-import { dispatchNativeStage } from "./native-stage-dispatch";
-import { nativeStageRouteCandidates } from "./native-stage-profile";
+import { type NativeAuditRunResult } from "./auditor-runner";
+import { dispatchNativeStage, type NativeStageDispatchInput, type NativeStageDispatchResult } from "./native-stage-dispatch";
+import { nativeStageRouteCandidates, type NativeStageRoute } from "./native-stage-profile";
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
-import { resolveAuditPolicy } from "./audit-policy";
+import { resolveAuditPolicy, type ResolvedAuditPolicy } from "./audit-policy";
 import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Candidate, type CloseAttempt, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView, type WorkflowView } from "@oh-my-pi/pi-work-client";
+
+interface AuditDispatchIdentityParams {
+	workKey: string;
+	attemptId: string;
+	taskBody: string;
+	boundAuditRoute: NativeStageRoute;
+	grantId?: string | null;
+	candidateId?: string | null;
+	candidateSha256?: string | null;
+	sourceRevision?: string | null;
+}
+
+function buildAuditDispatchInput(params: AuditDispatchIdentityParams): NativeStageDispatchInput {
+	return {
+		workKey: params.workKey,
+		role: "audit",
+		taskBody: params.taskBody,
+		toolCallId: `native-audit-${params.attemptId}`,
+		grantId: params.grantId ?? null,
+		attemptId: params.attemptId,
+		candidateId: params.candidateId ?? null,
+		candidateSha256: params.candidateSha256 ?? null,
+		sourceRevision: params.sourceRevision ?? null,
+		boundAuditRoute: params.boundAuditRoute,
+	};
+}
 
 type ReviewAttemptIdentity = Partial<Pick<CloseAttempt, "revision_id" | "candidate_id" | "candidate_sha256" | "candidate_commit">>;
 type ReviewCandidateIdentity = Pick<Candidate, "candidate_id" | "candidate_sha256" | "commit_sha">;
@@ -3876,11 +3902,48 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (!issue.auditTask || issue.auditTask.attemptId !== snapshot.attemptId) {
 								return deny(`REFUSED — ${params.work} has no sealed audit task matching live attempt ${snapshot.attemptId}.`);
 							}
-							let runner: NativeAuditRunner;
+							let boundAuditRoute: NativeStageRoute;
 							try {
-								runner = await prepareNativeAuditRunner(ctx, _signal);
+								boundAuditRoute = resolveAuditPolicy(ctx.models).route;
 							} catch (error) {
-								return deny(`REFUSED — auditor runner preparation failed: ${error instanceof Error ? error.message : String(error)}`);
+								return deny(`Audit policy failed: ${error instanceof Error ? error.message : String(error)}`);
+							}
+
+							const origin = captureAuditLaunchOrigin(ctx);
+							const execution = await backend.getExecution(params.work);
+							const candidateId = snapshot.candidateId ?? execution?.activeItem?.plan_stamp?.candidate_id ?? null;
+							const candidateSha256 = snapshot.candidateSha ?? null;
+							const sourceRevision = execution?.activeItem?.initial_git_baseline ?? null;
+							const grantId = execution?.grant.grant_id ?? null;
+
+							let nativeAudit: NativeStageDispatchResult;
+							try {
+								nativeAudit = await dispatchNativeStage(
+									ctx,
+									backend,
+									knowledgeBridge,
+									buildAuditDispatchInput({
+										workKey: params.work,
+										attemptId: snapshot.attemptId,
+										taskBody: issue.auditTask.taskBody,
+										boundAuditRoute,
+										grantId,
+										candidateId,
+										candidateSha256,
+										sourceRevision,
+									}),
+									_signal,
+								);
+							} catch (error) {
+								return deny(`Native audit stage blocked: ${error instanceof Error ? error.message : String(error)}`);
+							}
+
+							if (nativeAudit.launch.status === "handed_off") {
+								return deny(`Native audit stage blocked: ${nativeAudit.run.error ?? "uncertain native stage delivery"}`);
+							}
+
+							if (!nativeAudit.run.started) {
+								return deny(`Auditor launch failed before start: ${nativeAudit.run.error ?? "runner cancelled before dispatch"}`);
 							}
 
 							const reservation = await backend.reserveAuditorLaunch(params.work, issue.auditTask.taskSha256, _id);
@@ -3893,27 +3956,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								return deny(`Audit launch refused by the ledger:\n${reservation.event?.renderedText ?? "unknown reservation refusal"}`);
 							}
 
-							const origin = captureAuditLaunchOrigin(ctx);
-							let auditRun: NativeAuditRunResult;
-							try {
-								auditRun = await runner(issue.auditTask.taskBody, snapshot.attemptId, _signal);
-							} catch (error) {
-								auditRun = { started: false, error: String(error) };
-							}
-
-							if (!auditRun.started) {
-								try {
-									const cancelOutcome = await backend.cancelAuditorLaunch(params.work, reservation.launchId);
-									if (cancelOutcome.event?.requiresDelivery) {
-										queueCheckpointDelivery(pi, backend, cancelOutcome.event, notice => {
-											pendingNotices.push(`[${TOOL_NAME}] cancel checkpoint delivery failed (${notice})`);
-										});
-									}
-								} catch (error) {
-									// cancel failed
-								}
-								return deny(`Auditor launch failed before start: ${auditRun.error ?? "runner cancelled before dispatch"}`);
-							}
+							const auditRun = nativeAudit.run;
 
 							recordAuditLaunch(origin, reservation.launchId, snapshot.attemptId, issue.auditTask.taskSha256, auditRun);
 
@@ -4511,8 +4554,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (!exec.activeItem || !["executing", "remediating", "reviewing"].includes(exec.activeItem.phase)) {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected executing, remediating, or reviewing`);
 							}
+							if (!backend.workClient) {
+								return deny("Native audit stage blocked: native stage dispatch requires WorkService");
+							}
 							const activeWorkId = exec.activeItem.work_id;
-							let tcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
+							let tcb = await computeAuditTcb(ctx, backend.workClient, cfg.sourceResolver);
 							const targetIssue = await backend.findIssue(exec.activeItem.work_id);
 							if (!targetIssue) return deny(`Target execution item ${exec.activeItem.work_id} not found`);
 
@@ -4731,7 +4777,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const boundAuditRoute = tcb.auditRoute;
 							const boundAuditPolicySha256 = tcb.judgeManifest.audit_policy_sha256;
 							const runAuditAndSettle = async (attemptId: string, pushReceiptId: string, hasManifest: boolean, candidateCommit?: string) => {
-								const currentPolicy = resolveAuditPolicy(ctx.models);
+								let currentPolicy: ResolvedAuditPolicy;
+								try {
+									currentPolicy = resolveAuditPolicy(ctx.models);
+								} catch (error) {
+									return deny(`audit policy drifted during execution review: ${error instanceof Error ? error.message : String(error)}`);
+								}
 								if (currentPolicy.policySha256 !== boundAuditPolicySha256) {
 									return deny("audit policy drifted during execution review");
 								}
@@ -4747,34 +4798,37 @@ export function createWorkflowHost(cfg: HostConfig) {
 								}
 								const sealedTask = await backend.sealedAuditTask(targetIssue.key);
 								if (!sealedTask) return deny("sealed audit task missing");
-								let nativeAuditRun: NativeAuditRunResult | undefined;
-								if (nativeStageRouteCandidates(ctx.models, "audit").length > 0) {
+								const origin = captureAuditLaunchOrigin(ctx, true);
+								let nativeAudit: NativeStageDispatchResult;
+								try {
 									const execution = await backend.getExecution(params.work);
-									try {
-										const nativeAudit = await dispatchNativeStage(ctx, backend, knowledgeBridge, {
+									nativeAudit = await dispatchNativeStage(
+										ctx,
+										backend,
+										knowledgeBridge,
+										buildAuditDispatchInput({
 											workKey: targetIssue.key,
-											role: "audit",
-											taskBody: sealedTask.taskBody,
-											toolCallId: `native-audit-${attemptId}`,
-											grantId: execution?.grant.grant_id ?? null,
 											attemptId,
-											candidateId: wfView?.item?.candidate?.candidate_id ?? null,
+											taskBody: sealedTask.taskBody,
+											boundAuditRoute,
+											grantId: execution?.grant.grant_id ?? null,
+											candidateId: wfView?.item?.candidate?.candidate_id ?? execution?.activeItem?.plan_stamp?.candidate_id ?? null,
 											candidateSha256: wfView?.item?.candidate?.candidate_sha256 ?? null,
 											sourceRevision: execution?.activeItem?.initial_git_baseline ?? null,
-											boundAuditRoute,
-										});
-										nativeAuditRun = nativeAudit.run;
-									} catch (error) {
-										return deny(`Native audit stage blocked: ${String(error)}`);
-									}
+										}),
+										_signal,
+									);
+								} catch (error) {
+									return deny(`Native audit stage blocked: ${error instanceof Error ? error.message : String(error)}`);
 								}
-								const runner = nativeAuditRun ? undefined : await prepareNativeAuditRunner(ctx, _signal, boundAuditRoute);
+								if (nativeAudit.launch.status === "handed_off") {
+									return deny(`Native audit stage blocked: ${nativeAudit.run.error ?? "uncertain native stage delivery"}`);
+								}
 								const resv = await backend.reserveAuditorLaunch(targetIssue.key, sealedTask.taskSha256, _id);
 								if (resv.status === "refused" || !resv.launchId) {
 									return deny(`Reserve launch refused: ${resv.event.renderedText}`);
 								}
-								const origin = captureAuditLaunchOrigin(ctx, true);
-								const auditRun = nativeAuditRun ?? await runner!(sealedTask.taskBody, attemptId, _signal);
+								const auditRun = nativeAudit.run;
 								if (!auditRun.started) {
 									// OMP-251: the auditor never dispatched a model request —
 									// cancel the reservation (cancelled launches do not count
@@ -4800,8 +4854,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								);
 								await knowledgeBridge?.onAuditorSettle(targetIssue.key, resv.launchId, settle, ctx);
 								if (
-									nativeAuditRun
-									&& (settle.verdict === "NEEDS_FIX" || settle.verdict === "BLOCKED")
+									(settle.verdict === "NEEDS_FIX" || settle.verdict === "BLOCKED")
 					&& requiresFrontierReview(sealedPaths, (wfView?.auditor_launches ?? []).filter(launch => launch.attempt_id === attemptId).length + 1, settle.verdict)
 								) {
 									if (nativeStageRouteCandidates(ctx.models, "frontier").length === 0) {
