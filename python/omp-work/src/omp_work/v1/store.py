@@ -84,7 +84,7 @@ _LAUNCH_FIELDS = "launch_id,attempt_id,manifest_id,launch_number,task_sha256,too
 _EVENT_FIELDS = "event_id,sequence,work_id,attempt_id,launch_id,event_type,reason_code,reason,legal_next_actions,remaining_launches,remaining_reports,requires_fresh_authorization,rendered_text,rendered_sha256,requires_delivery,created_at"
 _DELIVERY_FIELDS = "delivery_id,event_id,delivery_sequence,owner_session_id,rendered_sha256,status,authorization_ref,created_at"
 _STAGE_LAUNCH_FIELDS = "launch_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,request_sha256,tool_call_id,task_sha256,prepared_context_sha256,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,resolved_selector,resolved_provider,resolved_model,served_selector,served_model,is_fallback,fallback_reason,status,outcome_sha256,outcome,reserved_at,handed_off_at,settled_at"
-_STAGE_PREFLIGHT_INTENT_FIELDS = "intent_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,is_fallback,logical_sha256,group_sha256,host_owner_id,status,created_at,settled_at"
+_STAGE_PREFLIGHT_INTENT_FIELDS = "intent_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,is_fallback,logical_sha256,group_sha256,host_owner_id,status,created_at,settled_at,dispatched_at,dispatch_operation_id,dispatch_owner_id,cancelled_at,cancelled_by,cancel_reason"
 _STAGE_PREFLIGHT_FIELDS = "preflight_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,session_id,role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,is_fallback,outcome,stop_reason,error,requests,usage,provider_request_id,observed_at"
 _SOURCE_VERSION_FIELDS = "candidate_id,workspace_id,work_id,revision_id,repository_id,source_version_id,snapshot_id,base_commit,analyzed_commit,tree_sha,source_manifest_sha256,snapshot_manifest_sha256,content_sha256,association_sha256,producer,producer_receipt_sha256,created_at"
 _PROVIDER_ACCOUNT_FIELDS = "account_id,workspace_id,provider,account_identity,entitlement_evidence,evidence_observed_at,billing_mode,rate_card_version,observed_balance,balance_provenance,reset_at,concurrency_limit"
@@ -366,6 +366,8 @@ class PostgresWorkStore:
             "cancel_stage_launch",
             "reconcile_stage_launch",
             "begin_stage_preflight",
+            "admit_stage_preflight",
+            "cancel_stage_preflight",
             "record_stage_preflight",
             "complete_work",
             "create_budget_scope",
@@ -476,6 +478,10 @@ class PostgresWorkStore:
                     result = self._reconcile_stage_launch(cur, envelope)
                 elif command.type == "begin_stage_preflight":
                     result = self._begin_stage_preflight(cur, envelope)
+                elif command.type == "admit_stage_preflight":
+                    result = self._admit_stage_preflight(cur, envelope)
+                elif command.type == "cancel_stage_preflight":
+                    result = self._cancel_stage_preflight(cur, envelope)
                 elif command.type == "record_stage_preflight":
                     result = self._record_stage_preflight(cur, envelope)
                 elif command.type == "create_budget_scope":
@@ -3637,7 +3643,7 @@ class PostgresWorkStore:
         )
         siblings = cur.fetchall()
         for s in siblings:
-            if s["status"] == "begun":
+            if s["status"] in ("begun", "dispatched"):
                 raise WorkStoreError("preflight_intent_active", ("preflight_group_sibling_active",))
             if s["ordinal"] == payload.ordinal:
                 raise WorkStoreError("preflight_intent_active", ("preflight_group_ordinal_used",))
@@ -3690,6 +3696,131 @@ class PostgresWorkStore:
             "type": "begin_stage_preflight",
             "status": "applied",
             "intent": _row_json(intent),
+            "preflight": None,
+        }
+
+    def _admit_stage_preflight(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload: AdmitStagePreflightPayload = envelope.command.payload
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND transport_attempt_id=%s",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
+        intent = cur.fetchone()
+        if intent is None:
+            raise WorkStoreError("invalid_request", ("preflight_intent_unknown",))
+
+        self._lock_work_chain(cur, envelope.workspace_id, intent["work_id"])
+
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND transport_attempt_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
+        intent = cur.fetchone()
+        if intent is None:
+            raise WorkStoreError("invalid_request", ("preflight_intent_unknown",))
+
+        if intent["logical_sha256"] != payload.logical_sha256:
+            raise WorkStoreError("stale_evidence", ("preflight_intent_identity_mismatch",))
+
+        if intent["status"] == "dispatched":
+            if intent["dispatch_operation_id"] == envelope.operation_id:
+                return {
+                    "type": "admit_stage_preflight",
+                    "status": "replayed",
+                    "intent": _row_json(intent),
+                    "preflight": None,
+                }
+            raise WorkStoreError("preflight_intent_active", ("preflight_intent_already_dispatched",))
+
+        if intent["status"] == "settled":
+            raise WorkStoreError("invalid_request", ("preflight_intent_not_begun",))
+
+        if intent["status"] == "cancelled_undispatched":
+            raise WorkStoreError("invalid_request", ("preflight_intent_cancelled",))
+
+        if intent["host_owner_id"] != envelope.correlation_id:
+            raise WorkStoreError("preflight_intent_active", ("preflight_intent_foreign_owner",))
+
+        cur.execute(
+            f"UPDATE omp_work.stage_preflight_intents SET "
+            f"status='dispatched', dispatched_at=clock_timestamp(), "
+            f"dispatch_operation_id=%s, dispatch_owner_id=%s "
+            f"WHERE workspace_id=%s AND transport_attempt_id=%s "
+            f"RETURNING {_STAGE_PREFLIGHT_INTENT_FIELDS}",
+            (
+                envelope.operation_id,
+                envelope.correlation_id,
+                envelope.workspace_id,
+                payload.transport_attempt_id,
+            ),
+        )
+        dispatched_intent = cur.fetchone()
+        return {
+            "type": "admit_stage_preflight",
+            "status": "applied",
+            "intent": _row_json(dispatched_intent),
+            "preflight": None,
+        }
+
+    def _cancel_stage_preflight(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload: CancelStagePreflightPayload = envelope.command.payload
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND transport_attempt_id=%s",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
+        intent = cur.fetchone()
+        if intent is None:
+            raise WorkStoreError("invalid_request", ("preflight_intent_unknown",))
+
+        self._lock_work_chain(cur, envelope.workspace_id, intent["work_id"])
+
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND transport_attempt_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
+        intent = cur.fetchone()
+        if intent is None:
+            raise WorkStoreError("invalid_request", ("preflight_intent_unknown",))
+
+        if intent["logical_sha256"] != payload.logical_sha256:
+            raise WorkStoreError("stale_evidence", ("preflight_intent_identity_mismatch",))
+
+        if intent["status"] == "cancelled_undispatched":
+            return {
+                "type": "cancel_stage_preflight",
+                "status": "replayed",
+                "intent": _row_json(intent),
+                "preflight": None,
+            }
+
+        if intent["status"] == "dispatched":
+            raise WorkStoreError("preflight_intent_active", ("preflight_intent_already_dispatched",))
+
+        if intent["status"] == "settled":
+            raise WorkStoreError("invalid_request", ("preflight_intent_not_begun",))
+
+        cur.execute(
+            f"UPDATE omp_work.stage_preflight_intents SET "
+            f"status='cancelled_undispatched', cancelled_at=clock_timestamp(), "
+            f"cancelled_by=%s, cancel_reason=%s "
+            f"WHERE workspace_id=%s AND transport_attempt_id=%s "
+            f"RETURNING {_STAGE_PREFLIGHT_INTENT_FIELDS}",
+            (
+                envelope.correlation_id,
+                payload.reason,
+                envelope.workspace_id,
+                payload.transport_attempt_id,
+            ),
+        )
+        cancelled_intent = cur.fetchone()
+        return {
+            "type": "cancel_stage_preflight",
+            "status": "applied",
+            "intent": _row_json(cancelled_intent),
             "preflight": None,
         }
 
@@ -3757,8 +3888,10 @@ class PostgresWorkStore:
         intent = cur.fetchone()
         if intent is None:
             raise WorkStoreError("invalid_request", ("preflight_intent_required",))
-        if intent["status"] != "begun":
-            raise WorkStoreError("invalid_request", ("preflight_intent_not_begun",))
+        if intent["status"] != "dispatched":
+            raise WorkStoreError("invalid_request", ("preflight_intent_not_dispatched",))
+        if intent["dispatch_owner_id"] is None or envelope.correlation_id != intent["dispatch_owner_id"]:
+            raise WorkStoreError("preflight_intent_active", ("preflight_intent_foreign_owner",))
 
         matches_intent = (
             intent["work_id"] == payload.work_id

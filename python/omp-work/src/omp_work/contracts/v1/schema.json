@@ -998,6 +998,69 @@
       "title": "ActivateExecutionItemPayload",
       "type": "object"
     },
+    "AdmitStagePreflightCommand": {
+      "$defs": {
+        "AdmitStagePreflightPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "logical_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Logical Sha256",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "transport_attempt_id",
+            "logical_sha256"
+          ],
+          "title": "AdmitStagePreflightPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AdmitStagePreflightPayload"
+        },
+        "type": {
+          "const": "admit_stage_preflight",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "AdmitStagePreflightCommand",
+      "type": "object"
+    },
+    "AdmitStagePreflightPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "logical_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Logical Sha256",
+          "type": "string"
+        },
+        "transport_attempt_id": {
+          "format": "uuid",
+          "title": "Transport Attempt Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transport_attempt_id",
+        "logical_sha256"
+      ],
+      "title": "AdmitStagePreflightPayload",
+      "type": "object"
+    },
     "Anomaly": {
       "additionalProperties": false,
       "properties": {
@@ -3841,6 +3904,81 @@
       "title": "CancelStageLaunchPayload",
       "type": "object"
     },
+    "CancelStagePreflightCommand": {
+      "$defs": {
+        "CancelStagePreflightPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "logical_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Logical Sha256",
+              "type": "string"
+            },
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "transport_attempt_id",
+            "logical_sha256",
+            "reason"
+          ],
+          "title": "CancelStagePreflightPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CancelStagePreflightPayload"
+        },
+        "type": {
+          "const": "cancel_stage_preflight",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "CancelStagePreflightCommand",
+      "type": "object"
+    },
+    "CancelStagePreflightPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "logical_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Logical Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "transport_attempt_id": {
+          "format": "uuid",
+          "title": "Transport Attempt Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transport_attempt_id",
+        "logical_sha256",
+        "reason"
+      ],
+      "title": "CancelStagePreflightPayload",
+      "type": "object"
+    },
     "CancellationProof": {
       "additionalProperties": false,
       "description": "Owner ruling 2026-08-23 (staged cancel batches, OMP-111): one historical work\nitem canceled atomically with the primary's completion.",
@@ -4990,6 +5128,46 @@
           "title": "ActivateExecutionItemPayload",
           "type": "object"
         },
+        "AdmitStagePreflightCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/AdmitStagePreflightPayload"
+            },
+            "type": {
+              "const": "admit_stage_preflight",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "AdmitStagePreflightCommand",
+          "type": "object"
+        },
+        "AdmitStagePreflightPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "logical_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Logical Sha256",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "transport_attempt_id",
+            "logical_sha256"
+          ],
+          "title": "AdmitStagePreflightPayload",
+          "type": "object"
+        },
         "Anomaly": {
           "additionalProperties": false,
           "properties": {
@@ -5871,6 +6049,52 @@
             "reason"
           ],
           "title": "CancelStageLaunchPayload",
+          "type": "object"
+        },
+        "CancelStagePreflightCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/CancelStagePreflightPayload"
+            },
+            "type": {
+              "const": "cancel_stage_preflight",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "CancelStagePreflightCommand",
+          "type": "object"
+        },
+        "CancelStagePreflightPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "logical_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Logical Sha256",
+              "type": "string"
+            },
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "transport_attempt_id",
+            "logical_sha256",
+            "reason"
+          ],
+          "title": "CancelStagePreflightPayload",
           "type": "object"
         },
         "CancellationProof": {
@@ -9767,6 +9991,7 @@
             "mapping": {
               "activate_cutover": "#/$defs/ActivateCutoverCommand",
               "activate_execution_item": "#/$defs/ActivateExecutionItemCommand",
+              "admit_stage_preflight": "#/$defs/AdmitStagePreflightCommand",
               "append_evidence": "#/$defs/AppendEvidenceCommand",
               "associate_candidate_source": "#/$defs/AssociateCandidateSourceCommand",
               "attest_checkpoint_delivery": "#/$defs/AttestCheckpointDeliveryCommand",
@@ -9777,6 +10002,7 @@
               "cancel_auditor_launch": "#/$defs/CancelAuditorLaunchCommand",
               "cancel_budget": "#/$defs/CancelBudgetCommand",
               "cancel_stage_launch": "#/$defs/CancelStageLaunchCommand",
+              "cancel_stage_preflight": "#/$defs/CancelStagePreflightCommand",
               "claim_budget": "#/$defs/ClaimBudgetCommand",
               "clear_focus": "#/$defs/ClearFocusCommand",
               "complete_execution_item": "#/$defs/CompleteExecutionItemCommand",
@@ -9876,6 +10102,12 @@
             },
             {
               "$ref": "#/$defs/BeginStagePreflightCommand"
+            },
+            {
+              "$ref": "#/$defs/AdmitStagePreflightCommand"
+            },
+            {
+              "$ref": "#/$defs/CancelStagePreflightCommand"
             },
             {
               "$ref": "#/$defs/RecordStagePreflightCommand"
@@ -21440,6 +21672,8 @@
         "StagePreflightIntentStatus": {
           "enum": [
             "begun",
+            "dispatched",
+            "cancelled_undispatched",
             "settled"
           ],
           "title": "StagePreflightIntentStatus",
@@ -21461,6 +21695,44 @@
           "default": null,
           "title": "Attempt Id"
         },
+        "cancel_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancel Reason"
+        },
+        "cancelled_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancelled At"
+        },
+        "cancelled_by": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancelled By"
+        },
         "candidate_id": {
           "anyOf": [
             {
@@ -21478,6 +21750,45 @@
           "format": "date-time",
           "title": "Created At",
           "type": "string"
+        },
+        "dispatch_operation_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatch Operation Id"
+        },
+        "dispatch_owner_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatch Owner Id"
+        },
+        "dispatched_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatched At"
         },
         "grant_id": {
           "anyOf": [

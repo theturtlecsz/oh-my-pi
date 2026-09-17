@@ -87,6 +87,20 @@ class BeginStagePreflightResult(StrictModel):
     preflight: StagePreflight | None = None
 
 
+class AdmitStagePreflightResult(StrictModel):
+    type: Literal["admit_stage_preflight"]
+    status: Literal["applied", "replayed"]
+    intent: StagePreflightIntent
+    preflight: StagePreflight | None = None
+
+
+class CancelStagePreflightResult(StrictModel):
+    type: Literal["cancel_stage_preflight"]
+    status: Literal["applied", "replayed"]
+    intent: StagePreflightIntent
+    preflight: StagePreflight | None = None
+
+
 class StagePreflightResult(StrictModel):
     type: Literal["record_stage_preflight"]
     status: Literal["applied", "replayed", "refused"]
@@ -390,6 +404,8 @@ CommandResult = Annotated[
     | CloseAttemptResult
     | StageLaunchResult
     | BeginStagePreflightResult
+    | AdmitStagePreflightResult
+    | CancelStagePreflightResult
     | StagePreflightResult
     | CandidateSourceAssociationResult
     | RecordCloseoutReviewResult

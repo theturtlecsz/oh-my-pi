@@ -9,6 +9,9 @@ import { randomUUID } from "node:crypto";
 import { completeSimple, type AssistantMessage, type Usage } from "@oh-my-pi/pi-ai";
 import {
 	type BeginStagePreflightResult,
+	type AdmitStagePreflightResult,
+	type CancelStagePreflightResult,
+	type StagePreflightIntent,
 	sha256Hex,
 	type StagePreflight,
 	type UUID,
@@ -49,6 +52,8 @@ export interface NativeStagePreflightBeginInput {
 
 export interface NativeStagePreflightCallbacks {
 	begin: (input: NativeStagePreflightBeginInput) => Promise<BeginStagePreflightResult>;
+	admit: (input: { transportAttemptId: UUID; logicalSha256: string }) => Promise<AdmitStagePreflightResult>;
+	cancel: (input: { transportAttemptId: UUID; logicalSha256: string; reason: string }) => Promise<CancelStagePreflightResult>;
 	record: (attempt: NativeStagePreflightAttempt) => Promise<StagePreflight | void>;
 }
 
@@ -122,8 +127,13 @@ export async function prepareNativeStageRunner(
 ): Promise<NativeAuditRunner> {
 	if (signal?.aborted) throw new DOMException("Native stage preflight cancelled", "AbortError");
 	if (options.preflight) {
-		if (typeof options.preflight.begin !== "function" || typeof options.preflight.record !== "function") {
-			throw new Error("preflight option requires both begin and record callbacks");
+		if (
+			typeof options.preflight.begin !== "function" ||
+			typeof options.preflight.admit !== "function" ||
+			typeof options.preflight.cancel !== "function" ||
+			typeof options.preflight.record !== "function"
+		) {
+			throw new Error("preflight option requires begin, admit, cancel, and record callbacks");
 		}
 	}
 	const discovery = await discoverAgents(ctx.cwd);
@@ -185,7 +195,7 @@ export async function prepareNativeStageRunner(
 			}
 		}
 
-		const currentOrdinal = ordinal++;
+		let currentOrdinal = ordinal++;
 		let transportAttemptId: UUID = randomUUID();
 
 		if (options.preflight) {
@@ -194,13 +204,48 @@ export async function prepareNativeStageRunner(
 				ordinal: currentOrdinal,
 				probeSha256,
 			});
+			let activeIntent: StagePreflightIntent | undefined;
 			if (beginResult.status === "replayed") {
-				if (beginResult.intent.status === "begun") {
+				if (beginResult.intent.status === "dispatched") {
 					throw new Error(
-						`preflight intent active for ${candidate.requestedSelector} (transport attempt ${beginResult.intent.transport_attempt_id}): recovery required`,
+						"provider effect uncertain, trusted provider reconciliation required",
 					);
 				}
-				if (beginResult.intent.status === "settled") {
+				if (beginResult.intent.status === "begun") {
+					if (typeof options.preflight.cancel !== "function") {
+						throw new Error("native stage preflight requires cancel capability");
+					}
+					await options.preflight.cancel({
+						transportAttemptId: beginResult.intent.transport_attempt_id,
+						logicalSha256: beginResult.intent.logical_sha256,
+						reason: "replayed begun preflight recovered after lost begin response",
+					});
+					currentOrdinal = ordinal++;
+					const retryBegin = await options.preflight.begin({
+						route: candidate,
+						ordinal: currentOrdinal,
+						probeSha256,
+					});
+					if (retryBegin.status !== "applied" || retryBegin.intent.status !== "begun") {
+						throw new Error(
+							`preflight intent active for ${candidate.requestedSelector} (transport attempt ${retryBegin.intent.transport_attempt_id}): recovery required`,
+						);
+					}
+					activeIntent = retryBegin.intent;
+				} else if (beginResult.intent.status === "cancelled_undispatched") {
+					currentOrdinal = ordinal++;
+					const retryBegin = await options.preflight.begin({
+						route: candidate,
+						ordinal: currentOrdinal,
+						probeSha256,
+					});
+					if (retryBegin.status !== "applied" || retryBegin.intent.status !== "begun") {
+						throw new Error(
+							`preflight intent active for ${candidate.requestedSelector} (transport attempt ${retryBegin.intent.transport_attempt_id}): recovery required`,
+						);
+					}
+					activeIntent = retryBegin.intent;
+				} else if (beginResult.intent.status === "settled") {
 					const terminal = beginResult.preflight;
 					if (!terminal) {
 						throw new Error(
@@ -225,8 +270,36 @@ export async function prepareNativeStageRunner(
 						);
 					}
 				}
+			} else {
+				activeIntent = beginResult.intent;
 			}
-			transportAttemptId = beginResult.intent.transport_attempt_id;
+
+			if (activeIntent) {
+				if (signal?.aborted) {
+					if (typeof options.preflight.cancel === "function") {
+						await options.preflight.cancel({
+							transportAttemptId: activeIntent.transport_attempt_id,
+							logicalSha256: activeIntent.logical_sha256,
+							reason: "aborted before preflight dispatch admission",
+						}).catch(() => {});
+					}
+					throw new DOMException("The operation was aborted", "AbortError");
+				}
+
+				if (typeof options.preflight.admit !== "function") {
+					throw new Error("native stage preflight requires admit capability");
+				}
+				const admitResult = await options.preflight.admit({
+					transportAttemptId: activeIntent.transport_attempt_id,
+					logicalSha256: activeIntent.logical_sha256,
+				});
+				if (admitResult.intent.status !== "dispatched") {
+					throw new Error(
+						`preflight dispatch admission refused: status is ${admitResult.intent.status}`,
+					);
+				}
+				transportAttemptId = admitResult.intent.transport_attempt_id;
+			}
 		}
 
 		const recordAttempt = async (attempt: NativeStagePreflightAttempt) => {

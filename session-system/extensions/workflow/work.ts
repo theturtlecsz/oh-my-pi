@@ -42,6 +42,10 @@ import {
 	type StagePreflight,
 	type BeginStagePreflightPayload,
 	type BeginStagePreflightResult,
+	type AdmitStagePreflightPayload,
+	type AdmitStagePreflightResult,
+	type CancelStagePreflightPayload,
+	type CancelStagePreflightResult,
 	type RecordStagePreflightPayload,
 	type CandidateSourceVersion,
 } from "@oh-my-pi/pi-work-client";
@@ -1834,6 +1838,44 @@ export function createWorkBackend(
 			};
 			const response = await client.execute(envelope);
 			if (response.result.type !== "begin_stage_preflight") {
+				throw new Error("native stage preflight returned unexpected command result");
+			}
+			return response.result;
+		},
+
+		async admitStagePreflight(payload: AdmitStagePreflightPayload): Promise<AdmitStagePreflightResult> {
+			const envelope: CommandEnvelope = {
+				api_version: "work.omp.dev/v1",
+				workspace_id: config.workspaceId,
+				operation_id: randomUUID(),
+				request_id: randomUUID(),
+				correlation_id: correlationId,
+				command: {
+					type: "admit_stage_preflight",
+					payload,
+				},
+			};
+			const response = await client.execute(envelope);
+			if (response.result.type !== "admit_stage_preflight") {
+				throw new Error("native stage preflight returned unexpected command result");
+			}
+			return response.result;
+		},
+
+		async cancelStagePreflight(payload: CancelStagePreflightPayload): Promise<CancelStagePreflightResult> {
+			const envelope: CommandEnvelope = {
+				api_version: "work.omp.dev/v1",
+				workspace_id: config.workspaceId,
+				operation_id: randomUUID(),
+				request_id: randomUUID(),
+				correlation_id: correlationId,
+				command: {
+					type: "cancel_stage_preflight",
+					payload,
+				},
+			};
+			const response = await client.execute(envelope);
+			if (response.result.type !== "cancel_stage_preflight") {
 				throw new Error("native stage preflight returned unexpected command result");
 			}
 			return response.result;

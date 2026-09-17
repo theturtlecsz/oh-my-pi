@@ -470,6 +470,8 @@ class StagePreflight(StrictModel):
 
 class StagePreflightIntentStatus(StrEnum):
     BEGUN = "begun"
+    DISPATCHED = "dispatched"
+    CANCELLED_UNDISPATCHED = "cancelled_undispatched"
     SETTLED = "settled"
 
 
@@ -500,6 +502,12 @@ class StagePreflightIntent(StrictModel):
     status: StagePreflightIntentStatus
     created_at: datetime
     settled_at: datetime | None = None
+    dispatched_at: datetime | None = None
+    dispatch_operation_id: UUID | None = None
+    dispatch_owner_id: UUID | None = None
+    cancelled_at: datetime | None = None
+    cancelled_by: UUID | None = None
+    cancel_reason: str | None = None
 
 
 class CandidateSourceVersion(StrictModel):
@@ -1077,6 +1085,17 @@ class BeginStagePreflightPayload(StrictModel):
     is_fallback: bool = False
 
 
+class AdmitStagePreflightPayload(StrictModel):
+    transport_attempt_id: UUID
+    logical_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CancelStagePreflightPayload(StrictModel):
+    transport_attempt_id: UUID
+    logical_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(min_length=1)
+
+
 class RecordStagePreflightPayload(StrictModel):
     work_id: UUID
     revision_id: UUID | None = None
@@ -1562,6 +1581,16 @@ class RecordStagePreflightCommand(StrictModel):
     payload: RecordStagePreflightPayload
 
 
+class AdmitStagePreflightCommand(StrictModel):
+    type: Literal["admit_stage_preflight"]
+    payload: AdmitStagePreflightPayload
+
+
+class CancelStagePreflightCommand(StrictModel):
+    type: Literal["cancel_stage_preflight"]
+    payload: CancelStagePreflightPayload
+
+
 class CreateBudgetScopeCommand(StrictModel):
     type: Literal["create_budget_scope"]
     payload: CreateBudgetScopePayload
@@ -1659,6 +1688,8 @@ Command = Annotated[
     | CancelStageLaunchCommand
     | ReconcileStageLaunchCommand
     | BeginStagePreflightCommand
+    | AdmitStagePreflightCommand
+    | CancelStagePreflightCommand
     | RecordStagePreflightCommand
     | CreateBudgetScopeCommand
     | ReserveBudgetCommand

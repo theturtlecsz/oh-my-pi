@@ -1200,3 +1200,171 @@ test("executes begin_stage_preflight and decodes typed applied and replayed resu
 		expect(res.result.preflight).toBeNull();
 	}
 });
+
+test("executes admit_stage_preflight and decodes typed applied result", async () => {
+	const intentId = "00000000-0000-0000-0000-000000000031";
+	const transportAttemptId = "00000000-0000-0000-0000-000000000041";
+	const logicalSha256 = "33".repeat(32);
+
+	let commandRequest: Request | undefined;
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			commandRequest = new Request(String(input), init);
+			return Response.json({
+				api_version: "work.omp.dev/v1",
+				workspace_id: ENV.workspace_id,
+				operation_id: ENV.operation_id,
+				request_id: ENV.request_id,
+				result: {
+					type: "admit_stage_preflight",
+					status: "applied",
+					intent: {
+						intent_id: intentId,
+						workspace_id: ENV.workspace_id,
+						work_id: "00000000-0000-0000-0000-000000000021",
+						revision_id: null,
+						candidate_id: null,
+						attempt_id: null,
+						grant_id: null,
+						role: "implement",
+						tool_call_id: "call-1",
+						task_sha256: "11".repeat(32),
+						probe_sha256: "22".repeat(32),
+						transport_attempt_id: transportAttemptId,
+						ordinal: 0,
+						requested_selector: "gemini:gemini-3.8-flash",
+						requested_provider: "gemini",
+						requested_model: "gemini-3.8-flash",
+						requested_api: "google-genai",
+						requested_effort: "medium",
+						requested_wire_model: "gemini-3.8-flash-preview",
+						is_fallback: false,
+						logical_sha256: logicalSha256,
+						group_sha256: "44".repeat(32),
+						host_owner_id: ENV.correlation_id,
+						dispatched_at: "2026-09-17T12:01:00+00:00",
+						dispatch_operation_id: ENV.operation_id,
+						dispatch_owner_id: ENV.correlation_id,
+						cancelled_at: null,
+						cancelled_by: null,
+						cancel_reason: null,
+						status: "dispatched",
+						created_at: "2026-09-17T12:00:00+00:00",
+						settled_at: null,
+					},
+					preflight: null,
+				},
+				result_sha256: "55".repeat(32),
+				diagnostics: [],
+			});
+		},
+	);
+
+	const res = await client.execute({
+		...ENV,
+		command: {
+			type: "admit_stage_preflight",
+			payload: {
+				transport_attempt_id: transportAttemptId,
+				logical_sha256: logicalSha256,
+			},
+		},
+	});
+
+	expect(commandRequest?.url).toBe("http://127.0.0.1:54322/v1/commands");
+	expect(res.result.type).toBe("admit_stage_preflight");
+	if (res.result.type === "admit_stage_preflight") {
+		expect(res.result.status).toBe("applied");
+		expect(res.result.intent.intent_id).toBe(intentId);
+		expect(res.result.intent.status).toBe("dispatched");
+		expect(res.result.intent.dispatch_owner_id).toBe(ENV.correlation_id);
+	}
+});
+
+test("executes cancel_stage_preflight and decodes typed applied result", async () => {
+	const intentId = "00000000-0000-0000-0000-000000000031";
+	const transportAttemptId = "00000000-0000-0000-0000-000000000041";
+	const logicalSha256 = "33".repeat(32);
+
+	let commandRequest: Request | undefined;
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			commandRequest = new Request(String(input), init);
+			return Response.json({
+				api_version: "work.omp.dev/v1",
+				workspace_id: ENV.workspace_id,
+				operation_id: ENV.operation_id,
+				request_id: ENV.request_id,
+				result: {
+					type: "cancel_stage_preflight",
+					status: "applied",
+					intent: {
+						intent_id: intentId,
+						workspace_id: ENV.workspace_id,
+						work_id: "00000000-0000-0000-0000-000000000021",
+						revision_id: null,
+						candidate_id: null,
+						attempt_id: null,
+						grant_id: null,
+						role: "implement",
+						tool_call_id: "call-1",
+						task_sha256: "11".repeat(32),
+						probe_sha256: "22".repeat(32),
+						transport_attempt_id: transportAttemptId,
+						ordinal: 0,
+						requested_selector: "gemini:gemini-3.8-flash",
+						requested_provider: "gemini",
+						requested_model: "gemini-3.8-flash",
+						requested_api: "google-genai",
+						requested_effort: "medium",
+						requested_wire_model: "gemini-3.8-flash-preview",
+						is_fallback: false,
+						logical_sha256: logicalSha256,
+						group_sha256: "44".repeat(32),
+						host_owner_id: "00000000-0000-0000-0000-000000000099",
+						dispatched_at: null,
+						dispatch_operation_id: null,
+						dispatch_owner_id: null,
+						cancelled_at: "2026-09-17T12:02:00+00:00",
+						cancelled_by: ENV.correlation_id,
+						cancel_reason: "runner recovery reissue",
+						status: "cancelled_undispatched",
+						created_at: "2026-09-17T12:00:00+00:00",
+						settled_at: null,
+					},
+					preflight: null,
+				},
+				result_sha256: "55".repeat(32),
+				diagnostics: [],
+			});
+		},
+	);
+
+	const res = await client.execute({
+		...ENV,
+		command: {
+			type: "cancel_stage_preflight",
+			payload: {
+				transport_attempt_id: transportAttemptId,
+				logical_sha256: logicalSha256,
+				reason: "runner recovery reissue",
+			},
+		},
+	});
+
+	expect(commandRequest?.url).toBe("http://127.0.0.1:54322/v1/commands");
+	expect(res.result.type).toBe("cancel_stage_preflight");
+	if (res.result.type === "cancel_stage_preflight") {
+		expect(res.result.status).toBe("applied");
+		expect(res.result.intent.intent_id).toBe(intentId);
+		expect(res.result.intent.status).toBe("cancelled_undispatched");
+		expect(res.result.intent.cancelled_by).toBe(ENV.correlation_id);
+		expect(res.result.intent.cancel_reason).toBe("runner recovery reissue");
+	}
+});

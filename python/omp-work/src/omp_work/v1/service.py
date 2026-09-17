@@ -48,6 +48,8 @@ class WorkService:
         "cancel_stage_launch": "work.execute",
         "reconcile_stage_launch": "work.execute",
         "begin_stage_preflight": "work.execute",
+        "admit_stage_preflight": "work.execute",
+        "cancel_stage_preflight": "work.execute",
         "record_stage_preflight": "work.execute",
         "associate_candidate_source": "work.execute",
         "attest_checkpoint_delivery": "work.close",

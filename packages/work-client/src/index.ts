@@ -531,7 +531,7 @@ export type StagePreflight = {
 	provider_request_id: string | null;
 	observed_at: string;
 };
-export type StagePreflightIntentStatus = "begun" | "settled";
+export type StagePreflightIntentStatus = "begun" | "dispatched" | "cancelled_undispatched" | "settled";
 export type StagePreflightIntent = {
 	intent_id: UUID;
 	workspace_id: UUID;
@@ -559,6 +559,12 @@ export type StagePreflightIntent = {
 	status: StagePreflightIntentStatus;
 	created_at: string;
 	settled_at: string | null;
+	dispatched_at?: string | null;
+	dispatch_operation_id?: UUID | null;
+	dispatch_owner_id?: UUID | null;
+	cancelled_at?: string | null;
+	cancelled_by?: UUID | null;
+	cancel_reason?: string | null;
 };
 export type BeginStagePreflightPayload = {
 	work_id: UUID;
@@ -581,6 +587,27 @@ export type BeginStagePreflightPayload = {
 };
 export type BeginStagePreflightResult = {
 	type: "begin_stage_preflight";
+	status: "applied" | "replayed";
+	intent: StagePreflightIntent;
+	preflight?: StagePreflight | null;
+};
+export type AdmitStagePreflightPayload = {
+	transport_attempt_id: UUID;
+	logical_sha256: string;
+};
+export type AdmitStagePreflightResult = {
+	type: "admit_stage_preflight";
+	status: "applied" | "replayed";
+	intent: StagePreflightIntent;
+	preflight?: StagePreflight | null;
+};
+export type CancelStagePreflightPayload = {
+	transport_attempt_id: UUID;
+	logical_sha256: string;
+	reason: string;
+};
+export type CancelStagePreflightResult = {
+	type: "cancel_stage_preflight";
 	status: "applied" | "replayed";
 	intent: StagePreflightIntent;
 	preflight?: StagePreflight | null;
@@ -975,6 +1002,8 @@ export type Command =
 	| { type: "cancel_stage_launch"; payload: CancelStageLaunchPayload }
 	| { type: "reconcile_stage_launch"; payload: ReconcileStageLaunchPayload }
 	| { type: "begin_stage_preflight"; payload: BeginStagePreflightPayload }
+	| { type: "admit_stage_preflight"; payload: AdmitStagePreflightPayload }
+	| { type: "cancel_stage_preflight"; payload: CancelStagePreflightPayload }
 	| { type: "record_stage_preflight"; payload: RecordStagePreflightPayload }
 	| { type: "create_budget_scope"; payload: CreateBudgetScopePayload }
 	| { type: "reserve_budget"; payload: ReserveBudgetPayload }
@@ -1095,6 +1124,8 @@ export type CommandResult =
 			reason?: string | null;
 	  }
 	| BeginStagePreflightResult
+	| AdmitStagePreflightResult
+	| CancelStagePreflightResult
 	| StagePreflightResult
 	| {
 			type: "associate_candidate_source";

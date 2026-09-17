@@ -22,6 +22,10 @@ import type {
 	StagePreflightIntent,
 	BeginStagePreflightPayload,
 	BeginStagePreflightResult,
+	AdmitStagePreflightPayload,
+	AdmitStagePreflightResult,
+	CancelStagePreflightPayload,
+	CancelStagePreflightResult,
 	RecordStagePreflightPayload,
 	CandidateSourceVersion,
 	UUID,
@@ -647,6 +651,8 @@ export interface WorkflowBackend {
 	settleAuditorLaunch(key: string, launchId: string, transport: { payload?: unknown; failed?: boolean }): Promise<CloseAttemptOutcome>;
 	/** WorkService-owned native stage lifecycle. Session journal is telemetry only. */
 	beginStagePreflight(payload: BeginStagePreflightPayload): Promise<BeginStagePreflightResult>;
+	admitStagePreflight(payload: AdmitStagePreflightPayload): Promise<AdmitStagePreflightResult>;
+	cancelStagePreflight(payload: CancelStagePreflightPayload): Promise<CancelStagePreflightResult>;
 	recordStagePreflight(payload: RecordStagePreflightPayload): Promise<StagePreflight>;
 	reserveStageLaunch(input: NativeStageLaunchInput): Promise<StageLaunch>;
 	handoffStageLaunch(launchId: string, taskSha256: string): Promise<StageLaunch>;

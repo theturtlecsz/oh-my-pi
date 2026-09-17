@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { canonicalJson, sha256Hex, type BeginStagePreflightPayload, type RecordStagePreflightPayload, type StageLaunch, type StagePreflight, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, type BeginStagePreflightPayload, type AdmitStagePreflightPayload, type CancelStagePreflightPayload, type RecordStagePreflightPayload, type StageLaunch, type StagePreflight, type WorkItemView } from "@oh-my-pi/pi-work-client";
 import * as auditorRunner from "../extensions/workflow/auditor-runner";
 import { dispatchNativeStage } from "../extensions/workflow/native-stage-dispatch";
 import type { KnowledgeBridge } from "../extensions/workflow/knowledge-bridge";
@@ -869,8 +869,10 @@ describe("native stage dispatch", () => {
 
 	test("dispatch begin and record identities match and service-returned transport attempt ID is used", async () => {
 		const beginPayloads: BeginStagePreflightPayload[] = [];
+		const admitPayloads: AdmitStagePreflightPayload[] = [];
 		const recordPayloads: RecordStagePreflightPayload[] = [];
 		const serviceTransportAttemptId = "44444444-4444-4444-8444-444444444444";
+		const beginIntentLogicalSha256 = "b".repeat(64);
 		const selectedModel = model();
 		const prepared = launch();
 		const settled = launch("settled");
@@ -887,8 +889,12 @@ describe("native stage dispatch", () => {
 				ordinal: 0,
 				probeSha256: "f".repeat(64),
 			});
-			await options.preflight!.record({
+			const admitResult = await options.preflight!.admit!({
 				transportAttemptId: beginResult.intent.transport_attempt_id,
+				logicalSha256: beginResult.intent.logical_sha256,
+			});
+			await options.preflight!.record({
+				transportAttemptId: admitResult.intent.transport_attempt_id,
 				ordinal: 0,
 				route,
 				probeSha256: "f".repeat(64),
@@ -941,12 +947,89 @@ describe("native stage dispatch", () => {
 						requested_effort: payload.requested_effort ?? null,
 						requested_wire_model: payload.requested_wire_model,
 						is_fallback: payload.is_fallback,
-						logical_sha256: "0".repeat(64),
+						logical_sha256: beginIntentLogicalSha256,
 						group_sha256: "0".repeat(64),
 						host_owner_id: "owner-1",
 						status: "begun",
 						created_at: new Date().toISOString(),
 						settled_at: null,
+					},
+					preflight: undefined,
+				};
+			},
+			admitStagePreflight: async (payload: AdmitStagePreflightPayload) => {
+				admitPayloads.push(payload);
+				return {
+					type: "admit_stage_preflight",
+					status: "applied",
+					intent: {
+						intent_id: "00000000-0000-4000-8000-000000000001",
+						workspace_id: workspaceId,
+						work_id: beginPayloads[0].work_id,
+						revision_id: beginPayloads[0].revision_id,
+						candidate_id: beginPayloads[0].candidate_id ?? null,
+						attempt_id: beginPayloads[0].attempt_id ?? null,
+						grant_id: beginPayloads[0].grant_id ?? null,
+						role: beginPayloads[0].role,
+						tool_call_id: beginPayloads[0].tool_call_id,
+						task_sha256: beginPayloads[0].task_sha256,
+						probe_sha256: beginPayloads[0].probe_sha256,
+						transport_attempt_id: payload.transport_attempt_id,
+						ordinal: beginPayloads[0].ordinal,
+						requested_selector: beginPayloads[0].requested_selector,
+						requested_provider: beginPayloads[0].requested_provider,
+						requested_model: beginPayloads[0].requested_model,
+						requested_api: beginPayloads[0].requested_api,
+						requested_effort: beginPayloads[0].requested_effort ?? null,
+						requested_wire_model: beginPayloads[0].requested_wire_model,
+						is_fallback: beginPayloads[0].is_fallback,
+						logical_sha256: payload.logical_sha256,
+						group_sha256: "0".repeat(64),
+						host_owner_id: "owner-1",
+						status: "dispatched",
+						created_at: new Date().toISOString(),
+						settled_at: null,
+						dispatched_at: new Date().toISOString(),
+						dispatch_operation_id: "11111111-1111-4111-8111-111111111111",
+						dispatch_owner_id: "owner-1",
+					},
+					preflight: undefined,
+				};
+			},
+			cancelStagePreflight: async (payload: CancelStagePreflightPayload) => {
+				return {
+					type: "cancel_stage_preflight",
+					status: "applied",
+					intent: {
+						intent_id: "00000000-0000-4000-8000-000000000001",
+						workspace_id: workspaceId,
+						work_id: beginPayloads[0].work_id,
+						revision_id: beginPayloads[0].revision_id,
+						candidate_id: beginPayloads[0].candidate_id ?? null,
+						attempt_id: beginPayloads[0].attempt_id ?? null,
+						grant_id: beginPayloads[0].grant_id ?? null,
+						role: beginPayloads[0].role,
+						tool_call_id: beginPayloads[0].tool_call_id,
+						task_sha256: beginPayloads[0].task_sha256,
+						probe_sha256: beginPayloads[0].probe_sha256,
+						transport_attempt_id: payload.transport_attempt_id,
+						ordinal: beginPayloads[0].ordinal,
+						requested_selector: beginPayloads[0].requested_selector,
+						requested_provider: beginPayloads[0].requested_provider,
+						requested_model: beginPayloads[0].requested_model,
+						requested_api: beginPayloads[0].requested_api,
+						requested_effort: beginPayloads[0].requested_effort ?? null,
+						requested_wire_model: beginPayloads[0].requested_wire_model,
+						is_fallback: beginPayloads[0].is_fallback,
+						logical_sha256: payload.logical_sha256,
+						group_sha256: "0".repeat(64),
+						host_owner_id: "owner-1",
+						status: "cancelled_undispatched",
+						created_at: new Date().toISOString(),
+						settled_at: null,
+						cancelled_at: new Date().toISOString(),
+						cancelled_by: "owner-1",
+						cancel_reason: payload.reason,
 					},
 					preflight: undefined,
 				};
@@ -987,9 +1070,11 @@ describe("native stage dispatch", () => {
 
 		expect(result.launch.status).toBe("settled");
 		expect(beginPayloads).toHaveLength(1);
+		expect(admitPayloads).toHaveLength(1);
 		expect(recordPayloads).toHaveLength(1);
 
 		const begin = beginPayloads[0];
+		const admit = admitPayloads[0];
 		const record = recordPayloads[0];
 
 		// Identities match
@@ -1014,8 +1099,14 @@ describe("native stage dispatch", () => {
 		expect(begin.requested_wire_model).toBe(record.requested_wire_model);
 		expect(begin.is_fallback).toBe(record.is_fallback);
 
+		// Admit payload binds service-returned transport attempt ID and logical hash from begin intent
+		expect(admit.transport_attempt_id).toBe(serviceTransportAttemptId);
+		expect(admit.logical_sha256).toBe(beginIntentLogicalSha256);
+
 		// Record used the service-minted transportAttemptId
 		expect(record.transport_attempt_id).toBe(serviceTransportAttemptId);
+		expect(record.work_id).toBe(workId);
+		expect(record.revision_id).toBe(revisionId);
 	});
 
 	test("dispatch fails closed when beginStagePreflight capability is absent", async () => {
@@ -1066,5 +1157,95 @@ describe("native stage dispatch", () => {
 				grantId,
 			}),
 		).rejects.toThrow("native stage dispatch requires WorkService beginStagePreflight capability");
+	});
+
+	test("dispatch fails closed when admitStagePreflight capability is absent", async () => {
+		const selectedModel = model();
+		const workItem = item();
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			await options.preflight!.admit!({
+				transportAttemptId: "44444444-4444-4444-8444-444444444444",
+				logicalSha256: "0".repeat(64),
+			});
+			return async () => ({ started: true, payload: "{}", resolvedModel: null });
+		});
+		prepareRestore = () => prepare.mockRestore();
+
+		const backend = {
+			workspaceId,
+			workClient: {
+				workItem: async () => workItem,
+			},
+			beginStagePreflight: async () => ({}),
+			// admitStagePreflight is absent
+		} as unknown as WorkflowBackend;
+
+		const ctx = {
+			models: {
+				resolve: () => selectedModel,
+				list: () => [selectedModel],
+				current: () => selectedModel,
+				family: () => "openai-codex/gpt-5.6-luna",
+			},
+			sessionManager: {
+				getSessionId: () => "session-1",
+			},
+		} as unknown as ExtensionContext;
+
+		await expect(
+			dispatchNativeStage(ctx, backend, undefined, {
+				workKey: "OMP-1",
+				role: "implement",
+				taskBody: "edit sealed file",
+				toolCallId: "call-1",
+				grantId,
+			}),
+		).rejects.toThrow("native stage dispatch requires WorkService admitStagePreflight capability");
+	});
+
+	test("dispatch fails closed when cancelStagePreflight capability is absent", async () => {
+		const selectedModel = model();
+		const workItem = item();
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			await options.preflight!.cancel!({
+				transportAttemptId: "44444444-4444-4444-8444-444444444444",
+				logicalSha256: "0".repeat(64),
+				reason: "test",
+			});
+			return async () => ({ started: true, payload: "{}", resolvedModel: null });
+		});
+		prepareRestore = () => prepare.mockRestore();
+
+		const backend = {
+			workspaceId,
+			workClient: {
+				workItem: async () => workItem,
+			},
+			beginStagePreflight: async () => ({}),
+			admitStagePreflight: async () => ({}),
+			// cancelStagePreflight is absent
+		} as unknown as WorkflowBackend;
+
+		const ctx = {
+			models: {
+				resolve: () => selectedModel,
+				list: () => [selectedModel],
+				current: () => selectedModel,
+				family: () => "openai-codex/gpt-5.6-luna",
+			},
+			sessionManager: {
+				getSessionId: () => "session-1",
+			},
+		} as unknown as ExtensionContext;
+
+		await expect(
+			dispatchNativeStage(ctx, backend, undefined, {
+				workKey: "OMP-1",
+				role: "implement",
+				taskBody: "edit sealed file",
+				toolCallId: "call-1",
+				grantId,
+			}),
+		).rejects.toThrow("native stage dispatch requires WorkService cancelStagePreflight capability");
 	});
 });

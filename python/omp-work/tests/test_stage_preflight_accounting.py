@@ -69,7 +69,53 @@ def _preflight_payload(
     return base
 
 
-def _begin_preflight_for(service, workspace_id: UUID, payload: dict, **kwargs) -> str:
+_intent_correlations: dict[str, UUID] = {}
+
+
+def _command(
+    service,
+    workspace_id,
+    command: dict,
+    *,
+    token: str = "owner-token",
+    operation_id=None,
+    correlation_id=None,
+) -> tuple[int, dict]:
+    corr = correlation_id
+    if corr is None:
+        payload = command.get("payload")
+        if isinstance(payload, dict) and "transport_attempt_id" in payload:
+            t_id = str(payload["transport_attempt_id"])
+            if t_id in _intent_correlations:
+                corr = _intent_correlations[t_id]
+    if corr is None:
+        corr = uuid4()
+    envelope = {
+        "api_version": "work.omp.dev/v1",
+        "workspace_id": str(workspace_id),
+        "operation_id": str(operation_id or uuid4()),
+        "request_id": str(uuid4()),
+        "correlation_id": str(corr),
+        "command": command,
+    }
+    response = service.client.post(
+        "/v1/commands",
+        headers=_owner_headers(workspace_id) | {"Authorization": f"Bearer {token}"},
+        json=envelope,
+    )
+    return response.status_code, response.json()
+
+
+def _begin_preflight_for(
+    service,
+    workspace_id: UUID,
+    payload: dict,
+    *,
+    correlation_id: UUID | None = None,
+    admit: bool = True,
+    **kwargs,
+) -> str:
+    corr = correlation_id or uuid4()
     begin_payload = {
         "work_id": payload["work_id"],
         "role": payload.get("role", "implement"),
@@ -92,11 +138,28 @@ def _begin_preflight_for(service, workspace_id: UUID, payload: dict, **kwargs) -
         service,
         workspace_id,
         {"type": "begin_stage_preflight", "payload": begin_payload},
+        correlation_id=corr,
         **kwargs,
     )
     assert status == 200, body
     transport_id = body["result"]["intent"]["transport_attempt_id"]
+    logical_sha = body["result"]["intent"]["logical_sha256"]
     payload["transport_attempt_id"] = transport_id
+    _intent_correlations[str(transport_id)] = corr
+    if admit:
+        admit_status, admit_body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "admit_stage_preflight",
+                "payload": {
+                    "transport_attempt_id": transport_id,
+                    "logical_sha256": logical_sha,
+                },
+            },
+            correlation_id=corr,
+        )
+        assert admit_status == 200, admit_body
     return transport_id
 
 

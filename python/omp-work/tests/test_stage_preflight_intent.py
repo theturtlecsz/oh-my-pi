@@ -264,34 +264,67 @@ def test_stage_preflight_intent_record_requires_intent_and_atomically_settles(se
 
     rec_payload = _base_preflight_payload(work_id)
     begin_payload = _begin_payload_from(rec_payload)
+    correlation_id = uuid4()
 
     # 1. Recording without intent fails / refused
     random_transport = uuid4()
     rec_without_intent = dict(rec_payload, transport_attempt_id=str(random_transport))
-    status, err_body = _command(
+    status, err_body = _exec_command(
         service,
         workspace_id,
         {"type": "record_stage_preflight", "payload": rec_without_intent},
+        correlation_id=correlation_id,
     )
     assert status == 400, err_body
     assert err_body["error"]["code"] == "invalid_request"
     assert "preflight_intent_required" in err_body["error"]["diagnostics"]
 
     # 2. Begin valid intent
-    status, begin_body = _command(
+    status, begin_body = _exec_command(
         service,
         workspace_id,
         {"type": "begin_stage_preflight", "payload": begin_payload},
+        correlation_id=correlation_id,
     )
     assert status == 200, begin_body
     transport_attempt_id = begin_body["result"]["intent"]["transport_attempt_id"]
+    logical_sha256 = begin_body["result"]["intent"]["logical_sha256"]
 
-    # 3. Record stage preflight matches intent and atomically settles
+    # 3. Record stage preflight directly from begun refused with preflight_intent_not_dispatched
     valid_rec = dict(rec_payload, transport_attempt_id=transport_attempt_id)
-    status, rec_body = _command(
+    status, err_rec = _exec_command(
         service,
         workspace_id,
         {"type": "record_stage_preflight", "payload": valid_rec},
+        correlation_id=correlation_id,
+    )
+    assert status == 400, err_rec
+    assert err_rec["error"]["code"] == "invalid_request"
+    assert "preflight_intent_not_dispatched" in err_rec["error"]["diagnostics"]
+
+    # Admit intent: begun -> dispatched
+    status, admit_body = _exec_command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_stage_preflight",
+            "payload": {
+                "transport_attempt_id": transport_attempt_id,
+                "logical_sha256": logical_sha256,
+            },
+        },
+        correlation_id=correlation_id,
+    )
+    assert status == 200, admit_body
+    assert admit_body["result"]["status"] == "applied"
+    assert admit_body["result"]["intent"]["status"] == "dispatched"
+
+    # Now record stage preflight matches intent and atomically settles
+    status, rec_body = _exec_command(
+        service,
+        workspace_id,
+        {"type": "record_stage_preflight", "payload": valid_rec},
+        correlation_id=correlation_id,
     )
     assert status == 200, rec_body
     assert rec_body["result"]["status"] == "applied"
@@ -317,20 +350,22 @@ def test_stage_preflight_intent_record_requires_intent_and_atomically_settles(se
             assert evidence_row[0] == "selected"
 
     # 4. Terminal replay of record_stage_preflight returns evidence
-    status, replay_rec = _command(
+    status, replay_rec = _exec_command(
         service,
         workspace_id,
         {"type": "record_stage_preflight", "payload": valid_rec},
+        correlation_id=correlation_id,
     )
     assert status == 200, replay_rec
     assert replay_rec["result"]["status"] == "replayed"
     assert replay_rec["result"]["preflight"]["transport_attempt_id"] == transport_attempt_id
 
     # 5. Replay of begin_stage_preflight on settled intent returns terminal preflight evidence
-    status, replay_begin = _command(
+    status, replay_begin = _exec_command(
         service,
         workspace_id,
         {"type": "begin_stage_preflight", "payload": begin_payload},
+        correlation_id=correlation_id,
     )
     assert status == 200, replay_begin
     assert replay_begin["result"]["status"] == "replayed"
@@ -347,51 +382,73 @@ def test_stage_preflight_intent_mismatched_identity_stale_evidence_and_unknown_t
 
     rec_payload = _base_preflight_payload(work_id)
     begin_payload = _begin_payload_from(rec_payload)
+    correlation_id = uuid4()
 
-    status, begin_body = _command(
+    status, begin_body = _exec_command(
         service,
         workspace_id,
         {"type": "begin_stage_preflight", "payload": begin_payload},
+        correlation_id=correlation_id,
     )
     assert status == 200, begin_body
     transport_attempt_id = begin_body["result"]["intent"]["transport_attempt_id"]
+    logical_sha256 = begin_body["result"]["intent"]["logical_sha256"]
 
     # 1. Unknown transport refused
     unknown_payload = dict(rec_payload, transport_attempt_id=str(uuid4()))
-    status, body = _command(
+    status, body = _exec_command(
         service,
         workspace_id,
         {"type": "record_stage_preflight", "payload": unknown_payload},
+        correlation_id=correlation_id,
     )
     assert status == 400, body
     assert body["error"]["code"] == "invalid_request"
     assert "preflight_intent_required" in body["error"]["diagnostics"]
 
-    # 2. Mismatched route/identity fields against begun intent -> stale_evidence
+    # Admit the intent: begun -> dispatched
+    status, admit_body = _exec_command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_stage_preflight",
+            "payload": {
+                "transport_attempt_id": transport_attempt_id,
+                "logical_sha256": logical_sha256,
+            },
+        },
+        correlation_id=correlation_id,
+    )
+    assert status == 200, admit_body
+    assert admit_body["result"]["intent"]["status"] == "dispatched"
+
+    # 2. Mismatched route/identity fields against dispatched intent -> stale_evidence
     mismatched_model_payload = dict(
         rec_payload,
         transport_attempt_id=transport_attempt_id,
         requested_model="gemini-different-model",
     )
-    status, body = _command(
+    status, body = _exec_command(
         service,
         workspace_id,
         {"type": "record_stage_preflight", "payload": mismatched_model_payload},
+        correlation_id=correlation_id,
     )
     assert status == 409, body
     assert body["error"]["code"] == "stale_evidence"
     assert "preflight_intent_identity_mismatch" in body["error"]["diagnostics"]
 
-    # 3. Mismatched ordinal against begun intent -> stale_evidence
+    # 3. Mismatched ordinal against dispatched intent -> stale_evidence
     mismatched_ordinal_payload = dict(
         rec_payload,
         transport_attempt_id=transport_attempt_id,
         ordinal=99,
     )
-    status, body = _command(
+    status, body = _exec_command(
         service,
         workspace_id,
         {"type": "record_stage_preflight", "payload": mismatched_ordinal_payload},
+        correlation_id=correlation_id,
     )
     assert status == 409, body
     assert body["error"]["code"] == "stale_evidence"
@@ -443,59 +500,99 @@ def test_stage_preflight_group_ordinal_sequencing_and_terminal_selection(service
     )
     begin_2 = _begin_payload_from(rec_2)
 
+    correlation_id = uuid4()
+
     # 1. Begin ordinal 0
-    status, b0 = _command(
+    status, b0 = _exec_command(
         service,
         workspace_id,
         {"type": "begin_stage_preflight", "payload": begin_0},
+        correlation_id=correlation_id,
     )
     assert status == 200, b0
     t0 = b0["result"]["intent"]["transport_attempt_id"]
+    l0 = b0["result"]["intent"]["logical_sha256"]
 
     # 2. While ordinal 0 is begun, ordinal 1 in same group is BLOCKED
-    status, b1_blocked = _command(
+    status, b1_blocked = _exec_command(
         service,
         workspace_id,
         {"type": "begin_stage_preflight", "payload": begin_1},
+        correlation_id=correlation_id,
     )
     assert status == 409, b1_blocked
     assert b1_blocked["error"]["code"] == "preflight_intent_active"
     assert "preflight_group_sibling_active" in b1_blocked["error"]["diagnostics"]
 
+    # While ordinal 0 is admitted/dispatched, ordinal 1 is ALSO BLOCKED
+    status, a0 = _exec_command(
+        service,
+        workspace_id,
+        {"type": "admit_stage_preflight", "payload": {"transport_attempt_id": t0, "logical_sha256": l0}},
+        correlation_id=correlation_id,
+    )
+    assert status == 200, a0
+    assert a0["result"]["intent"]["status"] == "dispatched"
+
+    status, b1_still_blocked = _exec_command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_1},
+        correlation_id=correlation_id,
+    )
+    assert status == 409, b1_still_blocked
+    assert b1_still_blocked["error"]["code"] == "preflight_intent_active"
+    assert "preflight_group_sibling_active" in b1_still_blocked["error"]["diagnostics"]
+
     # 3. Settle ordinal 0 with failed settlement
     rec_0["transport_attempt_id"] = t0
-    status, r0 = _command(
+    status, r0 = _exec_command(
         service,
         workspace_id,
         {"type": "record_stage_preflight", "payload": rec_0},
+        correlation_id=correlation_id,
     )
     assert status == 200, r0
     assert r0["result"]["status"] == "applied"
 
     # 4. Now that ordinal 0 failed, ordinal 1 can begin
-    status, b1 = _command(
+    status, b1 = _exec_command(
         service,
         workspace_id,
         {"type": "begin_stage_preflight", "payload": begin_1},
+        correlation_id=correlation_id,
     )
     assert status == 200, b1
     t1 = b1["result"]["intent"]["transport_attempt_id"]
+    l1 = b1["result"]["intent"]["logical_sha256"]
+
+    # Admit ordinal 1
+    status, a1 = _exec_command(
+        service,
+        workspace_id,
+        {"type": "admit_stage_preflight", "payload": {"transport_attempt_id": t1, "logical_sha256": l1}},
+        correlation_id=correlation_id,
+    )
+    assert status == 200, a1
+    assert a1["result"]["intent"]["status"] == "dispatched"
 
     # 5. Settle ordinal 1 with selected settlement
     rec_1["transport_attempt_id"] = t1
-    status, r1 = _command(
+    status, r1 = _exec_command(
         service,
         workspace_id,
         {"type": "record_stage_preflight", "payload": rec_1},
+        correlation_id=correlation_id,
     )
     assert status == 200, r1
     assert r1["result"]["status"] == "applied"
 
     # 6. Selected terminal route blocks later ordinal begin in same group
-    status, b2_blocked = _command(
+    status, b2_blocked = _exec_command(
         service,
         workspace_id,
         {"type": "begin_stage_preflight", "payload": begin_2},
+        correlation_id=correlation_id,
     )
     assert status == 409, b2_blocked
     assert b2_blocked["error"]["code"] == "preflight_intent_active"
@@ -711,3 +808,639 @@ def test_migration_0030_backfills_preexisting_0029_evidence_row(
                 for relname, rls, force in rows:
                     assert rls, f"RLS must be enabled on {relname}"
                     assert force, f"FORCE RLS must be enabled on {relname}"
+
+
+def test_lost_begin_response_cancellation_reissue_and_stale_host_refusal(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "lost begin item")
+    work_id = item["work_id"]
+
+    rec_0 = _base_preflight_payload(work_id, ordinal=0)
+    begin_0 = _begin_payload_from(rec_0)
+
+    host_1_corr = uuid4()
+    host_2_corr = uuid4()
+
+    # Host 1 begins ordinal 0
+    status, b0 = _exec_command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_0},
+        correlation_id=host_1_corr,
+    )
+    assert status == 200, b0
+    assert b0["result"]["status"] == "applied"
+    t0 = b0["result"]["intent"]["transport_attempt_id"]
+    l0 = b0["result"]["intent"]["logical_sha256"]
+
+    # Host 2 (different correlation ID) sends identical begin (simulating lost response recovery)
+    status, b0_replay = _exec_command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_0},
+        correlation_id=host_2_corr,
+    )
+    assert status == 200, b0_replay
+    assert b0_replay["result"]["status"] == "replayed"
+    assert b0_replay["result"]["intent"]["status"] == "begun"
+    assert b0_replay["result"]["intent"]["transport_attempt_id"] == t0
+
+    # Host 2 cancels begun intent t0
+    status, c0 = _exec_command(
+        service,
+        workspace_id,
+        {
+            "type": "cancel_stage_preflight",
+            "payload": {
+                "transport_attempt_id": t0,
+                "logical_sha256": l0,
+                "reason": "lost begin recovery cancel",
+            },
+        },
+        correlation_id=host_2_corr,
+    )
+    assert status == 200, c0
+    assert c0["result"]["status"] == "applied"
+    assert c0["result"]["intent"]["status"] == "cancelled_undispatched"
+    assert c0["result"]["intent"]["cancelled_by"] == str(host_2_corr)
+    assert c0["result"]["intent"]["cancel_reason"] == "lost begin recovery cancel"
+
+    # Host 2 begins next ordinal (1) in group
+    rec_1 = _base_preflight_payload(work_id, tool_call_id=rec_0["tool_call_id"], ordinal=1)
+    begin_1 = _begin_payload_from(rec_1)
+    status, b1 = _exec_command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_1},
+        correlation_id=host_2_corr,
+    )
+    assert status == 200, b1
+    assert b1["result"]["status"] == "applied"
+    t1 = b1["result"]["intent"]["transport_attempt_id"]
+    l1 = b1["result"]["intent"]["logical_sha256"]
+
+    # Host 2 admits ordinal 1
+    status, a1 = _exec_command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_stage_preflight",
+            "payload": {
+                "transport_attempt_id": t1,
+                "logical_sha256": l1,
+            },
+        },
+        correlation_id=host_2_corr,
+    )
+    assert status == 200, a1
+    assert a1["result"]["status"] == "applied"
+    assert a1["result"]["intent"]["status"] == "dispatched"
+
+    # Original Host 1 attempts admit on ordinal 0 (t0): refused because cancelled
+    status, h1_admit = _exec_command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_stage_preflight",
+            "payload": {
+                "transport_attempt_id": t0,
+                "logical_sha256": l0,
+            },
+        },
+        correlation_id=host_1_corr,
+    )
+    assert status == 400, h1_admit
+    assert h1_admit["error"]["code"] == "invalid_request"
+    assert "preflight_intent_cancelled" in h1_admit["error"]["diagnostics"]
+
+    # Original Host 1 attempts record on ordinal 0 (t0): refused because not dispatched
+    rec_0["transport_attempt_id"] = t0
+    status, h1_rec = _exec_command(
+        service,
+        workspace_id,
+        {"type": "record_stage_preflight", "payload": rec_0},
+        correlation_id=host_1_corr,
+    )
+    assert status == 400, h1_rec
+    assert h1_rec["error"]["code"] == "invalid_request"
+    assert "preflight_intent_not_dispatched" in h1_rec["error"]["diagnostics"]
+
+    # Host 2 records ordinal 1: settles successfully
+    rec_1["transport_attempt_id"] = t1
+    status, h2_rec = _exec_command(
+        service,
+        workspace_id,
+        {"type": "record_stage_preflight", "payload": rec_1},
+        correlation_id=host_2_corr,
+    )
+    assert status == 200, h2_rec
+    assert h2_rec["result"]["status"] == "applied"
+    assert h2_rec["result"]["preflight"]["transport_attempt_id"] == t1
+
+
+def test_lost_admit_response_stays_blocked(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "lost admit item")
+    work_id = item["work_id"]
+
+    rec_0 = _base_preflight_payload(work_id, ordinal=0)
+    begin_0 = _begin_payload_from(rec_0)
+
+    host_1_corr = uuid4()
+    host_2_corr = uuid4()
+
+    # Host 1 begins ordinal 0
+    status, b0 = _exec_command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_0},
+        correlation_id=host_1_corr,
+    )
+    assert status == 200, b0
+    t0 = b0["result"]["intent"]["transport_attempt_id"]
+    l0 = b0["result"]["intent"]["logical_sha256"]
+
+    # Host 1 admits ordinal 0
+    admit_op = uuid4()
+    status, a0 = _exec_command(
+        service,
+        workspace_id,
+        {"type": "admit_stage_preflight", "payload": {"transport_attempt_id": t0, "logical_sha256": l0}},
+        operation_id=admit_op,
+        correlation_id=host_1_corr,
+    )
+    assert status == 200, a0
+    assert a0["result"]["status"] == "applied"
+    assert a0["result"]["intent"]["status"] == "dispatched"
+
+    # Exact replay of admit returns replayed
+    status, a0_exact = _exec_command(
+        service,
+        workspace_id,
+        {"type": "admit_stage_preflight", "payload": {"transport_attempt_id": t0, "logical_sha256": l0}},
+        operation_id=admit_op,
+        correlation_id=host_1_corr,
+    )
+    assert status == 200, a0_exact
+    assert a0_exact["receipt"]["state"] == "replayed"
+
+    # Distinct operation admit refuses with preflight_intent_already_dispatched
+    status, a0_distinct = _exec_command(
+        service,
+        workspace_id,
+        {"type": "admit_stage_preflight", "payload": {"transport_attempt_id": t0, "logical_sha256": l0}},
+        operation_id=uuid4(),
+        correlation_id=host_1_corr,
+    )
+    assert status == 409, a0_distinct
+    assert a0_distinct["error"]["code"] == "preflight_intent_active"
+    assert "preflight_intent_already_dispatched" in a0_distinct["error"]["diagnostics"]
+
+    # Foreign begin (Host 2) replays dispatched intent
+    status, b0_foreign = _exec_command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_0},
+        correlation_id=host_2_corr,
+    )
+    assert status == 200, b0_foreign
+    assert b0_foreign["result"]["status"] == "replayed"
+    assert b0_foreign["result"]["intent"]["status"] == "dispatched"
+
+    # Foreign cancel (or Host 1 cancel) on dispatched intent is refused
+    status, c_foreign = _exec_command(
+        service,
+        workspace_id,
+        {"type": "cancel_stage_preflight", "payload": {"transport_attempt_id": t0, "logical_sha256": l0, "reason": "cancel dispatched"}},
+        correlation_id=host_2_corr,
+    )
+    assert status == 409, c_foreign
+    assert c_foreign["error"]["code"] == "preflight_intent_active"
+    assert "preflight_intent_already_dispatched" in c_foreign["error"]["diagnostics"]
+
+    # Attempt to begin next ordinal 1 in same group is refused while ordinal 0 is dispatched
+    rec_1 = _base_preflight_payload(work_id, tool_call_id=rec_0["tool_call_id"], ordinal=1)
+    begin_1 = _begin_payload_from(rec_1)
+    status, b1_refused = _exec_command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_1},
+        correlation_id=host_2_corr,
+    )
+    assert status == 409, b1_refused
+    assert b1_refused["error"]["code"] == "preflight_intent_active"
+    assert "preflight_group_sibling_active" in b1_refused["error"]["diagnostics"]
+
+
+def test_concurrent_cancel_vs_admit_race(service) -> None:
+    import threading
+
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "race item")
+    work_id = item["work_id"]
+
+    rec_payload = _base_preflight_payload(work_id)
+    begin_payload = _begin_payload_from(rec_payload)
+    correlation_id = uuid4()
+
+    status, b = _exec_command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_payload},
+        correlation_id=correlation_id,
+    )
+    assert status == 200, b
+    t_id = b["result"]["intent"]["transport_attempt_id"]
+    l_sha = b["result"]["intent"]["logical_sha256"]
+
+    barrier = threading.Barrier(2)
+    results = {}
+
+    def do_cancel():
+        barrier.wait()
+        status, body = _exec_command(
+            service,
+            workspace_id,
+            {
+                "type": "cancel_stage_preflight",
+                "payload": {
+                    "transport_attempt_id": t_id,
+                    "logical_sha256": l_sha,
+                    "reason": "race cancel",
+                },
+            },
+            correlation_id=correlation_id,
+        )
+        results["cancel"] = (status, body)
+
+    def do_admit():
+        barrier.wait()
+        status, body = _exec_command(
+            service,
+            workspace_id,
+            {
+                "type": "admit_stage_preflight",
+                "payload": {
+                    "transport_attempt_id": t_id,
+                    "logical_sha256": l_sha,
+                },
+            },
+            correlation_id=correlation_id,
+        )
+        results["admit"] = (status, body)
+
+    t1 = threading.Thread(target=do_cancel)
+    t2 = threading.Thread(target=do_admit)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    cancel_status, cancel_body = results["cancel"]
+    admit_status, admit_body = results["admit"]
+
+    # Exactly one winner must succeed with 200, the other must fail with 400 (if cancel won) or 409 (if admit won)
+    statuses = [cancel_status, admit_status]
+    assert statuses.count(200) == 1, f"Expected exactly one 200, got {statuses}"
+    assert all(s in (200, 400, 409) for s in statuses), f"Expected winner 200 and loser 400/409, got {statuses}"
+
+
+def test_stale_host_admit_refused_as_foreign_owner(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "foreign owner item")
+    work_id = item["work_id"]
+
+    rec_payload = _base_preflight_payload(work_id)
+    begin_payload = _begin_payload_from(rec_payload)
+
+    owner_1 = uuid4()
+    owner_2 = uuid4()
+
+    # Owner 1 begins intent
+    status, b = _exec_command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_payload},
+        correlation_id=owner_1,
+    )
+    assert status == 200, b
+    t_id = b["result"]["intent"]["transport_attempt_id"]
+    l_sha = b["result"]["intent"]["logical_sha256"]
+
+    # Foreign Owner 2 attempts to admit Owner 1's begun intent: refused
+    status, a_err = _exec_command(
+        service,
+        workspace_id,
+        {"type": "admit_stage_preflight", "payload": {"transport_attempt_id": t_id, "logical_sha256": l_sha}},
+        correlation_id=owner_2,
+    )
+    assert status == 409, a_err
+    assert a_err["error"]["code"] == "preflight_intent_active"
+    assert "preflight_intent_foreign_owner" in a_err["error"]["diagnostics"]
+
+    # Owner 1 admits intent: succeeds
+    status, a_ok = _exec_command(
+        service,
+        workspace_id,
+        {"type": "admit_stage_preflight", "payload": {"transport_attempt_id": t_id, "logical_sha256": l_sha}},
+        correlation_id=owner_1,
+    )
+    assert status == 200, a_ok
+    assert a_ok["result"]["intent"]["status"] == "dispatched"
+
+    # Foreign Owner 2 attempts to record on Owner 1's dispatched intent: refused
+    rec_payload["transport_attempt_id"] = t_id
+    status, r_err = _exec_command(
+        service,
+        workspace_id,
+        {"type": "record_stage_preflight", "payload": rec_payload},
+        correlation_id=owner_2,
+    )
+    assert status == 409, r_err
+    assert r_err["error"]["code"] == "preflight_intent_active"
+    assert "preflight_intent_foreign_owner" in r_err["error"]["diagnostics"]
+
+
+def test_forged_logical_sha256_and_cross_workspace_fail_closed(service) -> None:
+    ws_1 = uuid4()
+    ws_2 = uuid4()
+    _grant(service, ws_1)
+    _grant(service, ws_2)
+
+    item = _create(service, ws_1, "forged sha item")
+    work_id = item["work_id"]
+
+    rec_payload = _base_preflight_payload(work_id)
+    begin_payload = _begin_payload_from(rec_payload)
+    correlation_id = uuid4()
+
+    status, b = _exec_command(
+        service,
+        ws_1,
+        {"type": "begin_stage_preflight", "payload": begin_payload},
+        correlation_id=correlation_id,
+    )
+    assert status == 200, b
+    t_id = b["result"]["intent"]["transport_attempt_id"]
+    l_sha = b["result"]["intent"]["logical_sha256"]
+
+    # 1. Admit with forged logical_sha256 -> 409 stale_evidence
+    forged_sha = "f" * 64
+    status, a_forged = _exec_command(
+        service,
+        ws_1,
+        {"type": "admit_stage_preflight", "payload": {"transport_attempt_id": t_id, "logical_sha256": forged_sha}},
+        correlation_id=correlation_id,
+    )
+    assert status == 409, a_forged
+    assert a_forged["error"]["code"] == "stale_evidence"
+    assert "preflight_intent_identity_mismatch" in a_forged["error"]["diagnostics"]
+
+    # 2. Cancel with forged logical_sha256 -> 409 stale_evidence
+    status, c_forged = _exec_command(
+        service,
+        ws_1,
+        {"type": "cancel_stage_preflight", "payload": {"transport_attempt_id": t_id, "logical_sha256": forged_sha, "reason": "test"}},
+        correlation_id=correlation_id,
+    )
+    assert status == 409, c_forged
+    assert c_forged["error"]["code"] == "stale_evidence"
+    assert "preflight_intent_identity_mismatch" in c_forged["error"]["diagnostics"]
+
+    # 3. Cross-workspace admit on intent in ws_1 using ws_2 header -> 400 invalid_request (preflight_intent_unknown)
+    status, a_cross = _exec_command(
+        service,
+        ws_2,
+        {"type": "admit_stage_preflight", "payload": {"transport_attempt_id": t_id, "logical_sha256": l_sha}},
+        correlation_id=correlation_id,
+    )
+    assert status == 400, a_cross
+    assert a_cross["error"]["code"] == "invalid_request"
+    assert "preflight_intent_unknown" in a_cross["error"]["diagnostics"]
+
+    # 4. Cross-workspace cancel on intent in ws_1 using ws_2 header -> 400 invalid_request (preflight_intent_unknown)
+    status, c_cross = _exec_command(
+        service,
+        ws_2,
+        {"type": "cancel_stage_preflight", "payload": {"transport_attempt_id": t_id, "logical_sha256": l_sha, "reason": "test"}},
+        correlation_id=correlation_id,
+    )
+    assert status == 400, c_cross
+    assert c_cross["error"]["code"] == "invalid_request"
+    assert "preflight_intent_unknown" in c_cross["error"]["diagnostics"]
+
+
+def test_migration_0031_over_target_30_database(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("omp_work.operations.database.validate_bundle", lambda **kw: None)
+    cfg = _make_operations_config(tmp_path)
+    original_migrate = database_module.migrate
+
+    # Step 1: Bootstrap up to target migration 30
+    monkeypatch.setattr(
+        database_module,
+        "migrate",
+        lambda c, target=None, lock_timeout=30: original_migrate(c, target=30, lock_timeout=lock_timeout),
+    )
+    with native_postgres(cfg.state_dir, cfg.port):
+        bootstrap(cfg)
+        monkeypatch.setattr(database_module, "migrate", original_migrate)
+
+        workspace_id = uuid4()
+        work_id = uuid4()
+        intent_id = uuid4()
+        transport_attempt_id = uuid4()
+        host_owner_id = uuid4()
+        created_time = datetime.now(timezone.utc)
+        logical_sha = hashlib.sha256(f"logical:{transport_attempt_id}".encode()).hexdigest()
+        group_sha = hashlib.sha256(f"group:{transport_attempt_id}".encode()).hexdigest()
+
+        # Step 2: Insert a 0030 'begun' intent row
+        with psycopg.connect(**cfg.connection_kwargs("postgres"), autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)", (workspace_id,))
+                cur.execute(
+                    "INSERT INTO omp_work.work_items(work_id, workspace_id, state) VALUES (%s, %s, 'NOW')",
+                    (work_id, workspace_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO omp_work.stage_preflight_intents (
+                        intent_id, workspace_id, work_id, role, tool_call_id,
+                        task_sha256, probe_sha256, transport_attempt_id, ordinal,
+                        requested_selector, requested_provider, requested_model,
+                        requested_api, requested_effort, requested_wire_model,
+                        is_fallback, logical_sha256, group_sha256, host_owner_id,
+                        status, created_at, settled_at
+                    ) VALUES (
+                        %s, %s, %s, 'implement', 'tool-mig-1',
+                        %s, %s, %s, 0,
+                        'gemini:flash', 'gemini', 'gemini-3.8-flash',
+                        'google-genai', 'medium', 'gemini-3.8-flash-preview',
+                        false, %s, %s, %s,
+                        'begun', %s, null
+                    )
+                    """,
+                    (
+                        intent_id,
+                        workspace_id,
+                        work_id,
+                        "a" * 64,
+                        "b" * 64,
+                        transport_attempt_id,
+                        logical_sha,
+                        group_sha,
+                        host_owner_id,
+                        created_time,
+                    ),
+                )
+
+        # Step 3: Run migration 0031
+        original_migrate(cfg)
+
+        # Step 4: Verify migration effects in database
+        with psycopg.connect(**cfg.connection_kwargs("postgres")) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT status, dispatched_at, dispatch_owner_id, dispatch_operation_id,
+                           cancelled_at, cancelled_by, cancel_reason
+                    FROM omp_work.stage_preflight_intents
+                    WHERE intent_id=%s
+                    """,
+                    (intent_id,),
+                )
+                row = cur.fetchone()
+                assert row is not None
+                assert row[0] == "dispatched", "begun row must be backfilled to dispatched"
+                assert row[1] == created_time, "dispatched_at must match created_at"
+                assert row[2] == host_owner_id, "dispatch_owner_id must match host_owner_id"
+                assert row[3] == transport_attempt_id, "dispatch_operation_id must match non-authorizing marker transport_attempt_id"
+                assert row[4] is None, "cancelled_at must be null"
+                assert row[5] is None, "cancelled_by must be null"
+                assert row[6] is None, "cancel_reason must be null"
+
+                # Check exact CHECK constraints: old stage_preflight_intents_check is dropped, exactly 8 remain
+                cur.execute(
+                    """
+                    SELECT conname, pg_get_constraintdef(oid)
+                    FROM pg_constraint
+                    WHERE conrelid = 'omp_work.stage_preflight_intents'::regclass
+                      AND contype = 'c'
+                    ORDER BY conname
+                    """
+                )
+                check_constraints = dict(cur.fetchall())
+                expected_checks = {
+                    "stage_preflight_intents_group_sha256_check",
+                    "stage_preflight_intents_logical_sha256_check",
+                    "stage_preflight_intents_ordinal_check",
+                    "stage_preflight_intents_probe_sha256_check",
+                    "stage_preflight_intents_role_check",
+                    "stage_preflight_intents_state_check",
+                    "stage_preflight_intents_status_check",
+                    "stage_preflight_intents_task_sha256_check",
+                }
+                assert set(check_constraints.keys()) == expected_checks
+                assert "stage_preflight_intents_check" not in check_constraints
+                assert "cancelled_undispatched" in check_constraints["stage_preflight_intents_status_check"]
+                assert "dispatched" in check_constraints["stage_preflight_intents_status_check"]
+                # Actual role check preserved unchanged
+                assert "plan" in check_constraints["stage_preflight_intents_role_check"]
+                assert "implement" in check_constraints["stage_preflight_intents_role_check"]
+                assert "audit" in check_constraints["stage_preflight_intents_role_check"]
+                assert "frontier" in check_constraints["stage_preflight_intents_role_check"]
+
+                # Impossible partial states rejected by state CHECK
+                base_insert = """
+                    INSERT INTO omp_work.stage_preflight_intents (
+                        intent_id, workspace_id, work_id, role, tool_call_id,
+                        task_sha256, probe_sha256, transport_attempt_id, ordinal,
+                        requested_selector, requested_provider, requested_model,
+                        requested_api, requested_effort, requested_wire_model,
+                        is_fallback, logical_sha256, group_sha256, host_owner_id,
+                        status, created_at, settled_at,
+                        dispatched_at, dispatch_operation_id, dispatch_owner_id,
+                        cancelled_at, cancelled_by, cancel_reason
+                    ) VALUES (%s, %s, %s, 'implement', 'tc', %s, %s, %s, 0, 's', 'p', 'm', 'a', 'e', 'w', false, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
+
+                def try_insert(**overrides):
+                    vals = {
+                        "intent_id": uuid4(),
+                        "workspace_id": workspace_id,
+                        "work_id": work_id,
+                        "task_sha256": "a" * 64,
+                        "probe_sha256": "b" * 64,
+                        "transport_attempt_id": uuid4(),
+                        "logical_sha256": hashlib.sha256(str(uuid4()).encode()).hexdigest(),
+                        "group_sha256": hashlib.sha256(str(uuid4()).encode()).hexdigest(),
+                        "host_owner_id": host_owner_id,
+                        "status": "dispatched",
+                        "created_at": created_time,
+                        "settled_at": None,
+                        "dispatched_at": created_time,
+                        "dispatch_operation_id": uuid4(),
+                        "dispatch_owner_id": host_owner_id,
+                        "cancelled_at": None,
+                        "cancelled_by": None,
+                        "cancel_reason": None,
+                    }
+                    vals.update(overrides)
+                    with conn.transaction():
+                        cur.execute(
+                            base_insert,
+                            (
+                                vals["intent_id"], vals["workspace_id"], vals["work_id"],
+                                vals["task_sha256"], vals["probe_sha256"], vals["transport_attempt_id"],
+                                vals["logical_sha256"], vals["group_sha256"], vals["host_owner_id"],
+                                vals["status"], vals["created_at"], vals["settled_at"],
+                                vals["dispatched_at"], vals["dispatch_operation_id"], vals["dispatch_owner_id"],
+                                vals["cancelled_at"], vals["cancelled_by"], vals["cancel_reason"],
+                            ),
+                        )
+
+                # Dispatched with null dispatch_operation_id -> check violation
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    try_insert(status="dispatched", dispatch_operation_id=None)
+
+                # Dispatched with null dispatch_owner_id -> check violation
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    try_insert(status="dispatched", dispatch_owner_id=None)
+
+                # Dispatched with null dispatched_at -> check violation
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    try_insert(status="dispatched", dispatched_at=None)
+
+                # Settled with partial dispatch fields (dispatched_at set, but operation_id null) -> check violation
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    try_insert(status="settled", settled_at=created_time, dispatched_at=created_time, dispatch_operation_id=None, dispatch_owner_id=None)
+
+                # Cancelled with missing cancel_reason -> check violation
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    try_insert(status="cancelled_undispatched", cancelled_at=created_time, cancelled_by=host_owner_id, cancel_reason=None, dispatched_at=None, dispatch_operation_id=None, dispatch_owner_id=None)
+
+                # Check FORCE RLS is asserted
+                cur.execute(
+                    "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE oid = 'omp_work.stage_preflight_intents'::regclass"
+                )
+                r_row = cur.fetchone()
+                assert r_row[1] is True, "RLS must be enabled"
+                assert r_row[2] is True, "FORCE RLS must be enabled"
+
+        # Check privilege denials for app role
+        with psycopg.connect(**cfg.connection_kwargs("omp_work_app"), autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                    (str(workspace_id), str(uuid4())),
+                )
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    cur.execute("DELETE FROM omp_work.stage_preflight_intents")
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    cur.execute("TRUNCATE omp_work.stage_preflight_intents")

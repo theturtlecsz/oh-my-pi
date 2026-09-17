@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import type { ToolCallEventResult } from "@oh-my-pi/pi-coding-agent/extensibility/shared-events";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { WORK_CONTRACT_SHA256, sha256Hex, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope, type RecordStagePreflightPayload, type BeginStagePreflightPayload, type BeginStagePreflightResult } from "@oh-my-pi/pi-work-client";
+import { WORK_CONTRACT_SHA256, sha256Hex, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope, type RecordStagePreflightPayload, type BeginStagePreflightPayload, type BeginStagePreflightResult, type AdmitStagePreflightPayload, type AdmitStagePreflightResult, type CancelStagePreflightPayload, type CancelStagePreflightResult } from "@oh-my-pi/pi-work-client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { z } from "zod";
@@ -212,6 +212,7 @@ function attachStageLaunchFixture<T extends Record<string, unknown>>(
 	backendRecord.stageLaunches = stageLaunches;
 	backendRecord.stagePreflights = stagePreflights;
 
+	let lastPreflightIntent: any = undefined;
 	backendRecord.beginStagePreflight = async (payload: BeginStagePreflightPayload): Promise<BeginStagePreflightResult> => {
 		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
 		callLog?.push("beginStagePreflight");
@@ -240,12 +241,116 @@ function attachStageLaunchFixture<T extends Record<string, unknown>>(
 			logical_sha256: "0".repeat(64),
 			group_sha256: "0".repeat(64),
 			host_owner_id: "00000000-0000-0000-0000-000000000001",
+			dispatched_at: null,
+			dispatch_operation_id: null,
+			dispatch_owner_id: null,
+			cancelled_at: null,
+			cancelled_by: null,
+			cancel_reason: null,
 			status: "begun" as const,
 			created_at: new Date().toISOString(),
 			settled_at: null,
 		};
+		lastPreflightIntent = intent;
 		return {
 			type: "begin_stage_preflight",
+			status: "applied",
+			intent,
+			preflight: undefined,
+		};
+	};
+
+	backendRecord.admitStagePreflight = async (payload: AdmitStagePreflightPayload): Promise<AdmitStagePreflightResult> => {
+		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
+		callLog?.push("admitStagePreflight");
+		const intent = {
+			...(lastPreflightIntent ?? {
+				intent_id: `intent-${nextPreflightId}`,
+				workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+				work_id: "work-1",
+				revision_id: null,
+				candidate_id: null,
+				attempt_id: null,
+				grant_id: null,
+				role: "audit",
+				tool_call_id: "call-1",
+				task_sha256: "0".repeat(64),
+				probe_sha256: "0".repeat(64),
+				transport_attempt_id: payload.transport_attempt_id,
+				ordinal: 0,
+				requested_selector: "gemini:gemini-3.8-flash",
+				requested_provider: "google-antigravity",
+				requested_model: "gemini-3.8-flash",
+				requested_api: "google-gemini-cli",
+				requested_effort: null,
+				requested_wire_model: "gemini-3.8-flash",
+				is_fallback: false,
+				logical_sha256: payload.logical_sha256,
+				group_sha256: "0".repeat(64),
+				host_owner_id: "00000000-0000-0000-0000-000000000001",
+				created_at: new Date().toISOString(),
+				settled_at: null,
+			}),
+			transport_attempt_id: payload.transport_attempt_id,
+			logical_sha256: payload.logical_sha256,
+			status: "dispatched" as const,
+			dispatched_at: new Date().toISOString(),
+			dispatch_operation_id: "00000000-0000-0000-0000-000000000001",
+			dispatch_owner_id: "00000000-0000-0000-0000-000000000001",
+		};
+		lastPreflightIntent = intent;
+		return {
+			type: "admit_stage_preflight",
+			status: "applied",
+			intent,
+			preflight: undefined,
+		};
+	};
+
+	backendRecord.cancelStagePreflight = async (payload: CancelStagePreflightPayload): Promise<CancelStagePreflightResult> => {
+		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
+		callLog?.push("cancelStagePreflight");
+		const intent = {
+			...(lastPreflightIntent ?? {
+				intent_id: `intent-${nextPreflightId}`,
+				workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+				work_id: "work-1",
+				revision_id: null,
+				candidate_id: null,
+				attempt_id: null,
+				grant_id: null,
+				role: "audit",
+				tool_call_id: "call-1",
+				task_sha256: "0".repeat(64),
+				probe_sha256: "0".repeat(64),
+				transport_attempt_id: payload.transport_attempt_id,
+				ordinal: 0,
+				requested_selector: "gemini:gemini-3.8-flash",
+				requested_provider: "google-antigravity",
+				requested_model: "gemini-3.8-flash",
+				requested_api: "google-gemini-cli",
+				requested_effort: null,
+				requested_wire_model: "gemini-3.8-flash",
+				is_fallback: false,
+				logical_sha256: payload.logical_sha256,
+				group_sha256: "0".repeat(64),
+				host_owner_id: "00000000-0000-0000-0000-000000000001",
+				dispatched_at: null,
+				dispatch_operation_id: null,
+				dispatch_owner_id: null,
+				created_at: new Date().toISOString(),
+				settled_at: null,
+			}),
+			transport_attempt_id: payload.transport_attempt_id,
+			logical_sha256: payload.logical_sha256,
+			status: "cancelled_undispatched" as const,
+			cancelled_at: new Date().toISOString(),
+			cancelled_by: "00000000-0000-0000-0000-000000000001",
+			cancel_reason: payload.reason,
+		};
+		lastPreflightIntent = intent;
+		return {
+			type: "cancel_stage_preflight",
 			status: "applied",
 			intent,
 			preflight: undefined,
@@ -1135,7 +1240,7 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(attemptRecorded?.probeSha256).toBe(sha256Hex(sentContent));
 	});
 
-	test("preflight executes in order: begin -> provider probe -> record with returned transport attempt ID", async () => {
+	test("preflight executes in order: begin -> admit -> provider probe -> record with returned transport attempt ID", async () => {
 		const implementer: AgentDefinition = {
 			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
 			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
@@ -1188,12 +1293,63 @@ describe("native auditor runner (OMP-168)", () => {
 							logical_sha256: "0".repeat(64),
 							group_sha256: "0".repeat(64),
 							host_owner_id: "owner-1",
+							dispatched_at: null,
+							dispatch_operation_id: null,
+							dispatch_owner_id: null,
+							cancelled_at: null,
+							cancelled_by: null,
+							cancel_reason: null,
 							status: "begun",
 							created_at: new Date().toISOString(),
 							settled_at: null,
 						},
 						preflight: undefined,
 					};
+				},
+				admit: async ({ transportAttemptId, logicalSha256 }) => {
+					events.push("admit");
+					return {
+						type: "admit_stage_preflight",
+						status: "applied",
+						intent: {
+							intent_id: "00000000-0000-4000-8000-000000000001",
+							workspace_id: "ws-1",
+							work_id: "work-1",
+							revision_id: "rev-1",
+							candidate_id: null,
+							attempt_id: null,
+							grant_id: null,
+							role: "implement",
+							tool_call_id: "call-1",
+							task_sha256: "0".repeat(64),
+							probe_sha256: "0".repeat(64),
+							transport_attempt_id: transportAttemptId,
+							ordinal: 0,
+							requested_selector: "gemini:gemini-3.8-flash",
+							requested_provider: "google-antigravity",
+							requested_model: "gemini-3.8-flash",
+							requested_api: "google-gemini-cli",
+							requested_effort: null,
+							requested_wire_model: "gemini-3.8-flash",
+							is_fallback: false,
+							logical_sha256: logicalSha256,
+							group_sha256: "0".repeat(64),
+							host_owner_id: "owner-1",
+							dispatched_at: new Date().toISOString(),
+							dispatch_operation_id: "op-1",
+							dispatch_owner_id: "owner-1",
+							cancelled_at: null,
+							cancelled_by: null,
+							cancel_reason: null,
+							status: "dispatched",
+							created_at: new Date().toISOString(),
+							settled_at: null,
+						},
+						preflight: undefined,
+					};
+				},
+				cancel: async () => {
+					throw new Error("cancel should not be called in happy path");
 				},
 				record: async attempt => {
 					events.push("record");
@@ -1202,7 +1358,7 @@ describe("native auditor runner (OMP-168)", () => {
 			},
 		});
 
-		expect(events).toEqual(["begin", "probe", "record"]);
+		expect(events).toEqual(["begin", "admit", "probe", "record"]);
 		expect(recordedAttempt?.transportAttemptId).toBe(serviceTransportAttemptId);
 		expect(recordedAttempt?.outcome).toBe("selected");
 	});
@@ -1292,6 +1448,12 @@ describe("native auditor runner (OMP-168)", () => {
 						},
 					};
 				},
+				admit: async () => {
+					throw new Error("admit should not be called on settled replay");
+				},
+				cancel: async () => {
+					throw new Error("cancel should not be called on settled replay");
+				},
 				record: async () => {
 					events.push("record");
 				},
@@ -1307,7 +1469,215 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(selectedRoute?.model.id).toBe("gemini-3.8-flash");
 	});
 
-	test("replayed begun preflight blocks provider probe, reservation, handoff, and runner", async () => {
+	test("cancel-and-reissue on replayed begun produces one probe with second transport ID and next ordinal", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const probeSpy = vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
+			return { stopReason: "stop", content: [{ type: "text", text: "OK" }] } as never;
+		});
+
+		const firstTransportAttemptId = "11111111-1111-4111-8111-111111111111";
+		const secondTransportAttemptId = "22222222-2222-4222-8222-222222222222";
+		const cancelledIds: string[] = [];
+		const begunOrdinals: number[] = [];
+		let admittedTransportId: string | undefined;
+		let recordedAttempt: NativeStagePreflightAttempt | undefined;
+
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => gemini },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		await prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			preflight: {
+				begin: async ({ route, ordinal, probeSha256 }) => {
+					begunOrdinals.push(ordinal);
+					if (ordinal === 0) {
+						return {
+							type: "begin_stage_preflight",
+							status: "replayed",
+							intent: {
+								intent_id: "00000000-0000-4000-8000-000000000001",
+								workspace_id: "ws-1",
+								work_id: "work-1",
+								revision_id: "rev-1",
+								candidate_id: null,
+								attempt_id: null,
+								grant_id: null,
+								role: "implement",
+								tool_call_id: "call-1",
+								task_sha256: "0".repeat(64),
+								probe_sha256: probeSha256,
+								transport_attempt_id: firstTransportAttemptId,
+								ordinal: 0,
+								requested_selector: route.requestedSelector,
+								requested_provider: route.model.provider,
+								requested_model: route.model.id,
+								requested_api: route.model.api,
+								requested_effort: route.effort ?? null,
+								requested_wire_model: route.model.id,
+								is_fallback: route.isFallback,
+								logical_sha256: "0".repeat(64),
+								group_sha256: "0".repeat(64),
+								host_owner_id: "owner-1",
+								dispatched_at: null,
+								dispatch_operation_id: null,
+								dispatch_owner_id: null,
+								cancelled_at: null,
+								cancelled_by: null,
+								cancel_reason: null,
+								status: "begun",
+								created_at: new Date().toISOString(),
+								settled_at: null,
+							},
+							preflight: undefined,
+						};
+					}
+					return {
+						type: "begin_stage_preflight",
+						status: "applied",
+						intent: {
+							intent_id: "00000000-0000-4000-8000-000000000002",
+							workspace_id: "ws-1",
+							work_id: "work-1",
+							revision_id: "rev-1",
+							candidate_id: null,
+							attempt_id: null,
+							grant_id: null,
+							role: "implement",
+							tool_call_id: "call-1",
+							task_sha256: "0".repeat(64),
+							probe_sha256: probeSha256,
+							transport_attempt_id: secondTransportAttemptId,
+							ordinal,
+							requested_selector: route.requestedSelector,
+							requested_provider: route.model.provider,
+							requested_model: route.model.id,
+							requested_api: route.model.api,
+							requested_effort: route.effort ?? null,
+							requested_wire_model: route.model.id,
+							is_fallback: route.isFallback,
+							logical_sha256: "0".repeat(64),
+							group_sha256: "0".repeat(64),
+							host_owner_id: "owner-1",
+							dispatched_at: null,
+							dispatch_operation_id: null,
+							dispatch_owner_id: null,
+							cancelled_at: null,
+							cancelled_by: null,
+							cancel_reason: null,
+							status: "begun",
+							created_at: new Date().toISOString(),
+							settled_at: null,
+						},
+						preflight: undefined,
+					};
+				},
+				cancel: async ({ transportAttemptId, logicalSha256, reason }) => {
+					cancelledIds.push(transportAttemptId);
+					return {
+						type: "cancel_stage_preflight",
+						status: "applied",
+						intent: {
+							intent_id: "00000000-0000-4000-8000-000000000001",
+							workspace_id: "ws-1",
+							work_id: "work-1",
+							revision_id: "rev-1",
+							candidate_id: null,
+							attempt_id: null,
+							grant_id: null,
+							role: "implement",
+							tool_call_id: "call-1",
+							task_sha256: "0".repeat(64),
+							probe_sha256: "0".repeat(64),
+							transport_attempt_id: transportAttemptId,
+							ordinal: 0,
+							requested_selector: "gemini:gemini-3.8-flash",
+							requested_provider: "google-antigravity",
+							requested_model: "gemini-3.8-flash",
+							requested_api: "google-gemini-cli",
+							requested_effort: null,
+							requested_wire_model: "gemini-3.8-flash",
+							is_fallback: false,
+							logical_sha256: logicalSha256,
+							group_sha256: "0".repeat(64),
+							host_owner_id: "owner-1",
+							dispatched_at: null,
+							dispatch_operation_id: null,
+							dispatch_owner_id: null,
+							cancelled_at: new Date().toISOString(),
+							cancelled_by: "owner-1",
+							cancel_reason: reason,
+							status: "cancelled_undispatched",
+							created_at: new Date().toISOString(),
+							settled_at: null,
+						},
+						preflight: undefined,
+					};
+				},
+				admit: async ({ transportAttemptId, logicalSha256 }) => {
+					admittedTransportId = transportAttemptId;
+					return {
+						type: "admit_stage_preflight",
+						status: "applied",
+						intent: {
+							intent_id: "00000000-0000-4000-8000-000000000002",
+							workspace_id: "ws-1",
+							work_id: "work-1",
+							revision_id: "rev-1",
+							candidate_id: null,
+							attempt_id: null,
+							grant_id: null,
+							role: "implement",
+							tool_call_id: "call-1",
+							task_sha256: "0".repeat(64),
+							probe_sha256: "0".repeat(64),
+							transport_attempt_id: transportAttemptId,
+							ordinal: 1,
+							requested_selector: "gemini:gemini-3.8-flash",
+							requested_provider: "google-antigravity",
+							requested_model: "gemini-3.8-flash",
+							requested_api: "google-gemini-cli",
+							requested_effort: null,
+							requested_wire_model: "gemini-3.8-flash",
+							is_fallback: false,
+							logical_sha256: logicalSha256,
+							group_sha256: "0".repeat(64),
+							host_owner_id: "owner-1",
+							dispatched_at: new Date().toISOString(),
+							dispatch_operation_id: "op-2",
+							dispatch_owner_id: "owner-1",
+							cancelled_at: null,
+							cancelled_by: null,
+							cancel_reason: null,
+							status: "dispatched",
+							created_at: new Date().toISOString(),
+							settled_at: null,
+						},
+						preflight: undefined,
+					};
+				},
+				record: async attempt => {
+					recordedAttempt = attempt;
+				},
+			},
+		});
+
+		expect(cancelledIds).toEqual([firstTransportAttemptId]);
+		expect(begunOrdinals).toEqual([0, 1]);
+		expect(admittedTransportId).toBe(secondTransportAttemptId);
+		expect(probeSpy).toHaveBeenCalledTimes(1);
+		expect(recordedAttempt?.transportAttemptId).toBe(secondTransportAttemptId);
+		expect(recordedAttempt?.ordinal).toBe(1);
+	});
+
+	test("replayed dispatched preflight is blocked with uncertainty error and sends zero probes", async () => {
 		const implementer: AgentDefinition = {
 			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
 			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
@@ -1315,8 +1685,6 @@ describe("native auditor runner (OMP-168)", () => {
 		mockDiscovery(implementer);
 		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
 		const probeSpy = vi.spyOn(ai, "completeSimple");
-		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess");
-		let routeSelected = false;
 
 		const fakeCtx = {
 			cwd: path.resolve(import.meta.dir, "../.."),
@@ -1355,26 +1723,29 @@ describe("native auditor runner (OMP-168)", () => {
 							logical_sha256: "0".repeat(64),
 							group_sha256: "0".repeat(64),
 							host_owner_id: "owner-1",
-							status: "begun",
+							dispatched_at: new Date().toISOString(),
+							dispatch_operation_id: "op-1",
+							dispatch_owner_id: "owner-1",
+							cancelled_at: null,
+							cancelled_by: null,
+							cancel_reason: null,
+							status: "dispatched",
 							created_at: new Date().toISOString(),
 							settled_at: null,
 						},
 						preflight: undefined,
 					};
 				},
+				admit: async () => { throw new Error("should not be called"); },
+				cancel: async () => { throw new Error("should not be called"); },
 				record: async () => {},
 			},
-			onRouteSelected: () => {
-				routeSelected = true;
-			},
-		})).rejects.toThrow(/preflight intent active.*recovery required/);
+		})).rejects.toThrow(/provider effect uncertain, trusted provider reconciliation required/);
 
 		expect(probeSpy).not.toHaveBeenCalled();
-		expect(routeSelected).toBe(false);
-		expect(runSubprocessSpy).not.toHaveBeenCalled();
 	});
 
-	test("begin response loss followed by reconstructed dispatch reaches same begun intent and sends zero provider probes", async () => {
+	test("cancel-throws and admit-throws fail closed and send zero probes", async () => {
 		const implementer: AgentDefinition = {
 			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
 			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
@@ -1389,6 +1760,7 @@ describe("native auditor runner (OMP-168)", () => {
 			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
 		} as unknown as ExtensionContext;
 
+		// Subcase 1: cancel throws during begun replay recovery
 		await expect(prepareNativeStageRunner(fakeCtx, {
 			role: "implement",
 			preflight: {
@@ -1398,6 +1770,61 @@ describe("native auditor runner (OMP-168)", () => {
 						status: "replayed",
 						intent: {
 							intent_id: "00000000-0000-4000-8000-000000000001",
+							workspace_id: "ws-1",
+							work_id: "work-1",
+							revision_id: "rev-1",
+							candidate_id: null,
+							attempt_id: null,
+							grant_id: null,
+							role: "implement",
+							tool_call_id: "call-1",
+							task_sha256: "0".repeat(64),
+							probe_sha256: probeSha256,
+							transport_attempt_id: "88888888-8888-4888-8888-888888888888",
+							ordinal,
+							requested_selector: route.requestedSelector,
+							requested_provider: route.model.provider,
+							requested_model: route.model.id,
+							requested_api: route.model.api,
+							requested_effort: route.effort ?? null,
+							requested_wire_model: route.model.id,
+							is_fallback: route.isFallback,
+							logical_sha256: "0".repeat(64),
+							group_sha256: "0".repeat(64),
+							host_owner_id: "owner-1",
+							dispatched_at: null,
+							dispatch_operation_id: null,
+							dispatch_owner_id: null,
+							cancelled_at: null,
+							cancelled_by: null,
+							cancel_reason: null,
+							status: "begun",
+							created_at: new Date().toISOString(),
+							settled_at: null,
+						},
+						preflight: undefined,
+					};
+				},
+				cancel: async () => {
+					throw new Error("network partition during cancel");
+				},
+				admit: async () => { throw new Error("should not be reached"); },
+				record: async () => {},
+			},
+		})).rejects.toThrow("network partition during cancel");
+
+		expect(probeSpy).not.toHaveBeenCalled();
+
+		// Subcase 2: admit throws during regular dispatch admission
+		await expect(prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			preflight: {
+				begin: async ({ route, ordinal, probeSha256 }) => {
+					return {
+						type: "begin_stage_preflight",
+						status: "applied",
+						intent: {
+							intent_id: "00000000-0000-4000-8000-000000000002",
 							workspace_id: "ws-1",
 							work_id: "work-1",
 							revision_id: "rev-1",
@@ -1420,6 +1847,12 @@ describe("native auditor runner (OMP-168)", () => {
 							logical_sha256: "0".repeat(64),
 							group_sha256: "0".repeat(64),
 							host_owner_id: "owner-1",
+							dispatched_at: null,
+							dispatch_operation_id: null,
+							dispatch_owner_id: null,
+							cancelled_at: null,
+							cancelled_by: null,
+							cancel_reason: null,
 							status: "begun",
 							created_at: new Date().toISOString(),
 							settled_at: null,
@@ -1427,10 +1860,198 @@ describe("native auditor runner (OMP-168)", () => {
 						preflight: undefined,
 					};
 				},
+				cancel: async () => { throw new Error("should not be reached"); },
+				admit: async () => {
+					throw new Error("admit RPC failed with 503");
+				},
 				record: async () => {},
 			},
-		})).rejects.toThrow(/preflight intent active.*recovery required/);
+		})).rejects.toThrow("admit RPC failed with 503");
 
+		expect(probeSpy).not.toHaveBeenCalled();
+	});
+
+	test("abort after begin attempts cancel and throws AbortError", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const probeSpy = vi.spyOn(ai, "completeSimple");
+
+		const controller = new AbortController();
+		let cancelCalled = false;
+		let cancelledAttemptId: string | undefined;
+
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => gemini },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		const transportAttemptId = "33333333-3333-4333-8333-333333333333";
+
+		await expect(prepareNativeStageRunner(
+			fakeCtx,
+			{
+				role: "implement",
+				preflight: {
+					begin: async ({ route, ordinal, probeSha256 }) => {
+						controller.abort();
+						return {
+							type: "begin_stage_preflight",
+							status: "applied",
+							intent: {
+								intent_id: "00000000-0000-4000-8000-000000000001",
+								workspace_id: "ws-1",
+								work_id: "work-1",
+								revision_id: "rev-1",
+								candidate_id: null,
+								attempt_id: null,
+								grant_id: null,
+								role: "implement",
+								tool_call_id: "call-1",
+								task_sha256: "0".repeat(64),
+								probe_sha256: probeSha256,
+								transport_attempt_id: transportAttemptId,
+								ordinal,
+								requested_selector: route.requestedSelector,
+								requested_provider: route.model.provider,
+								requested_model: route.model.id,
+								requested_api: route.model.api,
+								requested_effort: route.effort ?? null,
+								requested_wire_model: route.model.id,
+								is_fallback: route.isFallback,
+								logical_sha256: "0".repeat(64),
+								group_sha256: "0".repeat(64),
+								host_owner_id: "owner-1",
+								dispatched_at: null,
+								dispatch_operation_id: null,
+								dispatch_owner_id: null,
+								cancelled_at: null,
+								cancelled_by: null,
+								cancel_reason: null,
+								status: "begun",
+								created_at: new Date().toISOString(),
+								settled_at: null,
+							},
+							preflight: undefined,
+						};
+					},
+					cancel: async ({ transportAttemptId }) => {
+						cancelCalled = true;
+						cancelledAttemptId = transportAttemptId;
+						return {
+							type: "cancel_stage_preflight",
+							status: "applied",
+							intent: {
+								intent_id: "00000000-0000-4000-8000-000000000001",
+								workspace_id: "ws-1",
+								work_id: "work-1",
+								revision_id: "rev-1",
+								candidate_id: null,
+								attempt_id: null,
+								grant_id: null,
+								role: "implement",
+								tool_call_id: "call-1",
+								task_sha256: "0".repeat(64),
+								probe_sha256: "0".repeat(64),
+								transport_attempt_id: transportAttemptId,
+								ordinal: 0,
+								requested_selector: "gemini:gemini-3.8-flash",
+								requested_provider: "google-antigravity",
+								requested_model: "gemini-3.8-flash",
+								requested_api: "google-gemini-cli",
+								requested_effort: null,
+								requested_wire_model: "gemini-3.8-flash",
+								is_fallback: false,
+								logical_sha256: "0".repeat(64),
+								group_sha256: "0".repeat(64),
+								host_owner_id: "owner-1",
+								dispatched_at: null,
+								dispatch_operation_id: null,
+								dispatch_owner_id: null,
+								cancelled_at: new Date().toISOString(),
+								cancelled_by: "owner-1",
+								cancel_reason: "aborted before preflight dispatch admission",
+								status: "cancelled_undispatched",
+								created_at: new Date().toISOString(),
+								settled_at: null,
+							},
+							preflight: undefined,
+						};
+					},
+					admit: async () => { throw new Error("admit should not be called when aborted"); },
+					record: async () => {},
+				},
+			},
+			controller.signal,
+		)).rejects.toThrow(/operation was aborted|AbortError/);
+
+		expect(cancelCalled).toBe(true);
+		expect(cancelledAttemptId).toBe(transportAttemptId);
+		expect(probeSpy).not.toHaveBeenCalled();
+	});
+
+	test("partial preflight callback set fails upfront before discovery or begin, making zero begin or provider calls", async () => {
+		const probeSpy = vi.spyOn(ai, "completeSimple");
+		const beginSpy = vi.fn();
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => ({ id: "m", provider: "p", api: "a" }) },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") },
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		// Missing admit and cancel
+		await expect(
+			prepareNativeStageRunner(fakeCtx, {
+				role: "implement",
+				preflight: {
+					begin: beginSpy,
+					record: async () => {},
+				} as any,
+			}),
+		).rejects.toThrow("preflight option requires begin, admit, cancel, and record callbacks");
+
+		// Missing cancel
+		await expect(
+			prepareNativeStageRunner(fakeCtx, {
+				role: "implement",
+				preflight: {
+					begin: beginSpy,
+					admit: async () => ({} as any),
+					record: async () => {},
+				} as any,
+			}),
+		).rejects.toThrow("preflight option requires begin, admit, cancel, and record callbacks");
+
+		// Missing admit
+		await expect(
+			prepareNativeStageRunner(fakeCtx, {
+				role: "implement",
+				preflight: {
+					begin: beginSpy,
+					cancel: async () => ({} as any),
+					record: async () => {},
+				} as any,
+			}),
+		).rejects.toThrow("preflight option requires begin, admit, cancel, and record callbacks");
+
+		// Missing record
+		await expect(
+			prepareNativeStageRunner(fakeCtx, {
+				role: "implement",
+				preflight: {
+					begin: beginSpy,
+					admit: async () => ({} as any),
+					cancel: async () => ({} as any),
+				} as any,
+			}),
+		).rejects.toThrow("preflight option requires begin, admit, cancel, and record callbacks");
+
+		expect(beginSpy).not.toHaveBeenCalled();
 		expect(probeSpy).not.toHaveBeenCalled();
 	});
 

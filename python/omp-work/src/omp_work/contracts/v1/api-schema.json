@@ -515,6 +515,814 @@
       "title": "ActivateExecutionItemResult",
       "type": "object"
     },
+    "AdmitStagePreflightResult": {
+      "$defs": {
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        },
+        "StagePreflight": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error"
+            },
+            "grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grant Id"
+            },
+            "is_fallback": {
+              "default": false,
+              "title": "Is Fallback",
+              "type": "boolean"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "ordinal": {
+              "minimum": 0,
+              "title": "Ordinal",
+              "type": "integer"
+            },
+            "outcome": {
+              "$ref": "#/$defs/StagePreflightOutcome"
+            },
+            "preflight_id": {
+              "format": "uuid",
+              "title": "Preflight Id",
+              "type": "string"
+            },
+            "probe_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Probe Sha256",
+              "type": "string"
+            },
+            "provider_request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Request Id"
+            },
+            "requested_api": {
+              "minLength": 1,
+              "title": "Requested Api",
+              "type": "string"
+            },
+            "requested_effort": {
+              "minLength": 1,
+              "title": "Requested Effort",
+              "type": "string"
+            },
+            "requested_model": {
+              "minLength": 1,
+              "title": "Requested Model",
+              "type": "string"
+            },
+            "requested_provider": {
+              "minLength": 1,
+              "title": "Requested Provider",
+              "type": "string"
+            },
+            "requested_selector": {
+              "minLength": 1,
+              "title": "Requested Selector",
+              "type": "string"
+            },
+            "requested_wire_model": {
+              "minLength": 1,
+              "title": "Requested Wire Model",
+              "type": "string"
+            },
+            "requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requests"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision Id"
+            },
+            "role": {
+              "$ref": "#/$defs/StageLaunchRole"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "stop_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stop Reason"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "preflight_id",
+            "workspace_id",
+            "work_id",
+            "role",
+            "tool_call_id",
+            "task_sha256",
+            "probe_sha256",
+            "transport_attempt_id",
+            "ordinal",
+            "requested_selector",
+            "requested_provider",
+            "requested_model",
+            "requested_api",
+            "requested_effort",
+            "requested_wire_model",
+            "outcome",
+            "observed_at"
+          ],
+          "title": "StagePreflight",
+          "type": "object"
+        },
+        "StagePreflightCttlUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "ephemeral1h": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ephemeral1H"
+            },
+            "ephemeral5m": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ephemeral5M"
+            }
+          },
+          "title": "StagePreflightCttlUsage",
+          "type": "object"
+        },
+        "StagePreflightIntent": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "cancelled_by": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled By"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "dispatch_operation_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatch Operation Id"
+            },
+            "dispatch_owner_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatch Owner Id"
+            },
+            "dispatched_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatched At"
+            },
+            "grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grant Id"
+            },
+            "group_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Group Sha256",
+              "type": "string"
+            },
+            "host_owner_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Host Owner Id"
+            },
+            "intent_id": {
+              "format": "uuid",
+              "title": "Intent Id",
+              "type": "string"
+            },
+            "is_fallback": {
+              "default": false,
+              "title": "Is Fallback",
+              "type": "boolean"
+            },
+            "logical_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Logical Sha256",
+              "type": "string"
+            },
+            "ordinal": {
+              "minimum": 0,
+              "title": "Ordinal",
+              "type": "integer"
+            },
+            "probe_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Probe Sha256",
+              "type": "string"
+            },
+            "requested_api": {
+              "minLength": 1,
+              "title": "Requested Api",
+              "type": "string"
+            },
+            "requested_effort": {
+              "minLength": 1,
+              "title": "Requested Effort",
+              "type": "string"
+            },
+            "requested_model": {
+              "minLength": 1,
+              "title": "Requested Model",
+              "type": "string"
+            },
+            "requested_provider": {
+              "minLength": 1,
+              "title": "Requested Provider",
+              "type": "string"
+            },
+            "requested_selector": {
+              "minLength": 1,
+              "title": "Requested Selector",
+              "type": "string"
+            },
+            "requested_wire_model": {
+              "minLength": 1,
+              "title": "Requested Wire Model",
+              "type": "string"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision Id"
+            },
+            "role": {
+              "$ref": "#/$defs/StageLaunchRole"
+            },
+            "settled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Settled At"
+            },
+            "status": {
+              "$ref": "#/$defs/StagePreflightIntentStatus"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "intent_id",
+            "workspace_id",
+            "work_id",
+            "role",
+            "tool_call_id",
+            "task_sha256",
+            "probe_sha256",
+            "transport_attempt_id",
+            "ordinal",
+            "requested_selector",
+            "requested_provider",
+            "requested_model",
+            "requested_api",
+            "requested_effort",
+            "requested_wire_model",
+            "logical_sha256",
+            "group_sha256",
+            "status",
+            "created_at"
+          ],
+          "title": "StagePreflightIntent",
+          "type": "object"
+        },
+        "StagePreflightIntentStatus": {
+          "enum": [
+            "begun",
+            "dispatched",
+            "cancelled_undispatched",
+            "settled"
+          ],
+          "title": "StagePreflightIntentStatus",
+          "type": "string"
+        },
+        "StagePreflightOrchestrationUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cacheRead": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cacheread"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input"
+            },
+            "output": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output"
+            }
+          },
+          "title": "StagePreflightOrchestrationUsage",
+          "type": "object"
+        },
+        "StagePreflightOutcome": {
+          "enum": [
+            "selected",
+            "failed",
+            "cancelled"
+          ],
+          "title": "StagePreflightOutcome",
+          "type": "string"
+        },
+        "StagePreflightServerUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "webFetch": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Webfetch"
+            },
+            "webSearch": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Websearch"
+            }
+          },
+          "title": "StagePreflightServerUsage",
+          "type": "object"
+        },
+        "StagePreflightUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cacheRead": {
+              "minimum": 0,
+              "title": "Cacheread",
+              "type": "integer"
+            },
+            "cacheWrite": {
+              "minimum": 0,
+              "title": "Cachewrite",
+              "type": "integer"
+            },
+            "contextTokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Contexttokens"
+            },
+            "cttl": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightCttlUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "input": {
+              "minimum": 0,
+              "title": "Input",
+              "type": "integer"
+            },
+            "orchestration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightOrchestrationUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "output": {
+              "minimum": 0,
+              "title": "Output",
+              "type": "integer"
+            },
+            "premiumRequests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Premiumrequests"
+            },
+            "reasoningTokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoningtokens"
+            },
+            "server": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightServerUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "totalTokens": {
+              "minimum": 0,
+              "title": "Totaltokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "input",
+            "output",
+            "cacheRead",
+            "cacheWrite",
+            "totalTokens"
+          ],
+          "title": "StagePreflightUsage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "intent": {
+          "$ref": "#/$defs/StagePreflightIntent"
+        },
+        "preflight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StagePreflight"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "replayed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "admit_stage_preflight",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "intent"
+      ],
+      "title": "AdmitStagePreflightResult",
+      "type": "object"
+    },
     "ApiError": {
       "additionalProperties": false,
       "properties": {
@@ -1570,6 +2378,44 @@
               "default": null,
               "title": "Attempt Id"
             },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "cancelled_by": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled By"
+            },
             "candidate_id": {
               "anyOf": [
                 {
@@ -1587,6 +2433,45 @@
               "format": "date-time",
               "title": "Created At",
               "type": "string"
+            },
+            "dispatch_operation_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatch Operation Id"
+            },
+            "dispatch_owner_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatch Owner Id"
+            },
+            "dispatched_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatched At"
             },
             "grant_id": {
               "anyOf": [
@@ -1759,6 +2644,8 @@
         "StagePreflightIntentStatus": {
           "enum": [
             "begun",
+            "dispatched",
+            "cancelled_undispatched",
             "settled"
           ],
           "title": "StagePreflightIntentStatus",
@@ -2433,6 +3320,814 @@
         "exhausted"
       ],
       "title": "BudgetScopeListView",
+      "type": "object"
+    },
+    "CancelStagePreflightResult": {
+      "$defs": {
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        },
+        "StagePreflight": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error"
+            },
+            "grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grant Id"
+            },
+            "is_fallback": {
+              "default": false,
+              "title": "Is Fallback",
+              "type": "boolean"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "ordinal": {
+              "minimum": 0,
+              "title": "Ordinal",
+              "type": "integer"
+            },
+            "outcome": {
+              "$ref": "#/$defs/StagePreflightOutcome"
+            },
+            "preflight_id": {
+              "format": "uuid",
+              "title": "Preflight Id",
+              "type": "string"
+            },
+            "probe_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Probe Sha256",
+              "type": "string"
+            },
+            "provider_request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Request Id"
+            },
+            "requested_api": {
+              "minLength": 1,
+              "title": "Requested Api",
+              "type": "string"
+            },
+            "requested_effort": {
+              "minLength": 1,
+              "title": "Requested Effort",
+              "type": "string"
+            },
+            "requested_model": {
+              "minLength": 1,
+              "title": "Requested Model",
+              "type": "string"
+            },
+            "requested_provider": {
+              "minLength": 1,
+              "title": "Requested Provider",
+              "type": "string"
+            },
+            "requested_selector": {
+              "minLength": 1,
+              "title": "Requested Selector",
+              "type": "string"
+            },
+            "requested_wire_model": {
+              "minLength": 1,
+              "title": "Requested Wire Model",
+              "type": "string"
+            },
+            "requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requests"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision Id"
+            },
+            "role": {
+              "$ref": "#/$defs/StageLaunchRole"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "stop_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stop Reason"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "preflight_id",
+            "workspace_id",
+            "work_id",
+            "role",
+            "tool_call_id",
+            "task_sha256",
+            "probe_sha256",
+            "transport_attempt_id",
+            "ordinal",
+            "requested_selector",
+            "requested_provider",
+            "requested_model",
+            "requested_api",
+            "requested_effort",
+            "requested_wire_model",
+            "outcome",
+            "observed_at"
+          ],
+          "title": "StagePreflight",
+          "type": "object"
+        },
+        "StagePreflightCttlUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "ephemeral1h": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ephemeral1H"
+            },
+            "ephemeral5m": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ephemeral5M"
+            }
+          },
+          "title": "StagePreflightCttlUsage",
+          "type": "object"
+        },
+        "StagePreflightIntent": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "cancelled_by": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled By"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "dispatch_operation_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatch Operation Id"
+            },
+            "dispatch_owner_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatch Owner Id"
+            },
+            "dispatched_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatched At"
+            },
+            "grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grant Id"
+            },
+            "group_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Group Sha256",
+              "type": "string"
+            },
+            "host_owner_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Host Owner Id"
+            },
+            "intent_id": {
+              "format": "uuid",
+              "title": "Intent Id",
+              "type": "string"
+            },
+            "is_fallback": {
+              "default": false,
+              "title": "Is Fallback",
+              "type": "boolean"
+            },
+            "logical_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Logical Sha256",
+              "type": "string"
+            },
+            "ordinal": {
+              "minimum": 0,
+              "title": "Ordinal",
+              "type": "integer"
+            },
+            "probe_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Probe Sha256",
+              "type": "string"
+            },
+            "requested_api": {
+              "minLength": 1,
+              "title": "Requested Api",
+              "type": "string"
+            },
+            "requested_effort": {
+              "minLength": 1,
+              "title": "Requested Effort",
+              "type": "string"
+            },
+            "requested_model": {
+              "minLength": 1,
+              "title": "Requested Model",
+              "type": "string"
+            },
+            "requested_provider": {
+              "minLength": 1,
+              "title": "Requested Provider",
+              "type": "string"
+            },
+            "requested_selector": {
+              "minLength": 1,
+              "title": "Requested Selector",
+              "type": "string"
+            },
+            "requested_wire_model": {
+              "minLength": 1,
+              "title": "Requested Wire Model",
+              "type": "string"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision Id"
+            },
+            "role": {
+              "$ref": "#/$defs/StageLaunchRole"
+            },
+            "settled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Settled At"
+            },
+            "status": {
+              "$ref": "#/$defs/StagePreflightIntentStatus"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "intent_id",
+            "workspace_id",
+            "work_id",
+            "role",
+            "tool_call_id",
+            "task_sha256",
+            "probe_sha256",
+            "transport_attempt_id",
+            "ordinal",
+            "requested_selector",
+            "requested_provider",
+            "requested_model",
+            "requested_api",
+            "requested_effort",
+            "requested_wire_model",
+            "logical_sha256",
+            "group_sha256",
+            "status",
+            "created_at"
+          ],
+          "title": "StagePreflightIntent",
+          "type": "object"
+        },
+        "StagePreflightIntentStatus": {
+          "enum": [
+            "begun",
+            "dispatched",
+            "cancelled_undispatched",
+            "settled"
+          ],
+          "title": "StagePreflightIntentStatus",
+          "type": "string"
+        },
+        "StagePreflightOrchestrationUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cacheRead": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cacheread"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input"
+            },
+            "output": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output"
+            }
+          },
+          "title": "StagePreflightOrchestrationUsage",
+          "type": "object"
+        },
+        "StagePreflightOutcome": {
+          "enum": [
+            "selected",
+            "failed",
+            "cancelled"
+          ],
+          "title": "StagePreflightOutcome",
+          "type": "string"
+        },
+        "StagePreflightServerUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "webFetch": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Webfetch"
+            },
+            "webSearch": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Websearch"
+            }
+          },
+          "title": "StagePreflightServerUsage",
+          "type": "object"
+        },
+        "StagePreflightUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cacheRead": {
+              "minimum": 0,
+              "title": "Cacheread",
+              "type": "integer"
+            },
+            "cacheWrite": {
+              "minimum": 0,
+              "title": "Cachewrite",
+              "type": "integer"
+            },
+            "contextTokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Contexttokens"
+            },
+            "cttl": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightCttlUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "input": {
+              "minimum": 0,
+              "title": "Input",
+              "type": "integer"
+            },
+            "orchestration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightOrchestrationUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "output": {
+              "minimum": 0,
+              "title": "Output",
+              "type": "integer"
+            },
+            "premiumRequests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Premiumrequests"
+            },
+            "reasoningTokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoningtokens"
+            },
+            "server": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightServerUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "totalTokens": {
+              "minimum": 0,
+              "title": "Totaltokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "input",
+            "output",
+            "cacheRead",
+            "cacheWrite",
+            "totalTokens"
+          ],
+          "title": "StagePreflightUsage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "intent": {
+          "$ref": "#/$defs/StagePreflightIntent"
+        },
+        "preflight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StagePreflight"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "replayed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "cancel_stage_preflight",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "intent"
+      ],
+      "title": "CancelStagePreflightResult",
       "type": "object"
     },
     "Candidate": {
@@ -4458,6 +6153,45 @@
           "title": "ActivateExecutionItemResult",
           "type": "object"
         },
+        "AdmitStagePreflightResult": {
+          "additionalProperties": false,
+          "properties": {
+            "intent": {
+              "$ref": "#/$defs/StagePreflightIntent"
+            },
+            "preflight": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflight"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "admit_stage_preflight",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "intent"
+          ],
+          "title": "AdmitStagePreflightResult",
+          "type": "object"
+        },
         "AttestCutoverPlanResult": {
           "additionalProperties": false,
           "properties": {
@@ -4859,6 +6593,45 @@
             "type"
           ],
           "title": "BudgetResult",
+          "type": "object"
+        },
+        "CancelStagePreflightResult": {
+          "additionalProperties": false,
+          "properties": {
+            "intent": {
+              "$ref": "#/$defs/StagePreflightIntent"
+            },
+            "preflight": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflight"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "cancel_stage_preflight",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "intent"
+          ],
+          "title": "CancelStagePreflightResult",
           "type": "object"
         },
         "Candidate": {
@@ -7750,6 +9523,44 @@
               "default": null,
               "title": "Attempt Id"
             },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "cancelled_by": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled By"
+            },
             "candidate_id": {
               "anyOf": [
                 {
@@ -7767,6 +9578,45 @@
               "format": "date-time",
               "title": "Created At",
               "type": "string"
+            },
+            "dispatch_operation_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatch Operation Id"
+            },
+            "dispatch_owner_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatch Owner Id"
+            },
+            "dispatched_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatched At"
             },
             "grant_id": {
               "anyOf": [
@@ -7939,6 +9789,8 @@
         "StagePreflightIntentStatus": {
           "enum": [
             "begun",
+            "dispatched",
+            "cancelled_undispatched",
             "settled"
           ],
           "title": "StagePreflightIntentStatus",
@@ -8319,6 +10171,7 @@
             "mapping": {
               "activate_cutover": "#/$defs/ActivateCutoverResult",
               "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
+              "admit_stage_preflight": "#/$defs/AdmitStagePreflightResult",
               "append_evidence": "#/$defs/EvidenceResult",
               "associate_candidate_source": "#/$defs/CandidateSourceAssociationResult",
               "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
@@ -8329,6 +10182,7 @@
               "cancel_auditor_launch": "#/$defs/CloseAttemptResult",
               "cancel_budget": "#/$defs/BudgetResult",
               "cancel_stage_launch": "#/$defs/StageLaunchResult",
+              "cancel_stage_preflight": "#/$defs/CancelStagePreflightResult",
               "claim_budget": "#/$defs/BudgetResult",
               "clear_focus": "#/$defs/FocusResult",
               "complete_execution_item": "#/$defs/CompleteExecutionItemResult",
@@ -8399,6 +10253,12 @@
             },
             {
               "$ref": "#/$defs/BeginStagePreflightResult"
+            },
+            {
+              "$ref": "#/$defs/AdmitStagePreflightResult"
+            },
+            {
+              "$ref": "#/$defs/CancelStagePreflightResult"
             },
             {
               "$ref": "#/$defs/StagePreflightResult"
@@ -15147,6 +17007,8 @@
         "StagePreflightIntentStatus": {
           "enum": [
             "begun",
+            "dispatched",
+            "cancelled_undispatched",
             "settled"
           ],
           "title": "StagePreflightIntentStatus",
@@ -15168,6 +17030,44 @@
           "default": null,
           "title": "Attempt Id"
         },
+        "cancel_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancel Reason"
+        },
+        "cancelled_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancelled At"
+        },
+        "cancelled_by": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancelled By"
+        },
         "candidate_id": {
           "anyOf": [
             {
@@ -15185,6 +17085,45 @@
           "format": "date-time",
           "title": "Created At",
           "type": "string"
+        },
+        "dispatch_operation_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatch Operation Id"
+        },
+        "dispatch_owner_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatch Owner Id"
+        },
+        "dispatched_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatched At"
         },
         "grant_id": {
           "anyOf": [
@@ -16616,6 +18555,45 @@
           "title": "ActivateExecutionItemResult",
           "type": "object"
         },
+        "AdmitStagePreflightResult": {
+          "additionalProperties": false,
+          "properties": {
+            "intent": {
+              "$ref": "#/$defs/StagePreflightIntent"
+            },
+            "preflight": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflight"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "admit_stage_preflight",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "intent"
+          ],
+          "title": "AdmitStagePreflightResult",
+          "type": "object"
+        },
         "AttestCutoverPlanResult": {
           "additionalProperties": false,
           "properties": {
@@ -17017,6 +18995,45 @@
             "type"
           ],
           "title": "BudgetResult",
+          "type": "object"
+        },
+        "CancelStagePreflightResult": {
+          "additionalProperties": false,
+          "properties": {
+            "intent": {
+              "$ref": "#/$defs/StagePreflightIntent"
+            },
+            "preflight": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflight"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "cancel_stage_preflight",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "intent"
+          ],
+          "title": "CancelStagePreflightResult",
           "type": "object"
         },
         "Candidate": {
@@ -19908,6 +21925,44 @@
               "default": null,
               "title": "Attempt Id"
             },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "cancelled_by": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled By"
+            },
             "candidate_id": {
               "anyOf": [
                 {
@@ -19925,6 +21980,45 @@
               "format": "date-time",
               "title": "Created At",
               "type": "string"
+            },
+            "dispatch_operation_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatch Operation Id"
+            },
+            "dispatch_owner_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatch Owner Id"
+            },
+            "dispatched_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dispatched At"
             },
             "grant_id": {
               "anyOf": [
@@ -20097,6 +22191,8 @@
         "StagePreflightIntentStatus": {
           "enum": [
             "begun",
+            "dispatched",
+            "cancelled_undispatched",
             "settled"
           ],
           "title": "StagePreflightIntentStatus",
@@ -20493,6 +22589,7 @@
                 "mapping": {
                   "activate_cutover": "#/$defs/ActivateCutoverResult",
                   "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
+                  "admit_stage_preflight": "#/$defs/AdmitStagePreflightResult",
                   "append_evidence": "#/$defs/EvidenceResult",
                   "associate_candidate_source": "#/$defs/CandidateSourceAssociationResult",
                   "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
@@ -20503,6 +22600,7 @@
                   "cancel_auditor_launch": "#/$defs/CloseAttemptResult",
                   "cancel_budget": "#/$defs/BudgetResult",
                   "cancel_stage_launch": "#/$defs/StageLaunchResult",
+                  "cancel_stage_preflight": "#/$defs/CancelStagePreflightResult",
                   "claim_budget": "#/$defs/BudgetResult",
                   "clear_focus": "#/$defs/FocusResult",
                   "complete_execution_item": "#/$defs/CompleteExecutionItemResult",
@@ -20573,6 +22671,12 @@
                 },
                 {
                   "$ref": "#/$defs/BeginStagePreflightResult"
+                },
+                {
+                  "$ref": "#/$defs/AdmitStagePreflightResult"
+                },
+                {
+                  "$ref": "#/$defs/CancelStagePreflightResult"
                 },
                 {
                   "$ref": "#/$defs/StagePreflightResult"

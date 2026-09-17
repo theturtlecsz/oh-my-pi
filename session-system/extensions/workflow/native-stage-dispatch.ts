@@ -310,6 +310,25 @@ async function dispatchNativeStageLocked(
 					is_fallback: routeFields.isFallback,
 				});
 			},
+			admit: async ({ transportAttemptId, logicalSha256 }) => {
+				if (typeof backend.admitStagePreflight !== "function") {
+					throw new Error("native stage dispatch requires WorkService admitStagePreflight capability");
+				}
+				return backend.admitStagePreflight({
+					transport_attempt_id: transportAttemptId,
+					logical_sha256: logicalSha256,
+				});
+			},
+			cancel: async ({ transportAttemptId, logicalSha256, reason }) => {
+				if (typeof backend.cancelStagePreflight !== "function") {
+					throw new Error("native stage dispatch requires WorkService cancelStagePreflight capability");
+				}
+				return backend.cancelStagePreflight({
+					transport_attempt_id: transportAttemptId,
+					logical_sha256: logicalSha256,
+					reason,
+				});
+			},
 			record: recordPreflightAttempt,
 		},
 		onRouteSelected: selected => {

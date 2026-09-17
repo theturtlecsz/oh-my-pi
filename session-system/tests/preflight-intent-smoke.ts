@@ -259,22 +259,24 @@ uvicorn.run(app, host="127.0.0.1", port=port, access_log=False)
 	assert.ok(forbiddenBody.includes("session_id"), "error body mentions session_id");
 	console.log("Verified wire boundary rejects begin_stage_preflight with session_id with HTTP 400");
 
-	// 1. Backend 1 begins intent
+	// 1. Two-host lost-begin cancellation and reissue:
+	// Backend 1 begins intent for ordinal 0
 	console.log("Backend 1 beginning intent for ordinal 0...");
 	const begin1 = await backend1.beginStagePreflight(logicalIdentity);
 	assert.equal(begin1.status, "applied", "backend 1 intent applied");
 	assert.equal(begin1.intent.status, "begun", "backend 1 intent status is begun");
 	assert.ok(begin1.intent.host_owner_id, "server minted host_owner_id on intent");
-	const transportAttemptId = begin1.intent.transport_attempt_id;
-	console.log("Minted transport attempt ID:", transportAttemptId);
+	const transportAttemptId0 = begin1.intent.transport_attempt_id;
+	const logicalSha256_0 = begin1.intent.logical_sha256;
+	console.log("Minted transport attempt ID:", transportAttemptId0);
 	console.log("Server-minted host owner ID:", begin1.intent.host_owner_id);
 
-	// 2. Backend 2 begins same logical identity -> replayed begun intent
-	console.log("Backend 2 beginning same logical identity...");
+	// Backend 2 begins same logical identity -> replayed begun intent
+	console.log("Backend 2 beginning same logical identity (lost begin response recovery)...");
 	const begin2 = await backend2.beginStagePreflight(logicalIdentity);
 	assert.equal(begin2.status, "replayed", "backend 2 receives replayed intent");
 	assert.equal(begin2.intent.status, "begun", "replayed intent status is begun");
-	assert.equal(begin2.intent.transport_attempt_id, transportAttemptId, "replayed intent has same transport attempt ID");
+	assert.equal(begin2.intent.transport_attempt_id, transportAttemptId0, "replayed intent has same transport attempt ID");
 	assert.equal(begin2.intent.host_owner_id, begin1.intent.host_owner_id, "replayed intent preserves original host_owner_id");
 	assert.equal(begin2.preflight, null, "replayed begun intent returns no preflight");
 
@@ -287,22 +289,68 @@ uvicorn.run(app, host="127.0.0.1", port=port, access_log=False)
 		return res.stdout.toString().trim();
 	};
 
-	const rowCount = parseInt(psqlQuery(`SELECT COUNT(*) FROM omp_work.stage_preflight_intents WHERE workspace_id = '${WORKSPACE}' AND transport_attempt_id = '${transportAttemptId}';`), 10);
+	const rowCount = parseInt(psqlQuery(`SELECT COUNT(*) FROM omp_work.stage_preflight_intents WHERE workspace_id = '${WORKSPACE}' AND transport_attempt_id = '${transportAttemptId0}';`), 10);
 	assert.equal(rowCount, 1, "exactly one row exists in database for this intent");
 	console.log("Verified exactly 1 row in database for this intent");
 
-	// 3. Second backend fails closed:
-	// Verify that host auditorRunner / dispatch logic treats replayed begun as fail-closed
-	// (mandating recovery before probe, never probing)
-	const hostMustFailClosed = begin2.status === "replayed" && begin2.intent.status === "begun";
-	assert.ok(hostMustFailClosed, "second backend replayed begun intent must fail closed (recovery required, zero probes)");
-	console.log("Verified second backend fails closed on replayed begun intent");
+	// Backend 2 cancels the replayed begun intent
+	console.log("Backend 2 cancelling begun intent...");
+	const cancel0 = await backend2.cancelStagePreflight({
+		transport_attempt_id: transportAttemptId0,
+		logical_sha256: logicalSha256_0,
+		reason: "lost begin response recovery cancel",
+	});
+	assert.equal(cancel0.status, "applied", "cancel status applied");
+	assert.equal(cancel0.intent.status, "cancelled_undispatched", "intent is cancelled_undispatched");
+	console.log("Verified Backend 2 cancelled begun intent");
 
-	// 4. First backend settles ordinal 0 with terminal failure
-	console.log("Backend 1 settling ordinal 0 with terminal failure...");
-	const record1 = await backend1.recordStagePreflight({
+	// Backend 1 cannot admit cancelled intent (fails closed with HTTP 400 preflight_intent_cancelled)
+	let admitCancelledFailed = false;
+	try {
+		await backend1.admitStagePreflight({
+			transport_attempt_id: transportAttemptId0,
+			logical_sha256: logicalSha256_0,
+		});
+	} catch (err: any) {
+		admitCancelledFailed = true;
+		assert.ok(String(err).includes("preflight_intent_cancelled"), "admit error mentions preflight_intent_cancelled");
+	}
+	assert.ok(admitCancelledFailed, "admit on cancelled intent must fail closed");
+	console.log("Verified admit on cancelled intent fails closed");
+
+	// Backend 2 reissues next ordinal (ordinal 1) in the group
+	console.log("Backend 2 reissuing next ordinal 1 in group...");
+	const logicalIdentityOrdinal1 = {
 		...logicalIdentity,
-		transport_attempt_id: transportAttemptId,
+		ordinal: 1,
+		requested_provider: "anthropic",
+		requested_model: "claude-3-7-sonnet",
+		requested_wire_model: "claude-3-7-sonnet-20250219",
+	};
+	const begin1Next = await backend2.beginStagePreflight(logicalIdentityOrdinal1);
+	assert.equal(begin1Next.status, "applied", "next ordinal begins successfully");
+	assert.equal(begin1Next.intent.status, "begun", "next ordinal intent is begun");
+	assert.equal(begin1Next.intent.ordinal, 1, "next ordinal is 1");
+	const transportAttemptId1 = begin1Next.intent.transport_attempt_id;
+	const logicalSha256_1 = begin1Next.intent.logical_sha256;
+	console.log("Verified next ordinal 1 begun after cancellation");
+
+	// 2. Valid begin -> admit -> record path:
+	// Backend 2 admits ordinal 1
+	console.log("Backend 2 admitting ordinal 1...");
+	const admit1 = await backend2.admitStagePreflight({
+		transport_attempt_id: transportAttemptId1,
+		logical_sha256: logicalSha256_1,
+	});
+	assert.equal(admit1.status, "applied", "admit status applied");
+	assert.equal(admit1.intent.status, "dispatched", "intent status is dispatched");
+	console.log("Verified Backend 2 admitted ordinal 1");
+
+	// Backend 2 records ordinal 1 terminal failure
+	console.log("Backend 2 settling ordinal 1 with terminal failure...");
+	const record1 = await backend2.recordStagePreflight({
+		...logicalIdentityOrdinal1,
+		transport_attempt_id: transportAttemptId1,
 		outcome: "failed",
 		stop_reason: "error",
 		error: "probe endpoint connection timeout",
@@ -311,32 +359,98 @@ uvicorn.run(app, host="127.0.0.1", port=port, access_log=False)
 		provider_request_id: "req-smoke-fail",
 	});
 	assert.equal(record1.outcome, "failed", "preflight outcome recorded as failed");
-	assert.equal(record1.transport_attempt_id, transportAttemptId, "preflight matches transport attempt ID");
+	assert.equal(record1.transport_attempt_id, transportAttemptId1, "preflight matches transport attempt ID");
+	console.log("Verified Backend 2 recorded terminal preflight");
 
-	// 5. After first terminal failure, replay exposes terminal evidence
-	console.log("Replaying begin for ordinal 0 after terminal settlement...");
-	const replayAfterSettle = await backend2.beginStagePreflight(logicalIdentity);
+	// Replay after settle exposes terminal evidence
+	const replayAfterSettle = await backend1.beginStagePreflight(logicalIdentityOrdinal1);
 	assert.equal(replayAfterSettle.status, "replayed", "replay returns replayed status");
 	assert.equal(replayAfterSettle.intent.status, "settled", "intent status is settled");
 	assert.ok(replayAfterSettle.preflight, "terminal preflight evidence is returned on replay");
 	assert.equal(replayAfterSettle.preflight?.outcome, "failed", "terminal preflight has failed outcome");
-	assert.equal(replayAfterSettle.preflight?.transport_attempt_id, transportAttemptId, "terminal preflight matches transport attempt ID");
-	console.log("Verified terminal evidence exposed on replay");
+	assert.equal(replayAfterSettle.preflight?.transport_attempt_id, transportAttemptId1, "terminal preflight matches transport attempt ID");
+	console.log("Verified terminal evidence exposed on replay after settle");
 
-	// 6. Next ordinal can now begin
-	console.log("Beginning ordinal 1 in the same group...");
-	const logicalIdentityOrdinal1 = {
+	// 3. Dispatched uncertainty blocks second probe:
+	// Backend 1 begins ordinal 2 in same group
+	console.log("Backend 1 beginning ordinal 2 in group...");
+	const logicalIdentityOrdinal2 = {
 		...logicalIdentity,
-		ordinal: 1,
-		requested_provider: "anthropic",
-		requested_model: "claude-3-7-sonnet",
-		requested_wire_model: "claude-3-7-sonnet-20250219",
+		ordinal: 2,
+		requested_provider: "openai",
+		requested_model: "gpt-4o",
+		requested_wire_model: "gpt-4o",
 	};
-	const beginNext = await backend1.beginStagePreflight(logicalIdentityOrdinal1);
-	assert.equal(beginNext.status, "applied", "next ordinal begins successfully");
-	assert.equal(beginNext.intent.status, "begun", "next ordinal intent is begun");
-	assert.equal(beginNext.intent.ordinal, 1, "next ordinal is 1");
-	console.log("Verified next ordinal 1 begins successfully");
+	const begin2Next = await backend1.beginStagePreflight(logicalIdentityOrdinal2);
+	assert.equal(begin2Next.status, "applied", "ordinal 2 begins successfully");
+	assert.equal(begin2Next.intent.status, "begun", "ordinal 2 is begun");
+	const transportAttemptId2 = begin2Next.intent.transport_attempt_id;
+	const logicalSha256_2 = begin2Next.intent.logical_sha256;
+
+	// Backend 1 admits ordinal 2
+	console.log("Backend 1 admitting ordinal 2...");
+	const admit2 = await backend1.admitStagePreflight({
+		transport_attempt_id: transportAttemptId2,
+		logical_sha256: logicalSha256_2,
+	});
+	assert.equal(admit2.status, "applied", "ordinal 2 admit applied");
+	assert.equal(admit2.intent.status, "dispatched", "ordinal 2 is dispatched");
+
+	// Backend 2 (second host / replay) observes ordinal 2 as dispatched
+	console.log("Backend 2 observing ordinal 2 as dispatched...");
+	const replayDispatched = await backend2.beginStagePreflight(logicalIdentityOrdinal2);
+	assert.equal(replayDispatched.status, "replayed", "replayed status");
+	assert.equal(replayDispatched.intent.status, "dispatched", "intent status is dispatched");
+
+	// Cancel on dispatched intent is refused (HTTP 409 preflight_intent_active)
+	console.log("Verifying cancel on dispatched intent is refused...");
+	let cancelDispatchedFailed = false;
+	try {
+		await backend2.cancelStagePreflight({
+			transport_attempt_id: transportAttemptId2,
+			logical_sha256: logicalSha256_2,
+			reason: "try cancel dispatched",
+		});
+	} catch (err: any) {
+		cancelDispatchedFailed = true;
+		assert.equal(err.code, "preflight_intent_active", "cancel error code is preflight_intent_active");
+		assert.equal(err.status, 409, "cancel error status is 409");
+	}
+	assert.ok(cancelDispatchedFailed, "cancel on dispatched intent must fail");
+	console.log("Verified cancel on dispatched intent refused");
+
+	// Next ordinal (ordinal 3) is blocked while ordinal 2 is dispatched (group sibling active)
+	console.log("Verifying next ordinal 3 is blocked while ordinal 2 is dispatched...");
+	let nextOrdinalBlocked = false;
+	try {
+		const logicalIdentityOrdinal3 = {
+			...logicalIdentity,
+			ordinal: 3,
+			requested_provider: "anthropic",
+			requested_model: "claude-3-5-sonnet",
+			requested_wire_model: "claude-3-5-sonnet-20241022",
+		};
+		await backend2.beginStagePreflight(logicalIdentityOrdinal3);
+	} catch (err: any) {
+		nextOrdinalBlocked = true;
+		assert.ok(String(err).includes("preflight_group_sibling_active"), "begin error mentions preflight_group_sibling_active");
+	}
+	assert.ok(nextOrdinalBlocked, "next ordinal must be blocked while sibling is dispatched");
+	console.log("Verified next ordinal blocked (zero second probes possible absent provider reconciliation)");
+
+	// Backend 1 completes ordinal 2 as selected terminal route
+	console.log("Backend 1 recording terminal route for ordinal 2...");
+	const record2 = await backend1.recordStagePreflight({
+		...logicalIdentityOrdinal2,
+		transport_attempt_id: transportAttemptId2,
+		outcome: "selected",
+		stop_reason: "stop",
+		requests: 1,
+		usage: null,
+		provider_request_id: "req-smoke-ok",
+	});
+	assert.equal(record2.outcome, "selected", "ordinal 2 recorded as selected");
+	console.log("Verified Backend 1 settled ordinal 2 as selected");
 
 	console.log("preflight-intent-smoke: ALL REAL BOUNDARY ASSERTIONS PASSED!");
 } finally {
