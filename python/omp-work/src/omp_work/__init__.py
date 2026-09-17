@@ -33,6 +33,8 @@ _READS = frozenset(
         "GET /v1/workspaces/{workspace_id}/authority",
         "GET /v1/workspaces/{workspace_id}/execution",
         "GET /v1/workspaces/{workspace_id}/execution/{grant_id}",
+        "GET /v1/workspaces/{workspace_id}/provider-accounts",
+        "GET /v1/workspaces/{workspace_id}/provider-accounts/{account_id}",
         "GET /v1/health/live",
         "GET /v1/health/ready",
     }
@@ -116,6 +118,7 @@ _COMMAND_TYPES = frozenset(
         "cancel_budget",
         "expire_budget",
         "issue_frontier_exception",
+        "put_provider_account",
     }
 )
 

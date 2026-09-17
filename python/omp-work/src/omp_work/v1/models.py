@@ -998,6 +998,30 @@ class IssueFrontierExceptionPayload(StrictModel):
     expires_at: datetime
 
 
+class PutProviderAccountPayload(StrictModel):
+    account_id: UUID
+    provider: str = Field(min_length=1)
+    account_identity: str = Field(min_length=1)
+    entitlement_evidence: str = Field(min_length=1)
+    evidence_observed_at: datetime
+    billing_mode: Literal["subscription", "metered", "purchased_credit", "local"]
+    rate_card_version: str | None = None
+    observed_balance: str | None = Field(default=None, pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    balance_provenance: Literal["provider_observed", "locally_estimated", "unknown"]
+    reset_at: datetime | None = None
+    concurrency_limit: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_invariants(self) -> PutProviderAccountPayload:
+        if self.rate_card_version is not None and not self.rate_card_version.strip():
+            raise ValueError("rate_card_version cannot be empty")
+        if self.observed_balance is not None and self.balance_provenance == "unknown":
+            raise ValueError("observed_balance cannot be set when balance_provenance is unknown")
+        if self.reset_at is not None and self.reset_at <= self.evidence_observed_at:
+            raise ValueError("reset_at must be in the future relative to evidence_observed_at")
+        return self
+
+
 class AssociateCandidateSourcePayload(StrictModel):
     candidate_id: UUID
     work_id: UUID
@@ -1376,6 +1400,11 @@ class IssueFrontierExceptionCommand(StrictModel):
     payload: IssueFrontierExceptionPayload
 
 
+class PutProviderAccountCommand(StrictModel):
+    type: Literal["put_provider_account"]
+    payload: PutProviderAccountPayload
+
+
 class AssociateCandidateSourceCommand(StrictModel):
     type: Literal["associate_candidate_source"]
     payload: AssociateCandidateSourcePayload
@@ -1439,6 +1468,7 @@ Command = Annotated[
     | CancelBudgetCommand
     | ExpireBudgetCommand
     | IssueFrontierExceptionCommand
+    | PutProviderAccountCommand
     | AssociateCandidateSourceCommand
     | AttestCheckpointDeliveryCommand
     | RecordCloseoutReviewCommand

@@ -53,6 +53,7 @@ from .models import (
     EvidenceReceipt,
     OperationReceipt,
     OperationState,
+    PutProviderAccountPayload,
     RelationEdge,
     RepositoryCursorPayload,
     RiderProof,
@@ -78,6 +79,7 @@ _EVENT_FIELDS = "event_id,sequence,work_id,attempt_id,launch_id,event_type,reaso
 _DELIVERY_FIELDS = "delivery_id,event_id,delivery_sequence,owner_session_id,rendered_sha256,status,authorization_ref,created_at"
 _STAGE_LAUNCH_FIELDS = "launch_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,request_sha256,tool_call_id,task_sha256,prepared_context_sha256,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,resolved_selector,resolved_provider,resolved_model,served_selector,served_model,is_fallback,fallback_reason,status,outcome_sha256,outcome,reserved_at,handed_off_at,settled_at"
 _SOURCE_VERSION_FIELDS = "candidate_id,workspace_id,work_id,revision_id,repository_id,source_version_id,snapshot_id,base_commit,analyzed_commit,tree_sha,source_manifest_sha256,snapshot_manifest_sha256,content_sha256,association_sha256,producer,producer_receipt_sha256,created_at"
+_PROVIDER_ACCOUNT_FIELDS = "account_id,workspace_id,provider,account_identity,entitlement_evidence,evidence_observed_at,billing_mode,rate_card_version,observed_balance,balance_provenance,reset_at,concurrency_limit"
 _LIVE_STATES = tuple(sorted(state.value for state in LIVE_CLOSE_ATTEMPT_STATES))
 _CLOSE_COMMANDS = {
     "begin_close_attempt",
@@ -360,6 +362,7 @@ class PostgresWorkStore:
             "cancel_budget",
             "expire_budget",
             "issue_frontier_exception",
+            "put_provider_account",
         }
         conflict = False
         with self._transaction(
@@ -472,6 +475,8 @@ class PostgresWorkStore:
                     result = self._expire_budget(cur, envelope)
                 elif command.type == "issue_frontier_exception":
                     result = self._issue_frontier_exception(cur, envelope)
+                elif command.type == "put_provider_account":
+                    result = self._put_provider_account(cur, envelope)
                 elif command.type == "associate_candidate_source":
                     result = self._associate_candidate_source(cur, envelope)
                 elif command.type == "attest_checkpoint_delivery":
@@ -3179,6 +3184,86 @@ class PostgresWorkStore:
         if cur.fetchone() is None: raise WorkStoreError("invalid_request", ("scope_not_found",))
         cur.execute("INSERT INTO omp_work.frontier_exceptions(exception_id,workspace_id,scope_id,question,route,effort,context_limit,output_limit,max_attempts,remaining_attempts,resource,resource_limit,expires_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (exception_id,envelope.workspace_id,payload.scope_id,payload.question,payload.route,payload.effort,payload.context_limit,payload.output_limit,payload.max_attempts,payload.max_attempts,payload.resource.value,payload.resource_limit,payload.expires_at))
         return {"type":"issue_frontier_exception","exception_id":str(exception_id),"remaining_attempts":payload.max_attempts}
+
+    def _put_provider_account(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload: PutProviderAccountPayload = envelope.command.payload
+        if payload.concurrency_limit <= 0:
+            raise WorkStoreError("invalid_request", ("concurrency_limit_must_be_positive",))
+        if payload.observed_balance is not None:
+            try:
+                bal = Decimal(payload.observed_balance)
+                if bal < 0 or not bal.is_finite():
+                    raise ValueError
+            except (ArithmeticError, ValueError):
+                raise WorkStoreError("invalid_request", ("invalid_observed_balance",))
+            if payload.balance_provenance == "unknown":
+                raise WorkStoreError("invalid_request", ("unknown_balance_provenance_conflict",))
+        if payload.reset_at is not None and payload.reset_at <= payload.evidence_observed_at:
+            raise WorkStoreError("invalid_request", ("reset_at_must_be_after_evidence_observed_at",))
+        if payload.rate_card_version is not None and not payload.rate_card_version.strip():
+            raise WorkStoreError("invalid_request", ("invalid_rate_card_version",))
+
+        cur.execute(
+            """
+            SELECT omp_work.put_provider_account(
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            ) AS disposition
+            """,
+            (
+                payload.account_id,
+                envelope.workspace_id,
+                payload.provider,
+                payload.account_identity,
+                payload.entitlement_evidence,
+                payload.evidence_observed_at,
+                payload.billing_mode,
+                payload.rate_card_version,
+                Decimal(payload.observed_balance) if payload.observed_balance is not None else None,
+                payload.balance_provenance,
+                payload.reset_at,
+                payload.concurrency_limit,
+            ),
+        )
+        row = cur.fetchone()
+        disposition = row["disposition"] if row else None
+        if disposition == "stale_evidence":
+            raise WorkStoreError("stale_evidence", ("stale_provider_account_evidence",))
+        if disposition == "conflict":
+            raise WorkStoreError("revision_conflict", ("provider_account_identity_conflict",))
+        if disposition not in ("inserted", "updated", "unchanged"):
+            raise WorkStoreError("invalid_request", (f"unexpected_disposition_{disposition}",))
+
+        cur.execute(
+            f"SELECT {_PROVIDER_ACCOUNT_FIELDS} FROM omp_work.provider_accounts WHERE workspace_id = %s AND account_id = %s",
+            (envelope.workspace_id, payload.account_id),
+        )
+        account_row = cur.fetchone()
+        if not account_row:
+            raise WorkStoreError("invalid_request", ("provider_account_missing",))
+
+        account = {
+            "account_id": str(account_row["account_id"]),
+            "workspace_id": str(account_row["workspace_id"]),
+            "provider": account_row["provider"],
+            "account_identity": account_row["account_identity"],
+            "entitlement_evidence": account_row["entitlement_evidence"],
+            "evidence_observed_at": account_row["evidence_observed_at"].isoformat() if hasattr(account_row["evidence_observed_at"], "isoformat") else str(account_row["evidence_observed_at"]),
+            "billing_mode": account_row["billing_mode"],
+            "rate_card_version": account_row["rate_card_version"],
+            "observed_balance": str(account_row["observed_balance"]) if account_row["observed_balance"] is not None else None,
+            "balance_provenance": account_row["balance_provenance"],
+            "reset_at": account_row["reset_at"].isoformat() if account_row.get("reset_at") and hasattr(account_row["reset_at"], "isoformat") else (str(account_row["reset_at"]) if account_row.get("reset_at") else None),
+            "concurrency_limit": int(account_row["concurrency_limit"]),
+        }
+
+        return {
+            "type": "put_provider_account",
+            "status": disposition,
+            "account_id": str(payload.account_id),
+            "account": account,
+        }
 
     def _reserve_stage_launch(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
@@ -6640,6 +6725,70 @@ class PostgresWorkStore:
                     "limit": limit,
                     "exhausted": exhausted,
                 }
+
+            if kind == "provider_accounts":
+                if value:
+                    try:
+                        account_uuid = UUID(value)
+                    except ValueError:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("invalid_account_id", f"invalid account UUID: '{value}'"),
+                        )
+                    cur.execute(
+                        f"SELECT {_PROVIDER_ACCOUNT_FIELDS} FROM omp_work.provider_accounts WHERE workspace_id = %s AND account_id = %s",
+                        (workspace_id, account_uuid),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=(
+                                "not_found",
+                                f"provider account '{value}' not found in workspace",
+                            ),
+                        )
+                    return {
+                        "account_id": str(row["account_id"]),
+                        "workspace_id": str(row["workspace_id"]),
+                        "provider": row["provider"],
+                        "account_identity": row["account_identity"],
+                        "entitlement_evidence": row["entitlement_evidence"],
+                        "evidence_observed_at": row["evidence_observed_at"].isoformat() if hasattr(row["evidence_observed_at"], "isoformat") else str(row["evidence_observed_at"]),
+                        "billing_mode": row["billing_mode"],
+                        "rate_card_version": row["rate_card_version"],
+                        "observed_balance": str(row["observed_balance"]) if row["observed_balance"] is not None else None,
+                        "balance_provenance": row["balance_provenance"],
+                        "reset_at": row["reset_at"].isoformat() if row.get("reset_at") and hasattr(row["reset_at"], "isoformat") else (str(row["reset_at"]) if row.get("reset_at") else None),
+                        "concurrency_limit": int(row["concurrency_limit"]),
+                    }
+                else:
+                    cur.execute(
+                        f"SELECT {_PROVIDER_ACCOUNT_FIELDS} FROM omp_work.provider_accounts WHERE workspace_id = %s ORDER BY provider ASC, account_identity ASC",
+                        (workspace_id,),
+                    )
+                    rows = cur.fetchall()
+                    accounts = [
+                        {
+                            "account_id": str(r["account_id"]),
+                            "workspace_id": str(r["workspace_id"]),
+                            "provider": r["provider"],
+                            "account_identity": r["account_identity"],
+                            "entitlement_evidence": r["entitlement_evidence"],
+                            "evidence_observed_at": r["evidence_observed_at"].isoformat() if hasattr(r["evidence_observed_at"], "isoformat") else str(r["evidence_observed_at"]),
+                            "billing_mode": r["billing_mode"],
+                            "rate_card_version": r["rate_card_version"],
+                            "observed_balance": str(r["observed_balance"]) if r["observed_balance"] is not None else None,
+                            "balance_provenance": r["balance_provenance"],
+                            "reset_at": r["reset_at"].isoformat() if r.get("reset_at") and hasattr(r["reset_at"], "isoformat") else (str(r["reset_at"]) if r.get("reset_at") else None),
+                            "concurrency_limit": int(r["concurrency_limit"]),
+                        }
+                        for r in rows
+                    ]
+                    return {
+                        "workspace_id": str(workspace_id),
+                        "accounts": accounts,
+                    }
 
             raise WorkStoreError("invalid_request")
 

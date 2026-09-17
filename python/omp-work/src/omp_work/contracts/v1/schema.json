@@ -7144,6 +7144,129 @@
           "title": "PromoteImportBatchPayload",
           "type": "object"
         },
+        "PutProviderAccountCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/PutProviderAccountPayload"
+            },
+            "type": {
+              "const": "put_provider_account",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "PutProviderAccountCommand",
+          "type": "object"
+        },
+        "PutProviderAccountPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "account_identity": {
+              "minLength": 1,
+              "title": "Account Identity",
+              "type": "string"
+            },
+            "balance_provenance": {
+              "enum": [
+                "provider_observed",
+                "locally_estimated",
+                "unknown"
+              ],
+              "title": "Balance Provenance",
+              "type": "string"
+            },
+            "billing_mode": {
+              "enum": [
+                "subscription",
+                "metered",
+                "purchased_credit",
+                "local"
+              ],
+              "title": "Billing Mode",
+              "type": "string"
+            },
+            "concurrency_limit": {
+              "exclusiveMinimum": 0,
+              "title": "Concurrency Limit",
+              "type": "integer"
+            },
+            "entitlement_evidence": {
+              "minLength": 1,
+              "title": "Entitlement Evidence",
+              "type": "string"
+            },
+            "evidence_observed_at": {
+              "format": "date-time",
+              "title": "Evidence Observed At",
+              "type": "string"
+            },
+            "observed_balance": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observed Balance"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "rate_card_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rate Card Version"
+            },
+            "reset_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reset At"
+            }
+          },
+          "required": [
+            "account_id",
+            "provider",
+            "account_identity",
+            "entitlement_evidence",
+            "evidence_observed_at",
+            "billing_mode",
+            "balance_provenance",
+            "concurrency_limit"
+          ],
+          "title": "PutProviderAccountPayload",
+          "type": "object"
+        },
         "PutRelationCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8699,6 +8822,7 @@
               "handoff_stage_launch": "#/$defs/HandoffStageLaunchCommand",
               "issue_frontier_exception": "#/$defs/IssueFrontierExceptionCommand",
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
+              "put_provider_account": "#/$defs/PutProviderAccountCommand",
               "put_relation": "#/$defs/PutRelationCommand",
               "reconcile_stage_launch": "#/$defs/ReconcileStageLaunchCommand",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewCommand",
@@ -8802,6 +8926,9 @@
             },
             {
               "$ref": "#/$defs/IssueFrontierExceptionCommand"
+            },
+            {
+              "$ref": "#/$defs/PutProviderAccountCommand"
             },
             {
               "$ref": "#/$defs/AssociateCandidateSourceCommand"
@@ -15086,6 +15213,235 @@
         "work_state"
       ],
       "title": "PushedBranchExample",
+      "type": "object"
+    },
+    "PutProviderAccountCommand": {
+      "$defs": {
+        "PutProviderAccountPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "account_identity": {
+              "minLength": 1,
+              "title": "Account Identity",
+              "type": "string"
+            },
+            "balance_provenance": {
+              "enum": [
+                "provider_observed",
+                "locally_estimated",
+                "unknown"
+              ],
+              "title": "Balance Provenance",
+              "type": "string"
+            },
+            "billing_mode": {
+              "enum": [
+                "subscription",
+                "metered",
+                "purchased_credit",
+                "local"
+              ],
+              "title": "Billing Mode",
+              "type": "string"
+            },
+            "concurrency_limit": {
+              "exclusiveMinimum": 0,
+              "title": "Concurrency Limit",
+              "type": "integer"
+            },
+            "entitlement_evidence": {
+              "minLength": 1,
+              "title": "Entitlement Evidence",
+              "type": "string"
+            },
+            "evidence_observed_at": {
+              "format": "date-time",
+              "title": "Evidence Observed At",
+              "type": "string"
+            },
+            "observed_balance": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observed Balance"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "rate_card_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rate Card Version"
+            },
+            "reset_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reset At"
+            }
+          },
+          "required": [
+            "account_id",
+            "provider",
+            "account_identity",
+            "entitlement_evidence",
+            "evidence_observed_at",
+            "billing_mode",
+            "balance_provenance",
+            "concurrency_limit"
+          ],
+          "title": "PutProviderAccountPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/PutProviderAccountPayload"
+        },
+        "type": {
+          "const": "put_provider_account",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "PutProviderAccountCommand",
+      "type": "object"
+    },
+    "PutProviderAccountPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "format": "uuid",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "account_identity": {
+          "minLength": 1,
+          "title": "Account Identity",
+          "type": "string"
+        },
+        "balance_provenance": {
+          "enum": [
+            "provider_observed",
+            "locally_estimated",
+            "unknown"
+          ],
+          "title": "Balance Provenance",
+          "type": "string"
+        },
+        "billing_mode": {
+          "enum": [
+            "subscription",
+            "metered",
+            "purchased_credit",
+            "local"
+          ],
+          "title": "Billing Mode",
+          "type": "string"
+        },
+        "concurrency_limit": {
+          "exclusiveMinimum": 0,
+          "title": "Concurrency Limit",
+          "type": "integer"
+        },
+        "entitlement_evidence": {
+          "minLength": 1,
+          "title": "Entitlement Evidence",
+          "type": "string"
+        },
+        "evidence_observed_at": {
+          "format": "date-time",
+          "title": "Evidence Observed At",
+          "type": "string"
+        },
+        "observed_balance": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Balance"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "rate_card_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rate Card Version"
+        },
+        "reset_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reset At"
+        }
+      },
+      "required": [
+        "account_id",
+        "provider",
+        "account_identity",
+        "entitlement_evidence",
+        "evidence_observed_at",
+        "billing_mode",
+        "balance_provenance",
+        "concurrency_limit"
+      ],
+      "title": "PutProviderAccountPayload",
       "type": "object"
     },
     "PutRelationCommand": {

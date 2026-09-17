@@ -17,6 +17,7 @@ from .models import (
     CloseAttemptEvent,
     EvidenceReceipt,
     OperationReceipt,
+    ProviderAccount,
     RelationEdge,
     StrictModel,
     WorkAlias,
@@ -344,6 +345,13 @@ class BudgetResult(StrictModel):
     replayed: bool | None = None
 
 
+class ProviderAccountResult(StrictModel):
+    type: Literal["put_provider_account"]
+    status: Literal["inserted", "updated", "unchanged"]
+    account_id: UUID
+    account: ProviderAccount
+
+
 class AuthorityView(StrictModel):
     authority: Literal["linear", "work"]
     epoch_id: UUID | None = None
@@ -370,6 +378,7 @@ CommandResult = Annotated[
     | ActivateCutoverResult
     | AttestCutoverPlanResult
     | BudgetResult
+    | ProviderAccountResult
     | BeginExecutionResult
     | ActivateExecutionItemResult
     | SealExecutionCriteriaResult
@@ -480,3 +489,8 @@ class RepositoryListView(StrictModel):
     next_cursor: str | None = None
     limit: int
     exhausted: bool
+
+
+class ProviderAccountListView(StrictModel):
+    workspace_id: UUID
+    accounts: tuple[ProviderAccount, ...]

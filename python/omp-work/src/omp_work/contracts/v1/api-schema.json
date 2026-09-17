@@ -5705,6 +5705,150 @@
           "title": "ProjectHealthView",
           "type": "object"
         },
+        "ProviderAccount": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "account_identity": {
+              "minLength": 1,
+              "title": "Account Identity",
+              "type": "string"
+            },
+            "balance_provenance": {
+              "enum": [
+                "provider_observed",
+                "locally_estimated",
+                "unknown"
+              ],
+              "title": "Balance Provenance",
+              "type": "string"
+            },
+            "billing_mode": {
+              "enum": [
+                "subscription",
+                "metered",
+                "purchased_credit",
+                "local"
+              ],
+              "title": "Billing Mode",
+              "type": "string"
+            },
+            "concurrency_limit": {
+              "minimum": 1,
+              "title": "Concurrency Limit",
+              "type": "integer"
+            },
+            "entitlement_evidence": {
+              "minLength": 1,
+              "title": "Entitlement Evidence",
+              "type": "string"
+            },
+            "evidence_observed_at": {
+              "format": "date-time",
+              "title": "Evidence Observed At",
+              "type": "string"
+            },
+            "observed_balance": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observed Balance"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "rate_card_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rate Card Version"
+            },
+            "reset_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reset At"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "account_id",
+            "workspace_id",
+            "provider",
+            "account_identity",
+            "entitlement_evidence",
+            "evidence_observed_at",
+            "billing_mode",
+            "balance_provenance",
+            "concurrency_limit"
+          ],
+          "title": "ProviderAccount",
+          "type": "object"
+        },
+        "ProviderAccountResult": {
+          "additionalProperties": false,
+          "properties": {
+            "account": {
+              "$ref": "#/$defs/ProviderAccount"
+            },
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "inserted",
+                "updated",
+                "unchanged"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "put_provider_account",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "account_id",
+            "account"
+          ],
+          "title": "ProviderAccountResult",
+          "type": "object"
+        },
         "RecordCloseoutReviewResult": {
           "additionalProperties": false,
           "properties": {
@@ -6440,6 +6584,7 @@
               "finalize_candidate": "#/$defs/FinalizeCandidateResult",
               "handoff_stage_launch": "#/$defs/StageLaunchResult",
               "issue_frontier_exception": "#/$defs/BudgetResult",
+              "put_provider_account": "#/$defs/ProviderAccountResult",
               "put_relation": "#/$defs/RelationResult",
               "reconcile_stage_launch": "#/$defs/StageLaunchResult",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
@@ -6512,6 +6657,9 @@
             },
             {
               "$ref": "#/$defs/BudgetResult"
+            },
+            {
+              "$ref": "#/$defs/ProviderAccountResult"
             },
             {
               "$ref": "#/$defs/BeginExecutionResult"
@@ -9966,6 +10114,395 @@
         "name"
       ],
       "title": "ProjectView",
+      "type": "object"
+    },
+    "ProviderAccount": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "format": "uuid",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "account_identity": {
+          "minLength": 1,
+          "title": "Account Identity",
+          "type": "string"
+        },
+        "balance_provenance": {
+          "enum": [
+            "provider_observed",
+            "locally_estimated",
+            "unknown"
+          ],
+          "title": "Balance Provenance",
+          "type": "string"
+        },
+        "billing_mode": {
+          "enum": [
+            "subscription",
+            "metered",
+            "purchased_credit",
+            "local"
+          ],
+          "title": "Billing Mode",
+          "type": "string"
+        },
+        "concurrency_limit": {
+          "minimum": 1,
+          "title": "Concurrency Limit",
+          "type": "integer"
+        },
+        "entitlement_evidence": {
+          "minLength": 1,
+          "title": "Entitlement Evidence",
+          "type": "string"
+        },
+        "evidence_observed_at": {
+          "format": "date-time",
+          "title": "Evidence Observed At",
+          "type": "string"
+        },
+        "observed_balance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Balance"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "rate_card_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rate Card Version"
+        },
+        "reset_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reset At"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_id",
+        "workspace_id",
+        "provider",
+        "account_identity",
+        "entitlement_evidence",
+        "evidence_observed_at",
+        "billing_mode",
+        "balance_provenance",
+        "concurrency_limit"
+      ],
+      "title": "ProviderAccount",
+      "type": "object"
+    },
+    "ProviderAccountListView": {
+      "$defs": {
+        "ProviderAccount": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "account_identity": {
+              "minLength": 1,
+              "title": "Account Identity",
+              "type": "string"
+            },
+            "balance_provenance": {
+              "enum": [
+                "provider_observed",
+                "locally_estimated",
+                "unknown"
+              ],
+              "title": "Balance Provenance",
+              "type": "string"
+            },
+            "billing_mode": {
+              "enum": [
+                "subscription",
+                "metered",
+                "purchased_credit",
+                "local"
+              ],
+              "title": "Billing Mode",
+              "type": "string"
+            },
+            "concurrency_limit": {
+              "minimum": 1,
+              "title": "Concurrency Limit",
+              "type": "integer"
+            },
+            "entitlement_evidence": {
+              "minLength": 1,
+              "title": "Entitlement Evidence",
+              "type": "string"
+            },
+            "evidence_observed_at": {
+              "format": "date-time",
+              "title": "Evidence Observed At",
+              "type": "string"
+            },
+            "observed_balance": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observed Balance"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "rate_card_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rate Card Version"
+            },
+            "reset_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reset At"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "account_id",
+            "workspace_id",
+            "provider",
+            "account_identity",
+            "entitlement_evidence",
+            "evidence_observed_at",
+            "billing_mode",
+            "balance_provenance",
+            "concurrency_limit"
+          ],
+          "title": "ProviderAccount",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "items": {
+            "$ref": "#/$defs/ProviderAccount"
+          },
+          "title": "Accounts",
+          "type": "array"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "accounts"
+      ],
+      "title": "ProviderAccountListView",
+      "type": "object"
+    },
+    "ProviderAccountResult": {
+      "$defs": {
+        "ProviderAccount": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "account_identity": {
+              "minLength": 1,
+              "title": "Account Identity",
+              "type": "string"
+            },
+            "balance_provenance": {
+              "enum": [
+                "provider_observed",
+                "locally_estimated",
+                "unknown"
+              ],
+              "title": "Balance Provenance",
+              "type": "string"
+            },
+            "billing_mode": {
+              "enum": [
+                "subscription",
+                "metered",
+                "purchased_credit",
+                "local"
+              ],
+              "title": "Billing Mode",
+              "type": "string"
+            },
+            "concurrency_limit": {
+              "minimum": 1,
+              "title": "Concurrency Limit",
+              "type": "integer"
+            },
+            "entitlement_evidence": {
+              "minLength": 1,
+              "title": "Entitlement Evidence",
+              "type": "string"
+            },
+            "evidence_observed_at": {
+              "format": "date-time",
+              "title": "Evidence Observed At",
+              "type": "string"
+            },
+            "observed_balance": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observed Balance"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "rate_card_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rate Card Version"
+            },
+            "reset_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reset At"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "account_id",
+            "workspace_id",
+            "provider",
+            "account_identity",
+            "entitlement_evidence",
+            "evidence_observed_at",
+            "billing_mode",
+            "balance_provenance",
+            "concurrency_limit"
+          ],
+          "title": "ProviderAccount",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "$ref": "#/$defs/ProviderAccount"
+        },
+        "account_id": {
+          "format": "uuid",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "inserted",
+            "updated",
+            "unchanged"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "put_provider_account",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "account_id",
+        "account"
+      ],
+      "title": "ProviderAccountResult",
       "type": "object"
     },
     "RecordCloseoutReviewResult": {
@@ -15347,6 +15884,150 @@
           "title": "ProjectHealthView",
           "type": "object"
         },
+        "ProviderAccount": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "account_identity": {
+              "minLength": 1,
+              "title": "Account Identity",
+              "type": "string"
+            },
+            "balance_provenance": {
+              "enum": [
+                "provider_observed",
+                "locally_estimated",
+                "unknown"
+              ],
+              "title": "Balance Provenance",
+              "type": "string"
+            },
+            "billing_mode": {
+              "enum": [
+                "subscription",
+                "metered",
+                "purchased_credit",
+                "local"
+              ],
+              "title": "Billing Mode",
+              "type": "string"
+            },
+            "concurrency_limit": {
+              "minimum": 1,
+              "title": "Concurrency Limit",
+              "type": "integer"
+            },
+            "entitlement_evidence": {
+              "minLength": 1,
+              "title": "Entitlement Evidence",
+              "type": "string"
+            },
+            "evidence_observed_at": {
+              "format": "date-time",
+              "title": "Evidence Observed At",
+              "type": "string"
+            },
+            "observed_balance": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Observed Balance"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "rate_card_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rate Card Version"
+            },
+            "reset_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reset At"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "account_id",
+            "workspace_id",
+            "provider",
+            "account_identity",
+            "entitlement_evidence",
+            "evidence_observed_at",
+            "billing_mode",
+            "balance_provenance",
+            "concurrency_limit"
+          ],
+          "title": "ProviderAccount",
+          "type": "object"
+        },
+        "ProviderAccountResult": {
+          "additionalProperties": false,
+          "properties": {
+            "account": {
+              "$ref": "#/$defs/ProviderAccount"
+            },
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "inserted",
+                "updated",
+                "unchanged"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "put_provider_account",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "account_id",
+            "account"
+          ],
+          "title": "ProviderAccountResult",
+          "type": "object"
+        },
         "RecordCloseoutReviewResult": {
           "additionalProperties": false,
           "properties": {
@@ -16098,6 +16779,7 @@
                   "finalize_candidate": "#/$defs/FinalizeCandidateResult",
                   "handoff_stage_launch": "#/$defs/StageLaunchResult",
                   "issue_frontier_exception": "#/$defs/BudgetResult",
+                  "put_provider_account": "#/$defs/ProviderAccountResult",
                   "put_relation": "#/$defs/RelationResult",
                   "reconcile_stage_launch": "#/$defs/StageLaunchResult",
                   "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
@@ -16170,6 +16852,9 @@
                 },
                 {
                   "$ref": "#/$defs/BudgetResult"
+                },
+                {
+                  "$ref": "#/$defs/ProviderAccountResult"
                 },
                 {
                   "$ref": "#/$defs/BeginExecutionResult"

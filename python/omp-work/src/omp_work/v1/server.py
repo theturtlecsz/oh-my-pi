@@ -305,6 +305,13 @@ def create_app(
     def execution(request: Request, workspace_id: UUID, grant_id: str = "") -> JSONResponse:
         return read_route(request, workspace_id, "execution", grant_id)
 
+    @app.get("/v1/workspaces/{workspace_id}/provider-accounts")
+    @app.get("/v1/workspaces/{workspace_id}/provider-accounts/{account_id}")
+    def provider_accounts(
+        request: Request, workspace_id: UUID, account_id: str = ""
+    ) -> JSONResponse:
+        return read_route(request, workspace_id, "provider_accounts", account_id)
+
     @app.get("/v1/workspaces/{workspace_id}/activity")
     def activity(
         request: Request,
