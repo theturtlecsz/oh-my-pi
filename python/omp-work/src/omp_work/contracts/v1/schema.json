@@ -7608,6 +7608,19 @@
               "title": "Expires At",
               "type": "string"
             },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
             "logical_call_id": {
               "format": "uuid",
               "title": "Logical Call Id",
@@ -16237,6 +16250,19 @@
               "title": "Expires At",
               "type": "string"
             },
+            "launch_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Launch Id"
+            },
             "logical_call_id": {
               "format": "uuid",
               "title": "Logical Call Id",
@@ -16346,6 +16372,19 @@
           "format": "date-time",
           "title": "Expires At",
           "type": "string"
+        },
+        "launch_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Launch Id"
         },
         "logical_call_id": {
           "format": "uuid",

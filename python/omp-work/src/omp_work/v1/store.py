@@ -2906,17 +2906,62 @@ class PostgresWorkStore:
         cur.execute("INSERT INTO omp_work.budget_scopes(scope_id,workspace_id,parent_scope_id,kind,policy_version,work_id,session_id,limits) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (payload.scope_id, envelope.workspace_id, payload.parent_scope_id, payload.kind.value, payload.policy_version, payload.work_id, payload.session_id, json.dumps(payload.limits)))
         return {"type": "create_budget_scope", "scope_id": str(payload.scope_id), "parent_scope_id": str(payload.parent_scope_id) if payload.parent_scope_id else None}
 
+    def _claim_reservation_row(self, cur: psycopg.Cursor[Any], reservation_id: UUID) -> bool:
+        cur.execute(
+            "UPDATE omp_work.budget_reservations SET state='potentially_sent', claimed_at=clock_timestamp() WHERE reservation_id=%s AND state='reserved_unsent' AND clock_timestamp() < expires_at",
+            (reservation_id,),
+        )
+        return cur.rowcount == 1
+
+    def _release_unsent_reservation(
+        self, cur: psycopg.Cursor[Any], workspace_id: UUID, row: dict[str, Any]
+    ) -> None:
+        chain = self._lock_budget_chain(cur, workspace_id, row["scope_id"])
+        worst_case = self._money(str(row["worst_case_drawdown"]))
+        self._apply_budget_transition(cur, chain, row["resource"], held_delta=-worst_case)
+        cur.execute(
+            "UPDATE omp_work.budget_reservations SET state='cancelled_unsent', settled_at=clock_timestamp() WHERE reservation_id=%s",
+            (row["reservation_id"],),
+        )
+
     def _reserve_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
         cur.execute("SELECT clock_timestamp() >= %s AS expired", (payload.expires_at,))
         if cur.fetchone()["expired"]:
             raise WorkStoreError("invalid_request", ("reservation_already_expired",))
-        amount = self._money(payload.worst_case_drawdown)
-        chain = self._lock_budget_chain(cur, envelope.workspace_id, payload.scope_id)
+        if payload.launch_id is not None:
+            cur.execute(
+                f"SELECT {_STAGE_LAUNCH_FIELDS} FROM omp_work.stage_launches WHERE workspace_id=%s AND launch_id=%s FOR UPDATE",
+                (envelope.workspace_id, payload.launch_id),
+            )
+            launch = cur.fetchone()
+            if launch is None:
+                raise WorkStoreError("stale_evidence", ("unknown native stage launch",))
+            if launch["status"] != StageLaunchStatus.RESERVED.value:
+                raise WorkStoreError("stale_evidence", (f"stage launch is {launch['status']}",))
+            effective_provider = launch["resolved_provider"] or launch["requested_provider"]
+            effective_model = launch["resolved_model"] or launch["requested_model"]
+            effective_effort = launch["requested_effort"]
+            if (
+                payload.provider != effective_provider
+                or payload.model != effective_model
+                or payload.effort != effective_effort
+            ):
+                raise WorkStoreError("stale_evidence", ("stage launch route mismatch",))
+            cur.execute(
+                "SELECT 1 FROM omp_work.budget_reservations WHERE workspace_id=%s AND launch_id=%s AND state IN ('reserved_unsent', 'potentially_sent')",
+                (envelope.workspace_id, payload.launch_id),
+            )
+            if cur.fetchone() is not None:
+                raise WorkStoreError("invalid_request", ("launch_reservation_active",))
         cur.execute("SELECT * FROM omp_work.provider_accounts WHERE workspace_id=%s AND account_id=%s", (envelope.workspace_id, payload.account_id))
         account = cur.fetchone()
         if account is None or account["balance_provenance"] == "unknown":
             raise WorkStoreError("invalid_request", ("unknown_account_evidence",))
+        if account["provider"] != payload.provider:
+            raise WorkStoreError("invalid_request", ("account_provider_mismatch",))
+        amount = self._money(payload.worst_case_drawdown)
+        chain = self._lock_budget_chain(cur, envelope.workspace_id, payload.scope_id)
         cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (str(payload.account_id),))
         cur.execute("SELECT count(*) AS active FROM omp_work.budget_reservations WHERE account_id=%s AND state IN ('reserved_unsent','potentially_sent','unresolved')", (payload.account_id,))
         if int(cur.fetchone()["active"]) >= int(account["concurrency_limit"]):
@@ -2940,13 +2985,15 @@ class PostgresWorkStore:
                 reservation_id, workspace_id, scope_id, account_id,
                 logical_call_id, transport_attempt_id, fence, state,
                 resource, worst_case_drawdown, provider, model,
-                effort, context_limit, output_limit, expires_at
+                effort, context_limit, output_limit, expires_at,
+                launch_id
             )
             SELECT
                 %s, %s, %s, %s,
                 %s, %s, %s, 'reserved_unsent',
                 %s, %s, %s, %s,
-                %s, %s, %s, %s
+                %s, %s, %s, %s,
+                %s
             WHERE clock_timestamp() < %s
             """,
             (
@@ -2965,6 +3012,7 @@ class PostgresWorkStore:
                 payload.context_limit,
                 payload.output_limit,
                 payload.expires_at,
+                payload.launch_id,
                 payload.expires_at,
             ),
         )
@@ -2974,15 +3022,13 @@ class PostgresWorkStore:
 
     def _claim_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
-        cur.execute("SELECT state,fence FROM omp_work.budget_reservations WHERE workspace_id=%s AND reservation_id=%s FOR UPDATE", (envelope.workspace_id, payload.reservation_id))
+        cur.execute("SELECT state,fence,launch_id FROM omp_work.budget_reservations WHERE workspace_id=%s AND reservation_id=%s FOR UPDATE", (envelope.workspace_id, payload.reservation_id))
         row = cur.fetchone()
         if row is None or row["fence"] != payload.fence or row["state"] != "reserved_unsent":
             raise WorkStoreError("invalid_request", ("reservation_fence_or_state_invalid",))
-        cur.execute(
-            "UPDATE omp_work.budget_reservations SET state='potentially_sent', claimed_at=clock_timestamp() WHERE reservation_id=%s AND state='reserved_unsent' AND clock_timestamp() < expires_at",
-            (payload.reservation_id,),
-        )
-        if cur.rowcount != 1:
+        if row["launch_id"] is not None:
+            raise WorkStoreError("invalid_request", ("bound_reservation_uses_stage_commands",))
+        if not self._claim_reservation_row(cur, payload.reservation_id):
             raise WorkStoreError("invalid_request", ("reservation_expired",))
         return {"type": "claim_budget", "reservation_id": str(payload.reservation_id), "fence": payload.fence, "state": "potentially_sent"}
 
@@ -3049,10 +3095,9 @@ class PostgresWorkStore:
         row = cur.fetchone()
         if row is None or row["state"] != "reserved_unsent" or row["fence"] != payload.fence:
             raise WorkStoreError("invalid_request", ("reservation_not_verified_unsent",))
-        chain = self._lock_budget_chain(cur, envelope.workspace_id, row["scope_id"])
-        worst_case = self._money(str(row["worst_case_drawdown"]))
-        self._apply_budget_transition(cur, chain, row["resource"], held_delta=-worst_case)
-        cur.execute("UPDATE omp_work.budget_reservations SET state='cancelled_unsent',settled_at=clock_timestamp() WHERE reservation_id=%s", (payload.reservation_id,))
+        if row["launch_id"] is not None:
+            raise WorkStoreError("invalid_request", ("bound_reservation_uses_stage_commands",))
+        self._release_unsent_reservation(cur, envelope.workspace_id, row)
         return {"type": "cancel_budget", "reservation_id": str(payload.reservation_id), "state": "cancelled_unsent"}
 
     def _expire_budget(
@@ -3320,6 +3365,24 @@ class PostgresWorkStore:
             return {"type": "handoff_stage_launch", "status": "replayed", "launch": _row_json(launch)}
         if launch["status"] != StageLaunchStatus.RESERVED.value:
             raise WorkStoreError("invalid_request", (f"stage launch is {launch['status']}",))
+
+        cur.execute(
+            "SELECT * FROM omp_work.budget_reservations WHERE workspace_id=%s AND launch_id=%s AND state='reserved_unsent' FOR UPDATE",
+            (envelope.workspace_id, payload.launch_id),
+        )
+        bound = cur.fetchone()
+        if bound is not None:
+            if not self._claim_reservation_row(cur, bound["reservation_id"]):
+                raise WorkStoreError("invalid_request", ("reservation_expired",))
+        else:
+            effective_provider = launch["resolved_provider"] or launch["requested_provider"]
+            cur.execute(
+                "SELECT 1 FROM omp_work.provider_accounts WHERE workspace_id=%s AND provider=%s",
+                (envelope.workspace_id, effective_provider),
+            )
+            if cur.fetchone() is not None:
+                raise WorkStoreError("budget_exhausted", ("stage handoff requires an active budget reservation",))
+
         cur.execute(
             f"UPDATE omp_work.stage_launches SET status='handed_off', handed_off_at=clock_timestamp() WHERE workspace_id=%s AND launch_id=%s RETURNING {_STAGE_LAUNCH_FIELDS}",
             (envelope.workspace_id, payload.launch_id),
@@ -3374,6 +3437,16 @@ class PostgresWorkStore:
             return {"type": envelope.command.type, "status": "replayed", "launch": _row_json(launch), "reason": payload.reason}
         if launch["status"] not in {StageLaunchStatus.RESERVED.value, StageLaunchStatus.HANDED_OFF.value}:
             raise WorkStoreError("invalid_request", (f"stage launch is {launch['status']}",))
+
+        if status == "cancelled" and launch["status"] == StageLaunchStatus.RESERVED.value:
+            cur.execute(
+                "SELECT * FROM omp_work.budget_reservations WHERE workspace_id=%s AND launch_id=%s AND state='reserved_unsent' FOR UPDATE",
+                (envelope.workspace_id, payload.launch_id),
+            )
+            bound = cur.fetchone()
+            if bound is not None:
+                self._release_unsent_reservation(cur, envelope.workspace_id, bound)
+
         cur.execute(
             f"UPDATE omp_work.stage_launches SET status=%s, settled_at=clock_timestamp() WHERE workspace_id=%s AND launch_id=%s RETURNING {_STAGE_LAUNCH_FIELDS}",
             (status, envelope.workspace_id, payload.launch_id),

@@ -951,6 +951,7 @@ class ReserveBudgetPayload(StrictModel):
     context_limit: int = Field(gt=0)
     output_limit: int = Field(gt=0)
     expires_at: datetime
+    launch_id: UUID | None = None
 
 
 class ClaimBudgetPayload(StrictModel):
