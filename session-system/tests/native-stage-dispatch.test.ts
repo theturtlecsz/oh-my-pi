@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Model } from "@oh-my-pi/pi-ai";
+import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import { canonicalJson, sha256Hex, type BeginStagePreflightPayload, type AdmitStagePreflightPayload, type CancelStagePreflightPayload, type RecordStagePreflightPayload, type StageLaunch, type StagePreflight, type WorkItemView } from "@oh-my-pi/pi-work-client";
 import * as auditorRunner from "../extensions/workflow/auditor-runner";
 import { dispatchNativeStage } from "../extensions/workflow/native-stage-dispatch";
@@ -1247,5 +1248,117 @@ describe("native stage dispatch", () => {
 				grantId,
 			}),
 		).rejects.toThrow("native stage dispatch requires WorkService cancelStagePreflight capability");
+	});
+
+	test("dispatch fails closed with classifier reason and leaves reserve/handoff/settle uncalled when preflight is replayed as dispatched", async () => {
+		const selectedModel = model();
+		const workItem = item();
+		const dispatchedTransportAttemptId = "55555555-5555-4555-8555-555555555555";
+
+		const reserveSpy = spyOn({ reserve: async () => launch() }, "reserve");
+		const handoffSpy = spyOn({ handoff: async () => launch("handed_off") }, "handoff");
+		const settleSpy = spyOn({ settle: async () => launch("settled") }, "settle");
+
+		const implementer = {
+			name: "implementer",
+			description: "Implementer",
+			systemPrompt: "Implement",
+			model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } },
+			source: "bundled" as const,
+		};
+		const discoverSpy = spyOn(taskModule, "discoverAgents").mockResolvedValue({
+			agents: [implementer],
+			projectAgentsDir: null,
+		});
+
+		const backend = {
+			workspaceId,
+			workClient: {
+				workItem: async () => workItem,
+			},
+			beginStagePreflight: async (payload: BeginStagePreflightPayload) => ({
+				type: "begin_stage_preflight",
+				status: "replayed",
+				intent: {
+					intent_id: "00000000-0000-4000-8000-000000000001",
+					workspace_id: workspaceId,
+					work_id: payload.work_id,
+					revision_id: payload.revision_id,
+					candidate_id: payload.candidate_id ?? null,
+					attempt_id: payload.attempt_id ?? null,
+					grant_id: payload.grant_id ?? null,
+					role: payload.role,
+					tool_call_id: payload.tool_call_id,
+					task_sha256: payload.task_sha256,
+					probe_sha256: payload.probe_sha256,
+					transport_attempt_id: dispatchedTransportAttemptId,
+					ordinal: payload.ordinal,
+					requested_selector: payload.requested_selector,
+					requested_provider: payload.requested_provider,
+					requested_model: payload.requested_model,
+					requested_api: payload.requested_api,
+					requested_effort: payload.requested_effort ?? null,
+					requested_wire_model: payload.requested_wire_model,
+					is_fallback: payload.is_fallback,
+					logical_sha256: "0".repeat(64),
+					group_sha256: "0".repeat(64),
+					host_owner_id: "owner-1",
+					status: "dispatched",
+					created_at: new Date().toISOString(),
+					settled_at: null,
+					dispatched_at: new Date().toISOString(),
+					dispatch_operation_id: "op-1",
+					dispatch_owner_id: "owner-1",
+				},
+				preflight: undefined,
+			}),
+			admitStagePreflight: async () => { throw new Error("admit should not be called"); },
+			cancelStagePreflight: async () => { throw new Error("cancel should not be called"); },
+			recordStagePreflight: async () => { throw new Error("record should not be called"); },
+			reserveStageLaunch: reserveSpy as unknown as WorkflowBackend["reserveStageLaunch"],
+			handoffStageLaunch: handoffSpy as unknown as WorkflowBackend["handoffStageLaunch"],
+			settleStageLaunch: settleSpy as unknown as WorkflowBackend["settleStageLaunch"],
+		} as unknown as WorkflowBackend;
+
+		const ctx = {
+			models: {
+				resolve: () => selectedModel,
+				list: () => [selectedModel],
+				current: () => selectedModel,
+				family: () => "openai-codex/gpt-5.6-luna",
+			},
+			modelRegistry: {
+				getApiKey: async () => "token",
+			},
+			sessionManager: {
+				getSessionId: () => "session-1",
+			},
+		} as unknown as ExtensionContext;
+
+		try {
+			let thrownError: Error | undefined;
+			try {
+				await dispatchNativeStage(ctx, backend, undefined, {
+					workKey: "OMP-1",
+					role: "implement",
+					taskBody: "edit sealed file",
+					toolCallId: "call-1",
+					grantId,
+				});
+			} catch (error) {
+				thrownError = error as Error;
+			}
+
+			expect(thrownError).toBeDefined();
+			expect(thrownError?.message).toContain("provider effect uncertain, trusted provider reconciliation required");
+			expect(thrownError?.message).toContain("openai-codex/openai-codex-responses does not support authoritative outcome lookup; pre-effect correlation is session-scoped and lacks durable retrieval");
+			expect(thrownError?.message).toContain(`(transport attempt ${dispatchedTransportAttemptId})`);
+			expect(reserveSpy).not.toHaveBeenCalled();
+			expect(handoffSpy).not.toHaveBeenCalled();
+			expect(settleSpy).not.toHaveBeenCalled();
+		} finally {
+			discoverSpy.mockRestore();
+		}
 	});
 });

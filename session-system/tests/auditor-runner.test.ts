@@ -21,6 +21,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { createExtensionModelQuery } from "../../packages/coding-agent/src/extensibility/extensions/model-api";
 import { prepareNativeStageRunner, type NativeStagePreflightAttempt } from "../extensions/workflow/auditor-runner";
+import { providerObservationCapability } from "../extensions/workflow/provider-observation";
 import { resolveAuditPolicy } from "../extensions/workflow/audit-policy";
 import type { WorkflowBackend } from "../extensions/workflow/backend";
 import { createWorkflowHost } from "../extensions/workflow/host";
@@ -1685,72 +1686,161 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(recordedAttempt?.ordinal).toBe(1);
 	});
 
-	test("replayed dispatched preflight is blocked with uncertainty error and sends zero probes", async () => {
+	test.each([
+		{
+			name: "configured Antigravity",
+			model: nativeStageModel({
+				id: "gemini-3.8-flash",
+				provider: "google-antigravity",
+				api: "google-gemini-cli",
+				thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } },
+			}),
+			expectedReason: "google-antigravity/google-gemini-cli does not support authoritative outcome lookup; pre-effect correlation is none and post-effect identity is unavailable",
+			transportAttemptId: "11111111-1111-4111-8111-111111111111",
+		},
+		{
+			name: "configured OpenAI Codex",
+			model: nativeStageModel({
+				id: "gpt-5.6-luna",
+				provider: "openai-codex",
+				api: "openai-codex-responses",
+				thinking: { mode: "effort", efforts: ["high"], effortRouting: { high: "gpt-5.6-luna" } },
+			}),
+			expectedReason: "openai-codex/openai-codex-responses does not support authoritative outcome lookup; pre-effect correlation is session-scoped and lacks durable retrieval",
+			transportAttemptId: "22222222-2222-4222-8222-222222222222",
+		},
+		{
+			name: "configured Anthropic/Fable",
+			model: nativeStageModel({
+				id: "claude-fable-5-1",
+				provider: "anthropic",
+				api: "anthropic-messages",
+				thinking: { mode: "anthropic-adaptive", efforts: ["high"], effortRouting: { high: "claude-fable-5-1" } },
+			}),
+			expectedReason: "anthropic/anthropic-messages does not support authoritative outcome lookup; pre-effect correlation is transport-internal and Messages API exposes no retrieval",
+			transportAttemptId: "33333333-3333-4333-8333-333333333333",
+		},
+		{
+			name: "unknown Kimi pair",
+			model: nativeStageModel({
+				id: "k3-256k",
+				provider: "kimi-code",
+				api: "openai-completions",
+			}),
+			expectedReason: "unsupported native provider/api pair kimi-code/openai-completions: no authoritative observation path configured",
+			transportAttemptId: "44444444-4444-4444-8444-444444444444",
+		},
+	])("replayed dispatched preflight rejects with reason and zero provider calls ($name)", async ({ model, expectedReason, transportAttemptId }) => {
 		const implementer: AgentDefinition = {
 			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
 			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
 		};
 		mockDiscovery(implementer);
-		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
 		const probeSpy = vi.spyOn(ai, "completeSimple");
+		const mockSecretKey = "mock-secret-api-key-do-not-leak-" + model.provider;
 
 		const fakeCtx = {
 			cwd: path.resolve(import.meta.dir, "../.."),
-			models: { resolve: () => gemini },
-			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+			models: { resolve: () => model },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue(mockSecretKey) },
+			taskDepth: 0,
 		} as unknown as ExtensionContext;
 
-		await expect(prepareNativeStageRunner(fakeCtx, {
-			role: "implement",
-			preflight: {
-				begin: async ({ route, ordinal, probeSha256 }) => {
-					return {
-						type: "begin_stage_preflight",
-						status: "replayed",
-						intent: {
-							intent_id: "00000000-0000-4000-8000-000000000001",
-							workspace_id: "ws-1",
-							work_id: "work-1",
-							revision_id: "rev-1",
-							candidate_id: null,
-							attempt_id: null,
-							grant_id: null,
-							role: "implement",
-							tool_call_id: "call-1",
-							task_sha256: "0".repeat(64),
-							probe_sha256: probeSha256,
-							transport_attempt_id: "88888888-8888-4888-8888-888888888888",
-							ordinal,
-							requested_selector: route.requestedSelector,
-							requested_provider: route.model.provider,
-							requested_model: route.model.id,
-							requested_api: route.model.api,
-							requested_effort: route.effort ?? null,
-							requested_wire_model: route.model.id,
-							is_fallback: route.isFallback,
-							logical_sha256: "0".repeat(64),
-							group_sha256: "0".repeat(64),
-							host_owner_id: "owner-1",
-							dispatched_at: new Date().toISOString(),
-							dispatch_operation_id: "op-1",
-							dispatch_owner_id: "owner-1",
-							cancelled_at: null,
-							cancelled_by: null,
-							cancel_reason: null,
-							status: "dispatched",
-							created_at: new Date().toISOString(),
-							settled_at: null,
-						},
-						preflight: undefined,
-					};
-				},
-				admit: async () => { throw new Error("should not be called"); },
-				cancel: async () => { throw new Error("should not be called"); },
-				record: async () => {},
-			},
-		})).rejects.toThrow(/provider effect uncertain, trusted provider reconciliation required/);
+		const route = {
+			requestedSelector: `${model.provider}/${model.id}:high`,
+			model,
+			effort: "high" as Effort,
+			isFallback: false,
+		};
 
+		let thrownError: Error | undefined;
+		try {
+			await prepareNativeStageRunner(fakeCtx, {
+				role: "implement",
+				routes: [route],
+				preflight: {
+					begin: async ({ ordinal, probeSha256 }) => {
+						return {
+							type: "begin_stage_preflight",
+							status: "replayed",
+							intent: {
+								intent_id: "00000000-0000-4000-8000-000000000001",
+								workspace_id: "ws-1",
+								work_id: "work-1",
+								revision_id: "rev-1",
+								candidate_id: null,
+								attempt_id: null,
+								grant_id: null,
+								role: "implement",
+								tool_call_id: "call-1",
+								task_sha256: "0".repeat(64),
+								probe_sha256: probeSha256,
+								transport_attempt_id: transportAttemptId,
+								ordinal,
+								requested_selector: route.requestedSelector,
+								requested_provider: route.model.provider,
+								requested_model: route.model.id,
+								requested_api: route.model.api,
+								requested_effort: route.effort ?? null,
+								requested_wire_model: route.model.id,
+								is_fallback: route.isFallback,
+								logical_sha256: "0".repeat(64),
+								group_sha256: "0".repeat(64),
+								host_owner_id: "owner-1",
+								dispatched_at: new Date().toISOString(),
+								dispatch_operation_id: "op-1",
+								dispatch_owner_id: "owner-1",
+								cancelled_at: null,
+								cancelled_by: null,
+								cancel_reason: null,
+								status: "dispatched",
+								created_at: new Date().toISOString(),
+								settled_at: null,
+							},
+							preflight: undefined,
+						};
+					},
+					admit: async () => { throw new Error("admit should not be called"); },
+					cancel: async () => { throw new Error("cancel should not be called"); },
+					record: async () => { throw new Error("record should not be called"); },
+				},
+			});
+		} catch (err) {
+			thrownError = err as Error;
+		}
+
+		expect(thrownError).toBeDefined();
+		expect(thrownError?.message.startsWith("provider effect uncertain, trusted provider reconciliation required: ")).toBe(true);
+		expect(thrownError?.message).toContain(expectedReason);
+		expect(thrownError?.message).toContain(`(transport attempt ${transportAttemptId})`);
+		expect(thrownError?.message).not.toContain(mockSecretKey);
 		expect(probeSpy).not.toHaveBeenCalled();
+	});
+
+	test("pure capability classifier encodes expected attributes and diagnostic reasons", () => {
+		const antigravity = providerObservationCapability("google-antigravity", "google-gemini-cli");
+		expect(antigravity.lookup).toBe("unsupported");
+		expect(antigravity.preEffectCorrelation).toBe("none");
+		expect(antigravity.postEffectIdentity).toEqual([]);
+		expect(antigravity.reason).toContain("google-antigravity/google-gemini-cli does not support authoritative outcome lookup");
+
+		const codex = providerObservationCapability("openai-codex", "openai-codex-responses");
+		expect(codex.lookup).toBe("unsupported");
+		expect(codex.preEffectCorrelation).toBe("session_scoped");
+		expect(codex.postEffectIdentity).toEqual(["provider_response_id"]);
+		expect(codex.reason).toContain("openai-codex/openai-codex-responses does not support authoritative outcome lookup");
+
+		const anthropic = providerObservationCapability("anthropic", "anthropic-messages");
+		expect(anthropic.lookup).toBe("unsupported");
+		expect(anthropic.preEffectCorrelation).toBe("transport_internal");
+		expect(anthropic.postEffectIdentity).toEqual(["provider_response_id", "http_request_id"]);
+		expect(anthropic.reason).toContain("anthropic/anthropic-messages does not support authoritative outcome lookup");
+
+		const kimi = providerObservationCapability("kimi-code", "openai-completions");
+		expect(kimi.lookup).toBe("unsupported");
+		expect(kimi.preEffectCorrelation).toBe("none");
+		expect(kimi.postEffectIdentity).toEqual([]);
+		expect(kimi.reason).toContain("unsupported native provider/api pair kimi-code/openai-completions: no authoritative observation path configured");
 	});
 
 	test("cancel-throws and admit-throws fail closed and send zero probes", async () => {

@@ -22,6 +22,7 @@ import { resolveAuditPolicy } from "./audit-policy";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { nativeStageRouteCandidates, type NativeStageRole, type NativeStageRoute } from "./native-stage-profile";
+import { providerObservationCapability } from "./provider-observation";
 import nativePreflightProbePrompt from "./native-preflight-probe.md" with { type: "text" };
 
 export type NativeAuditUsage = Omit<Usage, "cost">;
@@ -207,8 +208,9 @@ export async function prepareNativeStageRunner(
 			let activeIntent: StagePreflightIntent | undefined;
 			if (beginResult.status === "replayed") {
 				if (beginResult.intent.status === "dispatched") {
+					const capability = providerObservationCapability(candidate.model);
 					throw new Error(
-						"provider effect uncertain, trusted provider reconciliation required",
+						`provider effect uncertain, trusted provider reconciliation required: ${capability.reason} (transport attempt ${beginResult.intent.transport_attempt_id})`,
 					);
 				}
 				if (beginResult.intent.status === "begun") {
