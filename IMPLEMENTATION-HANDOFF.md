@@ -1,3 +1,11 @@
+# Native provider-observation capability (2026-09-17)
+
+Accepted source-development commit 581064ef6a adds a pure typed capability classifier and fail-closed diagnostics for replayed dispatched preflights. Current configured Antigravity, OpenAI Codex, and Anthropic routes are explicitly unsupported for authoritative outcome lookup; unknown routes fail closed. Error output now names the missing route capability and original transport-attempt ID before any provider or stage-launch effect.
+
+Focused suites pass 129 tests / 807 assertions; root bun check passes. Frozen diff 034335477572be69d8d6023c0f32403c91ae902b0aa19cadb2fcef9ff94d694a received fresh Kimi K3 256K PASS after independent provider-source inspection. No connected provider adapter, reconciliation submission, approval, installation, deployment, native acceptance, or Q36 action occurred. [Full disposition](/home/thetu/.codex/workflows/economy/artifacts/omp233-shared-job-inventory-20260916/provider-correlation-adapter-20260917/REVIEW-DISPOSITION.md).
+
+Next work must create a real durable provider-correlation seam before claiming automated lookup. It also needs an authoritative provider lookup contract, operator-owned invocation, and provider-account mapping. Keep unsupported routes blocked.
+
 # Provider preflight reconciliation (2026-09-17)
 
 Accepted source-development commit `7f38a8b701` adds WorkService-owned reconciliation for uncertain dispatched native-stage preflight intents. Migration `0032`, Python service/store/API contracts, generated schemas, TypeScript work client, and real PostgreSQL tests bind original transport and logical request identity to provider observations. Indeterminate evidence preserves uncertainty; completed, failed, and confirmed-absent evidence settles through serialized authoritative transitions.
