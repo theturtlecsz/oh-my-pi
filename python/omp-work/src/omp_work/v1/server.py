@@ -210,6 +210,14 @@ def create_app(
     ) -> JSONResponse:
         return read_route(request, x_omp_workspace_id, "workflow", key)
 
+    @app.get("/v1/work-items/{key}/research")
+    def research(
+        request: Request,
+        key: str,
+        x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
+    ) -> JSONResponse:
+        return read_route(request, x_omp_workspace_id, "research", key)
+
     @app.get("/v1/work-items/{key}/revisions")
     def work_item_revisions(
         request: Request,

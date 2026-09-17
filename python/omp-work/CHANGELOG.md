@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add bounded R02-S1 record-only research contract core: durable campaigns, trials, untrusted observations, and deliverable bindings (migration 0036).
 - Stage budget resource classification and immutable quote binding (OMP-233): migration 0035 adds nullable resource and scope_id columns on budget_quotes preserving historical readability, fail-closed non-null resource and scope enforcement on reservation, deterministic byte-equivalent reservation replay identity, and structured constraint conflict detection.
 - Immutable provider budget-quote authority with `quote_budget` command, append-only `budget_quotes` table, and optional `quote_id` reservation binding on `reserve_budget` (OMP-233).
 

@@ -39,6 +39,7 @@ _READS = frozenset(
         "GET /v1/workspaces/{workspace_id}/rate-cards/{rate_card_id}",
         "GET /v1/workspaces/{workspace_id}/budget-scopes",
         "GET /v1/workspaces/{workspace_id}/budget-scopes/{scope_id}",
+        "GET /v1/work-items/{key}/research",
         "GET /v1/health/live",
         "GET /v1/health/ready",
     }
@@ -131,6 +132,12 @@ _COMMAND_TYPES = frozenset(
         "put_provider_account",
         "register_rate_card",
         "quote_budget",
+        "create_research_campaign",
+        "admit_research_campaign",
+        "cancel_research_campaign",
+        "propose_research_trial",
+        "record_research_observation",
+        "bind_research_deliverable",
     }
 )
 

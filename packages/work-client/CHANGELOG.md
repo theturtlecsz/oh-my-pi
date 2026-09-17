@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add research domain types, campaign/trial/observation/deliverable-binding models, command payloads, and `research(key)` query method on `WorkClient` (R02-S1).
 - Added `budget_resource` on `ProviderAccount`, `resource` and `scope_id` on `BudgetQuote` (legacy nullable compatible), and updated `WORK_CONTRACT_SHA256` digest (OMP-233).
 - Added `quote_budget` command and `BudgetQuoteResult` type, and optional `quote_id` on `ReserveBudgetPayload` (OMP-233).
 

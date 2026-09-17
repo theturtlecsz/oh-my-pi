@@ -76,6 +76,12 @@ class WorkService:
         "put_provider_account": "work.operate",
         "register_rate_card": "work.operate",
         "quote_budget": "work.execute",
+        "create_research_campaign": "work.execute",
+        "admit_research_campaign": "work.approve",
+        "cancel_research_campaign": "work.execute",
+        "propose_research_trial": "work.execute",
+        "record_research_observation": "work.execute",
+        "bind_research_deliverable": "work.execute",
     }
 
     def __init__(self, store: WorkStore) -> None:
