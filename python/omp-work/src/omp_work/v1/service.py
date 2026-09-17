@@ -51,6 +51,7 @@ class WorkService:
         "admit_stage_preflight": "work.execute",
         "cancel_stage_preflight": "work.execute",
         "record_stage_preflight": "work.execute",
+        "reconcile_stage_preflight": "work.operate",
         "associate_candidate_source": "work.execute",
         "attest_checkpoint_delivery": "work.close",
         "record_closeout_review": "work.close",

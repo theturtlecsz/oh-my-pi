@@ -8060,6 +8060,146 @@
           "title": "ReconcileStageLaunchPayload",
           "type": "object"
         },
+        "ReconcileStagePreflightCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ReconcileStagePreflightPayload"
+            },
+            "type": {
+              "const": "reconcile_stage_preflight",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ReconcileStagePreflightCommand",
+          "type": "object"
+        },
+        "ReconcileStagePreflightPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "disposition": {
+              "$ref": "#/$defs/StagePreflightDisposition"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "logical_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Logical Sha256",
+              "type": "string"
+            },
+            "observation_id": {
+              "format": "uuid",
+              "title": "Observation Id",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "provider_request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Request Id"
+            },
+            "requested_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Provider"
+            },
+            "requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requests"
+            },
+            "stop_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stop Reason"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "transport_attempt_id",
+            "logical_sha256",
+            "account_id",
+            "observation_id",
+            "observed_at",
+            "evidence_sha256",
+            "disposition"
+          ],
+          "title": "ReconcileStagePreflightPayload",
+          "type": "object"
+        },
         "ReconciliationCounts": {
           "additionalProperties": false,
           "properties": {
@@ -9598,6 +9738,16 @@
           "title": "StagePreflightCttlUsage",
           "type": "object"
         },
+        "StagePreflightDisposition": {
+          "enum": [
+            "indeterminate",
+            "completed",
+            "failed",
+            "confirmed_absent"
+          ],
+          "title": "StagePreflightDisposition",
+          "type": "string"
+        },
         "StagePreflightOrchestrationUsage": {
           "additionalProperties": false,
           "properties": {
@@ -10018,6 +10168,7 @@
               "put_provider_account": "#/$defs/PutProviderAccountCommand",
               "put_relation": "#/$defs/PutRelationCommand",
               "reconcile_stage_launch": "#/$defs/ReconcileStageLaunchCommand",
+              "reconcile_stage_preflight": "#/$defs/ReconcileStagePreflightCommand",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
               "record_stage_preflight": "#/$defs/RecordStagePreflightCommand",
@@ -10111,6 +10262,9 @@
             },
             {
               "$ref": "#/$defs/RecordStagePreflightCommand"
+            },
+            {
+              "$ref": "#/$defs/ReconcileStagePreflightCommand"
             },
             {
               "$ref": "#/$defs/CreateBudgetScopeCommand"
@@ -16854,6 +17008,737 @@
       "title": "ReconcileStageLaunchPayload",
       "type": "object"
     },
+    "ReconcileStagePreflightCommand": {
+      "$defs": {
+        "ReconcileStagePreflightPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "disposition": {
+              "$ref": "#/$defs/StagePreflightDisposition"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "logical_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Logical Sha256",
+              "type": "string"
+            },
+            "observation_id": {
+              "format": "uuid",
+              "title": "Observation Id",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "provider_request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Request Id"
+            },
+            "requested_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Provider"
+            },
+            "requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requests"
+            },
+            "stop_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stop Reason"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "transport_attempt_id",
+            "logical_sha256",
+            "account_id",
+            "observation_id",
+            "observed_at",
+            "evidence_sha256",
+            "disposition"
+          ],
+          "title": "ReconcileStagePreflightPayload",
+          "type": "object"
+        },
+        "StagePreflightCttlUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "ephemeral1h": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ephemeral1H"
+            },
+            "ephemeral5m": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ephemeral5M"
+            }
+          },
+          "title": "StagePreflightCttlUsage",
+          "type": "object"
+        },
+        "StagePreflightDisposition": {
+          "enum": [
+            "indeterminate",
+            "completed",
+            "failed",
+            "confirmed_absent"
+          ],
+          "title": "StagePreflightDisposition",
+          "type": "string"
+        },
+        "StagePreflightOrchestrationUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cacheRead": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cacheread"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input"
+            },
+            "output": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output"
+            }
+          },
+          "title": "StagePreflightOrchestrationUsage",
+          "type": "object"
+        },
+        "StagePreflightServerUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "webFetch": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Webfetch"
+            },
+            "webSearch": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Websearch"
+            }
+          },
+          "title": "StagePreflightServerUsage",
+          "type": "object"
+        },
+        "StagePreflightUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cacheRead": {
+              "minimum": 0,
+              "title": "Cacheread",
+              "type": "integer"
+            },
+            "cacheWrite": {
+              "minimum": 0,
+              "title": "Cachewrite",
+              "type": "integer"
+            },
+            "contextTokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Contexttokens"
+            },
+            "cttl": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightCttlUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "input": {
+              "minimum": 0,
+              "title": "Input",
+              "type": "integer"
+            },
+            "orchestration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightOrchestrationUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "output": {
+              "minimum": 0,
+              "title": "Output",
+              "type": "integer"
+            },
+            "premiumRequests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Premiumrequests"
+            },
+            "reasoningTokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoningtokens"
+            },
+            "server": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightServerUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "totalTokens": {
+              "minimum": 0,
+              "title": "Totaltokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "input",
+            "output",
+            "cacheRead",
+            "cacheWrite",
+            "totalTokens"
+          ],
+          "title": "StagePreflightUsage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ReconcileStagePreflightPayload"
+        },
+        "type": {
+          "const": "reconcile_stage_preflight",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ReconcileStagePreflightCommand",
+      "type": "object"
+    },
+    "ReconcileStagePreflightPayload": {
+      "$defs": {
+        "StagePreflightCttlUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "ephemeral1h": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ephemeral1H"
+            },
+            "ephemeral5m": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ephemeral5M"
+            }
+          },
+          "title": "StagePreflightCttlUsage",
+          "type": "object"
+        },
+        "StagePreflightDisposition": {
+          "enum": [
+            "indeterminate",
+            "completed",
+            "failed",
+            "confirmed_absent"
+          ],
+          "title": "StagePreflightDisposition",
+          "type": "string"
+        },
+        "StagePreflightOrchestrationUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cacheRead": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cacheread"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input"
+            },
+            "output": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output"
+            }
+          },
+          "title": "StagePreflightOrchestrationUsage",
+          "type": "object"
+        },
+        "StagePreflightServerUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "webFetch": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Webfetch"
+            },
+            "webSearch": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Websearch"
+            }
+          },
+          "title": "StagePreflightServerUsage",
+          "type": "object"
+        },
+        "StagePreflightUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cacheRead": {
+              "minimum": 0,
+              "title": "Cacheread",
+              "type": "integer"
+            },
+            "cacheWrite": {
+              "minimum": 0,
+              "title": "Cachewrite",
+              "type": "integer"
+            },
+            "contextTokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Contexttokens"
+            },
+            "cttl": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightCttlUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "input": {
+              "minimum": 0,
+              "title": "Input",
+              "type": "integer"
+            },
+            "orchestration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightOrchestrationUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "output": {
+              "minimum": 0,
+              "title": "Output",
+              "type": "integer"
+            },
+            "premiumRequests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Premiumrequests"
+            },
+            "reasoningTokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoningtokens"
+            },
+            "server": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightServerUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "totalTokens": {
+              "minimum": 0,
+              "title": "Totaltokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "input",
+            "output",
+            "cacheRead",
+            "cacheWrite",
+            "totalTokens"
+          ],
+          "title": "StagePreflightUsage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "format": "uuid",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "disposition": {
+          "$ref": "#/$defs/StagePreflightDisposition"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "logical_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Logical Sha256",
+          "type": "string"
+        },
+        "observation_id": {
+          "format": "uuid",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provider_request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Request Id"
+        },
+        "requested_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Provider"
+        },
+        "requests": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requests"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stop Reason"
+        },
+        "transport_attempt_id": {
+          "format": "uuid",
+          "title": "Transport Attempt Id",
+          "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StagePreflightUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "transport_attempt_id",
+        "logical_sha256",
+        "account_id",
+        "observation_id",
+        "observed_at",
+        "evidence_sha256",
+        "disposition"
+      ],
+      "title": "ReconcileStagePreflightPayload",
+      "type": "object"
+    },
     "ReconciliationCounts": {
       "additionalProperties": false,
       "properties": {
@@ -22002,6 +22887,362 @@
         }
       },
       "title": "StagePreflightOrchestrationUsage",
+      "type": "object"
+    },
+    "StagePreflightReconciliation": {
+      "$defs": {
+        "StagePreflightCttlUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "ephemeral1h": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ephemeral1H"
+            },
+            "ephemeral5m": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ephemeral5M"
+            }
+          },
+          "title": "StagePreflightCttlUsage",
+          "type": "object"
+        },
+        "StagePreflightDisposition": {
+          "enum": [
+            "indeterminate",
+            "completed",
+            "failed",
+            "confirmed_absent"
+          ],
+          "title": "StagePreflightDisposition",
+          "type": "string"
+        },
+        "StagePreflightOrchestrationUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cacheRead": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cacheread"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input"
+            },
+            "output": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output"
+            }
+          },
+          "title": "StagePreflightOrchestrationUsage",
+          "type": "object"
+        },
+        "StagePreflightServerUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "webFetch": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Webfetch"
+            },
+            "webSearch": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Websearch"
+            }
+          },
+          "title": "StagePreflightServerUsage",
+          "type": "object"
+        },
+        "StagePreflightUsage": {
+          "additionalProperties": false,
+          "properties": {
+            "cacheRead": {
+              "minimum": 0,
+              "title": "Cacheread",
+              "type": "integer"
+            },
+            "cacheWrite": {
+              "minimum": 0,
+              "title": "Cachewrite",
+              "type": "integer"
+            },
+            "contextTokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Contexttokens"
+            },
+            "cttl": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightCttlUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "input": {
+              "minimum": 0,
+              "title": "Input",
+              "type": "integer"
+            },
+            "orchestration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightOrchestrationUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "output": {
+              "minimum": 0,
+              "title": "Output",
+              "type": "integer"
+            },
+            "premiumRequests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Premiumrequests"
+            },
+            "reasoningTokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoningtokens"
+            },
+            "server": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StagePreflightServerUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "totalTokens": {
+              "minimum": 0,
+              "title": "Totaltokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "input",
+            "output",
+            "cacheRead",
+            "cacheWrite",
+            "totalTokens"
+          ],
+          "title": "StagePreflightUsage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "format": "uuid",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "disposition": {
+          "$ref": "#/$defs/StagePreflightDisposition"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "observation_id": {
+          "format": "uuid",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provider_request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Request Id"
+        },
+        "reconciled_at": {
+          "format": "date-time",
+          "title": "Reconciled At",
+          "type": "string"
+        },
+        "reconciliation_id": {
+          "format": "uuid",
+          "title": "Reconciliation Id",
+          "type": "string"
+        },
+        "requests": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requests"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stop Reason"
+        },
+        "transport_attempt_id": {
+          "format": "uuid",
+          "title": "Transport Attempt Id",
+          "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StagePreflightUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reconciliation_id",
+        "workspace_id",
+        "transport_attempt_id",
+        "account_id",
+        "observation_id",
+        "disposition",
+        "observed_at",
+        "evidence_sha256",
+        "reconciled_at"
+      ],
+      "title": "StagePreflightReconciliation",
       "type": "object"
     },
     "StagePreflightServerUsage": {

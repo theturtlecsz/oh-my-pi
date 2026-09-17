@@ -249,6 +249,13 @@ class StagePreflightOutcome(StrEnum):
     CANCELLED = "cancelled"
 
 
+class StagePreflightDisposition(StrEnum):
+    INDETERMINATE = "indeterminate"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CONFIRMED_ABSENT = "confirmed_absent"
+
+
 class BudgetScopeKind(StrEnum):
     ACCOUNT = "account"
     SESSION = "session"
@@ -508,6 +515,23 @@ class StagePreflightIntent(StrictModel):
     cancelled_at: datetime | None = None
     cancelled_by: UUID | None = None
     cancel_reason: str | None = None
+
+
+class StagePreflightReconciliation(StrictModel):
+    reconciliation_id: UUID
+    workspace_id: UUID
+    transport_attempt_id: UUID
+    account_id: UUID
+    observation_id: UUID
+    disposition: StagePreflightDisposition
+    observed_at: datetime
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provider_request_id: str | None = None
+    requests: int | None = Field(default=None, ge=0, strict=True)
+    usage: StagePreflightUsage | None = None
+    stop_reason: str | None = None
+    error: str | None = None
+    reconciled_at: datetime
 
 
 class CandidateSourceVersion(StrictModel):
@@ -1134,6 +1158,45 @@ class RecordStagePreflightPayload(StrictModel):
         return self
 
 
+class ReconcileStagePreflightPayload(StrictModel):
+    transport_attempt_id: UUID
+    logical_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    account_id: UUID
+    observation_id: UUID
+    observed_at: AwareDatetime
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    disposition: StagePreflightDisposition
+    requested_provider: str | None = None
+    provider_request_id: str | None = None
+    requests: int | None = Field(default=None, ge=0, strict=True)
+    usage: StagePreflightUsage | None = None
+    stop_reason: str | None = None
+    error: str | None = None
+
+    @model_validator(mode="after")
+    def validate_disposition_invariants(self) -> ReconcileStagePreflightPayload:
+        if self.disposition == StagePreflightDisposition.COMPLETED:
+            if not self.provider_request_id or not self.provider_request_id.strip():
+                raise ValueError("completed preflight reconciliation requires provider_request_id")
+            if self.error is not None:
+                raise ValueError("completed preflight reconciliation cannot have error")
+        elif self.disposition == StagePreflightDisposition.FAILED:
+            if not self.provider_request_id or not self.provider_request_id.strip():
+                raise ValueError("failed preflight reconciliation requires provider_request_id")
+            if self.error is None or not self.error.strip():
+                raise ValueError("failed preflight reconciliation requires error")
+        elif self.disposition == StagePreflightDisposition.CONFIRMED_ABSENT:
+            if self.provider_request_id is not None:
+                raise ValueError("confirmed_absent preflight reconciliation cannot have provider_request_id")
+            if self.usage is not None:
+                raise ValueError("confirmed_absent preflight reconciliation cannot have usage")
+            if self.requests is not None and self.requests != 0:
+                raise ValueError("confirmed_absent preflight reconciliation requires known request count zero")
+            if self.error is None or not self.error.strip():
+                raise ValueError("confirmed_absent preflight reconciliation requires error explaining absence")
+        return self
+
+
 class CreateBudgetScopePayload(StrictModel):
     scope_id: UUID
     parent_scope_id: UUID | None = None
@@ -1591,6 +1654,11 @@ class CancelStagePreflightCommand(StrictModel):
     payload: CancelStagePreflightPayload
 
 
+class ReconcileStagePreflightCommand(StrictModel):
+    type: Literal["reconcile_stage_preflight"]
+    payload: ReconcileStagePreflightPayload
+
+
 class CreateBudgetScopeCommand(StrictModel):
     type: Literal["create_budget_scope"]
     payload: CreateBudgetScopePayload
@@ -1691,6 +1759,7 @@ Command = Annotated[
     | AdmitStagePreflightCommand
     | CancelStagePreflightCommand
     | RecordStagePreflightCommand
+    | ReconcileStagePreflightCommand
     | CreateBudgetScopeCommand
     | ReserveBudgetCommand
     | ClaimBudgetCommand

@@ -644,6 +644,46 @@ export type StagePreflightResult = {
 	status: "applied" | "replayed" | "refused";
 	preflight?: StagePreflight | null;
 };
+export type StagePreflightDisposition = "indeterminate" | "completed" | "failed" | "confirmed_absent";
+export type StagePreflightReconciliation = {
+	reconciliation_id: UUID;
+	workspace_id: UUID;
+	transport_attempt_id: UUID;
+	account_id: UUID;
+	observation_id: UUID;
+	disposition: StagePreflightDisposition;
+	observed_at: string;
+	evidence_sha256: string;
+	provider_request_id?: string | null;
+	requests?: number | null;
+	usage?: StagePreflightUsage | null;
+	stop_reason?: string | null;
+	error?: string | null;
+	reconciled_at: string;
+};
+export type ReconcileStagePreflightPayload = {
+	transport_attempt_id: UUID;
+	logical_sha256: string;
+	account_id: UUID;
+	observation_id: UUID;
+	observed_at: string;
+	evidence_sha256: string;
+	disposition: StagePreflightDisposition;
+	requested_provider?: string | null;
+	provider_request_id?: string | null;
+	requests?: number | null;
+	usage?: StagePreflightUsage | null;
+	stop_reason?: string | null;
+	error?: string | null;
+};
+export type ReconcileStagePreflightResult = {
+	type: "reconcile_stage_preflight";
+	status: "applied" | "replayed" | "refused";
+	reconciliation?: StagePreflightReconciliation | null;
+	intent?: StagePreflightIntent | null;
+	preflight?: StagePreflight | null;
+	reason?: string | null;
+};
 export type CandidateSourceVersion = {
 	candidate_id: UUID;
 	workspace_id: UUID;
@@ -1005,6 +1045,7 @@ export type Command =
 	| { type: "admit_stage_preflight"; payload: AdmitStagePreflightPayload }
 	| { type: "cancel_stage_preflight"; payload: CancelStagePreflightPayload }
 	| { type: "record_stage_preflight"; payload: RecordStagePreflightPayload }
+	| { type: "reconcile_stage_preflight"; payload: ReconcileStagePreflightPayload }
 	| { type: "create_budget_scope"; payload: CreateBudgetScopePayload }
 	| { type: "reserve_budget"; payload: ReserveBudgetPayload }
 	| { type: "claim_budget"; payload: ClaimBudgetPayload }
@@ -1127,6 +1168,7 @@ export type CommandResult =
 	| AdmitStagePreflightResult
 	| CancelStagePreflightResult
 	| StagePreflightResult
+	| ReconcileStagePreflightResult
 	| {
 			type: "associate_candidate_source";
 			status: "applied" | "replayed" | "refused";

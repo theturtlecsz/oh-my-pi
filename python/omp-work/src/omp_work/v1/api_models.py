@@ -14,6 +14,7 @@ from .models import (
     StageLaunch,
     StagePreflight,
     StagePreflightIntent,
+    StagePreflightReconciliation,
     Candidate,
     CheckpointDelivery,
     CloseAttempt,
@@ -105,6 +106,15 @@ class StagePreflightResult(StrictModel):
     type: Literal["record_stage_preflight"]
     status: Literal["applied", "replayed", "refused"]
     preflight: StagePreflight | None = None
+
+
+class ReconcileStagePreflightResult(StrictModel):
+    type: Literal["reconcile_stage_preflight"]
+    status: Literal["applied", "replayed", "refused"]
+    intent: StagePreflightIntent | None = None
+    preflight: StagePreflight | None = None
+    reconciliation: StagePreflightReconciliation | None = None
+    reason: str | None = None
 
 
 class CandidateSourceAssociationResult(StrictModel):
@@ -407,6 +417,7 @@ CommandResult = Annotated[
     | AdmitStagePreflightResult
     | CancelStagePreflightResult
     | StagePreflightResult
+    | ReconcileStagePreflightResult
     | CandidateSourceAssociationResult
     | RecordCloseoutReviewResult
     | ProjectHealthResult

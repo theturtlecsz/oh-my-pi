@@ -104,6 +104,7 @@ _COMMAND_TYPES = frozenset(
         "admit_stage_preflight",
         "cancel_stage_preflight",
         "record_stage_preflight",
+        "reconcile_stage_preflight",
         "attest_checkpoint_delivery",
         "record_closeout_review",
         "complete_work",

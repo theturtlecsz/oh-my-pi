@@ -1368,3 +1368,284 @@ test("executes cancel_stage_preflight and decodes typed applied result", async (
 		expect(res.result.intent.cancel_reason).toBe("runner recovery reissue");
 	}
 });
+
+test("executes reconcile_stage_preflight with completed disposition and decodes typed applied result", async () => {
+	const reconciliationId = "00000000-0000-0000-0000-000000000051";
+	const transportAttemptId = "00000000-0000-0000-0000-000000000052";
+	const accountId = "00000000-0000-0000-0000-000000000053";
+	const observationId = "00000000-0000-0000-0000-000000000054";
+	const preflightId = "00000000-0000-0000-0000-000000000055";
+	const logicalSha256 = "66".repeat(32);
+	const evidenceSha256 = "77".repeat(32);
+
+	let commandRequest: Request | undefined;
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			commandRequest = new Request(String(input), init);
+			return Response.json({
+				api_version: "work.omp.dev/v1",
+				workspace_id: ENV.workspace_id,
+				operation_id: ENV.operation_id,
+				request_id: ENV.request_id,
+				result: {
+					type: "reconcile_stage_preflight",
+					status: "applied",
+					reconciliation: {
+						reconciliation_id: reconciliationId,
+						workspace_id: ENV.workspace_id,
+						transport_attempt_id: transportAttemptId,
+						account_id: accountId,
+						observation_id: observationId,
+						disposition: "completed",
+						observed_at: "2026-09-17T12:05:00+00:00",
+						evidence_sha256: evidenceSha256,
+						provider_request_id: "req-12345",
+						requests: 1,
+						usage: {
+							input: 120,
+							output: 40,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 160,
+							orchestration: { input: 120, cacheRead: 0, output: 40 },
+							cttl: null,
+							server: null,
+						},
+						stop_reason: "stop",
+						error: null,
+						reconciled_at: "2026-09-17T12:05:01+00:00",
+					},
+					intent: {
+						intent_id: "00000000-0000-0000-0000-000000000056",
+						workspace_id: ENV.workspace_id,
+						work_id: "00000000-0000-0000-0000-000000000021",
+						revision_id: null,
+						candidate_id: null,
+						attempt_id: null,
+						grant_id: null,
+						role: "implement",
+						tool_call_id: "call-1",
+						task_sha256: "11".repeat(32),
+						probe_sha256: "22".repeat(32),
+						transport_attempt_id: transportAttemptId,
+						ordinal: 0,
+						requested_selector: "gemini:gemini-3.8-flash",
+						requested_provider: "gemini",
+						requested_model: "gemini-3.8-flash",
+						requested_api: "google-genai",
+						requested_effort: "medium",
+						requested_wire_model: "gemini-3.8-flash-preview",
+						is_fallback: false,
+						logical_sha256: logicalSha256,
+						group_sha256: "44".repeat(32),
+						host_owner_id: "00000000-0000-0000-0000-000000000099",
+						dispatched_at: "2026-09-17T12:00:00+00:00",
+						dispatch_operation_id: "00000000-0000-0000-0000-000000000098",
+						dispatch_owner_id: "00000000-0000-0000-0000-000000000097",
+						cancelled_at: null,
+						cancelled_by: null,
+						cancel_reason: null,
+						status: "settled",
+						created_at: "2026-09-17T12:00:00+00:00",
+						settled_at: "2026-09-17T12:05:01+00:00",
+					},
+					preflight: {
+						preflight_id: preflightId,
+						workspace_id: ENV.workspace_id,
+						work_id: "00000000-0000-0000-0000-000000000021",
+						revision_id: null,
+						candidate_id: null,
+						attempt_id: null,
+						grant_id: null,
+						role: "implement",
+						tool_call_id: "call-1",
+						task_sha256: "11".repeat(32),
+						probe_sha256: "22".repeat(32),
+						transport_attempt_id: transportAttemptId,
+						ordinal: 0,
+						requested_selector: "gemini:gemini-3.8-flash",
+						requested_provider: "gemini",
+						requested_model: "gemini-3.8-flash",
+						requested_api: "google-genai",
+						requested_effort: "medium",
+						requested_wire_model: "gemini-3.8-flash-preview",
+						is_fallback: false,
+						outcome: "selected",
+						stop_reason: "stop",
+						error: null,
+						requests: 1,
+						usage: {
+							input: 120,
+							output: 40,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 160,
+							orchestration: { input: 120, cacheRead: 0, output: 40 },
+							cttl: null,
+							server: null,
+						},
+						provider_request_id: "req-12345",
+						observed_at: "2026-09-17T12:05:00+00:00",
+					},
+					reason: null,
+				},
+				result_sha256: "88".repeat(32),
+				diagnostics: [],
+			});
+		},
+	);
+
+	const res = await client.execute({
+		...ENV,
+		command: {
+			type: "reconcile_stage_preflight",
+			payload: {
+				transport_attempt_id: transportAttemptId,
+				logical_sha256: logicalSha256,
+				account_id: accountId,
+				observation_id: observationId,
+				observed_at: "2026-09-17T12:05:00+00:00",
+				evidence_sha256: evidenceSha256,
+				disposition: "completed",
+				requested_provider: "gemini",
+				provider_request_id: "req-12345",
+				requests: 1,
+				usage: {
+					input: 120,
+					output: 40,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 160,
+					orchestration: { input: 120, cacheRead: 0, output: 40 },
+					cttl: null,
+					server: null,
+				},
+				stop_reason: "stop",
+			},
+		},
+	});
+
+	expect(commandRequest?.url).toBe("http://127.0.0.1:54322/v1/commands");
+	expect(res.result.type).toBe("reconcile_stage_preflight");
+	if (res.result.type === "reconcile_stage_preflight") {
+		expect(res.result.status).toBe("applied");
+		expect(res.result.reconciliation?.reconciliation_id).toBe(reconciliationId);
+		expect(res.result.reconciliation?.disposition).toBe("completed");
+		expect(res.result.reconciliation?.provider_request_id).toBe("req-12345");
+		expect(res.result.intent?.status).toBe("settled");
+		expect(res.result.preflight?.outcome).toBe("selected");
+		expect(res.result.preflight?.preflight_id).toBe(preflightId);
+	}
+});
+
+test("executes reconcile_stage_preflight and decodes typed replayed and refused results", async () => {
+	const reconciliationId = "00000000-0000-0000-0000-000000000061";
+	const transportAttemptId = "00000000-0000-0000-0000-000000000062";
+	const accountId = "00000000-0000-0000-0000-000000000063";
+	const observationId = "00000000-0000-0000-0000-000000000064";
+	const logicalSha256 = "66".repeat(32);
+	const evidenceSha256 = "77".repeat(32);
+
+	let returnStatus: "replayed" | "refused" = "replayed";
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async () => {
+			if (returnStatus === "replayed") {
+				return Response.json({
+					api_version: "work.omp.dev/v1",
+					workspace_id: ENV.workspace_id,
+					operation_id: ENV.operation_id,
+					request_id: ENV.request_id,
+					result: {
+						type: "reconcile_stage_preflight",
+						status: "replayed",
+						reconciliation: {
+							reconciliation_id: reconciliationId,
+							workspace_id: ENV.workspace_id,
+							transport_attempt_id: transportAttemptId,
+							account_id: accountId,
+							observation_id: observationId,
+							disposition: "indeterminate",
+							observed_at: "2026-09-17T12:05:00+00:00",
+							evidence_sha256: evidenceSha256,
+							reconciled_at: "2026-09-17T12:05:01+00:00",
+						},
+						intent: null,
+						preflight: null,
+						reason: "exact_reconciliation_replayed",
+					},
+					result_sha256: "88".repeat(32),
+					diagnostics: [],
+				});
+			}
+			return Response.json({
+				api_version: "work.omp.dev/v1",
+				workspace_id: ENV.workspace_id,
+				operation_id: ENV.operation_id,
+				request_id: ENV.request_id,
+				result: {
+					type: "reconcile_stage_preflight",
+					status: "refused",
+					reconciliation: null,
+					intent: null,
+					preflight: null,
+					reason: "intent_already_settled",
+				},
+				result_sha256: "88".repeat(32),
+				diagnostics: [],
+			});
+		},
+	);
+
+	const replayedRes = await client.execute({
+		...ENV,
+		command: {
+			type: "reconcile_stage_preflight",
+			payload: {
+				transport_attempt_id: transportAttemptId,
+				logical_sha256: logicalSha256,
+				account_id: accountId,
+				observation_id: observationId,
+				observed_at: "2026-09-17T12:05:00+00:00",
+				evidence_sha256: evidenceSha256,
+				disposition: "indeterminate",
+			},
+		},
+	});
+
+	expect(replayedRes.result.type).toBe("reconcile_stage_preflight");
+	if (replayedRes.result.type === "reconcile_stage_preflight") {
+		expect(replayedRes.result.status).toBe("replayed");
+		expect(replayedRes.result.reconciliation?.disposition).toBe("indeterminate");
+		expect(replayedRes.result.reason).toBe("exact_reconciliation_replayed");
+	}
+
+	returnStatus = "refused";
+	const refusedRes = await client.execute({
+		...ENV,
+		command: {
+			type: "reconcile_stage_preflight",
+			payload: {
+				transport_attempt_id: transportAttemptId,
+				logical_sha256: logicalSha256,
+				account_id: accountId,
+				observation_id: observationId,
+				observed_at: "2026-09-17T12:05:00+00:00",
+				evidence_sha256: evidenceSha256,
+				disposition: "indeterminate",
+			},
+		},
+	});
+
+	expect(refusedRes.result.type).toBe("reconcile_stage_preflight");
+	if (refusedRes.result.type === "reconcile_stage_preflight") {
+		expect(refusedRes.result.status).toBe("refused");
+		expect(refusedRes.result.reconciliation).toBeNull();
+		expect(refusedRes.result.reason).toBe("intent_already_settled");
+	}
+});

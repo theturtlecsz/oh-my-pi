@@ -45,8 +45,11 @@ from .models import (
     StagePreflight,
     StagePreflightIntent,
     StagePreflightOutcome,
+    StagePreflightDisposition,
+    StagePreflightReconciliation,
     BeginStagePreflightPayload,
     RecordStagePreflightPayload,
+    ReconcileStagePreflightPayload,
     Candidate,
     CloseAttempt,
     CommandEnvelope,
@@ -86,6 +89,7 @@ _DELIVERY_FIELDS = "delivery_id,event_id,delivery_sequence,owner_session_id,rend
 _STAGE_LAUNCH_FIELDS = "launch_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,request_sha256,tool_call_id,task_sha256,prepared_context_sha256,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,resolved_selector,resolved_provider,resolved_model,served_selector,served_model,is_fallback,fallback_reason,status,outcome_sha256,outcome,reserved_at,handed_off_at,settled_at"
 _STAGE_PREFLIGHT_INTENT_FIELDS = "intent_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,is_fallback,logical_sha256,group_sha256,host_owner_id,status,created_at,settled_at,dispatched_at,dispatch_operation_id,dispatch_owner_id,cancelled_at,cancelled_by,cancel_reason"
 _STAGE_PREFLIGHT_FIELDS = "preflight_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,session_id,role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,is_fallback,outcome,stop_reason,error,requests,usage,provider_request_id,observed_at"
+_STAGE_PREFLIGHT_RECONCILIATION_FIELDS = "reconciliation_id,workspace_id,transport_attempt_id,account_id,observation_id,disposition,observed_at,evidence_sha256,provider_request_id,requests,usage,stop_reason,error,reconciled_at"
 _SOURCE_VERSION_FIELDS = "candidate_id,workspace_id,work_id,revision_id,repository_id,source_version_id,snapshot_id,base_commit,analyzed_commit,tree_sha,source_manifest_sha256,snapshot_manifest_sha256,content_sha256,association_sha256,producer,producer_receipt_sha256,created_at"
 _PROVIDER_ACCOUNT_FIELDS = "account_id,workspace_id,provider,account_identity,entitlement_evidence,evidence_observed_at,billing_mode,rate_card_version,observed_balance,balance_provenance,reset_at,concurrency_limit"
 _LIVE_STATES = tuple(sorted(state.value for state in LIVE_CLOSE_ATTEMPT_STATES))
@@ -369,6 +373,7 @@ class PostgresWorkStore:
             "admit_stage_preflight",
             "cancel_stage_preflight",
             "record_stage_preflight",
+            "reconcile_stage_preflight",
             "complete_work",
             "create_budget_scope",
             "reserve_budget",
@@ -484,6 +489,8 @@ class PostgresWorkStore:
                     result = self._cancel_stage_preflight(cur, envelope)
                 elif command.type == "record_stage_preflight":
                     result = self._record_stage_preflight(cur, envelope)
+                elif command.type == "reconcile_stage_preflight":
+                    result = self._reconcile_stage_preflight(cur, envelope)
                 elif command.type == "create_budget_scope":
                     result = self._create_budget_scope(cur, envelope)
                 elif command.type == "reserve_budget":
@@ -3877,18 +3884,39 @@ class PostgresWorkStore:
                     "status": "replayed",
                     "preflight": _row_json(existing),
                 }
+            cur.execute(
+                "SELECT 1 FROM omp_work.stage_preflight_reconciliations WHERE workspace_id=%s AND transport_attempt_id=%s AND disposition IN ('completed', 'failed', 'confirmed_absent')",
+                (envelope.workspace_id, payload.transport_attempt_id),
+            )
+            if cur.fetchone() is not None:
+                return {
+                    "type": "record_stage_preflight",
+                    "status": "refused",
+                    "preflight": _row_json(existing),
+                }
             raise WorkStoreError(
                 "idempotency_conflict", ("conflicting_stage_preflight_payload",)
             )
 
         cur.execute(
-            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND transport_attempt_id=%s",
+            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND transport_attempt_id=%s FOR UPDATE",
             (envelope.workspace_id, payload.transport_attempt_id),
         )
         intent = cur.fetchone()
         if intent is None:
             raise WorkStoreError("invalid_request", ("preflight_intent_required",))
         if intent["status"] != "dispatched":
+            if intent["status"] == "settled":
+                cur.execute(
+                    f"SELECT {_STAGE_PREFLIGHT_FIELDS} FROM omp_work.stage_preflights WHERE workspace_id=%s AND transport_attempt_id=%s",
+                    (envelope.workspace_id, payload.transport_attempt_id),
+                )
+                pref = cur.fetchone()
+                return {
+                    "type": "record_stage_preflight",
+                    "status": "refused",
+                    "preflight": _row_json(pref),
+                }
             raise WorkStoreError("invalid_request", ("preflight_intent_not_dispatched",))
         if intent["dispatch_owner_id"] is None or envelope.correlation_id != intent["dispatch_owner_id"]:
             raise WorkStoreError("preflight_intent_active", ("preflight_intent_foreign_owner",))
@@ -3976,6 +4004,266 @@ class PostgresWorkStore:
             "type": "record_stage_preflight",
             "status": "applied",
             "preflight": _row_json(preflight),
+        }
+
+    def _reconcile_stage_preflight(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload: ReconcileStagePreflightPayload = envelope.command.payload
+
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND transport_attempt_id=%s",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
+        intent = cur.fetchone()
+        if intent is None:
+            raise WorkStoreError("invalid_request", ("preflight_intent_unknown",))
+
+        self._lock_work_chain(cur, envelope.workspace_id, intent["work_id"])
+
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND transport_attempt_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
+        intent = cur.fetchone()
+        if intent is None:
+            raise WorkStoreError("invalid_request", ("preflight_intent_unknown",))
+
+        if intent["logical_sha256"] != payload.logical_sha256:
+            raise WorkStoreError("stale_evidence", ("preflight_intent_identity_mismatch",))
+
+        if payload.requested_provider is not None and payload.requested_provider != intent["requested_provider"]:
+            raise WorkStoreError("stale_evidence", ("preflight_intent_identity_mismatch",))
+
+        cur.execute(
+            f"SELECT {_PROVIDER_ACCOUNT_FIELDS} FROM omp_work.provider_accounts WHERE workspace_id=%s AND account_id=%s",
+            (envelope.workspace_id, payload.account_id),
+        )
+        account = cur.fetchone()
+        if account is None:
+            raise WorkStoreError("invalid_request", ("provider_account_unknown",))
+        if account["provider"] != intent["requested_provider"]:
+            raise WorkStoreError("invalid_request", ("account_provider_mismatch",))
+
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_FIELDS} FROM omp_work.stage_preflights WHERE workspace_id=%s AND transport_attempt_id=%s",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
+        preflight_row = cur.fetchone()
+
+        if intent["status"] == "settled" or preflight_row is not None:
+            cur.execute(
+                f"SELECT {_STAGE_PREFLIGHT_RECONCILIATION_FIELDS} FROM omp_work.stage_preflight_reconciliations WHERE workspace_id=%s AND transport_attempt_id=%s AND observation_id=%s",
+                (envelope.workspace_id, payload.transport_attempt_id, payload.observation_id),
+            )
+            existing_rec = cur.fetchone()
+            if existing_rec is not None:
+                rec_usage = existing_rec["usage"]
+                if isinstance(rec_usage, str):
+                    rec_usage = json.loads(rec_usage)
+                payload_usage = (
+                    payload.usage.model_dump(mode="json", exclude_none=True)
+                    if payload.usage is not None
+                    else None
+                )
+                expected_reqs = 0 if payload.disposition == StagePreflightDisposition.CONFIRMED_ABSENT else payload.requests
+                expected_prov_req = None if payload.disposition == StagePreflightDisposition.CONFIRMED_ABSENT else payload.provider_request_id
+                matches_rec = (
+                    existing_rec["account_id"] == payload.account_id
+                    and existing_rec["disposition"] == payload.disposition.value
+                    and existing_rec["observed_at"] == payload.observed_at
+                    and existing_rec["evidence_sha256"] == payload.evidence_sha256
+                    and existing_rec["provider_request_id"] == expected_prov_req
+                    and existing_rec["requests"] == expected_reqs
+                    and rec_usage == payload_usage
+                    and existing_rec["stop_reason"] == payload.stop_reason
+                    and existing_rec["error"] == payload.error
+                )
+                if matches_rec:
+                    return {
+                        "type": "reconcile_stage_preflight",
+                        "status": "replayed",
+                        "intent": _row_json(intent),
+                        "preflight": _row_json(preflight_row) if preflight_row is not None else None,
+                        "reconciliation": _row_json(existing_rec),
+                        "reason": None,
+                    }
+            return {
+                "type": "reconcile_stage_preflight",
+                "status": "refused",
+                "intent": _row_json(intent),
+                "preflight": _row_json(preflight_row) if preflight_row is not None else None,
+                "reconciliation": None,
+                "reason": "preflight_intent_already_settled",
+            }
+
+        if intent["status"] == "cancelled_undispatched":
+            raise WorkStoreError("invalid_request", ("preflight_intent_cancelled",))
+
+        if intent["status"] != "dispatched":
+            raise WorkStoreError("invalid_request", ("preflight_intent_not_dispatched",))
+
+        cur.execute("SELECT clock_timestamp() AS db_now")
+        db_now = cur.fetchone()["db_now"]
+
+        if payload.observed_at > db_now:
+            raise WorkStoreError("invalid_request", ("observation_in_future",))
+
+        if intent["dispatched_at"] is None or payload.observed_at < intent["dispatched_at"]:
+            raise WorkStoreError("invalid_request", ("observation_precedes_dispatch",))
+
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_RECONCILIATION_FIELDS} FROM omp_work.stage_preflight_reconciliations WHERE workspace_id=%s AND observation_id=%s",
+            (envelope.workspace_id, payload.observation_id),
+        )
+        existing_rec = cur.fetchone()
+        if existing_rec is not None:
+            rec_usage = existing_rec["usage"]
+            if isinstance(rec_usage, str):
+                rec_usage = json.loads(rec_usage)
+            payload_usage = (
+                payload.usage.model_dump(mode="json", exclude_none=True)
+                if payload.usage is not None
+                else None
+            )
+            expected_reqs = 0 if payload.disposition == StagePreflightDisposition.CONFIRMED_ABSENT else payload.requests
+            expected_prov_req = None if payload.disposition == StagePreflightDisposition.CONFIRMED_ABSENT else payload.provider_request_id
+            matches_rec = (
+                existing_rec["transport_attempt_id"] == payload.transport_attempt_id
+                and existing_rec["account_id"] == payload.account_id
+                and existing_rec["disposition"] == payload.disposition.value
+                and existing_rec["observed_at"] == payload.observed_at
+                and existing_rec["evidence_sha256"] == payload.evidence_sha256
+                and existing_rec["provider_request_id"] == expected_prov_req
+                and existing_rec["requests"] == expected_reqs
+                and rec_usage == payload_usage
+                and existing_rec["stop_reason"] == payload.stop_reason
+                and existing_rec["error"] == payload.error
+            )
+            if matches_rec:
+                return {
+                    "type": "reconcile_stage_preflight",
+                    "status": "replayed",
+                    "intent": _row_json(intent),
+                    "preflight": None,
+                    "reconciliation": _row_json(existing_rec),
+                    "reason": None,
+                }
+            raise WorkStoreError("idempotency_conflict", ("conflicting_reconciliation_payload",))
+
+        reconciliation_id = uuid4()
+        usage_json = (
+            json.dumps(payload.usage.model_dump(mode="json", exclude_none=True))
+            if payload.usage is not None and payload.disposition != StagePreflightDisposition.CONFIRMED_ABSENT
+            else None
+        )
+        requests_val = 0 if payload.disposition == StagePreflightDisposition.CONFIRMED_ABSENT else payload.requests
+        provider_req_id = None if payload.disposition == StagePreflightDisposition.CONFIRMED_ABSENT else payload.provider_request_id
+
+        cur.execute(
+            f"INSERT INTO omp_work.stage_preflight_reconciliations("
+            f"reconciliation_id,workspace_id,transport_attempt_id,account_id,observation_id,"
+            f"disposition,observed_at,evidence_sha256,provider_request_id,requests,usage,"
+            f"stop_reason,error,reconciled_at"
+            f") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,clock_timestamp()) "
+            f"RETURNING {_STAGE_PREFLIGHT_RECONCILIATION_FIELDS}",
+            (
+                reconciliation_id,
+                envelope.workspace_id,
+                payload.transport_attempt_id,
+                payload.account_id,
+                payload.observation_id,
+                payload.disposition.value,
+                payload.observed_at,
+                payload.evidence_sha256,
+                provider_req_id,
+                requests_val,
+                usage_json,
+                payload.stop_reason,
+                payload.error,
+            ),
+        )
+        reconciliation = cur.fetchone()
+
+        if payload.disposition == StagePreflightDisposition.INDETERMINATE:
+            return {
+                "type": "reconcile_stage_preflight",
+                "status": "applied",
+                "intent": _row_json(intent),
+                "preflight": None,
+                "reconciliation": _row_json(reconciliation),
+                "reason": None,
+            }
+
+        outcome = (
+            StagePreflightOutcome.SELECTED
+            if payload.disposition == StagePreflightDisposition.COMPLETED
+            else StagePreflightOutcome.FAILED
+        )
+
+        if outcome == StagePreflightOutcome.SELECTED:
+            cur.execute(
+                "SELECT 1 FROM omp_work.stage_preflights sp JOIN omp_work.stage_preflight_intents spi ON sp.workspace_id=spi.workspace_id AND sp.transport_attempt_id=spi.transport_attempt_id WHERE spi.workspace_id=%s AND spi.group_sha256=%s AND sp.outcome='selected'",
+                (envelope.workspace_id, intent["group_sha256"]),
+            )
+            if cur.fetchone() is not None:
+                raise WorkStoreError("preflight_intent_active", ("preflight_group_terminal_route_selected",))
+
+        preflight_id = uuid4()
+        cur.execute(
+            f"INSERT INTO omp_work.stage_preflights("
+            f"preflight_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,session_id,"
+            f"role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,"
+            f"requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,"
+            f"is_fallback,outcome,stop_reason,error,requests,usage,provider_request_id,observed_at"
+            f") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            f"RETURNING {_STAGE_PREFLIGHT_FIELDS}",
+            (
+                preflight_id,
+                envelope.workspace_id,
+                intent["work_id"],
+                intent["revision_id"],
+                intent["candidate_id"],
+                intent["attempt_id"],
+                intent["grant_id"],
+                None,
+                intent["role"],
+                intent["tool_call_id"],
+                intent["task_sha256"],
+                intent["probe_sha256"],
+                payload.transport_attempt_id,
+                intent["ordinal"],
+                intent["requested_selector"],
+                intent["requested_provider"],
+                intent["requested_model"],
+                intent["requested_api"],
+                intent["requested_effort"],
+                intent["requested_wire_model"],
+                intent["is_fallback"],
+                outcome.value,
+                payload.stop_reason,
+                payload.error,
+                requests_val,
+                usage_json,
+                provider_req_id,
+                payload.observed_at,
+            ),
+        )
+        preflight = cur.fetchone()
+
+        cur.execute(
+            f"UPDATE omp_work.stage_preflight_intents SET status='settled', settled_at=clock_timestamp() WHERE workspace_id=%s AND transport_attempt_id=%s RETURNING {_STAGE_PREFLIGHT_INTENT_FIELDS}",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
+        settled_intent = cur.fetchone()
+
+        return {
+            "type": "reconcile_stage_preflight",
+            "status": "applied",
+            "intent": _row_json(settled_intent),
+            "preflight": _row_json(preflight),
+            "reconciliation": _row_json(reconciliation),
+            "reason": None,
         }
 
     def _attest_checkpoint_delivery(
