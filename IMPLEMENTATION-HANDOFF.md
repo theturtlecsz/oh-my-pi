@@ -1,3 +1,11 @@
+# Provider preflight reconciliation (2026-09-17)
+
+Accepted source-development commit `7f38a8b701` adds WorkService-owned reconciliation for uncertain dispatched native-stage preflight intents. Migration `0032`, Python service/store/API contracts, generated schemas, TypeScript work client, and real PostgreSQL tests bind original transport and logical request identity to provider observations. Indeterminate evidence preserves uncertainty; completed, failed, and confirmed-absent evidence settles through serialized authoritative transitions.
+
+Contract digest: `a4da1fef0a7b538e0f31d64246af2997ea44210bc7ffd173fc1b46ee141947d0`. Frozen repaired diff: `bf480302ef03ddacb7f996e3e61f9cccfb8fa9ebf469f5ecdac356e996a33a58`. Deterministic suites pass, and fresh Kimi K3 256K re-review returned PASS after one timezone-awareness repair. Production approval remains unchanged.
+
+Next bounded work: implement provider-specific lookup adapters and qualify exact operation UUID, workspace header, contract identity, provider-account correlation, and redacted diagnostics without allowing reconciliation evidence to authorize operations. Continue afterward through qualified rate cards and complete reserve/handoff/settle recovery. No installation, deployment, native acceptance, or Q36 action occurred. [Full disposition](/home/thetu/.codex/workflows/economy/artifacts/omp233-shared-job-inventory-20260916/provider-preflight-reconciliation-20260917/REVIEW-DISPOSITION.md).
+
 # Native tier route/profile slice
 
 Luna-authored isolated candidate. Combined and Enola trees untouched.
