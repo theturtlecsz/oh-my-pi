@@ -11,6 +11,7 @@
     "decisions/0007-omp-147-bookends-closure.md",
     "decisions/0008-execution-cycle-authority.md",
     "decisions/0009-native-foundation-reads-and-event-cursor.md",
+    "decisions/0010-research-campaign-lifecycle-authority.md",
     "examples.json",
     "manifest.json",
     "schema.json"

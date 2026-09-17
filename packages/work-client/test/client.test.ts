@@ -1993,6 +1993,8 @@ test("dispatches research commands, decodes results, and calls research view", a
 		policy_sha256: "2".repeat(64),
 		state: "proposed",
 		proposed_at: "2026-09-17T12:02:00Z",
+		action: "evaluate",
+		reason: "test proposal",
 	};
 
 	const mockObservation: ResearchObservation = {
@@ -2090,6 +2092,8 @@ test("dispatches research commands, decodes results, and calls research view", a
 				campaign_id: campaignId,
 				work_id: workId,
 				decision_id: "00000000-0000-0000-0000-0000000000e1",
+				action: "evaluate",
+				reason: "test proposal",
 				candidate_digest: "3".repeat(64),
 				experiment_spec_sha256: "4".repeat(64),
 				evaluator_sha256: "5".repeat(64),
@@ -2169,7 +2173,85 @@ test("dispatches research commands, decodes results, and calls research view", a
 	});
 	expect(cancelRes.result.type).toBe("cancel_research_campaign");
 
-	// 7. client.research(key)
+	// 7. set_research_campaign_state (blocked variant)
+	const mockBlockedCampaign: ResearchCampaign = {
+		...mockCampaign,
+		state: "blocked",
+		blocked_dependency: {
+			kind: "budget_scope",
+			ref: "scope-1",
+			reason: "waiting on allocation",
+		},
+		blocked_from_state: "running",
+	};
+	nextResult = {
+		receipt: RECEIPT,
+		result: {
+			type: "set_research_campaign_state",
+			status: "applied",
+			campaign: mockBlockedCampaign,
+		},
+	};
+	const setRes = await client.execute({
+		...ENV,
+		command: {
+			type: "set_research_campaign_state",
+			payload: {
+				campaign_id: campaignId,
+				work_id: workId,
+				expected_state: "running",
+				target_state: "blocked",
+				policy_sha256: "2".repeat(64),
+				blocked_dependency: {
+					kind: "budget_scope",
+					ref: "scope-1",
+					reason: "waiting on allocation",
+				},
+			},
+		},
+	});
+	expect(setRes.result.type).toBe("set_research_campaign_state");
+	if (setRes.result.type === "set_research_campaign_state") {
+		expect(setRes.result.campaign.state).toBe("blocked");
+		expect(setRes.result.campaign.blocked_dependency?.kind).toBe("budget_scope");
+	}
+
+	// 8. conclude_research_campaign
+	const mockConcludedCampaign: ResearchCampaign = {
+		...mockCampaign,
+		state: "concluded",
+		outcome: "supported",
+		outcome_reason: "evidence supported",
+		concluded_at: "2026-09-17T12:05:00Z",
+	};
+	nextResult = {
+		receipt: RECEIPT,
+		result: {
+			type: "conclude_research_campaign",
+			status: "applied",
+			campaign: mockConcludedCampaign,
+		},
+	};
+	const concludeRes = await client.execute({
+		...ENV,
+		command: {
+			type: "conclude_research_campaign",
+			payload: {
+				campaign_id: campaignId,
+				work_id: workId,
+				policy_sha256: "2".repeat(64),
+				outcome: "supported",
+				reason: "evidence supported",
+			},
+		},
+	});
+	expect(concludeRes.result.type).toBe("conclude_research_campaign");
+	if (concludeRes.result.type === "conclude_research_campaign") {
+		expect(concludeRes.result.campaign.state).toBe("concluded");
+		expect(concludeRes.result.campaign.outcome).toBe("supported");
+	}
+
+	// 9. client.research(key)
 	const mockResearchView: ResearchView = {
 		work_id: workId,
 		campaigns: [mockCampaign],

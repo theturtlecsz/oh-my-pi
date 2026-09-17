@@ -409,6 +409,7 @@ def test_draft_or_cancelled_campaign_cannot_accept_trial(service) -> None:
         "campaign_id": str(camp_id),
         "work_id": str(work_id),
         "decision_id": str(uuid4()),
+        "action": "evaluate",
         "candidate_digest": "c" * 64,
         "experiment_spec_sha256": "e" * 64,
         "evaluator_sha256": "b" * 64,
@@ -544,6 +545,7 @@ def test_cancellation_archives_proposed_trials_atomically(service) -> None:
                     "campaign_id": str(camp_id),
                     "work_id": str(work_id),
                     "decision_id": str(uuid4()),
+                    "action": "evaluate",
                     "candidate_digest": "c" * 64,
                     "experiment_spec_sha256": "e" * 64,
                     "evaluator_sha256": "b" * 64,
@@ -656,6 +658,7 @@ def test_trial_policy_mismatch_and_decision_idempotency(service) -> None:
                 "campaign_id": str(camp_id),
                 "work_id": str(work_id),
                 "decision_id": str(decision_id),
+                "action": "evaluate",
                 "candidate_digest": "c" * 64,
                 "experiment_spec_sha256": "e" * 64,
                 "evaluator_sha256": "b" * 64,
@@ -674,6 +677,7 @@ def test_trial_policy_mismatch_and_decision_idempotency(service) -> None:
         "campaign_id": str(camp_id),
         "work_id": str(work_id),
         "decision_id": str(decision_id),
+        "action": "evaluate",
         "candidate_digest": "c" * 64,
         "experiment_spec_sha256": "e" * 64,
         "evaluator_sha256": "b" * 64,
@@ -1016,6 +1020,7 @@ def test_deliverable_binding_invariants(service) -> None:
                 "campaign_id": str(camp_id),
                 "work_id": str(work_id),
                 "decision_id": str(uuid4()),
+                "action": "evaluate",
                 "candidate_digest": candidate_digest,
                 "experiment_spec_sha256": "e" * 64,
                 "evaluator_sha256": "b" * 64,
@@ -1679,6 +1684,7 @@ def test_cross_workspace_isolation_and_foreign_reference_rejection(service) -> N
                 "campaign_id": str(camp_a),
                 "work_id": str(work_a),
                 "decision_id": str(uuid4()),
+                "action": "evaluate",
                 "candidate_digest": "c" * 64,
                 "experiment_spec_sha256": "e" * 64,
                 "evaluator_sha256": "b" * 64,
@@ -1762,6 +1768,7 @@ def test_cross_workspace_isolation_and_foreign_reference_rejection(service) -> N
                 "campaign_id": str(camp_a),
                 "work_id": str(work_a),
                 "decision_id": str(uuid4()),
+                "action": "evaluate",
                 "candidate_digest": "c" * 64,
                 "experiment_spec_sha256": "e" * 64,
                 "evaluator_sha256": "b" * 64,
@@ -1893,6 +1900,7 @@ def test_direct_app_role_database_relational_integrity_constraints(service) -> N
                 "environment_sha256": "c" * 64,
                 "input_manifest_sha256": "d" * 64,
                 "policy_sha256": "a" * 64,
+                "action": "evaluate",
             },
         },
     )
@@ -1914,10 +1922,10 @@ def test_direct_app_role_database_relational_integrity_constraints(service) -> N
                 INSERT INTO omp_research.trials(
                     trial_id, workspace_id, campaign_id, work_id, decision_id,
                     candidate_digest, experiment_spec_sha256, evaluator_sha256,
-                    environment_sha256, input_manifest_sha256, policy_sha256, state
+                    environment_sha256, input_manifest_sha256, policy_sha256, action, state
                 ) VALUES (
                     %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, 'proposed'
+                    %s, %s, %s, %s, %s, %s, 'evaluate', 'proposed'
                 )
                 """,
                 (
@@ -2062,6 +2070,7 @@ def test_exact_trial_and_observation_replay_after_cancellation(service) -> None:
         "seed": 42,
         "hardware_class": "gpu_h100",
         "policy_sha256": policy_sha,
+        "action": "evaluate",
     }
     status, body = _command(
         service,
@@ -2229,6 +2238,7 @@ def test_deliverable_binding_exact_replay_and_drift_conflicts(service) -> None:
                 "environment_sha256": "c" * 64,
                 "input_manifest_sha256": "d" * 64,
                 "policy_sha256": policy_sha,
+                "action": "evaluate",
             },
         },
     )
@@ -2443,3 +2453,1921 @@ def test_admit_campaign_exact_replay_and_conflict_lifecycle(service) -> None:
     )
     assert status == 400, body
     assert body["error"]["code"] == "invalid_request"
+
+
+def test_campaign_lifecycle_transitions_replay_and_read(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "lifecycle transitions target")
+    work_id = UUID(item["work_id"])
+    rev_id = UUID(item["revision_id"])
+
+    camp_id = uuid4()
+    spec, spec_sha = _sample_spec()
+    policy_sha = "a" * 64
+
+    # 1. Create campaign (draft)
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "domain": "machine_learning",
+                "spec": spec,
+                "spec_sha256": spec_sha,
+            },
+        },
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+
+    # 2. Admit campaign (draft -> admitted)
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "spec_sha256": spec_sha,
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "admitted"
+
+    # 3. admitted -> running
+    op_run_1 = uuid4()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "admitted",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+        operation_id=op_run_1,
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "running"
+
+    # 4. running -> paused
+    op_pause_1 = uuid4()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "paused",
+                "policy_sha256": policy_sha,
+            },
+        },
+        operation_id=op_pause_1,
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "paused"
+
+    # 5. paused -> running
+    op_resume_1 = uuid4()
+    resume_payload = {
+        "campaign_id": str(camp_id),
+        "work_id": str(work_id),
+        "expected_state": "paused",
+        "target_state": "running",
+        "policy_sha256": policy_sha,
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": resume_payload,
+        },
+        operation_id=op_resume_1,
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "running"
+
+    # 6. running -> evaluating
+    op_eval_1 = uuid4()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "evaluating",
+                "policy_sha256": policy_sha,
+            },
+        },
+        operation_id=op_eval_1,
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "evaluating"
+
+    # 7. evaluating -> running
+    op_run_2 = uuid4()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "evaluating",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+        operation_id=op_run_2,
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "running"
+
+    # 8. running -> evaluating
+    op_eval_2 = uuid4()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "evaluating",
+                "policy_sha256": policy_sha,
+            },
+        },
+        operation_id=op_eval_2,
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "evaluating"
+
+    # 9. evaluating -> concluded (supported)
+    op_conclude = uuid4()
+    conclude_payload = {
+        "campaign_id": str(camp_id),
+        "work_id": str(work_id),
+        "policy_sha256": policy_sha,
+        "outcome": "supported",
+        "reason": "Hypothesis validated by experimental trials",
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "conclude_research_campaign",
+            "payload": conclude_payload,
+        },
+        operation_id=op_conclude,
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "concluded"
+    assert body["result"]["campaign"]["outcome"] == "supported"
+    assert body["result"]["campaign"]["outcome_reason"] == "Hypothesis validated by experimental trials"
+    assert body["result"]["campaign"]["concluded_at"] is not None
+
+    # 10. Replay earlier command (paused -> running) with same operation_id after drift returns replayed
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": resume_payload,
+        },
+        operation_id=op_resume_1,
+    )
+    assert status == 200, body
+    assert body["receipt"]["state"] == "replayed"
+
+    # 11. Read via GET /v1/work-items/{key}/research
+    resp = service.client.get(
+        f"/v1/work-items/{item['key']}/research", headers=_owner_headers(workspace_id)
+    )
+    assert resp.status_code == 200, resp.json()
+    campaign_view = resp.json()["campaigns"][0]
+    assert campaign_view["state"] == "concluded"
+    assert campaign_view["outcome"] == "supported"
+    assert campaign_view["outcome_reason"] == "Hypothesis validated by experimental trials"
+    assert campaign_view["concluded_at"] is not None
+
+    # 12. cancel_research_campaign on concluded campaign -> 400 invalid_request
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "cancel_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "reason": "Attempt cancel after conclusion",
+            },
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+
+def test_campaign_illegal_transitions_and_expected_state_conflict(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "illegal transitions target")
+    work_id = UUID(item["work_id"])
+    rev_id = UUID(item["revision_id"])
+
+    camp_id = uuid4()
+    spec, spec_sha = _sample_spec()
+    policy_sha = "a" * 64
+
+    # Create campaign (draft)
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "domain": "machine_learning",
+                "spec": spec,
+                "spec_sha256": spec_sha,
+            },
+        },
+    )
+
+    # 1. draft -> running (draft is invalid expected_state in schema) -> 400 invalid_request
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "draft",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+    # Admit campaign and move to running, then paused
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "spec_sha256": spec_sha,
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "admitted",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "paused",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+
+    # 2. paused -> evaluating -> 400 invalid_request
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "paused",
+                "target_state": "evaluating",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+    # Move to evaluating and conclude
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "paused",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "evaluating",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "conclude_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "policy_sha256": policy_sha,
+                "outcome": "supported",
+                "reason": "Concluding for test",
+            },
+        },
+    )
+
+    # 3. concluded -> running (concluded is invalid expected_state) -> 400 invalid_request
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "concluded",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+    # 4. expected_state stale conflict on a fresh operation:
+    # Create campaign 2, move to running
+    camp_2_id = uuid4()
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_2_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "domain": "machine_learning",
+                "spec": spec,
+                "spec_sha256": spec_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_2_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "spec_sha256": spec_sha,
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_2_id),
+                "work_id": str(work_id),
+                "expected_state": "admitted",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    # Payload says expected_state: paused, but campaign row is running -> 409 revision_conflict
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_2_id),
+                "work_id": str(work_id),
+                "expected_state": "paused",
+                "target_state": "evaluating",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "revision_conflict"
+
+    # 5. target_state=blocked without dependency -> 400 invalid_request
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_2_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "blocked",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+    # 6. non-blocked with dependency -> 400 invalid_request
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_2_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "paused",
+                "policy_sha256": policy_sha,
+                "blocked_dependency": {
+                    "kind": "budget_scope",
+                    "ref": "b-ref",
+                    "reason": "need budget",
+                },
+            },
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+    # 7. expected_state == target_state -> 400 invalid_request
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_2_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+
+def test_campaign_transitions_refuse_incompatible_policy_fingerprint(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "policy fingerprint compatibility target")
+    work_id = UUID(item["work_id"])
+    rev_id = UUID(item["revision_id"])
+
+    camp_id = uuid4()
+    spec, spec_sha = _sample_spec()
+    policy_sha = "a" * 64
+    wrong_policy_sha = "b" * 64
+
+    # Create and admit campaign
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "domain": "machine_learning",
+                "spec": spec,
+                "spec_sha256": spec_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "spec_sha256": spec_sha,
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    # Move to running, then paused
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "admitted",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "paused",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+
+    # 1. paused -> running with mismatched policy_sha256 -> 409 stale_evidence
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "paused",
+                "target_state": "running",
+                "policy_sha256": wrong_policy_sha,
+            },
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "stale_evidence"
+
+    # State unchanged on read
+    resp = service.client.get(
+        f"/v1/work-items/{item['key']}/research", headers=_owner_headers(workspace_id)
+    )
+    assert resp.status_code == 200
+    assert resp.json()["campaigns"][0]["state"] == "paused"
+
+    # Resume with correct policy_sha, then move to evaluating
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "paused",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "evaluating",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+
+    # 2. Conclude with mismatched policy_sha256 -> 409 stale_evidence
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "conclude_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "policy_sha256": wrong_policy_sha,
+                "outcome": "supported",
+                "reason": "Attempt conclude with bad policy fingerprint",
+            },
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "stale_evidence"
+
+    # State unchanged on read
+    resp = service.client.get(
+        f"/v1/work-items/{item['key']}/research", headers=_owner_headers(workspace_id)
+    )
+    assert resp.status_code == 200
+    assert resp.json()["campaigns"][0]["state"] == "evaluating"
+
+
+def test_blocked_campaign_records_dependency_and_resumes_only_to_prior_state(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "blocked campaign target")
+    work_id = UUID(item["work_id"])
+    rev_id = UUID(item["revision_id"])
+
+    camp_id = uuid4()
+    spec, spec_sha = _sample_spec()
+    policy_sha = "a" * 64
+
+    # Create and admit campaign
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "domain": "machine_learning",
+                "spec": spec,
+                "spec_sha256": spec_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "spec_sha256": spec_sha,
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "admitted",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+
+    # 1. running -> blocked with dependency
+    op_block = uuid4()
+    dep_payload = {
+        "kind": "budget_scope",
+        "ref": "scope-gpu-cluster-1",
+        "reason": "Quota exhaustion on compute cluster",
+    }
+    block_cmd_payload = {
+        "campaign_id": str(camp_id),
+        "work_id": str(work_id),
+        "expected_state": "running",
+        "target_state": "blocked",
+        "policy_sha256": policy_sha,
+        "blocked_dependency": dep_payload,
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "set_research_campaign_state", "payload": block_cmd_payload},
+        operation_id=op_block,
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "blocked"
+    assert body["result"]["campaign"]["blocked_from_state"] == "running"
+    assert body["result"]["campaign"]["blocked_dependency"] == dep_payload
+
+    # 2. Read shows blocked_dependency and blocked_from_state = running
+    resp = service.client.get(
+        f"/v1/work-items/{item['key']}/research", headers=_owner_headers(workspace_id)
+    )
+    assert resp.status_code == 200
+    camp_view = resp.json()["campaigns"][0]
+    assert camp_view["state"] == "blocked"
+    assert camp_view["blocked_from_state"] == "running"
+    assert camp_view["blocked_dependency"] == dep_payload
+
+    # 3. blocked -> evaluating returns 400 invalid_request
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "blocked",
+                "target_state": "evaluating",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+    # 4. Blocked replay with different dependency under same operation_id -> 409 idempotency_conflict
+    diff_dep_payload = dict(
+        block_cmd_payload,
+        blocked_dependency={
+            "kind": "external",
+            "ref": "gov-999",
+            "reason": "Policy review required",
+        },
+    )
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "set_research_campaign_state", "payload": diff_dep_payload},
+        operation_id=op_block,
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "idempotency_conflict"
+
+    # 5. blocked -> running clears both fields
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "blocked",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "running"
+    assert body["result"]["campaign"]["blocked_dependency"] is None
+    assert body["result"]["campaign"]["blocked_from_state"] is None
+
+    # Propose a trial while running
+    t_id = uuid4()
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "propose_research_trial",
+            "payload": {
+                "trial_id": str(t_id),
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "decision_id": str(uuid4()),
+                "candidate_digest": "c" * 64,
+                "experiment_spec_sha256": "e" * 64,
+                "evaluator_sha256": "b" * 64,
+                "environment_sha256": "c" * 64,
+                "input_manifest_sha256": "d" * 64,
+                "policy_sha256": policy_sha,
+                "action": "evaluate",
+            },
+        },
+    )
+
+    # Move back to blocked
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "blocked",
+                "policy_sha256": policy_sha,
+                "blocked_dependency": dep_payload,
+            },
+        },
+    )
+
+    # 6. cancel from blocked succeeds and atomically clears blocked fields and archives proposed trials
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "cancel_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "reason": "Cancelled while blocked",
+            },
+        },
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["campaign"]["state"] == "cancelled"
+    assert body["result"]["campaign"]["blocked_dependency"] is None
+    assert body["result"]["campaign"]["blocked_from_state"] is None
+
+    # Read back confirms cancellation, null blocked fields, and archived trial
+    resp = service.client.get(
+        f"/v1/work-items/{item['key']}/research", headers=_owner_headers(workspace_id)
+    )
+    assert resp.status_code == 200
+    camp_view = resp.json()["campaigns"][0]
+    assert camp_view["state"] == "cancelled"
+    assert camp_view["blocked_dependency"] is None
+    assert camp_view["blocked_from_state"] is None
+    trial_view = resp.json()["trials"][0]
+    assert trial_view["state"] == "archived"
+    assert trial_view["archived_reason"] == "campaign_cancelled"
+
+
+def test_conclusion_requires_approve_scope_evaluating_state_and_closed_outcome(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "conclusion requirements target")
+    work_id = UUID(item["work_id"])
+    rev_id = UUID(item["revision_id"])
+
+    camp_id = uuid4()
+    spec, spec_sha = _sample_spec()
+    policy_sha = "a" * 64
+
+    # 1. work.execute-only capability token
+    cap_file = service.capabilities / "exec-only.json"
+    cap_file.write_text(
+        json.dumps(
+            {
+                "token": "exec-only-token",
+                "actor_id": str(uuid4()),
+                "actor_kind": "worker",
+                "workspaces": [str(workspace_id)],
+                "scopes": ["work.read", "work.mutate", "work.execute"],
+            }
+        )
+    )
+    cap_file.chmod(0o600)
+
+    try:
+        # Create, admit, running, evaluating
+        _command(
+            service,
+            workspace_id,
+            {
+                "type": "create_research_campaign",
+                "payload": {
+                    "campaign_id": str(camp_id),
+                    "work_id": str(work_id),
+                    "revision_id": str(rev_id),
+                    "domain": "machine_learning",
+                    "spec": spec,
+                    "spec_sha256": spec_sha,
+                },
+            },
+        )
+        _command(
+            service,
+            workspace_id,
+            {
+                "type": "admit_research_campaign",
+                "payload": {
+                    "campaign_id": str(camp_id),
+                    "work_id": str(work_id),
+                    "revision_id": str(rev_id),
+                    "spec_sha256": spec_sha,
+                    "policy_sha256": policy_sha,
+                },
+            },
+        )
+        _command(
+            service,
+            workspace_id,
+            {
+                "type": "set_research_campaign_state",
+                "payload": {
+                    "campaign_id": str(camp_id),
+                    "work_id": str(work_id),
+                    "expected_state": "admitted",
+                    "target_state": "running",
+                    "policy_sha256": policy_sha,
+                },
+            },
+        )
+        # Propose trial while running so we can test observation after conclusion
+        t_id = uuid4()
+        _command(
+            service,
+            workspace_id,
+            {
+                "type": "propose_research_trial",
+                "payload": {
+                    "trial_id": str(t_id),
+                    "campaign_id": str(camp_id),
+                    "work_id": str(work_id),
+                    "decision_id": str(uuid4()),
+                    "candidate_digest": "c" * 64,
+                    "experiment_spec_sha256": "e" * 64,
+                    "evaluator_sha256": "b" * 64,
+                    "environment_sha256": "c" * 64,
+                    "input_manifest_sha256": "d" * 64,
+                    "policy_sha256": policy_sha,
+                    "action": "evaluate",
+                },
+            },
+        )
+        _command(
+            service,
+            workspace_id,
+            {
+                "type": "set_research_campaign_state",
+                "payload": {
+                    "campaign_id": str(camp_id),
+                    "work_id": str(work_id),
+                    "expected_state": "running",
+                    "target_state": "evaluating",
+                    "policy_sha256": policy_sha,
+                },
+            },
+        )
+
+        # 2. Conclude attempt with work.execute token -> 403 forbidden
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "conclude_research_campaign",
+                "payload": {
+                    "campaign_id": str(camp_id),
+                    "work_id": str(work_id),
+                    "policy_sha256": policy_sha,
+                    "outcome": "supported",
+                    "reason": "Unauthorized conclusion attempt",
+                },
+            },
+            token="exec-only-token",
+        )
+        assert status == 403, body
+        assert body["error"]["code"] == "forbidden"
+
+        # 3. Conclude from running campaign -> 400 invalid_request
+        camp_2_id = uuid4()
+        _command(
+            service,
+            workspace_id,
+            {
+                "type": "create_research_campaign",
+                "payload": {
+                    "campaign_id": str(camp_2_id),
+                    "work_id": str(work_id),
+                    "revision_id": str(rev_id),
+                    "domain": "machine_learning",
+                    "spec": spec,
+                    "spec_sha256": spec_sha,
+                },
+            },
+        )
+        _command(
+            service,
+            workspace_id,
+            {
+                "type": "admit_research_campaign",
+                "payload": {
+                    "campaign_id": str(camp_2_id),
+                    "work_id": str(work_id),
+                    "revision_id": str(rev_id),
+                    "spec_sha256": spec_sha,
+                    "policy_sha256": policy_sha,
+                },
+            },
+        )
+        _command(
+            service,
+            workspace_id,
+            {
+                "type": "set_research_campaign_state",
+                "payload": {
+                    "campaign_id": str(camp_2_id),
+                    "work_id": str(work_id),
+                    "expected_state": "admitted",
+                    "target_state": "running",
+                    "policy_sha256": policy_sha,
+                },
+            },
+        )
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "conclude_research_campaign",
+                "payload": {
+                    "campaign_id": str(camp_2_id),
+                    "work_id": str(work_id),
+                    "policy_sha256": policy_sha,
+                    "outcome": "supported",
+                    "reason": "Direct conclusion from running",
+                },
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_request"
+
+        # 4. Invalid outcome string ("passed") -> 400 invalid_request
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "conclude_research_campaign",
+                "payload": {
+                    "campaign_id": str(camp_id),
+                    "work_id": str(work_id),
+                    "policy_sha256": policy_sha,
+                    "outcome": "passed",
+                    "reason": "Invalid outcome name",
+                },
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_request"
+
+        # 5. Conclude from blocked allowed ONLY for resource_exhausted / externally_blocked
+        _command(
+            service,
+            workspace_id,
+            {
+                "type": "set_research_campaign_state",
+                "payload": {
+                    "campaign_id": str(camp_2_id),
+                    "work_id": str(work_id),
+                    "expected_state": "running",
+                    "target_state": "blocked",
+                    "policy_sha256": policy_sha,
+                    "blocked_dependency": {
+                        "kind": "budget_scope",
+                        "ref": "b-ref",
+                        "reason": "Cluster down",
+                    },
+                },
+            },
+        )
+        # blocked with supported -> 400 invalid_request
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "conclude_research_campaign",
+                "payload": {
+                    "campaign_id": str(camp_2_id),
+                    "work_id": str(work_id),
+                    "policy_sha256": policy_sha,
+                    "outcome": "supported",
+                    "reason": "Not allowed from blocked",
+                },
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_request"
+
+        # blocked with resource_exhausted -> 200 applied
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "conclude_research_campaign",
+                "payload": {
+                    "campaign_id": str(camp_2_id),
+                    "work_id": str(work_id),
+                    "policy_sha256": policy_sha,
+                    "outcome": "resource_exhausted",
+                    "reason": "All budget consumed",
+                },
+            },
+        )
+        assert status == 200 and body["result"]["status"] == "applied", body
+        assert body["result"]["campaign"]["state"] == "concluded"
+        assert body["result"]["campaign"]["outcome"] == "resource_exhausted"
+
+        # 6. Conclude evaluating campaign 1:
+        op_conclude = uuid4()
+        conclude_payload = {
+            "campaign_id": str(camp_id),
+            "work_id": str(work_id),
+            "policy_sha256": policy_sha,
+            "outcome": "supported",
+            "reason": "Hypothesis validated",
+        }
+        status, body = _command(
+            service,
+            workspace_id,
+            {"type": "conclude_research_campaign", "payload": conclude_payload},
+            operation_id=op_conclude,
+        )
+        assert status == 200 and body["result"]["status"] == "applied", body
+        assert body["result"]["campaign"]["state"] == "concluded"
+        assert body["result"]["campaign"]["outcome"] == "supported"
+
+        # 7. Same operation replay -> replayed
+        status, body = _command(
+            service,
+            workspace_id,
+            {"type": "conclude_research_campaign", "payload": conclude_payload},
+            operation_id=op_conclude,
+        )
+        assert status == 200, body
+        assert body["receipt"]["state"] == "replayed"
+
+        # 8. Different outcome under same operation_id -> 409 idempotency_conflict
+        diff_conclude = dict(conclude_payload, outcome="refuted")
+        status, body = _command(
+            service,
+            workspace_id,
+            {"type": "conclude_research_campaign", "payload": diff_conclude},
+            operation_id=op_conclude,
+        )
+        assert status == 409, body
+        assert body["error"]["code"] == "idempotency_conflict"
+
+        # 9. Record observation with execution_status: completed after conclusion
+        obs_id = uuid4()
+        obs_payload = {
+            "observation_id": str(obs_id),
+            "campaign_id": str(camp_id),
+            "trial_id": str(t_id),
+            "issuer_kind": "candidate_authored",
+            "source_ref": "late-obs",
+            "execution_status": "completed",
+            "commit_sha": "a" * 40,
+            "payload": {"loss": 0.01},
+            "payload_sha256": sha256({"loss": 0.01}),
+            "observed_at": datetime(2026, 9, 17, 16, 0, 0, tzinfo=UTC).isoformat(),
+        }
+        status, body = _command(
+            service,
+            workspace_id,
+            {"type": "record_research_observation", "payload": obs_payload},
+        )
+        assert status == 200 and body["result"]["status"] == "applied", body
+
+        # Verify campaign outcome remains unchanged on read
+        resp = service.client.get(
+            f"/v1/work-items/{item['key']}/research", headers=_owner_headers(workspace_id)
+        )
+        assert resp.status_code == 200
+        camp_view = next(c for c in resp.json()["campaigns"] if c["campaign_id"] == str(camp_id))
+        assert camp_view["state"] == "concluded"
+        assert camp_view["outcome"] == "supported"
+    finally:
+        cap_file.unlink(missing_ok=True)
+
+
+def test_trial_proposal_requires_closed_action_vocabulary_and_running_or_admitted_campaign(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "trial action vocabulary target")
+    work_id = UUID(item["work_id"])
+    rev_id = UUID(item["revision_id"])
+
+    camp_id = uuid4()
+    spec, spec_sha = _sample_spec()
+    policy_sha = "a" * 64
+
+    # Create and admit campaign
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "domain": "machine_learning",
+                "spec": spec,
+                "spec_sha256": spec_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "spec_sha256": spec_sha,
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "admitted",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+
+    base_trial_payload = {
+        "trial_id": str(uuid4()),
+        "campaign_id": str(camp_id),
+        "work_id": str(work_id),
+        "decision_id": str(uuid4()),
+        "candidate_digest": "c" * 64,
+        "experiment_spec_sha256": "e" * 64,
+        "evaluator_sha256": "b" * 64,
+        "environment_sha256": "c" * 64,
+        "input_manifest_sha256": "d" * 64,
+        "policy_sha256": policy_sha,
+    }
+
+    # 1. Missing action -> 400 invalid_request
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "propose_research_trial", "payload": base_trial_payload},
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+    # 2. Invalid action ("launch") -> 400 invalid_request
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "propose_research_trial",
+            "payload": dict(base_trial_payload, action="launch"),
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+    # 3. Valid action ("replicate") with reason on running campaign -> applied and read back
+    t1_id = uuid4()
+    t1_payload = dict(
+        base_trial_payload,
+        trial_id=str(t1_id),
+        action="replicate",
+        reason="Replicating previous benchmark baseline",
+    )
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "propose_research_trial", "payload": t1_payload},
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["trial"]["action"] == "replicate"
+    assert body["result"]["trial"]["reason"] == "Replicating previous benchmark baseline"
+
+    # Read back over HTTP
+    resp = service.client.get(
+        f"/v1/work-items/{item['key']}/research", headers=_owner_headers(workspace_id)
+    )
+    assert resp.status_code == 200
+    t_read = next(t for t in resp.json()["trials"] if t["trial_id"] == str(t1_id))
+    assert t_read["action"] == "replicate"
+    assert t_read["reason"] == "Replicating previous benchmark baseline"
+
+    # 4. Move campaign to paused, try propose trial -> 400 invalid_request
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "running",
+                "target_state": "paused",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "propose_research_trial",
+            "payload": dict(
+                base_trial_payload,
+                trial_id=str(uuid4()),
+                decision_id=str(uuid4()),
+                action="evaluate",
+            ),
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+
+    # Resume running
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "paused",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+
+    # 5. Replay with different action -> 409 idempotency_conflict
+    diff_action_payload = dict(t1_payload, action="evaluate")
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "propose_research_trial", "payload": diff_action_payload},
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "idempotency_conflict"
+
+
+def test_migration_0037_preserves_r02_s1_rows_and_constraints(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OMP-R02 migration 0037 upgrade rehearsal: pre-0037 data preserved and lifecycle constraints enforced."""
+    from types import SimpleNamespace
+
+    import omp_work.operations.database as database_module
+    from omp_work.operations.database import bootstrap
+    from omp_work.v1.server import create_app
+    from pg_native import seed_authority
+    from starlette.testclient import TestClient
+    from test_workflow_service import _config
+
+    root = tmp_path_factory.mktemp("migration-0037-upgrade")
+    config = _config(root)
+    with native_postgres(root, config.port):
+        original_migrate = database_module.migrate
+        monkeypatch.setattr(database_module, "validate_bundle", lambda **kw: None)
+        monkeypatch.setattr(
+            database_module,
+            "migrate",
+            lambda cfg, **kw: original_migrate(cfg, target=36, **kw),
+        )
+        bootstrap(config)
+        monkeypatch.setattr(database_module, "migrate", original_migrate)
+
+        workspace_id = uuid4()
+        work_id = uuid4()
+        revision_id = uuid4()
+        camp_id = uuid4()
+        trial_id = uuid4()
+        now = datetime.now(UTC)
+        spec, spec_sha = _sample_spec()
+        policy_sha = "a" * 64
+
+        with psycopg.connect(
+            **config.connection_kwargs("postgres"), autocommit=True
+        ) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)",
+                (workspace_id,),
+            )
+            cur.execute(
+                "INSERT INTO omp_work.work_items(work_id, workspace_id, state) VALUES (%s, %s, 'NOW')",
+                (work_id, workspace_id),
+            )
+            cur.execute(
+                "INSERT INTO omp_work.work_revisions(revision_id, work_id, workspace_id, revision_number, title, description, scope, content_sha256, created_by, supplied_at) "
+                "VALUES (%s, %s, %s, 1, 'migration 0037 test item', '', '', %s, 'test', %s)",
+                (revision_id, work_id, workspace_id, "a" * 64, now),
+            )
+            cur.execute(
+                "UPDATE omp_work.work_items SET current_revision_id=%s WHERE work_id=%s",
+                (revision_id, work_id),
+            )
+            cur.execute(
+                "INSERT INTO omp_work.work_aliases(work_id, workspace_id, key, origin, primary_alias) VALUES (%s, %s, 'OMP-1', 'local', true)",
+                (work_id, workspace_id),
+            )
+            # Insert admitted campaign under migration 0036 schema (no outcome, concluded_at, blocked columns)
+            cur.execute(
+                """
+                INSERT INTO omp_research.campaigns(
+                    campaign_id, workspace_id, work_id, revision_id,
+                    domain, state, spec, spec_sha256, policy_sha256,
+                    created_at, admitted_at
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    'machine_learning', 'admitted', %s, %s, %s,
+                    %s, %s
+                )
+                """,
+                (
+                    camp_id, workspace_id, work_id, revision_id,
+                    json.dumps(spec), spec_sha, policy_sha,
+                    now, now,
+                ),
+            )
+            # Insert proposed trial under migration 0036 schema (no action, reason columns)
+            cur.execute(
+                """
+                INSERT INTO omp_research.trials(
+                    trial_id, workspace_id, campaign_id, work_id, decision_id,
+                    candidate_digest, experiment_spec_sha256, evaluator_sha256,
+                    environment_sha256, input_manifest_sha256, policy_sha256,
+                    state
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    'proposed'
+                )
+                """,
+                (
+                    trial_id, workspace_id, camp_id, work_id, uuid4(),
+                    "c" * 64, "e" * 64, "b" * 64,
+                    "c" * 64, "d" * 64, policy_sha,
+                ),
+            )
+
+        # Run migration 0037
+        original_migrate(config)
+
+        # Set up capabilities and authority for HTTP tests
+        capabilities = root / "capabilities"
+        capabilities.mkdir(mode=0o700, exist_ok=True)
+        owner = capabilities / "owner.json"
+        owner.write_text(
+            json.dumps(
+                {
+                    "token": "owner-token",
+                    "actor_id": str(OWNER),
+                    "actor_kind": "owner",
+                    "workspaces": [str(workspace_id)],
+                    "scopes": [
+                        "work.read",
+                        "work.mutate",
+                        "work.approve",
+                        "work.close",
+                        "work.execute",
+                    ],
+                }
+            )
+        )
+        owner.chmod(0o600)
+        seed_authority(config.connection_kwargs("postgres"), workspace_id, OWNER)
+
+        svc = SimpleNamespace(
+            client=TestClient(create_app(config, capabilities_dir=capabilities)),
+            capabilities=capabilities,
+            config=config,
+        )
+
+        item_key = "OMP-1"
+
+        # 1. Read back historical rows over HTTP
+        resp = svc.client.get(
+            f"/v1/work-items/{item_key}/research", headers=_owner_headers(workspace_id)
+        )
+        assert resp.status_code == 200, resp.json()
+        research_data = resp.json()
+        camp = research_data["campaigns"][0]
+        assert camp["state"] == "admitted"
+        assert camp["outcome"] is None
+        assert camp["outcome_reason"] is None
+        assert camp["concluded_at"] is None
+        assert camp["blocked_dependency"] is None
+        assert camp["blocked_from_state"] is None
+
+        trial = research_data["trials"][0]
+        assert trial["action"] is None
+        assert trial["reason"] is None
+
+        # 2. set_research_campaign_state admitted -> running succeeds on historical campaign with original policy_sha
+        status, body = _command(
+            svc,
+            workspace_id,
+            {
+                "type": "set_research_campaign_state",
+                "payload": {
+                    "campaign_id": str(camp_id),
+                    "work_id": str(work_id),
+                    "expected_state": "admitted",
+                    "target_state": "running",
+                    "policy_sha256": policy_sha,
+                },
+            },
+        )
+        assert status == 200 and body["result"]["status"] == "applied", body
+        assert body["result"]["campaign"]["state"] == "running"
+
+        # 3. Verify pg_constraint contains all named constraints and 8 states
+        with psycopg.connect(**config.connection_kwargs("postgres")) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT conname, pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conrelid = 'omp_research.campaigns'::regclass
+                """
+            )
+            constraints = {row[0]: row[1] for row in cur.fetchall()}
+            assert "campaigns_state_check" in constraints
+            assert "campaigns_concluded_outcome" in constraints
+            assert "campaigns_blocked_dependency" in constraints
+            assert "campaigns_post_admission_policy" in constraints
+
+            state_def = constraints["campaigns_state_check"]
+            for s in ("draft", "admitted", "running", "paused", "evaluating", "blocked", "concluded", "cancelled"):
+                assert s in state_def
+
+        # 4. Direct app-role UPDATEs are refused by new constraints
+        with (
+            psycopg.connect(**config.connection_kwargs("omp_work_app")) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                (str(workspace_id), str(OWNER)),
+            )
+
+            # campaigns_post_admission_policy: running row with policy_sha256 = NULL fails
+            with pytest.raises(psycopg.errors.RaiseException, match="campaign policy_sha256 is immutable once set"):
+                cur.execute(
+                    "UPDATE omp_research.campaigns SET policy_sha256 = NULL WHERE campaign_id = %s",
+                    (camp_id,),
+                )
+            conn.rollback()
+
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                (str(workspace_id), str(OWNER)),
+            )
+            # Move running -> evaluating
+            cur.execute(
+                "UPDATE omp_research.campaigns SET state = 'evaluating' WHERE campaign_id = %s",
+                (camp_id,),
+            )
+            # campaigns_concluded_outcome: concluded row without outcome fails
+            with pytest.raises(psycopg.errors.CheckViolation):
+                cur.execute(
+                    "UPDATE omp_research.campaigns SET state = 'concluded', outcome = NULL, concluded_at = clock_timestamp() WHERE campaign_id = %s",
+                    (camp_id,),
+                )
+            conn.rollback()
+
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                (str(workspace_id), str(OWNER)),
+            )
+            # Cancel the admitted/running campaign
+            cur.execute(
+                "UPDATE omp_research.campaigns SET state = 'cancelled', cancel_reason = 'cancelled after migration', cancelled_at = clock_timestamp() WHERE campaign_id = %s",
+                (camp_id,),
+            )
+            cur.execute(
+                "SELECT policy_sha256, admitted_at FROM omp_research.campaigns WHERE campaign_id = %s",
+                (camp_id,),
+            )
+            row = cur.fetchone()
+            assert row[0] == policy_sha
+            assert row[1] is not None
+
+            # Negative tests: direct app-role UPDATE cannot clear or alter provenance on cancelled campaign
+            with pytest.raises(psycopg.errors.RaiseException, match="campaign policy_sha256 is immutable once set"):
+                cur.execute(
+                    "UPDATE omp_research.campaigns SET policy_sha256 = NULL WHERE campaign_id = %s",
+                    (camp_id,),
+                )
+            conn.rollback()
+
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                (str(workspace_id), str(OWNER)),
+            )
+            with pytest.raises(psycopg.errors.RaiseException, match="campaign admitted_at is immutable once set"):
+                cur.execute(
+                    "UPDATE omp_research.campaigns SET admitted_at = NULL WHERE campaign_id = %s",
+                    (camp_id,),
+                )
+            conn.rollback()
+
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                (str(workspace_id), str(OWNER)),
+            )
+            with pytest.raises(psycopg.errors.RaiseException, match="campaign policy_sha256 is immutable once set"):
+                cur.execute(
+                    "UPDATE omp_research.campaigns SET policy_sha256 = %s WHERE campaign_id = %s",
+                    ("f" * 64, camp_id),
+                )
+            conn.rollback()
+
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                (str(workspace_id), str(OWNER)),
+            )
+            with pytest.raises(psycopg.errors.RaiseException, match="campaign admitted_at is immutable once set"):
+                cur.execute(
+                    "UPDATE omp_research.campaigns SET admitted_at = clock_timestamp() WHERE campaign_id = %s",
+                    (camp_id,),
+                )
+            conn.rollback()
+
+
+def test_admitted_campaign_provenance_immutable_after_cancellation(service) -> None:
+    """PLAN-DISPOSITION: campaign cancelled after admission retains policy_sha256 and admitted_at.
+
+    Direct app-role UPDATEs cannot clear or alter provenance on cancelled campaigns.
+    Draft campaigns cancelled before admission preserve null provenance and refuse modification.
+    """
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "provenance immutability test item")
+    w, r = UUID(item["work_id"]), UUID(item["revision_id"])
+
+    # 1. Draft campaign cancelled before admission: retains nulls, direct UPDATE cannot set provenance
+    c_draft_id = uuid4()
+    spec_draft, spec_draft_sha = _sample_spec()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(c_draft_id),
+                "work_id": str(w),
+                "revision_id": str(r),
+                "domain": "machine_learning",
+                "spec": spec_draft,
+                "spec_sha256": spec_draft_sha,
+            },
+        },
+    )
+    assert status == 200, body
+
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "cancel_research_campaign",
+            "payload": {
+                "campaign_id": str(c_draft_id),
+                "work_id": str(w),
+                "reason": "cancelled before admission",
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["campaign"]["state"] == "cancelled"
+    assert body["result"]["campaign"]["policy_sha256"] is None
+    assert body["result"]["campaign"]["admitted_at"] is None
+
+    # Connect as app role: direct UPDATE on cancelled draft cannot set provenance
+    with (
+        psycopg.connect(**service.config.connection_kwargs("omp_work_app")) as conn,
+        conn.cursor() as cur,
+    ):
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        with pytest.raises(psycopg.errors.RaiseException, match="unadmitted campaign cannot set admission provenance"):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET policy_sha256 = %s WHERE campaign_id = %s",
+                ("a" * 64, c_draft_id),
+            )
+        conn.rollback()
+
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        with pytest.raises(psycopg.errors.RaiseException, match="unadmitted campaign cannot set admission provenance"):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET admitted_at = clock_timestamp() WHERE campaign_id = %s",
+                (c_draft_id,),
+            )
+        conn.rollback()
+
+    # 2. Admitted campaign cancelled after admission: retains provenance
+    c_admitted_id = uuid4()
+    spec_admitted, spec_admitted_sha = _sample_spec()
+    policy_sha = "d" * 64
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(c_admitted_id),
+                "work_id": str(w),
+                "revision_id": str(r),
+                "domain": "machine_learning",
+                "spec": spec_admitted,
+                "spec_sha256": spec_admitted_sha,
+            },
+        },
+    )
+    assert status == 200, body
+
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": {
+                "campaign_id": str(c_admitted_id),
+                "work_id": str(w),
+                "revision_id": str(r),
+                "spec_sha256": spec_admitted_sha,
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    admitted_at = body["result"]["campaign"]["admitted_at"]
+    assert admitted_at is not None
+
+    # Cancel the admitted campaign
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "cancel_research_campaign",
+            "payload": {
+                "campaign_id": str(c_admitted_id),
+                "work_id": str(w),
+                "reason": "cancelled after admission",
+            },
+        },
+    )
+    assert status == 200, body
+    camp = body["result"]["campaign"]
+    assert camp["state"] == "cancelled"
+    assert camp["policy_sha256"] == policy_sha
+    assert camp["admitted_at"] == admitted_at
+
+    # Read back over HTTP
+    resp = service.client.get(
+        f"/v1/work-items/{item['key']}/research", headers=_owner_headers(workspace_id)
+    )
+    assert resp.status_code == 200
+    read_c = next(c for c in resp.json()["campaigns"] if c["campaign_id"] == str(c_admitted_id))
+    assert read_c["state"] == "cancelled"
+    assert read_c["policy_sha256"] == policy_sha
+    assert datetime.fromisoformat(read_c["admitted_at"]) == datetime.fromisoformat(admitted_at)
+
+    # 3. Direct app-role PostgreSQL negative tests: provenance cannot be cleared or altered after cancellation
+    with (
+        psycopg.connect(**service.config.connection_kwargs("omp_work_app")) as conn,
+        conn.cursor() as cur,
+    ):
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        # Cannot clear policy_sha256
+        with pytest.raises(psycopg.errors.RaiseException, match="campaign policy_sha256 is immutable once set"):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET policy_sha256 = NULL WHERE campaign_id = %s",
+                (c_admitted_id,),
+            )
+        conn.rollback()
+
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        # Cannot clear admitted_at
+        with pytest.raises(psycopg.errors.RaiseException, match="campaign admitted_at is immutable once set"):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET admitted_at = NULL WHERE campaign_id = %s",
+                (c_admitted_id,),
+            )
+        conn.rollback()
+
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        # Cannot clear both policy_sha256 and admitted_at
+        with pytest.raises(psycopg.errors.RaiseException):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET policy_sha256 = NULL, admitted_at = NULL WHERE campaign_id = %s",
+                (c_admitted_id,),
+            )
+        conn.rollback()
+
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        # Cannot alter policy_sha256
+        with pytest.raises(psycopg.errors.RaiseException, match="campaign policy_sha256 is immutable once set"):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET policy_sha256 = %s WHERE campaign_id = %s",
+                ("f" * 64, c_admitted_id),
+            )
+        conn.rollback()
+
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        # Cannot alter admitted_at
+        with pytest.raises(psycopg.errors.RaiseException, match="campaign admitted_at is immutable once set"):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET admitted_at = clock_timestamp() WHERE campaign_id = %s",
+                (c_admitted_id,),
+            )
+        conn.rollback()
+
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        # Terminal state cannot transition to active states
+        with pytest.raises(psycopg.errors.RaiseException, match="terminal campaign state is immutable"):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET state = 'running' WHERE campaign_id = %s",
+                (c_admitted_id,),
+            )
+        conn.rollback()

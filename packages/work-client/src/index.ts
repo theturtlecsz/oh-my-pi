@@ -1136,6 +1136,44 @@ export type ResearchCampaignSpec = {
 	candidate_mapping_policy: string;
 };
 
+export type ResearchCampaignState =
+	| "draft"
+	| "admitted"
+	| "running"
+	| "paused"
+	| "evaluating"
+	| "blocked"
+	| "concluded"
+	| "cancelled";
+
+export type ResearchCampaignOutcome =
+	| "supported"
+	| "refuted"
+	| "inconclusive"
+	| "resource_exhausted"
+	| "externally_blocked";
+
+export type ResearchAction =
+	| "retrieve"
+	| "draft"
+	| "repair"
+	| "refine"
+	| "challenge"
+	| "combine"
+	| "evaluate"
+	| "replicate"
+	| "deepen"
+	| "prune"
+	| "synthesize"
+	| "escalate"
+	| "conclude";
+
+export type ResearchBlockedDependency = {
+	kind: "work_item" | "budget_scope" | "capability" | "external";
+	ref: string;
+	reason: string;
+};
+
 export type ResearchCampaign = {
 	campaign_id: UUID;
 	workspace_id: UUID;
@@ -1145,11 +1183,16 @@ export type ResearchCampaign = {
 	spec: ResearchCampaignSpec;
 	spec_sha256: string;
 	policy_sha256?: string | null;
-	state: "draft" | "admitted" | "cancelled";
+	state: ResearchCampaignState;
 	cancel_reason?: string | null;
 	created_at: string;
 	admitted_at?: string | null;
 	cancelled_at?: string | null;
+	outcome?: ResearchCampaignOutcome | null;
+	outcome_reason?: string | null;
+	concluded_at?: string | null;
+	blocked_dependency?: ResearchBlockedDependency | null;
+	blocked_from_state?: "admitted" | "running" | "paused" | "evaluating" | null;
 };
 
 export type ResearchTrial = {
@@ -1171,6 +1214,8 @@ export type ResearchTrial = {
 	archived_reason?: string | null;
 	proposed_at: string;
 	archived_at?: string | null;
+	action?: ResearchAction | null;
+	reason?: string | null;
 };
 
 export type ResearchIssuerKind = "legacy_autoresearch" | "candidate_authored";
@@ -1239,6 +1284,8 @@ export type ProposeResearchTrialPayload = {
 	campaign_id: UUID;
 	work_id: UUID;
 	decision_id: UUID;
+	action: ResearchAction;
+	reason?: string | null;
 	candidate_digest: string;
 	experiment_spec_sha256: string;
 	evaluator_sha256: string;
@@ -1248,6 +1295,23 @@ export type ProposeResearchTrialPayload = {
 	hardware_class?: string | null;
 	resource_request?: Record<string, unknown> | null;
 	policy_sha256: string;
+};
+
+export type SetResearchCampaignStatePayload = {
+	campaign_id: UUID;
+	work_id: UUID;
+	expected_state: "admitted" | "running" | "paused" | "evaluating" | "blocked";
+	target_state: "admitted" | "running" | "paused" | "evaluating" | "blocked";
+	policy_sha256: string;
+	blocked_dependency?: ResearchBlockedDependency | null;
+};
+
+export type ConcludeResearchCampaignPayload = {
+	campaign_id: UUID;
+	work_id: UUID;
+	policy_sha256: string;
+	outcome: ResearchCampaignOutcome;
+	reason: string;
 };
 
 export type RecordResearchObservationPayload = {
@@ -1326,7 +1390,9 @@ export type Command =
 	| { type: "cancel_research_campaign"; payload: CancelResearchCampaignPayload }
 	| { type: "propose_research_trial"; payload: ProposeResearchTrialPayload }
 	| { type: "record_research_observation"; payload: RecordResearchObservationPayload }
-	| { type: "bind_research_deliverable"; payload: BindResearchDeliverablePayload };
+	| { type: "bind_research_deliverable"; payload: BindResearchDeliverablePayload }
+	| { type: "set_research_campaign_state"; payload: SetResearchCampaignStatePayload }
+	| { type: "conclude_research_campaign"; payload: ConcludeResearchCampaignPayload };
 
 // ---- command results ----
 
@@ -1418,6 +1484,18 @@ export type BindResearchDeliverableResult = {
 	deliverable_binding: ResearchDeliverableBinding;
 };
 
+export type SetResearchCampaignStateResult = {
+	type: "set_research_campaign_state";
+	status: "applied" | "replayed";
+	campaign: ResearchCampaign;
+};
+
+export type ConcludeResearchCampaignResult = {
+	type: "conclude_research_campaign";
+	status: "applied" | "replayed";
+	campaign: ResearchCampaign;
+};
+
 export type CommandResult =
 	| BudgetResult
 	| ProviderAccountResult
@@ -1429,6 +1507,8 @@ export type CommandResult =
 	| ProposeResearchTrialResult
 	| RecordResearchObservationResult
 	| BindResearchDeliverableResult
+	| SetResearchCampaignStateResult
+	| ConcludeResearchCampaignResult
 	| { type: "create_work_batch"; items: CreatedWorkItem[] }
 	| { type: "create_same_session_child"; item: CreatedWorkItem; receipt: EvidenceReceipt }
 	| { type: "revise_work"; revision_id: UUID; changed: boolean }

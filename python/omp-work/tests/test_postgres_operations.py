@@ -46,7 +46,7 @@ def config(tmp_path: Path) -> OperationsConfig:
 
 def test_pinned_migration_set_is_forward_only() -> None:
     files = migrations()
-    assert [ordinal for ordinal, _ in files] == list(range(1, 37))
+    assert [ordinal for ordinal, _ in files] == list(range(1, 38))
     assert all(path.name.startswith(f"{ordinal:04d}_") for ordinal, path in files)
     assert len(migration_set_sha256()) == 64
 
