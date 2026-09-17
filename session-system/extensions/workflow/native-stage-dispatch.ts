@@ -8,6 +8,7 @@ import {
 	stripUsageCost,
 	type NativeAuditRunResult,
 	type NativeAuditUsage,
+	type NativeStagePreflightAttempt,
 } from "./auditor-runner";
 import type { KnowledgeBridge, KnowledgeExecutionIdentity } from "./knowledge-bridge";
 import { nativeStageRouteCandidates, resolveNativeStageRoute, type NativeStageRole, type NativeStageRoute } from "./native-stage-profile";
@@ -246,42 +247,70 @@ async function dispatchNativeStageLocked(
 	let launch: StageLaunch | undefined;
 	let handoffAttempted = false;
 	let handoffAcknowledged = false;
+	const recordPreflightAttempt = async (attempt: NativeStagePreflightAttempt) => {
+		const routeFields = modelRouteFields(attempt.route);
+		const sessionId = ctx.sessionManager?.getSessionId?.() ?? null;
+		await backend.recordStagePreflight({
+			work_id: item.work_id,
+			revision_id: item.revision.revision_id,
+			candidate_id: identity.candidateId,
+			grant_id: input.grantId ?? null,
+			attempt_id: input.attemptId ?? null,
+			session_id: sessionId,
+			role: input.role,
+			tool_call_id: input.toolCallId,
+			task_sha256: taskSha256,
+			probe_sha256: attempt.probeSha256,
+			transport_attempt_id: attempt.transportAttemptId,
+			ordinal: attempt.ordinal,
+			requested_selector: routeFields.requestedSelector,
+			requested_provider: routeFields.requestedProvider,
+			requested_model: routeFields.requestedModel,
+			requested_api: routeFields.requestedApi,
+			requested_effort: routeFields.requestedEffort,
+			requested_wire_model: routeFields.requestedWireModel,
+			is_fallback: routeFields.isFallback,
+			outcome: attempt.outcome,
+			stop_reason: attempt.stopReason ?? null,
+			error: attempt.error ?? null,
+			requests: null,
+			usage: attempt.usage ? (stripUsageCost(attempt.usage) as StagePreflightUsage) : null,
+			provider_request_id: attempt.providerRequestId ?? null,
+		});
+	};
 	const runner = await prepareNativeStageRunner(ctx, {
 		role: input.role,
 		context,
 		writeRoots: input.writeRoots,
 		routes,
 		boundRoute: input.boundAuditRoute,
-		onPreflightAttempt: async attempt => {
-			const routeFields = modelRouteFields(attempt.route);
-			const sessionId = ctx.sessionManager?.getSessionId?.() ?? null;
-			await backend.recordStagePreflight({
-				work_id: item.work_id,
-				revision_id: item.revision.revision_id,
-				candidate_id: identity.candidateId,
-				grant_id: input.grantId ?? null,
-				attempt_id: input.attemptId ?? null,
-				session_id: sessionId,
-				role: input.role,
-				tool_call_id: input.toolCallId,
-				task_sha256: taskSha256,
-				probe_sha256: attempt.probeSha256,
-				transport_attempt_id: attempt.transportAttemptId,
-				ordinal: attempt.ordinal,
-				requested_selector: routeFields.requestedSelector,
-				requested_provider: routeFields.requestedProvider,
-				requested_model: routeFields.requestedModel,
-				requested_api: routeFields.requestedApi,
-				requested_effort: routeFields.requestedEffort,
-				requested_wire_model: routeFields.requestedWireModel,
-				is_fallback: routeFields.isFallback,
-				outcome: attempt.outcome,
-				stop_reason: attempt.stopReason ?? null,
-				error: attempt.error ?? null,
-				requests: null,
-				usage: attempt.usage ? (stripUsageCost(attempt.usage) as StagePreflightUsage) : null,
-				provider_request_id: attempt.providerRequestId ?? null,
-			});
+		preflight: {
+			begin: async ({ route, ordinal, probeSha256 }) => {
+				const routeFields = modelRouteFields(route);
+				if (typeof backend.beginStagePreflight !== "function") {
+					throw new Error("native stage dispatch requires WorkService beginStagePreflight capability");
+				}
+				return backend.beginStagePreflight({
+					work_id: item.work_id,
+					revision_id: item.revision.revision_id,
+					candidate_id: identity.candidateId,
+					grant_id: input.grantId ?? null,
+					attempt_id: input.attemptId ?? null,
+					role: input.role,
+					tool_call_id: input.toolCallId,
+					task_sha256: taskSha256,
+					probe_sha256: probeSha256,
+					ordinal,
+					requested_selector: routeFields.requestedSelector,
+					requested_provider: routeFields.requestedProvider,
+					requested_model: routeFields.requestedModel,
+					requested_api: routeFields.requestedApi,
+					requested_effort: routeFields.requestedEffort,
+					requested_wire_model: routeFields.requestedWireModel,
+					is_fallback: routeFields.isFallback,
+				});
+			},
+			record: recordPreflightAttempt,
 		},
 		onRouteSelected: selected => {
 			resolvedRouteFields = modelRouteFields(selected);

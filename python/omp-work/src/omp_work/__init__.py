@@ -63,6 +63,7 @@ _ERROR_CODES = frozenset(
         "execution_no_progress",
         "execution_caps_exceeded",
         "budget_exhausted",
+        "preflight_intent_active",
     }
 )
 _SCOPES = frozenset(
@@ -99,6 +100,7 @@ _COMMAND_TYPES = frozenset(
         "settle_stage_launch",
         "cancel_stage_launch",
         "reconcile_stage_launch",
+        "begin_stage_preflight",
         "record_stage_preflight",
         "attest_checkpoint_delivery",
         "record_closeout_review",

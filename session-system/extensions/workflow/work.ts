@@ -40,6 +40,8 @@ import {
 	type ExecutionView,
 	type StageLaunch,
 	type StagePreflight,
+	type BeginStagePreflightPayload,
+	type BeginStagePreflightResult,
 	type RecordStagePreflightPayload,
 	type CandidateSourceVersion,
 } from "@oh-my-pi/pi-work-client";
@@ -1810,6 +1812,31 @@ export function createWorkBackend(
 				...(transport.failed ? { transport_failed: true } : { transport_payload: transport.payload }),
 			});
 			return outcomeOf(result);
+		},
+
+		async beginStagePreflight(payload: BeginStagePreflightPayload): Promise<BeginStagePreflightResult> {
+			// Do NOT use pending-op `run()` for begin_stage_preflight.
+			// Pending-ops persist envelope claims for replay; a replayed `begun`
+			// intent returned by WorkService must NOT be treated as a resolved local claim
+			// that permits probing. A direct `client.execute` envelope with the backend's
+			// stable `correlation_id` ensures WorkService is the sole authority for preflight
+			// intent state and distinct operation replays with a `begun` intent fail closed.
+			const envelope: CommandEnvelope = {
+				api_version: "work.omp.dev/v1",
+				workspace_id: config.workspaceId,
+				operation_id: randomUUID(),
+				request_id: randomUUID(),
+				correlation_id: correlationId,
+				command: {
+					type: "begin_stage_preflight",
+					payload,
+				},
+			};
+			const response = await client.execute(envelope);
+			if (response.result.type !== "begin_stage_preflight") {
+				throw new Error("native stage preflight returned unexpected command result");
+			}
+			return response.result;
 		},
 
 		async recordStagePreflight(payload: RecordStagePreflightPayload): Promise<StagePreflight> {

@@ -47,6 +47,7 @@ class WorkService:
         "settle_stage_launch": "work.execute",
         "cancel_stage_launch": "work.execute",
         "reconcile_stage_launch": "work.execute",
+        "begin_stage_preflight": "work.execute",
         "record_stage_preflight": "work.execute",
         "associate_candidate_source": "work.execute",
         "attest_checkpoint_delivery": "work.close",
@@ -107,6 +108,7 @@ class WorkService:
                 "execution_grant_inactive": 409,
                 "execution_caps_exceeded": 409,
                 "budget_exhausted": 409,
+                "preflight_intent_active": 409,
                 "unavailable": 503,
             }
             raise WorkError(

@@ -19,6 +19,9 @@ import type {
 	StageLaunch,
 	StageLaunchRole,
 	StagePreflight,
+	StagePreflightIntent,
+	BeginStagePreflightPayload,
+	BeginStagePreflightResult,
 	RecordStagePreflightPayload,
 	CandidateSourceVersion,
 	UUID,
@@ -643,6 +646,7 @@ export interface WorkflowBackend {
 	/** Settle the reserved launch with the UNTOUCHED transport payload. */
 	settleAuditorLaunch(key: string, launchId: string, transport: { payload?: unknown; failed?: boolean }): Promise<CloseAttemptOutcome>;
 	/** WorkService-owned native stage lifecycle. Session journal is telemetry only. */
+	beginStagePreflight(payload: BeginStagePreflightPayload): Promise<BeginStagePreflightResult>;
 	recordStagePreflight(payload: RecordStagePreflightPayload): Promise<StagePreflight>;
 	reserveStageLaunch(input: NativeStageLaunchInput): Promise<StageLaunch>;
 	handoffStageLaunch(launchId: string, taskSha256: string): Promise<StageLaunch>;

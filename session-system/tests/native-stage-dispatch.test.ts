@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { canonicalJson, sha256Hex, type RecordStagePreflightPayload, type StageLaunch, type StagePreflight, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, type BeginStagePreflightPayload, type RecordStagePreflightPayload, type StageLaunch, type StagePreflight, type WorkItemView } from "@oh-my-pi/pi-work-client";
 import * as auditorRunner from "../extensions/workflow/auditor-runner";
 import { dispatchNativeStage } from "../extensions/workflow/native-stage-dispatch";
 import type { KnowledgeBridge } from "../extensions/workflow/knowledge-bridge";
@@ -636,7 +636,7 @@ describe("native stage dispatch", () => {
 		const settled = launch("settled");
 
 		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
-			await options.onPreflightAttempt?.({
+			await (options.preflight?.record ?? options.onPreflightAttempt)?.({
 				transportAttemptId: "11111111-1111-4111-8111-111111111111",
 				ordinal: 0,
 				route: {
@@ -653,7 +653,7 @@ describe("native stage dispatch", () => {
 				usage: null,
 				providerRequestId: null,
 			});
-			await options.onPreflightAttempt?.({
+			await (options.preflight?.record ?? options.onPreflightAttempt)?.({
 				transportAttemptId: "22222222-2222-4222-8222-222222222222",
 				ordinal: 1,
 				route: {
@@ -803,7 +803,7 @@ describe("native stage dispatch", () => {
 		const events: string[] = [];
 		const selectedModel = model();
 		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
-			await options.onPreflightAttempt?.({
+			await (options.preflight?.record ?? options.onPreflightAttempt)?.({
 				transportAttemptId: "33333333-3333-4333-8333-333333333333",
 				ordinal: 0,
 				route: {
@@ -865,5 +865,206 @@ describe("native stage dispatch", () => {
 		})).rejects.toThrow("WorkService preflight storage failed");
 
 		expect(events).toEqual([]);
+	});
+
+	test("dispatch begin and record identities match and service-returned transport attempt ID is used", async () => {
+		const beginPayloads: BeginStagePreflightPayload[] = [];
+		const recordPayloads: RecordStagePreflightPayload[] = [];
+		const serviceTransportAttemptId = "44444444-4444-4444-8444-444444444444";
+		const selectedModel = model();
+		const prepared = launch();
+		const settled = launch("settled");
+
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			const route = {
+				requestedSelector: "openai-codex/gpt-5.6-luna:high",
+				model: selectedModel,
+				effort: "high",
+				isFallback: false,
+			};
+			const beginResult = await options.preflight!.begin({
+				route,
+				ordinal: 0,
+				probeSha256: "f".repeat(64),
+			});
+			await options.preflight!.record({
+				transportAttemptId: beginResult.intent.transport_attempt_id,
+				ordinal: 0,
+				route,
+				probeSha256: "f".repeat(64),
+				outcome: "selected",
+				stopReason: "stop",
+				error: null,
+				requests: null,
+				usage: null,
+				providerRequestId: "resp-1",
+			});
+			options.onRouteSelected?.(route);
+			return async (_task, _id) => {
+				await options.onHandoff?.();
+				return { started: true, payload: "{\"ok\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+			};
+		});
+		prepareRestore = () => prepare.mockRestore();
+
+		const fakeWorkClient = {
+			workItem: async () => item(),
+			workflow: async () => ({ stage_launches: [settled] }),
+		};
+
+		const backend = {
+			workspaceId,
+			workClient: fakeWorkClient,
+			beginStagePreflight: async (payload: BeginStagePreflightPayload) => {
+				beginPayloads.push(payload);
+				return {
+					type: "begin_stage_preflight",
+					status: "applied",
+					intent: {
+						intent_id: "00000000-0000-4000-8000-000000000001",
+						workspace_id: workspaceId,
+						work_id: payload.work_id,
+						revision_id: payload.revision_id,
+						candidate_id: payload.candidate_id ?? null,
+						attempt_id: payload.attempt_id ?? null,
+						grant_id: payload.grant_id ?? null,
+						role: payload.role,
+						tool_call_id: payload.tool_call_id,
+						task_sha256: payload.task_sha256,
+						probe_sha256: payload.probe_sha256,
+						transport_attempt_id: serviceTransportAttemptId,
+						ordinal: payload.ordinal,
+						requested_selector: payload.requested_selector,
+						requested_provider: payload.requested_provider,
+						requested_model: payload.requested_model,
+						requested_api: payload.requested_api,
+						requested_effort: payload.requested_effort ?? null,
+						requested_wire_model: payload.requested_wire_model,
+						is_fallback: payload.is_fallback,
+						logical_sha256: "0".repeat(64),
+						group_sha256: "0".repeat(64),
+						host_owner_id: "owner-1",
+						status: "begun",
+						created_at: new Date().toISOString(),
+						settled_at: null,
+					},
+					preflight: undefined,
+				};
+			},
+			recordStagePreflight: async (payload: RecordStagePreflightPayload) => {
+				recordPayloads.push(payload);
+				return {
+					preflight_id: "preflight-1",
+					workspace_id: workspaceId,
+					observed_at: new Date().toISOString(),
+					...payload,
+				} as StagePreflight;
+			},
+			reserveStageLaunch: async () => prepared,
+			handoffStageLaunch: async () => ({ ...prepared, status: "handed_off" as const }),
+			settleStageLaunch: async () => settled,
+		} as unknown as WorkflowBackend;
+
+		const ctx = {
+			models: {
+				resolve: () => selectedModel,
+				list: () => [selectedModel],
+				current: () => selectedModel,
+				family: () => "openai-codex/gpt-5.6-luna",
+			},
+			sessionManager: {
+				getSessionId: () => "session-1",
+			},
+		} as unknown as ExtensionContext;
+
+		const result = await dispatchNativeStage(ctx, backend, undefined, {
+			workKey: "OMP-1",
+			role: "implement",
+			taskBody: "edit sealed file",
+			toolCallId: "call-1",
+			grantId,
+		});
+
+		expect(result.launch.status).toBe("settled");
+		expect(beginPayloads).toHaveLength(1);
+		expect(recordPayloads).toHaveLength(1);
+
+		const begin = beginPayloads[0];
+		const record = recordPayloads[0];
+
+		// Identities match
+		expect(begin.work_id).toBe(record.work_id);
+		expect(begin.revision_id).toBe(record.revision_id);
+		expect(begin.candidate_id).toBe(record.candidate_id);
+		expect(begin.grant_id).toBe(record.grant_id);
+		expect(begin.attempt_id).toBe(record.attempt_id);
+		// session_id is deliberately excluded from begin intent payload
+		expect((begin as Record<string, unknown>).session_id).toBeUndefined();
+		expect(record.session_id).toBe("session-1");
+		expect(begin.role).toBe(record.role);
+		expect(begin.tool_call_id).toBe(record.tool_call_id);
+		expect(begin.task_sha256).toBe(record.task_sha256);
+		expect(begin.probe_sha256).toBe(record.probe_sha256);
+		expect(begin.ordinal).toBe(record.ordinal);
+		expect(begin.requested_selector).toBe(record.requested_selector);
+		expect(begin.requested_provider).toBe(record.requested_provider);
+		expect(begin.requested_model).toBe(record.requested_model);
+		expect(begin.requested_api).toBe(record.requested_api);
+		expect(begin.requested_effort).toBe(record.requested_effort);
+		expect(begin.requested_wire_model).toBe(record.requested_wire_model);
+		expect(begin.is_fallback).toBe(record.is_fallback);
+
+		// Record used the service-minted transportAttemptId
+		expect(record.transport_attempt_id).toBe(serviceTransportAttemptId);
+	});
+
+	test("dispatch fails closed when beginStagePreflight capability is absent", async () => {
+		const selectedModel = model();
+		const workItem = item();
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			const route = {
+				requestedSelector: "openai-codex/gpt-5.6-luna:high",
+				model: selectedModel,
+				effort: "high",
+				isFallback: false,
+			};
+			await options.preflight!.begin({
+				route,
+				ordinal: 0,
+				probeSha256: "f".repeat(64),
+			});
+			return async () => ({ started: true, payload: "{}", resolvedModel: null });
+		});
+		prepareRestore = () => prepare.mockRestore();
+
+		const backend = {
+			workspaceId,
+			workClient: {
+				workItem: async () => workItem,
+			},
+			// beginStagePreflight is absent
+		} as unknown as WorkflowBackend;
+
+		const ctx = {
+			models: {
+				resolve: () => selectedModel,
+				list: () => [selectedModel],
+				current: () => selectedModel,
+				family: () => "openai-codex/gpt-5.6-luna",
+			},
+			sessionManager: {
+				getSessionId: () => "session-1",
+			},
+		} as unknown as ExtensionContext;
+
+		await expect(
+			dispatchNativeStage(ctx, backend, undefined, {
+				workKey: "OMP-1",
+				role: "implement",
+				taskBody: "edit sealed file",
+				toolCallId: "call-1",
+				grantId,
+			}),
+		).rejects.toThrow("native stage dispatch requires WorkService beginStagePreflight capability");
 	});
 });

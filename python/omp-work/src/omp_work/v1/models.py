@@ -468,6 +468,40 @@ class StagePreflight(StrictModel):
         return self
 
 
+class StagePreflightIntentStatus(StrEnum):
+    BEGUN = "begun"
+    SETTLED = "settled"
+
+
+class StagePreflightIntent(StrictModel):
+    intent_id: UUID
+    workspace_id: UUID
+    work_id: UUID
+    revision_id: UUID | None = None
+    candidate_id: UUID | None = None
+    attempt_id: UUID | None = None
+    grant_id: UUID | None = None
+    role: StageLaunchRole
+    tool_call_id: str = Field(min_length=1)
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    probe_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    transport_attempt_id: UUID
+    ordinal: int = Field(ge=0, strict=True)
+    requested_selector: str = Field(min_length=1)
+    requested_provider: str = Field(min_length=1)
+    requested_model: str = Field(min_length=1)
+    requested_api: str = Field(min_length=1)
+    requested_effort: str = Field(min_length=1)
+    requested_wire_model: str = Field(min_length=1)
+    is_fallback: bool = False
+    logical_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    group_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    host_owner_id: UUID | None = None
+    status: StagePreflightIntentStatus
+    created_at: datetime
+    settled_at: datetime | None = None
+
+
 class CandidateSourceVersion(StrictModel):
     candidate_id: UUID
     workspace_id: UUID
@@ -1023,6 +1057,26 @@ class ReconcileStageLaunchPayload(StrictModel):
     reason: str = Field(min_length=1)
 
 
+class BeginStagePreflightPayload(StrictModel):
+    work_id: UUID
+    revision_id: UUID | None = None
+    candidate_id: UUID | None = None
+    attempt_id: UUID | None = None
+    grant_id: UUID | None = None
+    role: StageLaunchRole
+    tool_call_id: str = Field(min_length=1)
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    probe_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ordinal: int = Field(ge=0, strict=True)
+    requested_selector: str = Field(min_length=1)
+    requested_provider: str = Field(min_length=1)
+    requested_model: str = Field(min_length=1)
+    requested_api: str = Field(min_length=1)
+    requested_effort: str = Field(min_length=1)
+    requested_wire_model: str = Field(min_length=1)
+    is_fallback: bool = False
+
+
 class RecordStagePreflightPayload(StrictModel):
     work_id: UUID
     revision_id: UUID | None = None
@@ -1498,6 +1552,11 @@ class ReconcileStageLaunchCommand(StrictModel):
     payload: ReconcileStageLaunchPayload
 
 
+class BeginStagePreflightCommand(StrictModel):
+    type: Literal["begin_stage_preflight"]
+    payload: BeginStagePreflightPayload
+
+
 class RecordStagePreflightCommand(StrictModel):
     type: Literal["record_stage_preflight"]
     payload: RecordStagePreflightPayload
@@ -1599,6 +1658,7 @@ Command = Annotated[
     | SettleStageLaunchCommand
     | CancelStageLaunchCommand
     | ReconcileStageLaunchCommand
+    | BeginStagePreflightCommand
     | RecordStagePreflightCommand
     | CreateBudgetScopeCommand
     | ReserveBudgetCommand

@@ -13,6 +13,7 @@ from .models import (
     CandidateSourceVersion,
     StageLaunch,
     StagePreflight,
+    StagePreflightIntent,
     Candidate,
     CheckpointDelivery,
     CloseAttempt,
@@ -77,6 +78,13 @@ class StageLaunchResult(StrictModel):
     status: Literal["applied", "replayed", "refused"]
     launch: StageLaunch | None = None
     reason: str | None = None
+
+
+class BeginStagePreflightResult(StrictModel):
+    type: Literal["begin_stage_preflight"]
+    status: Literal["applied", "replayed"]
+    intent: StagePreflightIntent
+    preflight: StagePreflight | None = None
 
 
 class StagePreflightResult(StrictModel):
@@ -381,6 +389,7 @@ CommandResult = Annotated[
     | FinalizeCandidateResult
     | CloseAttemptResult
     | StageLaunchResult
+    | BeginStagePreflightResult
     | StagePreflightResult
     | CandidateSourceAssociationResult
     | RecordCloseoutReviewResult

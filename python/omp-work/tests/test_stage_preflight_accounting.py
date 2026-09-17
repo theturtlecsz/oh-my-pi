@@ -69,14 +69,45 @@ def _preflight_payload(
     return base
 
 
+def _begin_preflight_for(service, workspace_id: UUID, payload: dict, **kwargs) -> str:
+    begin_payload = {
+        "work_id": payload["work_id"],
+        "role": payload.get("role", "implement"),
+        "tool_call_id": payload["tool_call_id"],
+        "task_sha256": payload["task_sha256"],
+        "probe_sha256": payload["probe_sha256"],
+        "ordinal": payload.get("ordinal", 0),
+        "requested_selector": payload["requested_selector"],
+        "requested_provider": payload["requested_provider"],
+        "requested_model": payload["requested_model"],
+        "requested_api": payload["requested_api"],
+        "requested_effort": payload.get("requested_effort", "medium"),
+        "requested_wire_model": payload["requested_wire_model"],
+        "is_fallback": payload.get("is_fallback", False),
+    }
+    for k in ("revision_id", "candidate_id", "grant_id", "attempt_id"):
+        if k in payload and payload[k] is not None:
+            begin_payload[k] = payload[k]
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_payload},
+        **kwargs,
+    )
+    assert status == 200, body
+    transport_id = body["result"]["intent"]["transport_attempt_id"]
+    payload["transport_attempt_id"] = transport_id
+    return transport_id
+
+
 def test_record_stage_preflight_applied_and_workflow_readback(service) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)
     item = _create(service, workspace_id, "preflight item")
     work_id = item["work_id"]
 
-    transport_attempt_id = str(uuid4())
-    payload = _preflight_payload(work_id, transport_attempt_id=transport_attempt_id)
+    payload = _preflight_payload(work_id)
+    transport_attempt_id = _begin_preflight_for(service, workspace_id, payload)
 
     status, body = _command(
         service,
@@ -126,8 +157,8 @@ def test_record_stage_preflight_exact_replay_and_conflict_and_distinct_transport
     item = _create(service, workspace_id, "replay item")
     work_id = item["work_id"]
 
-    transport_attempt_id = str(uuid4())
-    payload = _preflight_payload(work_id, transport_attempt_id=transport_attempt_id)
+    payload = _preflight_payload(work_id, outcome="failed", error="probe failed")
+    transport_attempt_id = _begin_preflight_for(service, workspace_id, payload)
 
     # First attempt: applied
     status, body1 = _command(
@@ -167,9 +198,14 @@ def test_record_stage_preflight_exact_replay_and_conflict_and_distinct_transport
     assert status == 409, conflict_body
     assert conflict_body["error"]["code"] == "idempotency_conflict"
 
-    # Same probe hash and task hash, but NEW transport_attempt_id creates second row
-    new_transport_payload = dict(payload)
-    new_transport_payload["transport_attempt_id"] = str(uuid4())
+    # Same probe hash and task hash, but NEW transport_attempt_id creates second row (next ordinal)
+    new_transport_payload = _preflight_payload(
+        work_id,
+        tool_call_id=payload["tool_call_id"],
+        ordinal=1,
+        outcome="selected",
+    )
+    _begin_preflight_for(service, workspace_id, new_transport_payload)
     status, body3 = _command(
         service,
         workspace_id,
@@ -203,6 +239,7 @@ def test_record_stage_preflight_usage_validation(service) -> None:
         error="connection timeout",
         usage=None,
     )
+    _begin_preflight_for(service, workspace_id, null_usage_payload)
     status, body = _command(
         service,
         workspace_id,
@@ -215,6 +252,7 @@ def test_record_stage_preflight_usage_validation(service) -> None:
     # 2. Valid zeros roundtrip
     zero_usage_payload = _preflight_payload(
         work_id,
+        tool_call_id=f"tool-{uuid4()}",
         outcome="selected",
         usage={
             "input": 0,
@@ -225,6 +263,7 @@ def test_record_stage_preflight_usage_validation(service) -> None:
             "orchestration": {"input": 0, "output": 0, "cacheRead": 0},
         },
     )
+    _begin_preflight_for(service, workspace_id, zero_usage_payload)
     status, body = _command(
         service,
         workspace_id,
@@ -318,6 +357,7 @@ def test_record_stage_preflight_identity_binding_and_no_launch_side_effects(serv
         grant_id=grant_id,
         session_id="session-1",
     )
+    _begin_preflight_for(service, workspace_id, valid_bound_payload)
     status, body = _command(
         service,
         workspace_id,
@@ -337,6 +377,30 @@ def test_record_stage_preflight_identity_binding_and_no_launch_side_effects(serv
         other_item["work_id"],
         revision_id=revision_id,
     )
+    begin_mismatched = {
+        "work_id": mismatched_payload["work_id"],
+        "revision_id": mismatched_payload["revision_id"],
+        "role": mismatched_payload["role"],
+        "tool_call_id": mismatched_payload["tool_call_id"],
+        "task_sha256": mismatched_payload["task_sha256"],
+        "probe_sha256": mismatched_payload["probe_sha256"],
+        "ordinal": mismatched_payload["ordinal"],
+        "requested_selector": mismatched_payload["requested_selector"],
+        "requested_provider": mismatched_payload["requested_provider"],
+        "requested_model": mismatched_payload["requested_model"],
+        "requested_api": mismatched_payload["requested_api"],
+        "requested_effort": mismatched_payload["requested_effort"],
+        "requested_wire_model": mismatched_payload["requested_wire_model"],
+        "is_fallback": mismatched_payload["is_fallback"],
+    }
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "begin_stage_preflight", "payload": begin_mismatched},
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "stale_evidence"
+
     status, body = _command(
         service,
         workspace_id,
@@ -348,12 +412,14 @@ def test_record_stage_preflight_identity_binding_and_no_launch_side_effects(serv
     # Null identities succeed
     null_identities_payload = _preflight_payload(
         work_id,
+        tool_call_id=f"tool-{uuid4()}",
         revision_id=None,
         candidate_id=None,
         attempt_id=None,
         grant_id=None,
         session_id=None,
     )
+    _begin_preflight_for(service, workspace_id, null_identities_payload)
     status, body = _command(
         service,
         workspace_id,
@@ -418,6 +484,7 @@ def test_record_stage_preflight_outcome_and_hash_invariants(service) -> None:
         outcome="cancelled",
         error="user aborted launch",
     )
+    _begin_preflight_for(service, workspace_id, valid_cancelled)
     status, body = _command(
         service,
         workspace_id,
@@ -456,6 +523,7 @@ def test_record_stage_preflight_workspace_isolation_and_table_privilege_denials(
     item_b = _create(service, ws_b, "workspace B item")
 
     payload_a = _preflight_payload(item_a["work_id"])
+    _begin_preflight_for(service, ws_a, payload_a)
     status, body = _command(
         service,
         ws_a,
@@ -589,6 +657,7 @@ def test_stage_preflight_and_launch_grant_inactive_precedence(service) -> None:
         candidate_id=candidate_id,
         attempt_id=attempt_id,
     )
+    _begin_preflight_for(service, workspace_id, preflight_payload)
     status, body = _command(
         service,
         workspace_id,

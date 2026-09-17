@@ -7,7 +7,12 @@
  */
 import { randomUUID } from "node:crypto";
 import { completeSimple, type AssistantMessage, type Usage } from "@oh-my-pi/pi-ai";
-import { sha256Hex } from "@oh-my-pi/pi-work-client";
+import {
+	type BeginStagePreflightResult,
+	sha256Hex,
+	type StagePreflight,
+	type UUID,
+} from "@oh-my-pi/pi-work-client";
 import { getAgentDir, Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { formatModelSelectorValue, formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { resolveAuditPolicy } from "./audit-policy";
@@ -24,7 +29,7 @@ export function stripUsageCost(usage: Usage | NativeAuditUsage): NativeAuditUsag
 }
 
 export interface NativeStagePreflightAttempt {
-	transportAttemptId: string;
+	transportAttemptId: UUID;
 	ordinal: number;
 	route: NativeStageRoute;
 	probeSha256: string;
@@ -34,6 +39,17 @@ export interface NativeStagePreflightAttempt {
 	requests: null;
 	usage?: NativeAuditUsage | null;
 	providerRequestId?: string | null;
+}
+
+export interface NativeStagePreflightBeginInput {
+	route: NativeStageRoute;
+	ordinal: number;
+	probeSha256: string;
+}
+
+export interface NativeStagePreflightCallbacks {
+	begin: (input: NativeStagePreflightBeginInput) => Promise<BeginStagePreflightResult>;
+	record: (attempt: NativeStagePreflightAttempt) => Promise<StagePreflight | void>;
 }
 
 export interface NativeAuditRunResult {
@@ -65,6 +81,8 @@ export type NativeStageRunnerOptions = {
 	routes?: readonly NativeStageRoute[];
 	/** Bound immutable route passed from host TCB sealing. */
 	boundRoute?: NativeStageRoute;
+	/** WorkService preflight lifecycle callbacks (begin intent + terminal record). */
+	preflight?: NativeStagePreflightCallbacks;
 	/** Reports each actual transport preflight probe attempt. */
 	onPreflightAttempt?: (attempt: NativeStagePreflightAttempt) => void | Promise<void>;
 	/** Reports the route that survived credential and transport preflight. */
@@ -103,6 +121,11 @@ export async function prepareNativeStageRunner(
 	signal?: AbortSignal,
 ): Promise<NativeAuditRunner> {
 	if (signal?.aborted) throw new DOMException("Native stage preflight cancelled", "AbortError");
+	if (options.preflight) {
+		if (typeof options.preflight.begin !== "function" || typeof options.preflight.record !== "function") {
+			throw new Error("preflight option requires both begin and record callbacks");
+		}
+	}
 	const discovery = await discoverAgents(ctx.cwd);
 	const agentName = options.agentName ?? nativeStageAgentNames[options.role];
 	const agent = getAgent(discovery.agents, agentName);
@@ -162,8 +185,58 @@ export async function prepareNativeStageRunner(
 			}
 		}
 
-		const transportAttemptId = randomUUID();
 		const currentOrdinal = ordinal++;
+		let transportAttemptId: UUID = randomUUID();
+
+		if (options.preflight) {
+			const beginResult = await options.preflight.begin({
+				route: candidate,
+				ordinal: currentOrdinal,
+				probeSha256,
+			});
+			if (beginResult.status === "replayed") {
+				if (beginResult.intent.status === "begun") {
+					throw new Error(
+						`preflight intent active for ${candidate.requestedSelector} (transport attempt ${beginResult.intent.transport_attempt_id}): recovery required`,
+					);
+				}
+				if (beginResult.intent.status === "settled") {
+					const terminal = beginResult.preflight;
+					if (!terminal) {
+						throw new Error(
+							`settled preflight intent ${beginResult.intent.transport_attempt_id} missing terminal evidence`,
+						);
+					}
+					if (terminal.outcome === "selected") {
+						route = candidate;
+						break;
+					}
+					if (terminal.outcome === "failed") {
+						preflightError = new Error(
+							terminal.error ??
+								`native ${options.role} transport preflight settled failed for ${candidate.requestedSelector}`,
+						);
+						continue;
+					}
+					if (terminal.outcome === "cancelled") {
+						throw new DOMException(
+							terminal.error ?? "Native stage preflight cancelled",
+							"AbortError",
+						);
+					}
+				}
+			}
+			transportAttemptId = beginResult.intent.transport_attempt_id;
+		}
+
+		const recordAttempt = async (attempt: NativeStagePreflightAttempt) => {
+			if (options.preflight) {
+				await options.preflight.record(attempt);
+			} else if (options.onPreflightAttempt) {
+				await options.onPreflightAttempt(attempt);
+			}
+		};
+
 		let probe: AssistantMessage | undefined;
 		let thrownError: unknown;
 		try {
@@ -185,7 +258,7 @@ export async function prepareNativeStageRunner(
 				const cancelText = options.legacyAudit
 					? `@audit transport preflight cancelled for ${stageModel.provider}/${stageModel.id}`
 					: `native ${options.role} transport preflight cancelled for ${stageModel.provider}/${stageModel.id}`;
-				await options.onPreflightAttempt?.({
+				await recordAttempt({
 					transportAttemptId,
 					ordinal: currentOrdinal,
 					route: candidate,
@@ -203,7 +276,7 @@ export async function prepareNativeStageRunner(
 				? `@audit transport preflight failed for ${stageModel.provider}/${stageModel.id}: ${thrownError instanceof Error ? thrownError.message : String(thrownError)}`
 				: `native ${options.role} transport preflight failed for ${stageModel.provider}/${stageModel.id}: ${thrownError instanceof Error ? thrownError.message : String(thrownError)}`;
 			preflightError = new Error(failText);
-			await options.onPreflightAttempt?.({
+			await recordAttempt({
 				transportAttemptId,
 				ordinal: currentOrdinal,
 				route: candidate,
@@ -224,7 +297,7 @@ export async function prepareNativeStageRunner(
 				? `@audit transport preflight error for ${stageModel.provider}/${stageModel.id}: ${detail}`
 				: `native ${options.role} transport preflight error for ${stageModel.provider}/${stageModel.id}: ${detail}`;
 			preflightError = new Error(failText);
-			await options.onPreflightAttempt?.({
+			await recordAttempt({
 				transportAttemptId,
 				ordinal: currentOrdinal,
 				route: candidate,
@@ -245,7 +318,7 @@ export async function prepareNativeStageRunner(
 				? `@audit transport preflight aborted for ${stageModel.provider}/${stageModel.id}: ${detail}`
 				: `native ${options.role} transport preflight aborted for ${stageModel.provider}/${stageModel.id}: ${detail}`;
 			preflightError = new Error(abortText);
-			await options.onPreflightAttempt?.({
+			await recordAttempt({
 				transportAttemptId,
 				ordinal: currentOrdinal,
 				route: candidate,
@@ -263,7 +336,7 @@ export async function prepareNativeStageRunner(
 			continue;
 		}
 
-		await options.onPreflightAttempt?.({
+		await recordAttempt({
 			transportAttemptId,
 			ordinal: currentOrdinal,
 			route: candidate,

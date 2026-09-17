@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import type { ToolCallEventResult } from "@oh-my-pi/pi-coding-agent/extensibility/shared-events";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { WORK_CONTRACT_SHA256, sha256Hex, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope, type RecordStagePreflightPayload } from "@oh-my-pi/pi-work-client";
+import { WORK_CONTRACT_SHA256, sha256Hex, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope, type RecordStagePreflightPayload, type BeginStagePreflightPayload, type BeginStagePreflightResult } from "@oh-my-pi/pi-work-client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { z } from "zod";
@@ -211,6 +211,46 @@ function attachStageLaunchFixture<T extends Record<string, unknown>>(
 
 	backendRecord.stageLaunches = stageLaunches;
 	backendRecord.stagePreflights = stagePreflights;
+
+	backendRecord.beginStagePreflight = async (payload: BeginStagePreflightPayload): Promise<BeginStagePreflightResult> => {
+		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
+		callLog?.push("beginStagePreflight");
+		const transport_attempt_id = crypto.randomUUID();
+		const intent = {
+			intent_id: `intent-${nextPreflightId}`,
+			workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+			work_id: payload.work_id,
+			revision_id: payload.revision_id,
+			candidate_id: payload.candidate_id ?? null,
+			attempt_id: payload.attempt_id ?? null,
+			grant_id: payload.grant_id ?? null,
+			role: payload.role,
+			tool_call_id: payload.tool_call_id,
+			task_sha256: payload.task_sha256,
+			probe_sha256: payload.probe_sha256,
+			transport_attempt_id,
+			ordinal: payload.ordinal,
+			requested_selector: payload.requested_selector,
+			requested_provider: payload.requested_provider,
+			requested_model: payload.requested_model,
+			requested_api: payload.requested_api,
+			requested_effort: payload.requested_effort ?? null,
+			requested_wire_model: payload.requested_wire_model,
+			is_fallback: payload.is_fallback,
+			logical_sha256: "0".repeat(64),
+			group_sha256: "0".repeat(64),
+			host_owner_id: "00000000-0000-0000-0000-000000000001",
+			status: "begun" as const,
+			created_at: new Date().toISOString(),
+			settled_at: null,
+		};
+		return {
+			type: "begin_stage_preflight",
+			status: "applied",
+			intent,
+			preflight: undefined,
+		};
+	};
 
 	backendRecord.recordStagePreflight = async (payload: RecordStagePreflightPayload) => {
 		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
@@ -1093,6 +1133,305 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(sentContent).toBe("Transport preflight. Reply with the single word OK.");
 		expect(attemptRecorded?.probeSha256).toBe("968ec1efc411d085cb287574524382c932fb0a435154bb15fa175aaf1e471617");
 		expect(attemptRecorded?.probeSha256).toBe(sha256Hex(sentContent));
+	});
+
+	test("preflight executes in order: begin -> provider probe -> record with returned transport attempt ID", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const events: string[] = [];
+		vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
+			events.push("probe");
+			return { stopReason: "stop", content: [{ type: "text", text: "OK" }] } as never;
+		});
+		let recordedAttempt: NativeStagePreflightAttempt | undefined;
+		const serviceTransportAttemptId = "55555555-5555-4555-8555-555555555555";
+
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => gemini },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		await prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			preflight: {
+				begin: async ({ route, ordinal, probeSha256 }) => {
+					events.push("begin");
+					return {
+						type: "begin_stage_preflight",
+						status: "applied",
+						intent: {
+							intent_id: "00000000-0000-4000-8000-000000000001",
+							workspace_id: "ws-1",
+							work_id: "work-1",
+							revision_id: "rev-1",
+							candidate_id: null,
+							attempt_id: null,
+							grant_id: null,
+							role: "implement",
+							tool_call_id: "call-1",
+							task_sha256: "0".repeat(64),
+							probe_sha256: probeSha256,
+							transport_attempt_id: serviceTransportAttemptId,
+							ordinal,
+							requested_selector: route.requestedSelector,
+							requested_provider: route.model.provider,
+							requested_model: route.model.id,
+							requested_api: route.model.api,
+							requested_effort: route.effort ?? null,
+							requested_wire_model: route.model.id,
+							is_fallback: route.isFallback,
+							logical_sha256: "0".repeat(64),
+							group_sha256: "0".repeat(64),
+							host_owner_id: "owner-1",
+							status: "begun",
+							created_at: new Date().toISOString(),
+							settled_at: null,
+						},
+						preflight: undefined,
+					};
+				},
+				record: async attempt => {
+					events.push("record");
+					recordedAttempt = attempt;
+				},
+			},
+		});
+
+		expect(events).toEqual(["begin", "probe", "record"]);
+		expect(recordedAttempt?.transportAttemptId).toBe(serviceTransportAttemptId);
+		expect(recordedAttempt?.outcome).toBe("selected");
+	});
+
+	test("replayed settled preflight skips provider probe and produces correct route result", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const probeSpy = vi.spyOn(ai, "completeSimple");
+		const events: string[] = [];
+		let selectedRoute: NativeStageRoute | undefined;
+
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => gemini },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		await prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			preflight: {
+				begin: async ({ route, ordinal, probeSha256 }) => {
+					events.push("begin");
+					return {
+						type: "begin_stage_preflight",
+						status: "replayed",
+						intent: {
+							intent_id: "00000000-0000-4000-8000-000000000001",
+							workspace_id: "ws-1",
+							work_id: "work-1",
+							revision_id: "rev-1",
+							candidate_id: null,
+							attempt_id: null,
+							grant_id: null,
+							role: "implement",
+							tool_call_id: "call-1",
+							task_sha256: "0".repeat(64),
+							probe_sha256: probeSha256,
+							transport_attempt_id: "77777777-7777-4777-8777-777777777777",
+							ordinal,
+							requested_selector: route.requestedSelector,
+							requested_provider: route.model.provider,
+							requested_model: route.model.id,
+							requested_api: route.model.api,
+							requested_effort: route.effort ?? null,
+							requested_wire_model: route.model.id,
+							is_fallback: route.isFallback,
+							logical_sha256: "0".repeat(64),
+							group_sha256: "0".repeat(64),
+							host_owner_id: "owner-1",
+							status: "settled",
+							created_at: new Date().toISOString(),
+							settled_at: new Date().toISOString(),
+						},
+						preflight: {
+							preflight_id: "preflight-existing",
+							workspace_id: "ws-1",
+							work_id: "work-1",
+							revision_id: "rev-1",
+							candidate_id: null,
+							attempt_id: null,
+							grant_id: null,
+							session_id: null,
+							role: "implement",
+							tool_call_id: "call-1",
+							task_sha256: "0".repeat(64),
+							probe_sha256: probeSha256,
+							transport_attempt_id: "77777777-7777-4777-8777-777777777777",
+							ordinal,
+							requested_selector: route.requestedSelector,
+							requested_provider: route.model.provider,
+							requested_model: route.model.id,
+							requested_api: route.model.api,
+							requested_effort: route.effort ?? null,
+							requested_wire_model: route.model.id,
+							is_fallback: route.isFallback,
+							outcome: "selected",
+							stop_reason: "stop",
+							error: null,
+							requests: null,
+							usage: null,
+							provider_request_id: "prev-req-1",
+							observed_at: new Date().toISOString(),
+						},
+					};
+				},
+				record: async () => {
+					events.push("record");
+				},
+			},
+			onRouteSelected: route => {
+				selectedRoute = route;
+			},
+		});
+
+		expect(events).toEqual(["begin"]);
+		expect(probeSpy).not.toHaveBeenCalled();
+		expect(selectedRoute).toBeDefined();
+		expect(selectedRoute?.model.id).toBe("gemini-3.8-flash");
+	});
+
+	test("replayed begun preflight blocks provider probe, reservation, handoff, and runner", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const probeSpy = vi.spyOn(ai, "completeSimple");
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess");
+		let routeSelected = false;
+
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => gemini },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		await expect(prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			preflight: {
+				begin: async ({ route, ordinal, probeSha256 }) => {
+					return {
+						type: "begin_stage_preflight",
+						status: "replayed",
+						intent: {
+							intent_id: "00000000-0000-4000-8000-000000000001",
+							workspace_id: "ws-1",
+							work_id: "work-1",
+							revision_id: "rev-1",
+							candidate_id: null,
+							attempt_id: null,
+							grant_id: null,
+							role: "implement",
+							tool_call_id: "call-1",
+							task_sha256: "0".repeat(64),
+							probe_sha256: probeSha256,
+							transport_attempt_id: "88888888-8888-4888-8888-888888888888",
+							ordinal,
+							requested_selector: route.requestedSelector,
+							requested_provider: route.model.provider,
+							requested_model: route.model.id,
+							requested_api: route.model.api,
+							requested_effort: route.effort ?? null,
+							requested_wire_model: route.model.id,
+							is_fallback: route.isFallback,
+							logical_sha256: "0".repeat(64),
+							group_sha256: "0".repeat(64),
+							host_owner_id: "owner-1",
+							status: "begun",
+							created_at: new Date().toISOString(),
+							settled_at: null,
+						},
+						preflight: undefined,
+					};
+				},
+				record: async () => {},
+			},
+			onRouteSelected: () => {
+				routeSelected = true;
+			},
+		})).rejects.toThrow(/preflight intent active.*recovery required/);
+
+		expect(probeSpy).not.toHaveBeenCalled();
+		expect(routeSelected).toBe(false);
+		expect(runSubprocessSpy).not.toHaveBeenCalled();
+	});
+
+	test("begin response loss followed by reconstructed dispatch reaches same begun intent and sends zero provider probes", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const probeSpy = vi.spyOn(ai, "completeSimple");
+
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => gemini },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		await expect(prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			preflight: {
+				begin: async ({ route, ordinal, probeSha256 }) => {
+					return {
+						type: "begin_stage_preflight",
+						status: "replayed",
+						intent: {
+							intent_id: "00000000-0000-4000-8000-000000000001",
+							workspace_id: "ws-1",
+							work_id: "work-1",
+							revision_id: "rev-1",
+							candidate_id: null,
+							attempt_id: null,
+							grant_id: null,
+							role: "implement",
+							tool_call_id: "call-1",
+							task_sha256: "0".repeat(64),
+							probe_sha256: probeSha256,
+							transport_attempt_id: "99999999-9999-4999-8999-999999999999",
+							ordinal,
+							requested_selector: route.requestedSelector,
+							requested_provider: route.model.provider,
+							requested_model: route.model.id,
+							requested_api: route.model.api,
+							requested_effort: route.effort ?? null,
+							requested_wire_model: route.model.id,
+							is_fallback: route.isFallback,
+							logical_sha256: "0".repeat(64),
+							group_sha256: "0".repeat(64),
+							host_owner_id: "owner-1",
+							status: "begun",
+							created_at: new Date().toISOString(),
+							settled_at: null,
+						},
+						preflight: undefined,
+					};
+				},
+				record: async () => {},
+			},
+		})).rejects.toThrow(/preflight intent active.*recovery required/);
+
+		expect(probeSpy).not.toHaveBeenCalled();
 	});
 
 	test("native stage refuses a subprocess that reports an unallowlisted served model", async () => {

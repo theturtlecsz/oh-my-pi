@@ -3169,6 +3169,321 @@
       "title": "BeginExecutionPayload",
       "type": "object"
     },
+    "BeginStagePreflightCommand": {
+      "$defs": {
+        "BeginStagePreflightPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grant Id"
+            },
+            "is_fallback": {
+              "default": false,
+              "title": "Is Fallback",
+              "type": "boolean"
+            },
+            "ordinal": {
+              "minimum": 0,
+              "title": "Ordinal",
+              "type": "integer"
+            },
+            "probe_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Probe Sha256",
+              "type": "string"
+            },
+            "requested_api": {
+              "minLength": 1,
+              "title": "Requested Api",
+              "type": "string"
+            },
+            "requested_effort": {
+              "minLength": 1,
+              "title": "Requested Effort",
+              "type": "string"
+            },
+            "requested_model": {
+              "minLength": 1,
+              "title": "Requested Model",
+              "type": "string"
+            },
+            "requested_provider": {
+              "minLength": 1,
+              "title": "Requested Provider",
+              "type": "string"
+            },
+            "requested_selector": {
+              "minLength": 1,
+              "title": "Requested Selector",
+              "type": "string"
+            },
+            "requested_wire_model": {
+              "minLength": 1,
+              "title": "Requested Wire Model",
+              "type": "string"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision Id"
+            },
+            "role": {
+              "$ref": "#/$defs/StageLaunchRole"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "role",
+            "tool_call_id",
+            "task_sha256",
+            "probe_sha256",
+            "ordinal",
+            "requested_selector",
+            "requested_provider",
+            "requested_model",
+            "requested_api",
+            "requested_effort",
+            "requested_wire_model"
+          ],
+          "title": "BeginStagePreflightPayload",
+          "type": "object"
+        },
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/BeginStagePreflightPayload"
+        },
+        "type": {
+          "const": "begin_stage_preflight",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "BeginStagePreflightCommand",
+      "type": "object"
+    },
+    "BeginStagePreflightPayload": {
+      "$defs": {
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempt Id"
+        },
+        "candidate_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grant Id"
+        },
+        "is_fallback": {
+          "default": false,
+          "title": "Is Fallback",
+          "type": "boolean"
+        },
+        "ordinal": {
+          "minimum": 0,
+          "title": "Ordinal",
+          "type": "integer"
+        },
+        "probe_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Probe Sha256",
+          "type": "string"
+        },
+        "requested_api": {
+          "minLength": 1,
+          "title": "Requested Api",
+          "type": "string"
+        },
+        "requested_effort": {
+          "minLength": 1,
+          "title": "Requested Effort",
+          "type": "string"
+        },
+        "requested_model": {
+          "minLength": 1,
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "requested_provider": {
+          "minLength": 1,
+          "title": "Requested Provider",
+          "type": "string"
+        },
+        "requested_selector": {
+          "minLength": 1,
+          "title": "Requested Selector",
+          "type": "string"
+        },
+        "requested_wire_model": {
+          "minLength": 1,
+          "title": "Requested Wire Model",
+          "type": "string"
+        },
+        "revision_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision Id"
+        },
+        "role": {
+          "$ref": "#/$defs/StageLaunchRole"
+        },
+        "task_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "minLength": 1,
+          "title": "Tool Call Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "role",
+        "tool_call_id",
+        "task_sha256",
+        "probe_sha256",
+        "ordinal",
+        "requested_selector",
+        "requested_provider",
+        "requested_model",
+        "requested_api",
+        "requested_effort",
+        "requested_wire_model"
+      ],
+      "title": "BeginStagePreflightPayload",
+      "type": "object"
+    },
     "BindingManifest": {
       "additionalProperties": false,
       "properties": {
@@ -5255,6 +5570,161 @@
             "judge_manifest"
           ],
           "title": "BeginExecutionPayload",
+          "type": "object"
+        },
+        "BeginStagePreflightCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/BeginStagePreflightPayload"
+            },
+            "type": {
+              "const": "begin_stage_preflight",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "BeginStagePreflightCommand",
+          "type": "object"
+        },
+        "BeginStagePreflightPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grant Id"
+            },
+            "is_fallback": {
+              "default": false,
+              "title": "Is Fallback",
+              "type": "boolean"
+            },
+            "ordinal": {
+              "minimum": 0,
+              "title": "Ordinal",
+              "type": "integer"
+            },
+            "probe_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Probe Sha256",
+              "type": "string"
+            },
+            "requested_api": {
+              "minLength": 1,
+              "title": "Requested Api",
+              "type": "string"
+            },
+            "requested_effort": {
+              "minLength": 1,
+              "title": "Requested Effort",
+              "type": "string"
+            },
+            "requested_model": {
+              "minLength": 1,
+              "title": "Requested Model",
+              "type": "string"
+            },
+            "requested_provider": {
+              "minLength": 1,
+              "title": "Requested Provider",
+              "type": "string"
+            },
+            "requested_selector": {
+              "minLength": 1,
+              "title": "Requested Selector",
+              "type": "string"
+            },
+            "requested_wire_model": {
+              "minLength": 1,
+              "title": "Requested Wire Model",
+              "type": "string"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision Id"
+            },
+            "role": {
+              "$ref": "#/$defs/StageLaunchRole"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "role",
+            "tool_call_id",
+            "task_sha256",
+            "probe_sha256",
+            "ordinal",
+            "requested_selector",
+            "requested_provider",
+            "requested_model",
+            "requested_api",
+            "requested_effort",
+            "requested_wire_model"
+          ],
+          "title": "BeginStagePreflightPayload",
           "type": "object"
         },
         "BudgetResource": {
@@ -9303,6 +9773,7 @@
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanCommand",
               "begin_close_attempt": "#/$defs/BeginCloseAttemptCommand",
               "begin_execution": "#/$defs/BeginExecutionCommand",
+              "begin_stage_preflight": "#/$defs/BeginStagePreflightCommand",
               "cancel_auditor_launch": "#/$defs/CancelAuditorLaunchCommand",
               "cancel_budget": "#/$defs/CancelBudgetCommand",
               "cancel_stage_launch": "#/$defs/CancelStageLaunchCommand",
@@ -9402,6 +9873,9 @@
             },
             {
               "$ref": "#/$defs/ReconcileStageLaunchCommand"
+            },
+            {
+              "$ref": "#/$defs/BeginStagePreflightCommand"
             },
             {
               "$ref": "#/$defs/RecordStagePreflightCommand"
@@ -20949,6 +21423,228 @@
         }
       },
       "title": "StagePreflightCttlUsage",
+      "type": "object"
+    },
+    "StagePreflightIntent": {
+      "$defs": {
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        },
+        "StagePreflightIntentStatus": {
+          "enum": [
+            "begun",
+            "settled"
+          ],
+          "title": "StagePreflightIntentStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempt Id"
+        },
+        "candidate_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grant Id"
+        },
+        "group_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Group Sha256",
+          "type": "string"
+        },
+        "host_owner_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host Owner Id"
+        },
+        "intent_id": {
+          "format": "uuid",
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "is_fallback": {
+          "default": false,
+          "title": "Is Fallback",
+          "type": "boolean"
+        },
+        "logical_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Logical Sha256",
+          "type": "string"
+        },
+        "ordinal": {
+          "minimum": 0,
+          "title": "Ordinal",
+          "type": "integer"
+        },
+        "probe_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Probe Sha256",
+          "type": "string"
+        },
+        "requested_api": {
+          "minLength": 1,
+          "title": "Requested Api",
+          "type": "string"
+        },
+        "requested_effort": {
+          "minLength": 1,
+          "title": "Requested Effort",
+          "type": "string"
+        },
+        "requested_model": {
+          "minLength": 1,
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "requested_provider": {
+          "minLength": 1,
+          "title": "Requested Provider",
+          "type": "string"
+        },
+        "requested_selector": {
+          "minLength": 1,
+          "title": "Requested Selector",
+          "type": "string"
+        },
+        "requested_wire_model": {
+          "minLength": 1,
+          "title": "Requested Wire Model",
+          "type": "string"
+        },
+        "revision_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision Id"
+        },
+        "role": {
+          "$ref": "#/$defs/StageLaunchRole"
+        },
+        "settled_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Settled At"
+        },
+        "status": {
+          "$ref": "#/$defs/StagePreflightIntentStatus"
+        },
+        "task_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "minLength": 1,
+          "title": "Tool Call Id",
+          "type": "string"
+        },
+        "transport_attempt_id": {
+          "format": "uuid",
+          "title": "Transport Attempt Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id",
+        "workspace_id",
+        "work_id",
+        "role",
+        "tool_call_id",
+        "task_sha256",
+        "probe_sha256",
+        "transport_attempt_id",
+        "ordinal",
+        "requested_selector",
+        "requested_provider",
+        "requested_model",
+        "requested_api",
+        "requested_effort",
+        "requested_wire_model",
+        "logical_sha256",
+        "group_sha256",
+        "status",
+        "created_at"
+      ],
+      "title": "StagePreflightIntent",
       "type": "object"
     },
     "StagePreflightOrchestrationUsage": {

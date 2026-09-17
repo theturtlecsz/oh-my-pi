@@ -43,6 +43,9 @@ from .models import (
     BudgetResource,
     StageLaunch,
     StagePreflight,
+    StagePreflightIntent,
+    StagePreflightOutcome,
+    BeginStagePreflightPayload,
     RecordStagePreflightPayload,
     Candidate,
     CloseAttempt,
@@ -81,6 +84,7 @@ _LAUNCH_FIELDS = "launch_id,attempt_id,manifest_id,launch_number,task_sha256,too
 _EVENT_FIELDS = "event_id,sequence,work_id,attempt_id,launch_id,event_type,reason_code,reason,legal_next_actions,remaining_launches,remaining_reports,requires_fresh_authorization,rendered_text,rendered_sha256,requires_delivery,created_at"
 _DELIVERY_FIELDS = "delivery_id,event_id,delivery_sequence,owner_session_id,rendered_sha256,status,authorization_ref,created_at"
 _STAGE_LAUNCH_FIELDS = "launch_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,request_sha256,tool_call_id,task_sha256,prepared_context_sha256,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,resolved_selector,resolved_provider,resolved_model,served_selector,served_model,is_fallback,fallback_reason,status,outcome_sha256,outcome,reserved_at,handed_off_at,settled_at"
+_STAGE_PREFLIGHT_INTENT_FIELDS = "intent_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,is_fallback,logical_sha256,group_sha256,host_owner_id,status,created_at,settled_at"
 _STAGE_PREFLIGHT_FIELDS = "preflight_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,session_id,role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,is_fallback,outcome,stop_reason,error,requests,usage,provider_request_id,observed_at"
 _SOURCE_VERSION_FIELDS = "candidate_id,workspace_id,work_id,revision_id,repository_id,source_version_id,snapshot_id,base_commit,analyzed_commit,tree_sha,source_manifest_sha256,snapshot_manifest_sha256,content_sha256,association_sha256,producer,producer_receipt_sha256,created_at"
 _PROVIDER_ACCOUNT_FIELDS = "account_id,workspace_id,provider,account_identity,entitlement_evidence,evidence_observed_at,billing_mode,rate_card_version,observed_balance,balance_provenance,reset_at,concurrency_limit"
@@ -361,6 +365,7 @@ class PostgresWorkStore:
             "settle_stage_launch",
             "cancel_stage_launch",
             "reconcile_stage_launch",
+            "begin_stage_preflight",
             "record_stage_preflight",
             "complete_work",
             "create_budget_scope",
@@ -469,6 +474,8 @@ class PostgresWorkStore:
                     result = self._cancel_stage_launch(cur, envelope)
                 elif command.type == "reconcile_stage_launch":
                     result = self._reconcile_stage_launch(cur, envelope)
+                elif command.type == "begin_stage_preflight":
+                    result = self._begin_stage_preflight(cur, envelope)
                 elif command.type == "record_stage_preflight":
                     result = self._record_stage_preflight(cur, envelope)
                 elif command.type == "create_budget_scope":
@@ -3565,11 +3572,133 @@ class PostgresWorkStore:
         )
         return {"type": envelope.command.type, "status": "applied", "launch": _row_json(cur.fetchone()), "reason": payload.reason}
 
+    @staticmethod
+    def _preflight_group_payload(workspace_id: UUID, payload: Any) -> dict[str, object]:
+        return {
+            "attempt_id": str(payload.attempt_id) if payload.attempt_id is not None else None,
+            "candidate_id": str(payload.candidate_id) if payload.candidate_id is not None else None,
+            "grant_id": str(payload.grant_id) if payload.grant_id is not None else None,
+            "probe_sha256": payload.probe_sha256,
+            "revision_id": str(payload.revision_id) if payload.revision_id is not None else None,
+            "role": payload.role.value if hasattr(payload.role, "value") else str(payload.role),
+            "task_sha256": payload.task_sha256,
+            "tool_call_id": payload.tool_call_id,
+            "work_id": str(payload.work_id),
+            "workspace_id": str(workspace_id),
+        }
+
+    @staticmethod
+    def _preflight_logical_payload(workspace_id: UUID, payload: Any) -> dict[str, object]:
+        group = PostgresWorkStore._preflight_group_payload(workspace_id, payload)
+        return {
+            **group,
+            "is_fallback": payload.is_fallback,
+            "ordinal": payload.ordinal,
+            "requested_api": payload.requested_api,
+            "requested_effort": payload.requested_effort,
+            "requested_model": payload.requested_model,
+            "requested_provider": payload.requested_provider,
+            "requested_selector": payload.requested_selector,
+            "requested_wire_model": payload.requested_wire_model,
+        }
+
+    def _begin_stage_preflight(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload: BeginStagePreflightPayload = envelope.command.payload
+        self._lock_work_chain(cur, envelope.workspace_id, payload.work_id)
+
+        logical_hash = sha256(self._preflight_logical_payload(envelope.workspace_id, payload))
+        group_hash = sha256(self._preflight_group_payload(envelope.workspace_id, payload))
+
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND logical_sha256=%s",
+            (envelope.workspace_id, logical_hash),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            preflight_row = None
+            if existing["status"] == "settled":
+                cur.execute(
+                    f"SELECT {_STAGE_PREFLIGHT_FIELDS} FROM omp_work.stage_preflights WHERE workspace_id=%s AND transport_attempt_id=%s",
+                    (envelope.workspace_id, existing["transport_attempt_id"]),
+                )
+                preflight_row = cur.fetchone()
+            return {
+                "type": "begin_stage_preflight",
+                "status": "replayed",
+                "intent": _row_json(existing),
+                "preflight": _row_json(preflight_row) if preflight_row is not None else None,
+            }
+
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND group_sha256=%s ORDER BY ordinal ASC",
+            (envelope.workspace_id, group_hash),
+        )
+        siblings = cur.fetchall()
+        for s in siblings:
+            if s["status"] == "begun":
+                raise WorkStoreError("preflight_intent_active", ("preflight_group_sibling_active",))
+            if s["ordinal"] == payload.ordinal:
+                raise WorkStoreError("preflight_intent_active", ("preflight_group_ordinal_used",))
+
+        cur.execute(
+            "SELECT 1 FROM omp_work.stage_preflights sp JOIN omp_work.stage_preflight_intents spi ON sp.workspace_id=spi.workspace_id AND sp.transport_attempt_id=spi.transport_attempt_id WHERE spi.workspace_id=%s AND spi.group_sha256=%s AND sp.outcome='selected'",
+            (envelope.workspace_id, group_hash),
+        )
+        if cur.fetchone() is not None:
+            raise WorkStoreError("preflight_intent_active", ("preflight_group_terminal_route_selected",))
+
+        self._bind_stage_identities(cur, envelope.workspace_id, payload)
+        intent_id = uuid4()
+        cur.execute(
+            f"INSERT INTO omp_work.stage_preflight_intents("
+            f"intent_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,"
+            f"role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,"
+            f"requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,"
+            f"is_fallback,logical_sha256,group_sha256,host_owner_id,status,created_at"
+            f") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'begun',clock_timestamp()) "
+            f"RETURNING {_STAGE_PREFLIGHT_INTENT_FIELDS}",
+            (
+                intent_id,
+                envelope.workspace_id,
+                payload.work_id,
+                payload.revision_id,
+                payload.candidate_id,
+                payload.attempt_id,
+                payload.grant_id,
+                payload.role.value,
+                payload.tool_call_id,
+                payload.task_sha256,
+                payload.probe_sha256,
+                envelope.operation_id,
+                payload.ordinal,
+                payload.requested_selector,
+                payload.requested_provider,
+                payload.requested_model,
+                payload.requested_api,
+                payload.requested_effort,
+                payload.requested_wire_model,
+                payload.is_fallback,
+                logical_hash,
+                group_hash,
+                envelope.correlation_id,
+            ),
+        )
+        intent = cur.fetchone()
+        return {
+            "type": "begin_stage_preflight",
+            "status": "applied",
+            "intent": _row_json(intent),
+            "preflight": None,
+        }
+
     def _record_stage_preflight(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
         payload: RecordStagePreflightPayload = envelope.command.payload
         self._lock_work_chain(cur, envelope.workspace_id, payload.work_id)
+        self._bind_stage_identities(cur, envelope.workspace_id, payload)
 
         cur.execute(
             f"SELECT {_STAGE_PREFLIGHT_FIELDS} FROM omp_work.stage_preflights WHERE workspace_id=%s AND transport_attempt_id=%s",
@@ -3621,7 +3750,46 @@ class PostgresWorkStore:
                 "idempotency_conflict", ("conflicting_stage_preflight_payload",)
             )
 
-        self._bind_stage_identities(cur, envelope.workspace_id, payload)
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_INTENT_FIELDS} FROM omp_work.stage_preflight_intents WHERE workspace_id=%s AND transport_attempt_id=%s",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
+        intent = cur.fetchone()
+        if intent is None:
+            raise WorkStoreError("invalid_request", ("preflight_intent_required",))
+        if intent["status"] != "begun":
+            raise WorkStoreError("invalid_request", ("preflight_intent_not_begun",))
+
+        matches_intent = (
+            intent["work_id"] == payload.work_id
+            and intent["revision_id"] == payload.revision_id
+            and intent["candidate_id"] == payload.candidate_id
+            and intent["attempt_id"] == payload.attempt_id
+            and intent["grant_id"] == payload.grant_id
+            and intent["role"] == payload.role.value
+            and intent["tool_call_id"] == payload.tool_call_id
+            and intent["task_sha256"] == payload.task_sha256
+            and intent["probe_sha256"] == payload.probe_sha256
+            and intent["ordinal"] == payload.ordinal
+            and intent["requested_selector"] == payload.requested_selector
+            and intent["requested_provider"] == payload.requested_provider
+            and intent["requested_model"] == payload.requested_model
+            and intent["requested_api"] == payload.requested_api
+            and intent["requested_effort"] == payload.requested_effort
+            and intent["requested_wire_model"] == payload.requested_wire_model
+            and intent["is_fallback"] == payload.is_fallback
+        )
+        if not matches_intent:
+            raise WorkStoreError("stale_evidence", ("preflight_intent_identity_mismatch",))
+
+        if payload.outcome == StagePreflightOutcome.SELECTED:
+            cur.execute(
+                "SELECT 1 FROM omp_work.stage_preflights sp JOIN omp_work.stage_preflight_intents spi ON sp.workspace_id=spi.workspace_id AND sp.transport_attempt_id=spi.transport_attempt_id WHERE spi.workspace_id=%s AND spi.group_sha256=%s AND sp.outcome='selected'",
+                (envelope.workspace_id, intent["group_sha256"]),
+            )
+            if cur.fetchone() is not None:
+                raise WorkStoreError("preflight_intent_active", ("preflight_group_terminal_route_selected",))
+
         preflight_id = uuid4()
         usage_json = (
             json.dumps(payload.usage.model_dump(mode="json", exclude_none=True))
@@ -3667,6 +3835,10 @@ class PostgresWorkStore:
             ),
         )
         preflight = cur.fetchone()
+        cur.execute(
+            "UPDATE omp_work.stage_preflight_intents SET status='settled', settled_at=clock_timestamp() WHERE workspace_id=%s AND transport_attempt_id=%s",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
         return {
             "type": "record_stage_preflight",
             "status": "applied",
