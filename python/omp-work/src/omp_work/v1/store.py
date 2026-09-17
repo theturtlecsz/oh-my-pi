@@ -2860,13 +2860,30 @@ class PostgresWorkStore:
         if row is None or row["fence"] != payload.fence or row["transport_attempt_id"] != payload.transport_attempt_id:
             raise WorkStoreError("invalid_request", ("reservation_identity_invalid",))
         if row["state"] == "settled":
-            return {"type": "settle_budget", "reservation_id": str(payload.reservation_id), "state": "settled", "replayed": True}
-        if row["state"] not in {"potentially_sent", "reserved_unsent"}:
+            stored_usage = json.loads(row["usage"]) if isinstance(row["usage"], str) else (row["usage"] or {})
+            if (
+                payload.state == "settled"
+                and actual == self._money(str(row["actual_drawdown"]))
+                and stored_usage == payload.usage
+                and row["provenance"] == payload.provenance
+                and row["provider_request_id"] == payload.provider_request_id
+                and row["outcome"] == payload.outcome
+            ):
+                return {"type": "settle_budget", "reservation_id": str(payload.reservation_id), "state": "settled", "replayed": True}
+            raise WorkStoreError("idempotency_conflict", ("conflicting_settlement_payload",))
+        if row["state"] not in {"potentially_sent", "reserved_unsent", "unresolved"}:
+            raise WorkStoreError("invalid_request", ("reservation_not_settleable",))
+        if row["state"] == "unresolved" and payload.state != "settled":
             raise WorkStoreError("invalid_request", ("reservation_not_settleable",))
         cur.execute("SELECT * FROM omp_work.budget_scopes WHERE scope_id=%s FOR UPDATE", (row["scope_id"],)); scope = cur.fetchone()
         held = self._budget_json(scope["held"]); spent = self._budget_json(scope["spent"]); unresolved = self._budget_json(scope["unresolved"]); key = row["resource"]
-        held[key] = str(max(Decimal("0"), self._money(held.get(key, "0")) - self._money(str(row["worst_case_drawdown"]))))
-        destination = unresolved if payload.state == "unresolved" else spent; destination[key] = str(self._money(destination.get(key, "0")) + actual)
+        if row["state"] == "unresolved":
+            prior = self._money(str(row["actual_drawdown"])) if row["actual_drawdown"] is not None else Decimal("0")
+            unresolved[key] = str(max(Decimal("0"), self._money(unresolved.get(key, "0")) - prior))
+            spent[key] = str(self._money(spent.get(key, "0")) + actual)
+        else:
+            held[key] = str(max(Decimal("0"), self._money(held.get(key, "0")) - self._money(str(row["worst_case_drawdown"]))))
+            destination = unresolved if payload.state == "unresolved" else spent; destination[key] = str(self._money(destination.get(key, "0")) + actual)
         cur.execute("UPDATE omp_work.budget_scopes SET held=%s,spent=%s,unresolved=%s WHERE scope_id=%s", (json.dumps(held), json.dumps(spent), json.dumps(unresolved), row["scope_id"]))
         cur.execute("UPDATE omp_work.budget_reservations SET state=%s,actual_drawdown=%s,usage=%s,provenance=%s,provider_request_id=%s,outcome=%s,settled_at=clock_timestamp() WHERE reservation_id=%s", (payload.state, payload.actual_drawdown, json.dumps(payload.usage), payload.provenance, payload.provider_request_id, payload.outcome, payload.reservation_id))
         return {"type": "settle_budget", "reservation_id": str(payload.reservation_id), "state": payload.state, "actual_drawdown": payload.actual_drawdown, "overrun": actual > self._money(str(row["worst_case_drawdown"]))}
