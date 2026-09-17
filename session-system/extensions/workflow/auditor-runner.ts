@@ -529,21 +529,3 @@ function nativeResolvedModelMatchesRoute(resolvedModel: string, route: NativeSta
 	const expected = formatModelSelectorValue(formatModelStringWithRouting(route.model), route.effort);
 	return resolvedModel === expected || resolvedModel === route.requestedSelector;
 }
-
-export async function prepareNativeAuditRunner(
-	ctx: ExtensionContext,
-	signal?: AbortSignal,
-	boundRoute?: NativeStageRoute,
-): Promise<NativeAuditRunner> {
-	const resolvedBoundRoute = boundRoute ?? resolveAuditPolicy(ctx.models).route;
-	return prepareNativeStageRunner(
-		ctx,
-		{
-			role: "audit",
-			agentName: "auditor",
-			legacyAudit: true,
-			boundRoute: resolvedBoundRoute,
-		},
-		signal,
-	);
-}

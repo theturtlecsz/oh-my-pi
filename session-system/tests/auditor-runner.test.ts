@@ -20,7 +20,7 @@ import { applyExtensionNewSessionSetup } from "../../packages/coding-agent/src/m
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { createExtensionModelQuery } from "../../packages/coding-agent/src/extensibility/extensions/model-api";
-import { prepareNativeAuditRunner, prepareNativeStageRunner, type NativeStagePreflightAttempt } from "../extensions/workflow/auditor-runner";
+import { prepareNativeStageRunner, type NativeStagePreflightAttempt } from "../extensions/workflow/auditor-runner";
 import { resolveAuditPolicy } from "../extensions/workflow/audit-policy";
 import type { WorkflowBackend } from "../extensions/workflow/backend";
 import { createWorkflowHost } from "../extensions/workflow/host";
@@ -488,7 +488,7 @@ beforeEach(() => {
 		}],
 		projectAgentsDir: null,
 	});
-	// OMP-251: prepareNativeAuditRunner now runs a live transport probe via
+	// OMP-251: prepareNativeStageRunner now runs a live transport probe via
 	// completeSimple before any launch reservation — default it to success so
 	// existing preparation/host flows stay green without network access.
 	vi.spyOn(ai, "completeSimple").mockResolvedValue({
@@ -858,7 +858,7 @@ describe("native auditor runner (OMP-168)", () => {
 		vi.restoreAllMocks();
 	});
 
-	test("prepareNativeAuditRunner fails if @audit role cannot be resolved", async () => {
+	test("native audit stage fails if @audit role cannot be resolved", async () => {
 		mockDiscovery();
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const emptyQuery = createExtensionModelQuery(
@@ -871,7 +871,15 @@ describe("native auditor runner (OMP-168)", () => {
 			models: emptyQuery,
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
-		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow("@audit");
+		const { route: boundRoute } = resolveAuditPolicy(createAuditorTestModelQuery());
+		await expect(
+			prepareNativeStageRunner(fakeCtx, {
+				role: "audit",
+				agentName: "auditor",
+				legacyAudit: true,
+				boundRoute,
+			}),
+		).rejects.toThrow("@audit");
 	});
 
 	test("native stage defaults to installed role name and pins retry settings to allowlisted route", async () => {
@@ -2198,20 +2206,7 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(result.requests).toBeUndefined();
 	});
 
-	test("prepareNativeAuditRunner returns a runner when preconditions exist", async () => {
-		mockDiscovery();
-		const repoRoot = path.resolve(import.meta.dir, "../..");
-		const fakeCtx = {
-			cwd: repoRoot,
-			models: createAuditorTestModelQuery(),
-			modelRegistry: { getApiKey: () => Promise.resolve("key") },
-			taskDepth: 0,
-		} as unknown as ExtensionContext;
-		const runner = await prepareNativeAuditRunner(fakeCtx);
-		expect(typeof runner).toBe("function");
-	});
-
-	test("prepareNativeAuditRunner fails before any probe when @audit credentials are missing (OMP-251)", async () => {
+	test("native audit stage fails before any probe when @audit credentials are missing (OMP-251)", async () => {
 		mockDiscovery();
 		const completeSpy = vi.spyOn(ai, "completeSimple");
 		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess");
@@ -2222,12 +2217,20 @@ describe("native auditor runner (OMP-168)", () => {
 			modelRegistry: { getApiKey: () => Promise.resolve(undefined) },
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
-		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow("No provider credentials configured for @audit model openai-codex/gpt-5.6-sol");
+		const { route: boundRoute } = resolveAuditPolicy(fakeCtx.models);
+		await expect(
+			prepareNativeStageRunner(fakeCtx, {
+				role: "audit",
+				agentName: "auditor",
+				legacyAudit: true,
+				boundRoute,
+			}),
+		).rejects.toThrow("No provider credentials configured for @audit model openai-codex/gpt-5.6-sol");
 		expect(completeSpy).not.toHaveBeenCalled();
 		expect(runSubprocessSpy).not.toHaveBeenCalled();
 	});
 
-	test("prepareNativeAuditRunner fails when the transport probe reports an in-band provider error (OMP-251)", async () => {
+	test("native audit stage fails when the transport probe reports an in-band provider error (OMP-251)", async () => {
 		mockDiscovery();
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "error",
@@ -2242,13 +2245,21 @@ describe("native auditor runner (OMP-168)", () => {
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
-		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow(
+		const { route: boundRoute } = resolveAuditPolicy(fakeCtx.models);
+		await expect(
+			prepareNativeStageRunner(fakeCtx, {
+				role: "audit",
+				agentName: "auditor",
+				legacyAudit: true,
+				boundRoute,
+			}),
+		).rejects.toThrow(
 			"@audit transport preflight error for openai-codex/gpt-5.6-sol: 401 unauthorized",
 		);
 		expect(runSubprocessSpy).not.toHaveBeenCalled();
 	});
 
-	test("prepareNativeAuditRunner qualifies a rejected transport probe with the audit model (OMP-251)", async () => {
+	test("native audit stage qualifies a rejected transport probe with the audit model (OMP-251)", async () => {
 		mockDiscovery();
 		vi.spyOn(ai, "completeSimple").mockRejectedValue(new Error("ECONNREFUSED 127.0.0.1:443"));
 		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess");
@@ -2259,13 +2270,21 @@ describe("native auditor runner (OMP-168)", () => {
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
-		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow(
+		const { route: boundRoute } = resolveAuditPolicy(fakeCtx.models);
+		await expect(
+			prepareNativeStageRunner(fakeCtx, {
+				role: "audit",
+				agentName: "auditor",
+				legacyAudit: true,
+				boundRoute,
+			}),
+		).rejects.toThrow(
 			"@audit transport preflight failed for openai-codex/gpt-5.6-sol: ECONNREFUSED 127.0.0.1:443",
 		);
 		expect(runSubprocessSpy).not.toHaveBeenCalled();
 	});
 
-	test("runner returns started:false when cancelled before start", async () => {
+	test("native audit runner returns started:false when cancelled before start", async () => {
 		mockDiscovery();
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
@@ -2274,7 +2293,13 @@ describe("native auditor runner (OMP-168)", () => {
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
-		const runner = await prepareNativeAuditRunner(fakeCtx);
+		const { route: boundRoute } = resolveAuditPolicy(fakeCtx.models);
+		const runner = await prepareNativeStageRunner(fakeCtx, {
+			role: "audit",
+			agentName: "auditor",
+			legacyAudit: true,
+			boundRoute,
+		});
 
 		const abortController = new AbortController();
 		abortController.abort(); // already aborted
@@ -2330,7 +2355,13 @@ describe("native auditor runner (OMP-168)", () => {
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
 
-		const runner = await prepareNativeAuditRunner(fakeCtx);
+		const { route: boundRoute } = resolveAuditPolicy(fakeCtx.models);
+		const runner = await prepareNativeStageRunner(fakeCtx, {
+			role: "audit",
+			agentName: "auditor",
+			legacyAudit: true,
+			boundRoute,
+		});
 		const result = await runner("Run audit on OMP-173", "attempt-123");
 
 		expect(settingsSpy).toHaveBeenCalledWith({
@@ -2390,7 +2421,12 @@ describe("native auditor runner (OMP-168)", () => {
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
 
-		const runner = await prepareNativeAuditRunner(fakeCtx, undefined, boundRoute);
+		const runner = await prepareNativeStageRunner(fakeCtx, {
+			role: "audit",
+			agentName: "auditor",
+			legacyAudit: true,
+			boundRoute,
+		});
 		const result = await runner("Audit contract check", "attempt-bound-model-1");
 
 		expect(result.started).toBe(true);
@@ -2440,7 +2476,13 @@ describe("native auditor runner (OMP-168)", () => {
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
 
-		const runner = await prepareNativeAuditRunner(fakeCtx);
+		const { route: boundRoute } = resolveAuditPolicy(fakeCtx.models);
+		const runner = await prepareNativeStageRunner(fakeCtx, {
+			role: "audit",
+			agentName: "auditor",
+			legacyAudit: true,
+			boundRoute,
+		});
 		const result = await runner("Run audit on OMP-176", "attempt-oauth-1");
 
 		expect(result.started).toBe(true);
@@ -2515,7 +2557,16 @@ describe("native auditor runner (OMP-168)", () => {
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
 
-		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow("output schema");
+		const { route: boundRoute } = resolveAuditPolicy(fakeCtx.models);
+
+		await expect(
+			prepareNativeStageRunner(fakeCtx, {
+				role: "audit",
+				agentName: "auditor",
+				legacyAudit: true,
+				boundRoute,
+			}),
+		).rejects.toThrow("output schema");
 	});
 
 	test("grant state guard denies remediation on stopped or canceled grants (OMP-186)", async () => {

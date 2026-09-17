@@ -33,7 +33,7 @@ const NEEDS_FIX_REPORT = "VERDICT: NEEDS_FIX\n\nFINDINGS\n- [major] AC-1 src/smo
 const PASS_REPORT = "VERDICT: PASS\n\nFINDINGS\n(none)\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
 const BLOCKED_REPORT = "VERDICT: BLOCKED\n\nFINDINGS\n- [blocker] AC-1 blocked on external dependency\n\nACCEPTANCE COVERAGE\nAC-1 deliver smoke feature\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\nbun test\n\nREMAINING QUESTIONS\nnone";
 
-// OMP-251: prepareNativeAuditRunner probes auditor transport via completeSimple
+// OMP-251: prepareNativeStageRunner probes auditor transport via completeSimple
 // before reserving a launch — stub it to success so the smoke needs no network.
 vi.spyOn(ai, "completeSimple").mockResolvedValue({
 	stopReason: "stop",
