@@ -756,6 +756,30 @@ export type ProviderAccountListView = {
 	accounts: ProviderAccount[];
 };
 
+export type RateCardQualification = "unqualified" | "qualified";
+
+export type RateCard = {
+	rate_card_id: UUID;
+	workspace_id: UUID;
+	provider: string;
+	version: string;
+	billing_modes: ProviderBillingMode[];
+	effective_from: string;
+	effective_until: string | null;
+	currency: string;
+	unit_prices: Record<string, string>;
+	evidence_sha256: string;
+	evidence_source: string;
+	observed_at: string;
+	qualification: RateCardQualification;
+	registered_at: string;
+};
+
+export type RateCardListView = {
+	workspace_id: UUID;
+	rate_cards: RateCard[];
+};
+
 export type BudgetScope = {
 	scope_id: UUID;
 	workspace_id: UUID;
@@ -853,6 +877,21 @@ export type PutProviderAccountPayload = {
 	balance_provenance: ProviderBalanceProvenance;
 	reset_at?: string | null;
 	concurrency_limit: number;
+};
+
+export type RegisterRateCardPayload = {
+	rate_card_id: UUID;
+	provider: string;
+	version: string;
+	billing_modes: ProviderBillingMode[];
+	effective_from: string;
+	effective_until?: string | null;
+	currency: string;
+	unit_prices: Record<string, string>;
+	evidence_sha256: string;
+	evidence_source: string;
+	observed_at: string;
+	qualification: RateCardQualification;
 };
 
 export type CommandSmokeResult = { command_type: string; passed: boolean };
@@ -1054,6 +1093,7 @@ export type Command =
 	| { type: "expire_budget"; payload: ExpireBudgetPayload }
 	| { type: "issue_frontier_exception"; payload: IssueFrontierExceptionPayload }
 	| { type: "put_provider_account"; payload: PutProviderAccountPayload }
+	| { type: "register_rate_card"; payload: RegisterRateCardPayload }
 	| { type: "associate_candidate_source"; payload: AssociateCandidateSourcePayload }
 	| { type: "attest_checkpoint_delivery"; payload: AttestCheckpointDeliveryPayload }
 	| { type: "record_closeout_review"; payload: RecordCloseoutReviewPayload }
@@ -1109,9 +1149,17 @@ export type ProviderAccountResult = {
 	account: ProviderAccount;
 };
 
+export type RateCardResult = {
+	type: "register_rate_card";
+	status: "inserted" | "replayed";
+	rate_card_id: UUID;
+	rate_card: RateCard;
+};
+
 export type CommandResult =
 	| BudgetResult
 	| ProviderAccountResult
+	| RateCardResult
 	| { type: "create_work_batch"; items: CreatedWorkItem[] }
 	| { type: "create_same_session_child"; item: CreatedWorkItem; receipt: EvidenceReceipt }
 	| { type: "revise_work"; revision_id: UUID; changed: boolean }
@@ -1619,6 +1667,17 @@ export class WorkClient {
 			"GET",
 			`/v1/workspaces/${this.workspaceId}/provider-accounts/${encodeURIComponent(accountId)}`,
 		) as Promise<ProviderAccount>;
+	}
+
+	rateCards(): Promise<RateCardListView> {
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/rate-cards`) as Promise<RateCardListView>;
+	}
+
+	rateCard(rateCardId: UUID): Promise<RateCard> {
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/rate-cards/${encodeURIComponent(rateCardId)}`,
+		) as Promise<RateCard>;
 	}
 
 	budgetScopes(

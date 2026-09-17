@@ -76,7 +76,7 @@ def _put_account(
                 "entitlement_evidence": "active-subscription",
                 "evidence_observed_at": obs_time,
                 "billing_mode": "metered",
-                "rate_card_version": "2026-q3",
+                "rate_card_version": None,
                 "observed_balance": "500.00",
                 "balance_provenance": "provider_observed",
                 "concurrency_limit": 4,

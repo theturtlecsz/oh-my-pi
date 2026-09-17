@@ -742,6 +742,111 @@ test("providerAccount surfaces typed service error on not found", async () => {
 	expect(String(err)).toContain("not_found");
 });
 
+test("rateCards fetches workspace rate-card list view with contract headers", async () => {
+	let request: Request | undefined;
+	const dummyListView = {
+		workspace_id: ENV.workspace_id,
+		rate_cards: [
+			{
+				rate_card_id: "00000000-0000-7000-8000-000000000001",
+				workspace_id: ENV.workspace_id,
+				provider: "anthropic",
+				version: "2026-09",
+				billing_modes: ["metered" as const],
+				effective_from: "2026-09-01T00:00:00+00:00",
+				effective_until: null,
+				currency: "USD",
+				unit_prices: { input: "0.000003", output: "0.000015" },
+				evidence_source: "https://example.com/pricing",
+				evidence_sha256: "a".repeat(64),
+				observed_at: "2026-09-17T00:00:00+00:00",
+				qualification: "qualified" as const,
+				registered_at: "2026-09-17T00:00:00+00:00",
+			},
+		],
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			request = new Request(String(input), init);
+			return Response.json(dummyListView);
+		},
+	);
+
+	const view = await client.rateCards();
+	expect(request?.url).toBe(`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/rate-cards`);
+	expect(request?.method).toBe("GET");
+	expect(request?.headers.get("authorization")).toBe("Bearer token");
+	expect(request?.headers.get("x-omp-workspace-id")).toBe(ENV.workspace_id);
+	expect(request?.headers.get("x-omp-contract-sha256")).toBe(WORK_CONTRACT_SHA256);
+	expect(view).toEqual(dummyListView);
+});
+
+test("rateCard encodes rateCardId URL and returns single RateCard", async () => {
+	let request: Request | undefined;
+	const rateCardId = "00000000-0000-7000-8000-000000000001";
+	const dummyCard = {
+		rate_card_id: rateCardId,
+		workspace_id: ENV.workspace_id,
+		provider: "anthropic",
+		version: "2026-09",
+		billing_modes: ["metered" as const],
+		effective_from: "2026-09-01T00:00:00+00:00",
+		effective_until: null,
+		currency: "USD",
+		unit_prices: { input: "0.000003", output: "0.000015" },
+		evidence_source: "https://example.com/pricing",
+		evidence_sha256: "a".repeat(64),
+		observed_at: "2026-09-17T00:00:00+00:00",
+		qualification: "qualified" as const,
+		registered_at: "2026-09-17T00:00:00+00:00",
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			request = new Request(String(input), init);
+			return Response.json(dummyCard);
+		},
+	);
+
+	const card = await client.rateCard(rateCardId);
+	expect(request?.url).toBe(`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/rate-cards/${rateCardId}`);
+	expect(request?.method).toBe("GET");
+	expect(request?.headers.get("authorization")).toBe("Bearer token");
+	expect(request?.headers.get("x-omp-contract-sha256")).toBe(WORK_CONTRACT_SHA256);
+	expect(card).toEqual(dummyCard);
+});
+
+test("rateCard surfaces typed service error on not found", async () => {
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async () =>
+			Response.json(
+				{
+					error: {
+						code: "invalid_request",
+						request_id: null,
+						correlation_id: null,
+						diagnostics: ["not_found", "rate card not found in workspace"],
+					},
+				},
+				{ status: 400 },
+			),
+	);
+
+	const err = await client.rateCard("00000000-0000-7000-8000-000000000099").catch(e => e);
+	expect(err).toBeInstanceOf(WorkError);
+	expect((err as WorkError).code).toBe("invalid_request");
+	expect((err as WorkError).status).toBe(400);
+	expect(String(err)).toContain("not_found");
+});
+
 test("budgetScopes fetches workspace budget-scope list view with contract headers", async () => {
 	let request: Request | undefined;
 	const dummyListView = {
@@ -950,6 +1055,74 @@ test("executes budget and provider-account commands with typed results", async (
 		expect(accountRes.result.status).toBe("inserted");
 		expect(accountRes.result.account_id).toBe(accountId);
 		expect(accountRes.result.account.provider).toBe("gemini");
+	}
+});
+
+test("executes register_rate_card and decodes typed RateCardResult", async () => {
+	let request: Request | undefined;
+	const rateCardId = "00000000-0000-7000-8000-000000000001";
+	const dummyCard = {
+		rate_card_id: rateCardId,
+		workspace_id: ENV.workspace_id,
+		provider: "anthropic",
+		version: "2026-09",
+		billing_modes: ["metered" as const],
+		effective_from: "2026-09-01T00:00:00+00:00",
+		effective_until: null,
+		currency: "USD",
+		unit_prices: { input: "0.000003", output: "0.000015" },
+		evidence_source: "https://example.com/pricing",
+		evidence_sha256: "a".repeat(64),
+		observed_at: "2026-09-17T00:00:00+00:00",
+		qualification: "qualified" as const,
+		registered_at: "2026-09-17T00:00:00+00:00",
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			request = new Request(String(input), init);
+			return Response.json({
+				receipt: RECEIPT,
+				result: {
+					type: "register_rate_card",
+					status: "inserted",
+					rate_card_id: rateCardId,
+					rate_card: dummyCard,
+				},
+			});
+		},
+	);
+
+	const res = await client.execute({
+		...ENV,
+		command: {
+			type: "register_rate_card",
+			payload: {
+				rate_card_id: rateCardId,
+				provider: "anthropic",
+				version: "2026-09",
+				billing_modes: ["metered"],
+				effective_from: "2026-09-01T00:00:00+00:00",
+				currency: "USD",
+				unit_prices: { input: "0.000003", output: "0.000015" },
+				evidence_source: "https://example.com/pricing",
+				evidence_sha256: "a".repeat(64),
+				observed_at: "2026-09-17T00:00:00+00:00",
+				qualification: "qualified",
+			},
+		},
+	});
+
+	expect(request?.method).toBe("POST");
+	expect(request?.url).toBe("http://127.0.0.1:54322/v1/commands");
+	expect(res.result.type).toBe("register_rate_card");
+	if (res.result.type === "register_rate_card") {
+		expect(res.result.status).toBe("inserted");
+		expect(res.result.rate_card_id).toBe(rateCardId);
+		expect(res.result.rate_card.provider).toBe("anthropic");
+		expect(res.result.rate_card.qualification).toBe("qualified");
 	}
 });
 

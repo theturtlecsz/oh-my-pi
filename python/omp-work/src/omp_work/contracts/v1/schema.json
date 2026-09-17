@@ -8020,6 +8020,14 @@
           "title": "PutRelationPayload",
           "type": "object"
         },
+        "RateCardQualification": {
+          "enum": [
+            "unqualified",
+            "qualified"
+          ],
+          "title": "RateCardQualification",
+          "type": "string"
+        },
         "ReconcileStageLaunchCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8661,6 +8669,121 @@
             "outcome"
           ],
           "title": "RecordStagePreflightPayload",
+          "type": "object"
+        },
+        "RegisterRateCardCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RegisterRateCardPayload"
+            },
+            "type": {
+              "const": "register_rate_card",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RegisterRateCardCommand",
+          "type": "object"
+        },
+        "RegisterRateCardPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "billing_modes": {
+              "items": {
+                "enum": [
+                  "subscription",
+                  "metered",
+                  "purchased_credit",
+                  "local"
+                ],
+                "type": "string"
+              },
+              "title": "Billing Modes",
+              "type": "array"
+            },
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "title": "Currency",
+              "type": "string"
+            },
+            "effective_from": {
+              "format": "date-time",
+              "title": "Effective From",
+              "type": "string"
+            },
+            "effective_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effective Until"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "evidence_source": {
+              "minLength": 1,
+              "title": "Evidence Source",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "qualification": {
+              "$ref": "#/$defs/RateCardQualification"
+            },
+            "rate_card_id": {
+              "format": "uuid",
+              "title": "Rate Card Id",
+              "type": "string"
+            },
+            "unit_prices": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Unit Prices",
+              "type": "object"
+            },
+            "version": {
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rate_card_id",
+            "provider",
+            "version",
+            "billing_modes",
+            "effective_from",
+            "currency",
+            "unit_prices",
+            "evidence_sha256",
+            "evidence_source",
+            "observed_at",
+            "qualification"
+          ],
+          "title": "RegisterRateCardPayload",
           "type": "object"
         },
         "RelationEdge": {
@@ -10172,6 +10295,7 @@
               "record_closeout_review": "#/$defs/RecordCloseoutReviewCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
               "record_stage_preflight": "#/$defs/RecordStagePreflightCommand",
+              "register_rate_card": "#/$defs/RegisterRateCardCommand",
               "remove_relation": "#/$defs/RemoveRelationCommand",
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
               "reserve_budget": "#/$defs/ReserveBudgetCommand",
@@ -10289,6 +10413,9 @@
             },
             {
               "$ref": "#/$defs/PutProviderAccountCommand"
+            },
+            {
+              "$ref": "#/$defs/RegisterRateCardCommand"
             },
             {
               "$ref": "#/$defs/AssociateCandidateSourceCommand"
@@ -16945,6 +17072,124 @@
       "title": "PutRelationPayload",
       "type": "object"
     },
+    "RateCard": {
+      "$defs": {
+        "RateCardQualification": {
+          "enum": [
+            "unqualified",
+            "qualified"
+          ],
+          "title": "RateCardQualification",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "billing_modes": {
+          "items": {
+            "enum": [
+              "subscription",
+              "metered",
+              "purchased_credit",
+              "local"
+            ],
+            "type": "string"
+          },
+          "title": "Billing Modes",
+          "type": "array"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "effective_from": {
+          "format": "date-time",
+          "title": "Effective From",
+          "type": "string"
+        },
+        "effective_until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effective Until"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "evidence_source": {
+          "minLength": 1,
+          "title": "Evidence Source",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "qualification": {
+          "$ref": "#/$defs/RateCardQualification"
+        },
+        "rate_card_id": {
+          "format": "uuid",
+          "title": "Rate Card Id",
+          "type": "string"
+        },
+        "registered_at": {
+          "format": "date-time",
+          "title": "Registered At",
+          "type": "string"
+        },
+        "unit_prices": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Unit Prices",
+          "type": "object"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rate_card_id",
+        "workspace_id",
+        "provider",
+        "version",
+        "billing_modes",
+        "effective_from",
+        "currency",
+        "unit_prices",
+        "evidence_sha256",
+        "evidence_source",
+        "observed_at",
+        "qualification",
+        "registered_at"
+      ],
+      "title": "RateCard",
+      "type": "object"
+    },
     "ReconcileStageLaunchCommand": {
       "$defs": {
         "ReconcileStageLaunchPayload": {
@@ -19278,6 +19523,237 @@
         "outcome"
       ],
       "title": "RecordStagePreflightPayload",
+      "type": "object"
+    },
+    "RegisterRateCardCommand": {
+      "$defs": {
+        "RateCardQualification": {
+          "enum": [
+            "unqualified",
+            "qualified"
+          ],
+          "title": "RateCardQualification",
+          "type": "string"
+        },
+        "RegisterRateCardPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "billing_modes": {
+              "items": {
+                "enum": [
+                  "subscription",
+                  "metered",
+                  "purchased_credit",
+                  "local"
+                ],
+                "type": "string"
+              },
+              "title": "Billing Modes",
+              "type": "array"
+            },
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "title": "Currency",
+              "type": "string"
+            },
+            "effective_from": {
+              "format": "date-time",
+              "title": "Effective From",
+              "type": "string"
+            },
+            "effective_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effective Until"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "evidence_source": {
+              "minLength": 1,
+              "title": "Evidence Source",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "qualification": {
+              "$ref": "#/$defs/RateCardQualification"
+            },
+            "rate_card_id": {
+              "format": "uuid",
+              "title": "Rate Card Id",
+              "type": "string"
+            },
+            "unit_prices": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Unit Prices",
+              "type": "object"
+            },
+            "version": {
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rate_card_id",
+            "provider",
+            "version",
+            "billing_modes",
+            "effective_from",
+            "currency",
+            "unit_prices",
+            "evidence_sha256",
+            "evidence_source",
+            "observed_at",
+            "qualification"
+          ],
+          "title": "RegisterRateCardPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RegisterRateCardPayload"
+        },
+        "type": {
+          "const": "register_rate_card",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RegisterRateCardCommand",
+      "type": "object"
+    },
+    "RegisterRateCardPayload": {
+      "$defs": {
+        "RateCardQualification": {
+          "enum": [
+            "unqualified",
+            "qualified"
+          ],
+          "title": "RateCardQualification",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "billing_modes": {
+          "items": {
+            "enum": [
+              "subscription",
+              "metered",
+              "purchased_credit",
+              "local"
+            ],
+            "type": "string"
+          },
+          "title": "Billing Modes",
+          "type": "array"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "effective_from": {
+          "format": "date-time",
+          "title": "Effective From",
+          "type": "string"
+        },
+        "effective_until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effective Until"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "evidence_source": {
+          "minLength": 1,
+          "title": "Evidence Source",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "qualification": {
+          "$ref": "#/$defs/RateCardQualification"
+        },
+        "rate_card_id": {
+          "format": "uuid",
+          "title": "Rate Card Id",
+          "type": "string"
+        },
+        "unit_prices": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Unit Prices",
+          "type": "object"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rate_card_id",
+        "provider",
+        "version",
+        "billing_modes",
+        "effective_from",
+        "currency",
+        "unit_prices",
+        "evidence_sha256",
+        "evidence_source",
+        "observed_at",
+        "qualification"
+      ],
+      "title": "RegisterRateCardPayload",
       "type": "object"
     },
     "RelationCycleExample": {

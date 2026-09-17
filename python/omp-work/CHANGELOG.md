@@ -4,6 +4,7 @@
 
 ### Added
 
+- Immutable rate-card authority with `register_rate_card` command, workspace rate-cards query endpoints, and provider-account rate card version qualification and compatibility enforcement.
 - Exact historical `WorkRevision` resolution by work item key + revision selector (revision number or UUID) via `GET /v1/work-items/{key}/revisions/{revision_selector}`, and full revision list via `GET /v1/work-items/{key}/revisions`.
 - Exact immutable `EvidenceReceiptView` resolution by UUID via `GET /v1/receipts/{receipt_id}` enforcing `work.read` scope and workspace RLS.
 - Keyset enumeration for work items via `GET /v1/workspaces/{workspace_id}/work-items` beyond 1000 items, ordered deterministically by `(created_at, work_id)` with bound base64url cursor, limit validated 1..500, and explicit exhaustion flag.

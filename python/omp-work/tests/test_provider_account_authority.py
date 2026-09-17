@@ -60,7 +60,7 @@ def _put_account(
     entitlement_evidence: str = "tier-5-active",
     evidence_observed_at: str | None = None,
     billing_mode: str = "metered",
-    rate_card_version: str | None = "2026-q3",
+    rate_card_version: str | None = None,
     observed_balance: str | None = "500.00",
     balance_provenance: str = "provider_observed",
     reset_at: str | None = None,
@@ -100,6 +100,30 @@ def test_put_provider_account_insert_and_inspect(service):
     obs_at = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC).isoformat()
     reset_at = datetime(2026, 10, 1, 0, 0, 0, tzinfo=UTC).isoformat()
 
+    status_rc, resp_rc = _command(
+        service,
+        workspace_id,
+        {
+            "type": "register_rate_card",
+            "payload": {
+                "rate_card_id": str(uuid4()),
+                "provider": "anthropic",
+                "version": "2026-q3",
+                "billing_modes": ["purchased_credit"],
+                "effective_from": obs_at,
+                "effective_until": None,
+                "currency": "USD",
+                "unit_prices": {"input": "0.000003", "output": "0.000015"},
+                "evidence_sha256": "a" * 64,
+                "evidence_source": "https://anthropic.com/pricing",
+                "observed_at": obs_at,
+                "qualification": "qualified",
+            },
+        },
+        token="operator-token",
+    )
+    assert status_rc == 200, resp_rc
+
     status, resp = _put_account(
         service,
         workspace_id,
@@ -109,7 +133,7 @@ def test_put_provider_account_insert_and_inspect(service):
         entitlement_evidence="api-entitlement-v2",
         evidence_observed_at=obs_at,
         billing_mode="purchased_credit",
-        rate_card_version="card-v1",
+        rate_card_version="2026-q3",
         observed_balance="1250.75",
         balance_provenance="provider_observed",
         reset_at=reset_at,
@@ -126,6 +150,7 @@ def test_put_provider_account_insert_and_inspect(service):
     assert account["workspace_id"] == str(workspace_id)
     assert account["provider"] == "anthropic"
     assert account["account_identity"] == "team-scale"
+    assert account["rate_card_version"] == "2026-q3"
     assert account["observed_balance"] == "1250.75"
     assert account["balance_provenance"] == "provider_observed"
     assert account["concurrency_limit"] == 8
@@ -145,6 +170,7 @@ def test_put_provider_account_insert_and_inspect(service):
     assert item["account_id"] == str(account_id)
     assert item["provider"] == "anthropic"
     assert item["account_identity"] == "team-scale"
+    assert item["rate_card_version"] == "2026-q3"
     assert item["observed_balance"] == "1250.75"
     assert item["billing_mode"] == "purchased_credit"
 

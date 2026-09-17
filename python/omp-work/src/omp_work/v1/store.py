@@ -62,6 +62,7 @@ from .models import (
     OperationReceipt,
     OperationState,
     PutProviderAccountPayload,
+    RegisterRateCardPayload,
     BudgetScopeCursorPayload,
     RelationEdge,
     RepositoryCursorPayload,
@@ -92,6 +93,7 @@ _STAGE_PREFLIGHT_FIELDS = "preflight_id,workspace_id,work_id,revision_id,candida
 _STAGE_PREFLIGHT_RECONCILIATION_FIELDS = "reconciliation_id,workspace_id,transport_attempt_id,account_id,observation_id,disposition,observed_at,evidence_sha256,provider_request_id,requests,usage,stop_reason,error,reconciled_at"
 _SOURCE_VERSION_FIELDS = "candidate_id,workspace_id,work_id,revision_id,repository_id,source_version_id,snapshot_id,base_commit,analyzed_commit,tree_sha,source_manifest_sha256,snapshot_manifest_sha256,content_sha256,association_sha256,producer,producer_receipt_sha256,created_at"
 _PROVIDER_ACCOUNT_FIELDS = "account_id,workspace_id,provider,account_identity,entitlement_evidence,evidence_observed_at,billing_mode,rate_card_version,observed_balance,balance_provenance,reset_at,concurrency_limit"
+_RATE_CARD_FIELDS = "rate_card_id,workspace_id,provider,version,billing_modes,effective_from,effective_until,currency,unit_prices,evidence_sha256,evidence_source,observed_at,qualification,registered_at"
 _LIVE_STATES = tuple(sorted(state.value for state in LIVE_CLOSE_ATTEMPT_STATES))
 _CLOSE_COMMANDS = {
     "begin_close_attempt",
@@ -119,6 +121,18 @@ def _row_json(row: dict[str, object] | None) -> dict[str, object] | None:
         return value
 
     return {key: convert(value) for key, value in row.items()}
+
+
+def _rate_card_json(row: dict[str, object] | None) -> dict[str, object] | None:
+    if row is None:
+        return None
+    unit_prices = row.get("unit_prices")
+    if isinstance(unit_prices, str):
+        unit_prices = json.loads(unit_prices)
+    res = _row_json(row)
+    if res is not None and unit_prices is not None:
+        res["unit_prices"] = unit_prices
+    return res
 
 
 def normalize_title(title: str) -> str:
@@ -383,6 +397,7 @@ class PostgresWorkStore:
             "expire_budget",
             "issue_frontier_exception",
             "put_provider_account",
+            "register_rate_card",
         }
         conflict = False
         with self._transaction(
@@ -507,6 +522,8 @@ class PostgresWorkStore:
                     result = self._issue_frontier_exception(cur, envelope)
                 elif command.type == "put_provider_account":
                     result = self._put_provider_account(cur, envelope)
+                elif command.type == "register_rate_card":
+                    result = self._register_rate_card(cur, envelope)
                 elif command.type == "associate_candidate_source":
                     result = self._associate_candidate_source(cur, envelope)
                 elif command.type == "attest_checkpoint_delivery":
@@ -3262,6 +3279,12 @@ class PostgresWorkStore:
             raise WorkStoreError("stale_evidence", ("stale_provider_account_evidence",))
         if disposition == "conflict":
             raise WorkStoreError("revision_conflict", ("provider_account_identity_conflict",))
+        if disposition == "rate_card_missing":
+            raise WorkStoreError("invalid_request", ("rate_card_missing",))
+        if disposition == "rate_card_incompatible":
+            raise WorkStoreError("invalid_request", ("rate_card_incompatible",))
+        if disposition == "rate_card_unqualified":
+            raise WorkStoreError("invalid_request", ("rate_card_unqualified",))
         if disposition not in ("inserted", "updated", "unchanged"):
             raise WorkStoreError("invalid_request", (f"unexpected_disposition_{disposition}",))
 
@@ -3294,6 +3317,130 @@ class PostgresWorkStore:
             "account_id": str(payload.account_id),
             "account": account,
         }
+
+    def _register_rate_card(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        envelope: CommandEnvelope,
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        assert isinstance(payload, RegisterRateCardPayload)
+
+        for price_key, price_val in payload.unit_prices.items():
+            self._money(price_val)
+
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0)), pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (
+                str(payload.rate_card_id),
+                f"{envelope.workspace_id}:{payload.provider}:{payload.version}",
+            ),
+        )
+
+        cur.execute(
+            f"SELECT {_RATE_CARD_FIELDS} FROM omp_work.rate_cards WHERE workspace_id = %s AND rate_card_id = %s",
+            (envelope.workspace_id, payload.rate_card_id),
+        )
+        existing_by_id = cur.fetchone()
+
+        cur.execute(
+            f"SELECT {_RATE_CARD_FIELDS} FROM omp_work.rate_cards WHERE workspace_id = %s AND provider = %s AND version = %s",
+            (envelope.workspace_id, payload.provider, payload.version),
+        )
+        existing_by_key = cur.fetchone()
+
+        if existing_by_id is not None or existing_by_key is not None:
+            if existing_by_id is not None and existing_by_key is not None:
+                if existing_by_id["rate_card_id"] != existing_by_key["rate_card_id"]:
+                    raise WorkStoreError("revision_conflict", ("rate_card_identity_conflict",))
+            existing = existing_by_id if existing_by_id is not None else existing_by_key
+            assert existing is not None
+
+            existing_unit_prices = existing["unit_prices"]
+            if isinstance(existing_unit_prices, str):
+                existing_unit_prices = json.loads(existing_unit_prices)
+
+            matches = (
+                existing["rate_card_id"] == payload.rate_card_id
+                and existing["workspace_id"] == envelope.workspace_id
+                and existing["provider"] == payload.provider
+                and existing["version"] == payload.version
+                and list(existing["billing_modes"]) == list(payload.billing_modes)
+                and existing["effective_from"] == payload.effective_from
+                and existing["effective_until"] == payload.effective_until
+                and existing["currency"] == payload.currency
+                and existing_unit_prices == payload.unit_prices
+                and existing["evidence_sha256"] == payload.evidence_sha256
+                and existing["evidence_source"] == payload.evidence_source
+                and existing["observed_at"] == payload.observed_at
+                and existing["qualification"] == (
+                    payload.qualification.value
+                    if hasattr(payload.qualification, "value")
+                    else str(payload.qualification)
+                )
+            )
+            if matches:
+                return {
+                    "type": "register_rate_card",
+                    "status": "replayed",
+                    "rate_card_id": str(existing["rate_card_id"]),
+                    "rate_card": _rate_card_json(existing),
+                }
+            raise WorkStoreError("revision_conflict", ("rate_card_identity_conflict",))
+
+        qual_val = (
+            payload.qualification.value
+            if hasattr(payload.qualification, "value")
+            else str(payload.qualification)
+        )
+        try:
+            cur.execute(
+                f"""
+                INSERT INTO omp_work.rate_cards (
+                    rate_card_id,
+                    workspace_id,
+                    provider,
+                    version,
+                    billing_modes,
+                    effective_from,
+                    effective_until,
+                    currency,
+                    unit_prices,
+                    evidence_sha256,
+                    evidence_source,
+                    observed_at,
+                    qualification,
+                    registered_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp()
+                )
+                RETURNING {_RATE_CARD_FIELDS}
+                """,
+                (
+                    payload.rate_card_id,
+                    envelope.workspace_id,
+                    payload.provider,
+                    payload.version,
+                    list(payload.billing_modes),
+                    payload.effective_from,
+                    payload.effective_until,
+                    payload.currency,
+                    json.dumps(payload.unit_prices),
+                    payload.evidence_sha256,
+                    payload.evidence_source,
+                    payload.observed_at,
+                    qual_val,
+                ),
+            )
+            row = cur.fetchone()
+            return {
+                "type": "register_rate_card",
+                "status": "inserted",
+                "rate_card_id": str(payload.rate_card_id),
+                "rate_card": _rate_card_json(row),
+            }
+        except psycopg.errors.UniqueViolation:
+            raise WorkStoreError("revision_conflict", ("rate_card_identity_conflict",))
 
     def _bind_stage_identities(
         self,
@@ -7525,6 +7672,41 @@ class PostgresWorkStore:
                     return {
                         "workspace_id": str(workspace_id),
                         "accounts": accounts,
+                    }
+
+            if kind == "rate_cards":
+                if value:
+                    try:
+                        rate_card_uuid = UUID(value)
+                    except ValueError:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("invalid_rate_card_id", f"invalid rate card UUID: '{value}'"),
+                        )
+                    cur.execute(
+                        f"SELECT {_RATE_CARD_FIELDS} FROM omp_work.rate_cards WHERE workspace_id = %s AND rate_card_id = %s",
+                        (workspace_id, rate_card_uuid),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=(
+                                "not_found",
+                                f"rate card '{value}' not found in workspace",
+                            ),
+                        )
+                    return _rate_card_json(row)
+                else:
+                    cur.execute(
+                        f"SELECT {_RATE_CARD_FIELDS} FROM omp_work.rate_cards WHERE workspace_id = %s ORDER BY provider ASC, version ASC, effective_from ASC",
+                        (workspace_id,),
+                    )
+                    rows = cur.fetchall()
+                    rate_cards = [_rate_card_json(r) for r in rows]
+                    return {
+                        "workspace_id": str(workspace_id),
+                        "rate_cards": rate_cards,
                     }
 
             if kind == "budget_scopes":

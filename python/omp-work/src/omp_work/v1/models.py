@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -277,6 +279,28 @@ class BudgetResource(StrEnum):
     INCLUDED_CREDIT = "included_credit"
     NATIVE_QUOTA = "native_quota"
     LOCAL_COMPUTE = "local_compute"
+
+
+class RateCardQualification(StrEnum):
+    UNQUALIFIED = "unqualified"
+    QUALIFIED = "qualified"
+
+
+class RateCard(StrictModel):
+    rate_card_id: UUID
+    workspace_id: UUID
+    provider: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    billing_modes: tuple[Literal["subscription", "metered", "purchased_credit", "local"], ...]
+    effective_from: datetime
+    effective_until: datetime | None = None
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    unit_prices: dict[str, str]
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_source: str = Field(min_length=1)
+    observed_at: datetime
+    qualification: RateCardQualification
+    registered_at: datetime
 
 
 class ProviderAccount(StrictModel):
@@ -1291,6 +1315,50 @@ class PutProviderAccountPayload(StrictModel):
         return self
 
 
+class RegisterRateCardPayload(StrictModel):
+    rate_card_id: UUID
+    provider: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    billing_modes: tuple[Literal["subscription", "metered", "purchased_credit", "local"], ...]
+    effective_from: AwareDatetime
+    effective_until: AwareDatetime | None = None
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    unit_prices: dict[str, str]
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_source: str = Field(min_length=1)
+    observed_at: AwareDatetime
+    qualification: RateCardQualification
+
+    @model_validator(mode="after")
+    def validate_invariants(self) -> RegisterRateCardPayload:
+        if not self.provider.strip():
+            raise ValueError("provider cannot be blank")
+        if not self.version.strip():
+            raise ValueError("version cannot be blank")
+        if not self.evidence_source.strip():
+            raise ValueError("evidence_source cannot be blank")
+        if not self.billing_modes:
+            raise ValueError("billing_modes cannot be empty")
+        if len(self.billing_modes) != len(set(self.billing_modes)):
+            raise ValueError("billing_modes cannot contain duplicate entries")
+        if self.effective_until is not None and self.effective_until <= self.effective_from:
+            raise ValueError("effective_until must be after effective_from")
+        if not self.unit_prices:
+            raise ValueError("unit_prices cannot be empty")
+        for key, val in self.unit_prices.items():
+            if not key or not key.strip():
+                raise ValueError("unit_prices keys cannot be blank")
+            if not isinstance(val, str) or not re.match(r"^[0-9]+(?:\.[0-9]+)?$", val):
+                raise ValueError(f"invalid decimal string for unit price '{key}': {val}")
+            try:
+                dec = Decimal(val)
+            except InvalidOperation:
+                raise ValueError(f"invalid decimal value for unit price '{key}': {val}")
+            if not dec.is_finite() or dec < 0:
+                raise ValueError(f"unit price '{key}' must be finite and non-negative")
+        return self
+
+
 class AssociateCandidateSourcePayload(StrictModel):
     candidate_id: UUID
     work_id: UUID
@@ -1699,6 +1767,11 @@ class PutProviderAccountCommand(StrictModel):
     payload: PutProviderAccountPayload
 
 
+class RegisterRateCardCommand(StrictModel):
+    type: Literal["register_rate_card"]
+    payload: RegisterRateCardPayload
+
+
 class AssociateCandidateSourceCommand(StrictModel):
     type: Literal["associate_candidate_source"]
     payload: AssociateCandidateSourcePayload
@@ -1768,6 +1841,7 @@ Command = Annotated[
     | ExpireBudgetCommand
     | IssueFrontierExceptionCommand
     | PutProviderAccountCommand
+    | RegisterRateCardCommand
     | AssociateCandidateSourceCommand
     | AttestCheckpointDeliveryCommand
     | RecordCloseoutReviewCommand

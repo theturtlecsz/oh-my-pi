@@ -318,6 +318,13 @@ def create_app(
     ) -> JSONResponse:
         return read_route(request, workspace_id, "provider_accounts", account_id)
 
+    @app.get("/v1/workspaces/{workspace_id}/rate-cards")
+    @app.get("/v1/workspaces/{workspace_id}/rate-cards/{rate_card_id}")
+    def rate_cards(
+        request: Request, workspace_id: UUID, rate_card_id: str = ""
+    ) -> JSONResponse:
+        return read_route(request, workspace_id, "rate_cards", rate_card_id)
+
     @app.get("/v1/workspaces/{workspace_id}/budget-scopes")
     def budget_scopes(
         request: Request,

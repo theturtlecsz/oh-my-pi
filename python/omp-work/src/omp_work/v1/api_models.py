@@ -22,6 +22,7 @@ from .models import (
     EvidenceReceipt,
     OperationReceipt,
     ProviderAccount,
+    RateCard,
     RelationEdge,
     StrictModel,
     WorkAlias,
@@ -393,6 +394,13 @@ class ProviderAccountResult(StrictModel):
     account: ProviderAccount
 
 
+class RateCardResult(StrictModel):
+    type: Literal["register_rate_card"]
+    status: Literal["inserted", "replayed"]
+    rate_card_id: UUID
+    rate_card: RateCard
+
+
 class AuthorityView(StrictModel):
     authority: Literal["linear", "work"]
     epoch_id: UUID | None = None
@@ -425,6 +433,7 @@ CommandResult = Annotated[
     | AttestCutoverPlanResult
     | BudgetResult
     | ProviderAccountResult
+    | RateCardResult
     | BeginExecutionResult
     | ActivateExecutionItemResult
     | SealExecutionCriteriaResult
@@ -540,6 +549,11 @@ class RepositoryListView(StrictModel):
 class ProviderAccountListView(StrictModel):
     workspace_id: UUID
     accounts: tuple[ProviderAccount, ...]
+
+
+class RateCardListView(StrictModel):
+    workspace_id: UUID
+    rate_cards: tuple[RateCard, ...]
 
 
 class BudgetScopeListView(StrictModel):

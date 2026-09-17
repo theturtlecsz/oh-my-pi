@@ -8663,6 +8663,156 @@
           "title": "ProviderAccountResult",
           "type": "object"
         },
+        "RateCard": {
+          "additionalProperties": false,
+          "properties": {
+            "billing_modes": {
+              "items": {
+                "enum": [
+                  "subscription",
+                  "metered",
+                  "purchased_credit",
+                  "local"
+                ],
+                "type": "string"
+              },
+              "title": "Billing Modes",
+              "type": "array"
+            },
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "title": "Currency",
+              "type": "string"
+            },
+            "effective_from": {
+              "format": "date-time",
+              "title": "Effective From",
+              "type": "string"
+            },
+            "effective_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effective Until"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "evidence_source": {
+              "minLength": 1,
+              "title": "Evidence Source",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "qualification": {
+              "$ref": "#/$defs/RateCardQualification"
+            },
+            "rate_card_id": {
+              "format": "uuid",
+              "title": "Rate Card Id",
+              "type": "string"
+            },
+            "registered_at": {
+              "format": "date-time",
+              "title": "Registered At",
+              "type": "string"
+            },
+            "unit_prices": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Unit Prices",
+              "type": "object"
+            },
+            "version": {
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rate_card_id",
+            "workspace_id",
+            "provider",
+            "version",
+            "billing_modes",
+            "effective_from",
+            "currency",
+            "unit_prices",
+            "evidence_sha256",
+            "evidence_source",
+            "observed_at",
+            "qualification",
+            "registered_at"
+          ],
+          "title": "RateCard",
+          "type": "object"
+        },
+        "RateCardQualification": {
+          "enum": [
+            "unqualified",
+            "qualified"
+          ],
+          "title": "RateCardQualification",
+          "type": "string"
+        },
+        "RateCardResult": {
+          "additionalProperties": false,
+          "properties": {
+            "rate_card": {
+              "$ref": "#/$defs/RateCard"
+            },
+            "rate_card_id": {
+              "format": "uuid",
+              "title": "Rate Card Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "inserted",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "register_rate_card",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "rate_card_id",
+            "rate_card"
+          ],
+          "title": "RateCardResult",
+          "type": "object"
+        },
         "ReconcileStagePreflightResult": {
           "additionalProperties": false,
           "properties": {
@@ -10402,6 +10552,7 @@
               "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
               "record_project_health": "#/$defs/ProjectHealthResult",
               "record_stage_preflight": "#/$defs/StagePreflightResult",
+              "register_rate_card": "#/$defs/RateCardResult",
               "remove_relation": "#/$defs/RelationResult",
               "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
               "reserve_budget": "#/$defs/BudgetResult",
@@ -10488,6 +10639,9 @@
             },
             {
               "$ref": "#/$defs/ProviderAccountResult"
+            },
+            {
+              "$ref": "#/$defs/RateCardResult"
             },
             {
               "$ref": "#/$defs/BeginExecutionResult"
@@ -14331,6 +14485,417 @@
         "account"
       ],
       "title": "ProviderAccountResult",
+      "type": "object"
+    },
+    "RateCard": {
+      "$defs": {
+        "RateCardQualification": {
+          "enum": [
+            "unqualified",
+            "qualified"
+          ],
+          "title": "RateCardQualification",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "billing_modes": {
+          "items": {
+            "enum": [
+              "subscription",
+              "metered",
+              "purchased_credit",
+              "local"
+            ],
+            "type": "string"
+          },
+          "title": "Billing Modes",
+          "type": "array"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "effective_from": {
+          "format": "date-time",
+          "title": "Effective From",
+          "type": "string"
+        },
+        "effective_until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effective Until"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "evidence_source": {
+          "minLength": 1,
+          "title": "Evidence Source",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "qualification": {
+          "$ref": "#/$defs/RateCardQualification"
+        },
+        "rate_card_id": {
+          "format": "uuid",
+          "title": "Rate Card Id",
+          "type": "string"
+        },
+        "registered_at": {
+          "format": "date-time",
+          "title": "Registered At",
+          "type": "string"
+        },
+        "unit_prices": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Unit Prices",
+          "type": "object"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rate_card_id",
+        "workspace_id",
+        "provider",
+        "version",
+        "billing_modes",
+        "effective_from",
+        "currency",
+        "unit_prices",
+        "evidence_sha256",
+        "evidence_source",
+        "observed_at",
+        "qualification",
+        "registered_at"
+      ],
+      "title": "RateCard",
+      "type": "object"
+    },
+    "RateCardListView": {
+      "$defs": {
+        "RateCard": {
+          "additionalProperties": false,
+          "properties": {
+            "billing_modes": {
+              "items": {
+                "enum": [
+                  "subscription",
+                  "metered",
+                  "purchased_credit",
+                  "local"
+                ],
+                "type": "string"
+              },
+              "title": "Billing Modes",
+              "type": "array"
+            },
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "title": "Currency",
+              "type": "string"
+            },
+            "effective_from": {
+              "format": "date-time",
+              "title": "Effective From",
+              "type": "string"
+            },
+            "effective_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effective Until"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "evidence_source": {
+              "minLength": 1,
+              "title": "Evidence Source",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "qualification": {
+              "$ref": "#/$defs/RateCardQualification"
+            },
+            "rate_card_id": {
+              "format": "uuid",
+              "title": "Rate Card Id",
+              "type": "string"
+            },
+            "registered_at": {
+              "format": "date-time",
+              "title": "Registered At",
+              "type": "string"
+            },
+            "unit_prices": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Unit Prices",
+              "type": "object"
+            },
+            "version": {
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rate_card_id",
+            "workspace_id",
+            "provider",
+            "version",
+            "billing_modes",
+            "effective_from",
+            "currency",
+            "unit_prices",
+            "evidence_sha256",
+            "evidence_source",
+            "observed_at",
+            "qualification",
+            "registered_at"
+          ],
+          "title": "RateCard",
+          "type": "object"
+        },
+        "RateCardQualification": {
+          "enum": [
+            "unqualified",
+            "qualified"
+          ],
+          "title": "RateCardQualification",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "rate_cards": {
+          "items": {
+            "$ref": "#/$defs/RateCard"
+          },
+          "title": "Rate Cards",
+          "type": "array"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "rate_cards"
+      ],
+      "title": "RateCardListView",
+      "type": "object"
+    },
+    "RateCardResult": {
+      "$defs": {
+        "RateCard": {
+          "additionalProperties": false,
+          "properties": {
+            "billing_modes": {
+              "items": {
+                "enum": [
+                  "subscription",
+                  "metered",
+                  "purchased_credit",
+                  "local"
+                ],
+                "type": "string"
+              },
+              "title": "Billing Modes",
+              "type": "array"
+            },
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "title": "Currency",
+              "type": "string"
+            },
+            "effective_from": {
+              "format": "date-time",
+              "title": "Effective From",
+              "type": "string"
+            },
+            "effective_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effective Until"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "evidence_source": {
+              "minLength": 1,
+              "title": "Evidence Source",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "qualification": {
+              "$ref": "#/$defs/RateCardQualification"
+            },
+            "rate_card_id": {
+              "format": "uuid",
+              "title": "Rate Card Id",
+              "type": "string"
+            },
+            "registered_at": {
+              "format": "date-time",
+              "title": "Registered At",
+              "type": "string"
+            },
+            "unit_prices": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Unit Prices",
+              "type": "object"
+            },
+            "version": {
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rate_card_id",
+            "workspace_id",
+            "provider",
+            "version",
+            "billing_modes",
+            "effective_from",
+            "currency",
+            "unit_prices",
+            "evidence_sha256",
+            "evidence_source",
+            "observed_at",
+            "qualification",
+            "registered_at"
+          ],
+          "title": "RateCard",
+          "type": "object"
+        },
+        "RateCardQualification": {
+          "enum": [
+            "unqualified",
+            "qualified"
+          ],
+          "title": "RateCardQualification",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "rate_card": {
+          "$ref": "#/$defs/RateCard"
+        },
+        "rate_card_id": {
+          "format": "uuid",
+          "title": "Rate Card Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "inserted",
+            "replayed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "register_rate_card",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "rate_card_id",
+        "rate_card"
+      ],
+      "title": "RateCardResult",
       "type": "object"
     },
     "ReconcileStagePreflightResult": {
@@ -22596,6 +23161,156 @@
           "title": "ProviderAccountResult",
           "type": "object"
         },
+        "RateCard": {
+          "additionalProperties": false,
+          "properties": {
+            "billing_modes": {
+              "items": {
+                "enum": [
+                  "subscription",
+                  "metered",
+                  "purchased_credit",
+                  "local"
+                ],
+                "type": "string"
+              },
+              "title": "Billing Modes",
+              "type": "array"
+            },
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "title": "Currency",
+              "type": "string"
+            },
+            "effective_from": {
+              "format": "date-time",
+              "title": "Effective From",
+              "type": "string"
+            },
+            "effective_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Effective Until"
+            },
+            "evidence_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evidence Sha256",
+              "type": "string"
+            },
+            "evidence_source": {
+              "minLength": 1,
+              "title": "Evidence Source",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "qualification": {
+              "$ref": "#/$defs/RateCardQualification"
+            },
+            "rate_card_id": {
+              "format": "uuid",
+              "title": "Rate Card Id",
+              "type": "string"
+            },
+            "registered_at": {
+              "format": "date-time",
+              "title": "Registered At",
+              "type": "string"
+            },
+            "unit_prices": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Unit Prices",
+              "type": "object"
+            },
+            "version": {
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rate_card_id",
+            "workspace_id",
+            "provider",
+            "version",
+            "billing_modes",
+            "effective_from",
+            "currency",
+            "unit_prices",
+            "evidence_sha256",
+            "evidence_source",
+            "observed_at",
+            "qualification",
+            "registered_at"
+          ],
+          "title": "RateCard",
+          "type": "object"
+        },
+        "RateCardQualification": {
+          "enum": [
+            "unqualified",
+            "qualified"
+          ],
+          "title": "RateCardQualification",
+          "type": "string"
+        },
+        "RateCardResult": {
+          "additionalProperties": false,
+          "properties": {
+            "rate_card": {
+              "$ref": "#/$defs/RateCard"
+            },
+            "rate_card_id": {
+              "format": "uuid",
+              "title": "Rate Card Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "inserted",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "register_rate_card",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "rate_card_id",
+            "rate_card"
+          ],
+          "title": "RateCardResult",
+          "type": "object"
+        },
         "ReconcileStagePreflightResult": {
           "additionalProperties": false,
           "properties": {
@@ -24351,6 +25066,7 @@
                   "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
                   "record_project_health": "#/$defs/ProjectHealthResult",
                   "record_stage_preflight": "#/$defs/StagePreflightResult",
+                  "register_rate_card": "#/$defs/RateCardResult",
                   "remove_relation": "#/$defs/RelationResult",
                   "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
                   "reserve_budget": "#/$defs/BudgetResult",
@@ -24437,6 +25153,9 @@
                 },
                 {
                   "$ref": "#/$defs/ProviderAccountResult"
+                },
+                {
+                  "$ref": "#/$defs/RateCardResult"
                 },
                 {
                   "$ref": "#/$defs/BeginExecutionResult"
