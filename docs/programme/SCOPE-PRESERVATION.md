@@ -9,7 +9,7 @@ Each original obligation group has a corresponding O1–O10 section in the revis
 | Original group | Finished-document location | Preservation contract |
 | --- | --- | --- |
 | O1 Existing programme | Goal O1; MASTER Mission and continuation, Remaining completion gates | Work Ledger, native execution, stabilization, recovery, qualified installation/deployment, Fleet, two-repository learning/context/correction/recovery, deferred UI; preserve IDs, criteria, history and unfinished work |
-| O2 Repository/economy instructions | Goal O2 and economy routes; MASTER current handoff | Antidote, Observer, exact external CLI roles, no premium reserve/substitution, bounded authorized delegation |
+| O2 Repository/economy instructions | Goal O2 and economy routes; MASTER current handoff | Antidote, Observer, `gpt-5.6-sol:medium` coordinator, exact external CLI roles, one bounded Astra-high blocker-diagnosis reserve, no other premium reserve or silent substitution, bounded authorized delegation |
 | O3 Reality and ownership | Goal O3; ECC WP1; research R00 | Installed versus development identity; effective roles/tools/memory/discovery; native records; shared interfaces and existing owners; unknown access stays unknown |
 | O4 Complete ECC | Goal O4; full ECC sections 1–10 and WP1–WP8 | Complete pinned mirror, adapter, provenance/dependency closure, ownership lifecycle, packs, typed audits/accounting/advisors, learning/lifecycle, separately qualified security/release |
 | O5 Complete research | Goal O5; full research sections 1–30 and R00–R19 | All domains, durable shared execution, protected evaluation, adaptive/hypothesis/comparative learning, first experiment-to-reproduction slice, bilevel and recursive, continuous/distributed and clients |
