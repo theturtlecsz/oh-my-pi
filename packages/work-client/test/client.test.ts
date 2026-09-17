@@ -657,6 +657,7 @@ test("providerAccounts fetches workspace provider-account list view with contrac
 				balance_provenance: "provider_observed" as const,
 				reset_at: null,
 				concurrency_limit: 5,
+				budget_resource: "included_credit" as const,
 			},
 		],
 	};
@@ -695,6 +696,7 @@ test("providerAccount encodes accountId URL and returns single ProviderAccount",
 		balance_provenance: "unknown" as const,
 		reset_at: "2026-10-01T00:00:00+00:00",
 		concurrency_limit: 2,
+		budget_resource: null,
 	};
 	const client = new WorkClient(
 		"http://127.0.0.1:54322",
@@ -1154,6 +1156,8 @@ test("executes quote_budget and reserve_budget with quote_id", async () => {
 		evidence_sha256: "a".repeat(64),
 		quote_sha256: "b".repeat(64),
 		quoted_at: "2026-09-17T00:00:00+00:00",
+		resource: "native_quota",
+		scope_id: "00000000-0000-7000-8000-000000000001",
 	};
 
 	let capturedReservePayload: any = null;

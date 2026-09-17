@@ -27,9 +27,13 @@ import type {
 	CancelStagePreflightPayload,
 	CancelStagePreflightResult,
 	RecordStagePreflightPayload,
-	CandidateSourceVersion,
-	UUID,
+	type CandidateSourceVersion,
+	type UUID,
 	WorkClient,
+	type BudgetQuote,
+	type BudgetResult,
+	type QuoteBudgetPayload,
+	type ReserveBudgetPayload,
 } from "@oh-my-pi/pi-work-client";
 
 export interface ExecutionChildren {
@@ -659,6 +663,8 @@ export interface WorkflowBackend {
 	settleStageLaunch(input: { launchId: string; outcomeSha256: string; outcome: Record<string, unknown>; servedSelector?: string | null; servedModel?: string | null }): Promise<StageLaunch>;
 	cancelStageLaunch(launchId: string, reason: string): Promise<StageLaunch>;
 	reconcileStageLaunch(launchId: string, reason: string): Promise<StageLaunch>;
+	quoteBudget(payload: QuoteBudgetPayload): Promise<BudgetQuote>;
+	reserveBudget(payload: ReserveBudgetPayload): Promise<BudgetResult>;
 	associateCandidateSource(input: {
 		candidateId: string;
 		workId: string;

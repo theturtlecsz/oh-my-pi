@@ -69,6 +69,7 @@ from .models import (
     RepositoryCursorPayload,
     RiderProof,
     StageLaunchStatus,
+    StagePreflightUsage,
     SameSessionFoundFixedPayload,
     WorkItemsCursorPayload,
 )
@@ -93,9 +94,9 @@ _STAGE_PREFLIGHT_INTENT_FIELDS = "intent_id,workspace_id,work_id,revision_id,can
 _STAGE_PREFLIGHT_FIELDS = "preflight_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,session_id,role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,is_fallback,outcome,stop_reason,error,requests,usage,provider_request_id,observed_at"
 _STAGE_PREFLIGHT_RECONCILIATION_FIELDS = "reconciliation_id,workspace_id,transport_attempt_id,account_id,observation_id,disposition,observed_at,evidence_sha256,provider_request_id,requests,usage,stop_reason,error,reconciled_at"
 _SOURCE_VERSION_FIELDS = "candidate_id,workspace_id,work_id,revision_id,repository_id,source_version_id,snapshot_id,base_commit,analyzed_commit,tree_sha,source_manifest_sha256,snapshot_manifest_sha256,content_sha256,association_sha256,producer,producer_receipt_sha256,created_at"
-_PROVIDER_ACCOUNT_FIELDS = "account_id,workspace_id,provider,account_identity,entitlement_evidence,evidence_observed_at,billing_mode,rate_card_version,observed_balance,balance_provenance,reset_at,concurrency_limit"
+_PROVIDER_ACCOUNT_FIELDS = "account_id,workspace_id,provider,account_identity,entitlement_evidence,evidence_observed_at,billing_mode,rate_card_version,observed_balance,balance_provenance,reset_at,concurrency_limit,budget_resource"
 _RATE_CARD_FIELDS = "rate_card_id,workspace_id,provider,version,billing_modes,effective_from,effective_until,currency,unit_prices,evidence_sha256,evidence_source,observed_at,qualification,registered_at"
-_BUDGET_QUOTE_FIELDS = "quote_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,launch_id,account_id,account_evidence_observed_at,provider,model,effort,rate_card_id,rate_card_version,currency,usage_ceiling,worst_case_amount,evidence_sha256,quote_sha256,quoted_at"
+_BUDGET_QUOTE_FIELDS = "quote_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,launch_id,account_id,account_evidence_observed_at,provider,model,effort,rate_card_id,rate_card_version,currency,usage_ceiling,worst_case_amount,evidence_sha256,quote_sha256,quoted_at,resource,scope_id"
 _LIVE_STATES = tuple(sorted(state.value for state in LIVE_CLOSE_ATTEMPT_STATES))
 _CLOSE_COMMANDS = {
     "begin_close_attempt",
@@ -3021,11 +3022,13 @@ class PostgresWorkStore:
             ):
                 raise WorkStoreError("stale_evidence", ("stage launch route mismatch",))
             cur.execute(
-                "SELECT 1 FROM omp_work.budget_reservations WHERE workspace_id=%s AND launch_id=%s AND state IN ('reserved_unsent', 'potentially_sent')",
+                "SELECT quote_id FROM omp_work.budget_reservations WHERE workspace_id=%s AND launch_id=%s AND state IN ('reserved_unsent', 'potentially_sent')",
                 (envelope.workspace_id, payload.launch_id),
             )
-            if cur.fetchone() is not None:
-                raise WorkStoreError("invalid_request", ("launch_reservation_active",))
+            active_res = cur.fetchone()
+            if active_res is not None:
+                if payload.quote_id is None or active_res["quote_id"] != payload.quote_id:
+                    raise WorkStoreError("invalid_request", ("launch_reservation_active",))
         cur.execute("SELECT * FROM omp_work.provider_accounts WHERE workspace_id=%s AND account_id=%s", (envelope.workspace_id, payload.account_id))
         account = cur.fetchone()
         if account is None or account["balance_provenance"] == "unknown":
@@ -3033,6 +3036,7 @@ class PostgresWorkStore:
         if account["provider"] != payload.provider:
             raise WorkStoreError("invalid_request", ("account_provider_mismatch",))
         if payload.quote_id is not None:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (str(payload.quote_id),))
             cur.execute(
                 f"SELECT {_BUDGET_QUOTE_FIELDS} FROM omp_work.budget_quotes WHERE workspace_id=%s AND quote_id=%s",
                 (envelope.workspace_id, payload.quote_id),
@@ -3057,6 +3061,10 @@ class PostgresWorkStore:
                 or account["rate_card_version"] != quote["rate_card_version"]
             ):
                 raise WorkStoreError("stale_evidence", ("quote_stale_account",))
+            if quote["scope_id"] is None or str(quote["scope_id"]) != str(payload.scope_id):
+                raise WorkStoreError("invalid_request", ("quote_scope_mismatch",))
+            if quote["resource"] is None or quote["resource"] != payload.resource.value:
+                raise WorkStoreError("invalid_request", ("quote_resource_mismatch",))
             cur.execute(
                 """
                 SELECT (clock_timestamp() < effective_from OR (effective_until IS NOT NULL AND clock_timestamp() >= effective_until)) AS not_effective
@@ -3069,10 +3077,37 @@ class PostgresWorkStore:
             if card_check is None or card_check["not_effective"]:
                 raise WorkStoreError("invalid_request", ("rate_card_not_effective",))
             cur.execute(
-                "SELECT 1 FROM omp_work.budget_reservations WHERE quote_id=%s",
+                "SELECT * FROM omp_work.budget_reservations WHERE quote_id=%s",
                 (payload.quote_id,),
             )
-            if cur.fetchone() is not None:
+            existing_res = cur.fetchone()
+            if existing_res is not None:
+                if existing_res["state"] not in ("reserved_unsent", "potentially_sent"):
+                    raise WorkStoreError("invalid_request", ("reservation_terminal",))
+                if (
+                    payload.launch_id is not None
+                    and existing_res["launch_id"] == payload.launch_id
+                    and existing_res["scope_id"] == payload.scope_id
+                    and existing_res["account_id"] == payload.account_id
+                    and existing_res["logical_call_id"] == payload.logical_call_id
+                    and existing_res["transport_attempt_id"] == payload.transport_attempt_id
+                    and existing_res["resource"] == payload.resource.value
+                    and existing_res["provider"] == payload.provider
+                    and existing_res["model"] == payload.model
+                    and existing_res["effort"] == payload.effort
+                    and self._money(str(existing_res["worst_case_drawdown"])) == self._money(payload.worst_case_drawdown)
+                    and existing_res["context_limit"] == payload.context_limit
+                    and existing_res["output_limit"] == payload.output_limit
+                    and existing_res["expires_at"] == payload.expires_at
+                ):
+                    return {
+                        "type": "reserve_budget",
+                        "reservation_id": str(existing_res["reservation_id"]),
+                        "transport_attempt_id": str(existing_res["transport_attempt_id"]),
+                        "fence": existing_res["fence"],
+                        "state": existing_res["state"],
+                        "replayed": True,
+                    }
                 raise WorkStoreError("invalid_request", ("quote_already_reserved",))
         amount = self._money(payload.worst_case_drawdown)
         chain = self._lock_budget_chain(cur, envelope.workspace_id, payload.scope_id)
@@ -3133,7 +3168,8 @@ class PostgresWorkStore:
                 ),
             )
         except psycopg.errors.UniqueViolation as e:
-            if payload.quote_id is not None and "quote" in str(e).lower():
+            constraint = getattr(getattr(e, "diag", None), "constraint_name", None)
+            if constraint == "budget_reservations_quote":
                 raise WorkStoreError("invalid_request", ("quote_already_reserved",)) from e
             raise
         if cur.rowcount != 1:
@@ -3323,7 +3359,7 @@ class PostgresWorkStore:
         cur.execute(
             """
             SELECT omp_work.put_provider_account(
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             ) AS disposition
             """,
             (
@@ -3339,6 +3375,7 @@ class PostgresWorkStore:
                 payload.balance_provenance,
                 payload.reset_at,
                 payload.concurrency_limit,
+                payload.budget_resource.value if payload.budget_resource is not None else None,
             ),
         )
         row = cur.fetchone()
@@ -3377,6 +3414,7 @@ class PostgresWorkStore:
             "balance_provenance": account_row["balance_provenance"],
             "reset_at": account_row["reset_at"].isoformat() if account_row.get("reset_at") and hasattr(account_row["reset_at"], "isoformat") else (str(account_row["reset_at"]) if account_row.get("reset_at") else None),
             "concurrency_limit": int(account_row["concurrency_limit"]),
+            "budget_resource": account_row.get("budget_resource"),
         }
 
         return {
@@ -3568,6 +3606,25 @@ class PostgresWorkStore:
         # 4. Account fail-closed
         if account["balance_provenance"] == "unknown":
             raise WorkStoreError("invalid_request", ("unknown_account_evidence",))
+        if account["budget_resource"] is None:
+            raise WorkStoreError("invalid_request", ("account_resource_unclassified",))
+        resource = account["budget_resource"]
+
+        # Scope selection
+        cur.execute(
+            "SELECT * FROM omp_work.budget_scopes WHERE workspace_id=%s AND kind='work' AND work_id=%s",
+            (envelope.workspace_id, payload.work_id),
+        )
+        work_scopes = cur.fetchall()
+        if len(work_scopes) == 0:
+            raise WorkStoreError("invalid_request", ("budget_scope_missing",))
+        if len(work_scopes) > 1:
+            raise WorkStoreError("invalid_request", ("budget_scope_ambiguous",))
+        scope = work_scopes[0]
+        scope_limits = self._budget_json(scope["limits"])
+        if resource not in scope_limits:
+            raise WorkStoreError("invalid_request", ("budget_scope_missing_limit",))
+        scope_id = scope["scope_id"]
 
         # 5. Rate card lookup & validation
         if account["rate_card_version"] is None:
@@ -3645,8 +3702,10 @@ class PostgresWorkStore:
             "provider": payload.provider,
             "rate_card_id": str(card["rate_card_id"]),
             "rate_card_version": account["rate_card_version"],
+            "resource": resource,
             "revision_id": str(payload.revision_id) if payload.revision_id else None,
             "role": role_val,
+            "scope_id": str(scope_id),
             "usage_ceiling": payload.usage_ceiling,
             "work_id": str(payload.work_id),
             "workspace_id": str(envelope.workspace_id),
@@ -3680,13 +3739,16 @@ class PostgresWorkStore:
                 worst_case_amount,
                 evidence_sha256,
                 quote_sha256,
-                quoted_at
+                quoted_at,
+                resource,
+                scope_id
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
-                %s, clock_timestamp()
+                %s, clock_timestamp(),
+                %s, %s
             )
             RETURNING {_BUDGET_QUOTE_FIELDS}
             """,
@@ -3712,6 +3774,8 @@ class PostgresWorkStore:
                 Decimal(worst_case_amount_str),
                 card["evidence_sha256"],
                 quote_sha256_val,
+                resource,
+                scope_id,
             ),
         )
         row = cur.fetchone()
@@ -3946,6 +4010,146 @@ class PostgresWorkStore:
         )
         return {"type": "handoff_stage_launch", "status": "applied", "launch": _row_json(cur.fetchone())}
 
+    def _settle_bound_reservation_for_launch(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        bound_res: dict[str, object],
+        outcome: dict[str, object] | None,
+    ) -> None:
+        cur.execute(
+            f"SELECT {_BUDGET_QUOTE_FIELDS} FROM omp_work.budget_quotes WHERE workspace_id=%s AND quote_id=%s",
+            (workspace_id, bound_res["quote_id"]),
+        )
+        quote = cur.fetchone()
+        if quote is None:
+            raise WorkStoreError("cutover_invariant", ("quote_not_found_for_bound_reservation",))
+
+        cur.execute(
+            f"SELECT {_RATE_CARD_FIELDS} FROM omp_work.rate_cards WHERE workspace_id=%s AND rate_card_id=%s",
+            (workspace_id, quote["rate_card_id"]),
+        )
+        card = cur.fetchone()
+        if card is None:
+            raise WorkStoreError("cutover_invariant", ("rate_card_not_found_for_quote",))
+
+        unit_prices = card["unit_prices"]
+        if isinstance(unit_prices, str):
+            unit_prices = json.loads(unit_prices)
+
+        raw_usage = outcome.get("usage") if isinstance(outcome, dict) else None
+        usage: StagePreflightUsage | None = None
+        if isinstance(raw_usage, dict):
+            try:
+                usage = StagePreflightUsage.model_validate(raw_usage)
+            except Exception:
+                usage = None
+
+        settleable = False
+        if usage is not None:
+            priced_keys = set(unit_prices.keys())
+            flat_billable = {"input", "output", "cacheRead", "cacheWrite", "premiumRequests"}
+            if priced_keys.issubset(flat_billable):
+                has_positive_unpriced = False
+                for k in flat_billable - priced_keys:
+                    val = getattr(usage, k, 0)
+                    if val is not None and val > 0:
+                        has_positive_unpriced = True
+                        break
+
+                missing_priced = False
+                for k in priced_keys:
+                    val = getattr(usage, k, None)
+                    if val is None:
+                        missing_priced = True
+                        break
+
+                has_positive_nested = False
+                if usage.orchestration is not None:
+                    for val in (
+                        usage.orchestration.input,
+                        usage.orchestration.output,
+                        usage.orchestration.cacheRead,
+                        usage.orchestration.cacheWrite,
+                        usage.orchestration.totalTokens,
+                    ):
+                        if val is not None and val > 0:
+                            has_positive_nested = True
+                            break
+                if not has_positive_nested and usage.server is not None:
+                    for val in (usage.server.webSearch, usage.server.webFetch):
+                        if val is not None and val > 0:
+                            has_positive_nested = True
+                            break
+                if not has_positive_nested and usage.cttl is not None:
+                    for val in (usage.cttl.ephemeral5m, usage.cttl.ephemeral1h):
+                        if val is not None and val > 0:
+                            has_positive_nested = True
+                            break
+
+                if not has_positive_unpriced and not missing_priced and not has_positive_nested:
+                    settleable = True
+
+        chain = self._lock_budget_chain(cur, workspace_id, bound_res["scope_id"])
+        key = bound_res["resource"]
+        worst_case = self._money(str(bound_res["worst_case_drawdown"]))
+
+        if settleable:
+            actual = Decimal("0")
+            for k in unit_prices.keys():
+                count = getattr(usage, k)
+                price = self._money(str(unit_prices[k]))
+                actual += Decimal(count) * price
+            actual_str = format(actual, "f")
+
+            self._apply_budget_transition(
+                cur,
+                chain,
+                key,
+                held_delta=-worst_case,
+                spent_delta=actual,
+            )
+            started = outcome.get("started") if isinstance(outcome, dict) else False
+            error = outcome.get("error") if isinstance(outcome, dict) else None
+            outcome_val = "success" if (started is True and error is None) else "error"
+            provider_request_id = outcome.get("provider_request_id") if isinstance(outcome, dict) else None
+            cur.execute(
+                """
+                UPDATE omp_work.budget_reservations
+                SET state='settled',
+                    actual_drawdown=%s,
+                    usage=%s,
+                    provenance='provider_observed',
+                    provider_request_id=%s,
+                    outcome=%s,
+                    settled_at=clock_timestamp()
+                WHERE reservation_id=%s
+                """,
+                (actual_str, json.dumps(raw_usage), provider_request_id, outcome_val, bound_res["reservation_id"]),
+            )
+        else:
+            self._apply_budget_transition(
+                cur,
+                chain,
+                key,
+                held_delta=-worst_case,
+                unresolved_delta=worst_case,
+            )
+            cur.execute(
+                """
+                UPDATE omp_work.budget_reservations
+                SET state='unresolved',
+                    actual_drawdown=%s,
+                    usage=%s,
+                    provenance='unknown',
+                    provider_request_id=NULL,
+                    outcome='unknown',
+                    settled_at=clock_timestamp()
+                WHERE reservation_id=%s
+                """,
+                (str(worst_case), json.dumps(raw_usage) if raw_usage is not None else None, bound_res["reservation_id"]),
+            )
+
     def _settle_stage_launch(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -3963,6 +4167,14 @@ class PostgresWorkStore:
             raise WorkStoreError("idempotency_conflict", ("stage outcome differs from settled outcome",))
         if launch["status"] != StageLaunchStatus.HANDED_OFF.value:
             raise WorkStoreError("invalid_request", (f"stage launch is {launch['status']}; handoff is required",))
+
+        cur.execute(
+            "SELECT * FROM omp_work.budget_reservations WHERE workspace_id=%s AND launch_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.launch_id),
+        )
+        bound_res = cur.fetchone()
+        if bound_res is not None and bound_res["quote_id"] is not None and bound_res["state"] in {"potentially_sent", "reserved_unsent"}:
+            self._settle_bound_reservation_for_launch(cur, envelope.workspace_id, bound_res, payload.outcome)
         cur.execute(
             f"UPDATE omp_work.stage_launches SET status='settled', outcome_sha256=%s, outcome=%s, served_selector=%s, served_model=%s, settled_at=clock_timestamp() WHERE workspace_id=%s AND launch_id=%s RETURNING {_STAGE_LAUNCH_FIELDS}",
             (payload.outcome_sha256, json.dumps(payload.outcome), payload.served_selector, payload.served_model, envelope.workspace_id, payload.launch_id),
@@ -7923,6 +8135,7 @@ class PostgresWorkStore:
                         "balance_provenance": row["balance_provenance"],
                         "reset_at": row["reset_at"].isoformat() if row.get("reset_at") and hasattr(row["reset_at"], "isoformat") else (str(row["reset_at"]) if row.get("reset_at") else None),
                         "concurrency_limit": int(row["concurrency_limit"]),
+                        "budget_resource": row.get("budget_resource"),
                     }
                 else:
                     cur.execute(
@@ -7944,6 +8157,7 @@ class PostgresWorkStore:
                             "balance_provenance": r["balance_provenance"],
                             "reset_at": r["reset_at"].isoformat() if r.get("reset_at") and hasattr(r["reset_at"], "isoformat") else (str(r["reset_at"]) if r.get("reset_at") else None),
                             "concurrency_limit": int(r["concurrency_limit"]),
+                            "budget_resource": r.get("budget_resource"),
                         }
                         for r in rows
                     ]

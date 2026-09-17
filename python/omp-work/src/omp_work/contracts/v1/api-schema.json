@@ -2891,6 +2891,16 @@
     },
     "BudgetQuote": {
       "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        },
         "StageLaunchRole": {
           "enum": [
             "plan",
@@ -3016,6 +3026,17 @@
           "title": "Rate Card Version",
           "type": "string"
         },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetResource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "revision_id": {
           "anyOf": [
             {
@@ -3031,6 +3052,19 @@
         },
         "role": {
           "$ref": "#/$defs/StageLaunchRole"
+        },
+        "scope_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope Id"
         },
         "usage_ceiling": {
           "additionalProperties": {
@@ -3194,6 +3228,17 @@
               "title": "Rate Card Version",
               "type": "string"
             },
+            "resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BudgetResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "revision_id": {
               "anyOf": [
                 {
@@ -3209,6 +3254,19 @@
             },
             "role": {
               "$ref": "#/$defs/StageLaunchRole"
+            },
+            "scope_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope Id"
             },
             "usage_ceiling": {
               "additionalProperties": {
@@ -3254,6 +3312,16 @@
           ],
           "title": "BudgetQuote",
           "type": "object"
+        },
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
         },
         "StageLaunchRole": {
           "enum": [
@@ -6945,6 +7013,17 @@
               "title": "Rate Card Version",
               "type": "string"
             },
+            "resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BudgetResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "revision_id": {
               "anyOf": [
                 {
@@ -6960,6 +7039,19 @@
             },
             "role": {
               "$ref": "#/$defs/StageLaunchRole"
+            },
+            "scope_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope Id"
             },
             "usage_ceiling": {
               "additionalProperties": {
@@ -7024,6 +7116,16 @@
           ],
           "title": "BudgetQuoteResult",
           "type": "object"
+        },
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
         },
         "BudgetResult": {
           "additionalProperties": false,
@@ -9140,6 +9242,17 @@
               ],
               "title": "Billing Mode",
               "type": "string"
+            },
+            "budget_resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BudgetResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "concurrency_limit": {
               "minimum": 1,
@@ -14693,6 +14806,18 @@
       "type": "object"
     },
     "ProviderAccount": {
+      "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "account_id": {
@@ -14723,6 +14848,17 @@
           ],
           "title": "Billing Mode",
           "type": "string"
+        },
+        "budget_resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetResource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "concurrency_limit": {
           "minimum": 1,
@@ -14803,6 +14939,16 @@
     },
     "ProviderAccountListView": {
       "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        },
         "ProviderAccount": {
           "additionalProperties": false,
           "properties": {
@@ -14834,6 +14980,17 @@
               ],
               "title": "Billing Mode",
               "type": "string"
+            },
+            "budget_resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BudgetResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "concurrency_limit": {
               "minimum": 1,
@@ -14937,6 +15094,16 @@
     },
     "ProviderAccountResult": {
       "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        },
         "ProviderAccount": {
           "additionalProperties": false,
           "properties": {
@@ -14968,6 +15135,17 @@
               ],
               "title": "Billing Mode",
               "type": "string"
+            },
+            "budget_resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BudgetResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "concurrency_limit": {
               "minimum": 1,
@@ -21642,6 +21820,17 @@
               "title": "Rate Card Version",
               "type": "string"
             },
+            "resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BudgetResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "revision_id": {
               "anyOf": [
                 {
@@ -21657,6 +21846,19 @@
             },
             "role": {
               "$ref": "#/$defs/StageLaunchRole"
+            },
+            "scope_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope Id"
             },
             "usage_ceiling": {
               "additionalProperties": {
@@ -21721,6 +21923,16 @@
           ],
           "title": "BudgetQuoteResult",
           "type": "object"
+        },
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
         },
         "BudgetResult": {
           "additionalProperties": false,
@@ -23837,6 +24049,17 @@
               ],
               "title": "Billing Mode",
               "type": "string"
+            },
+            "budget_resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BudgetResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "concurrency_limit": {
               "minimum": 1,

@@ -60,6 +60,7 @@ def _put_account(
     entitlement_evidence: str = "tier-5-active",
     evidence_observed_at: str | None = None,
     billing_mode: str = "metered",
+    budget_resource: str | None = None,
     rate_card_version: str | None = None,
     observed_balance: str | None = "500.00",
     balance_provenance: str = "provider_observed",
@@ -81,6 +82,7 @@ def _put_account(
                 "entitlement_evidence": entitlement_evidence,
                 "evidence_observed_at": obs_time,
                 "billing_mode": billing_mode,
+                "budget_resource": budget_resource,
                 "rate_card_version": rate_card_version,
                 "observed_balance": observed_balance,
                 "balance_provenance": balance_provenance,
@@ -692,3 +694,107 @@ def test_stage_budget_binding_and_reservation_integration(service):
     assert res2_status == 409
     assert res2_data["error"]["code"] == "budget_exhausted"
     assert "account_slots_exhausted" in res2_data["error"]["diagnostics"]
+
+
+def test_put_provider_account_budget_resource_authority(service):
+    """Authority test for explicit budget_resource column on provider_accounts."""
+    workspace_id = uuid4()
+    _setup_operator(service, workspace_id)
+
+    # 1. Roundtrip all valid budget resources
+    valid_resources = ["cash", "included_credit", "native_quota", "local_compute"]
+    for resource in valid_resources:
+        acct_id = uuid4()
+        status, res = _put_account(
+            service,
+            workspace_id,
+            acct_id,
+            provider="openai",
+            account_identity=f"acct-{resource}",
+            budget_resource=resource,
+        )
+        assert status == 200, res
+        assert res["result"]["account"]["budget_resource"] == resource
+
+        # Inspect via read
+        read_resp = service.client.get(
+            f"/v1/workspaces/{workspace_id}/provider-accounts/{acct_id}",
+            headers=_owner_headers(service),
+        )
+        assert read_resp.status_code == 200, read_resp.json()
+        assert read_resp.json()["budget_resource"] == resource
+
+    # 2. Legacy / null budget_resource roundtrip
+    null_acct_id = uuid4()
+    status, res = _put_account(
+        service,
+        workspace_id,
+        null_acct_id,
+        provider="openai",
+        account_identity="acct-null",
+        budget_resource=None,
+    )
+    assert status == 200, res
+    assert res["result"]["account"]["budget_resource"] is None
+
+    read_resp = service.client.get(
+        f"/v1/workspaces/{workspace_id}/provider-accounts/{null_acct_id}",
+        headers=_owner_headers(service),
+    )
+    assert read_resp.status_code == 200, read_resp.json()
+    assert read_resp.json()["budget_resource"] is None
+
+    # 3. Invalid budget_resource rejected
+    invalid_acct_id = uuid4()
+    status, res = _put_account(
+        service,
+        workspace_id,
+        invalid_acct_id,
+        provider="openai",
+        account_identity="acct-invalid",
+        budget_resource="unsupported_crypto",
+    )
+    assert status == 400, res
+
+    # 4. Monotonicity and evidence update
+    t1 = datetime(2026, 9, 1, 10, 0, 0, tzinfo=UTC).isoformat()
+    t2 = datetime(2026, 9, 1, 11, 0, 0, tzinfo=UTC).isoformat()
+    t_stale = datetime(2026, 9, 1, 9, 0, 0, tzinfo=UTC).isoformat()
+
+    mono_acct_id = uuid4()
+    status, res = _put_account(
+        service,
+        workspace_id,
+        mono_acct_id,
+        provider="anthropic",
+        account_identity="acct-mono",
+        evidence_observed_at=t1,
+        budget_resource="included_credit",
+    )
+    assert status == 200, res
+
+    # Update with newer timestamp and changed resource succeeds
+    status, res = _put_account(
+        service,
+        workspace_id,
+        mono_acct_id,
+        provider="anthropic",
+        account_identity="acct-mono",
+        evidence_observed_at=t2,
+        budget_resource="cash",
+    )
+    assert status == 200, res
+    assert res["result"]["account"]["budget_resource"] == "cash"
+
+    # Stale evidence rejected
+    status, res = _put_account(
+        service,
+        workspace_id,
+        mono_acct_id,
+        provider="anthropic",
+        account_identity="acct-mono",
+        evidence_observed_at=t_stale,
+        budget_resource="local_compute",
+    )
+    assert status == 409, res
+    assert res["error"]["code"] == "stale_evidence"

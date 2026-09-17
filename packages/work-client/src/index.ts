@@ -750,6 +750,7 @@ export type ProviderAccount = {
 	balance_provenance: ProviderBalanceProvenance;
 	reset_at: string | null;
 	concurrency_limit: number;
+	budget_resource: BudgetResource | null;
 };
 export type ProviderAccountListView = {
 	workspace_id: UUID;
@@ -878,6 +879,7 @@ export type PutProviderAccountPayload = {
 	balance_provenance: ProviderBalanceProvenance;
 	reset_at?: string | null;
 	concurrency_limit: number;
+	budget_resource?: BudgetResource | null;
 };
 
 export type RegisterRateCardPayload = {
@@ -918,6 +920,8 @@ export type BudgetQuote = {
 	evidence_sha256: string;
 	quote_sha256: string;
 	quoted_at: string;
+	resource?: BudgetResource | null;
+	scope_id?: UUID | null;
 };
 
 export type QuoteBudgetPayload = {

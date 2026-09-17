@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import type { ToolCallEventResult } from "@oh-my-pi/pi-coding-agent/extensibility/shared-events";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { WORK_CONTRACT_SHA256, sha256Hex, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope, type RecordStagePreflightPayload, type BeginStagePreflightPayload, type BeginStagePreflightResult, type AdmitStagePreflightPayload, type AdmitStagePreflightResult, type CancelStagePreflightPayload, type CancelStagePreflightResult } from "@oh-my-pi/pi-work-client";
+import { WORK_CONTRACT_SHA256, sha256Hex, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope, type RecordStagePreflightPayload, type BeginStagePreflightPayload, type BeginStagePreflightResult, type AdmitStagePreflightPayload, type AdmitStagePreflightResult, type CancelStagePreflightPayload, type CancelStagePreflightResult, type ProviderAccountListView, type RateCardListView, type QuoteBudgetPayload, type BudgetQuoteResult, type ReserveBudgetPayload, type BudgetResult, type StagePreflightIntent } from "@oh-my-pi/pi-work-client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { z } from "zod";
@@ -208,12 +208,161 @@ function attachStageLaunchFixture<T extends Record<string, unknown>>(
 				stage_preflights: [...existingPreflights, ...stagePreflights],
 			};
 		};
+
+		const client = workClient as Partial<WorkClient>;
+		const origProviderAccounts = typeof client.providerAccounts === "function"
+			? client.providerAccounts.bind(workClient)
+			: undefined;
+		(workClient as Record<string, unknown>).providerAccounts = async (): Promise<ProviderAccountListView> => {
+			if (origProviderAccounts) return origProviderAccounts();
+			return {
+				workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+				accounts: [
+					{
+						account_id: "00000000-0000-0000-0000-000000000001",
+						workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+						provider: "openai-codex",
+						account_identity: "acct-openai-codex",
+						entitlement_evidence: "evidence-1",
+						evidence_observed_at: new Date().toISOString(),
+						billing_mode: "metered",
+						rate_card_version: "v1",
+						observed_balance: null,
+						balance_provenance: "unknown",
+						reset_at: null,
+						concurrency_limit: 10,
+						budget_resource: "cash",
+					},
+					{
+						account_id: "00000000-0000-0000-0000-000000000002",
+						workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+						provider: "google-antigravity",
+						account_identity: "acct-google-antigravity",
+						entitlement_evidence: "evidence-2",
+						evidence_observed_at: new Date().toISOString(),
+						billing_mode: "metered",
+						rate_card_version: "v1",
+						observed_balance: null,
+						balance_provenance: "unknown",
+						reset_at: null,
+						concurrency_limit: 10,
+						budget_resource: "cash",
+					},
+				],
+			};
+		};
+
+		const origRateCards = typeof client.rateCards === "function"
+			? client.rateCards.bind(workClient)
+			: undefined;
+		(workClient as Record<string, unknown>).rateCards = async (): Promise<RateCardListView> => {
+			if (origRateCards) return origRateCards();
+			return {
+				workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+				rate_cards: [
+					{
+						rate_card_id: "00000000-0000-0000-0000-000000000011",
+						workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+						provider: "openai-codex",
+						version: "v1",
+						qualification: "qualified",
+						billing_modes: ["metered"],
+						currency: "USD",
+						unit_prices: {
+							input: "0.000001",
+							output: "0.000002",
+							cacheRead: "0.0000005",
+							cacheWrite: "0.000001",
+						},
+						evidence_sha256: "0".repeat(64),
+						evidence_source: "test",
+						observed_at: new Date().toISOString(),
+						registered_at: new Date().toISOString(),
+						effective_from: new Date(Date.now() - 86400000).toISOString(),
+						effective_until: null,
+					},
+					{
+						rate_card_id: "00000000-0000-0000-0000-000000000012",
+						workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+						provider: "google-antigravity",
+						version: "v1",
+						qualification: "qualified",
+						billing_modes: ["metered"],
+						currency: "USD",
+						unit_prices: {
+							input: "0.000001",
+							output: "0.000002",
+							cacheRead: "0.0000005",
+							cacheWrite: "0.000001",
+						},
+						evidence_sha256: "0".repeat(64),
+						evidence_source: "test",
+						observed_at: new Date().toISOString(),
+						registered_at: new Date().toISOString(),
+						effective_from: new Date(Date.now() - 86400000).toISOString(),
+						effective_until: null,
+					},
+				],
+			};
+		};
+	}
+
+	if (!("mock" in Settings.loadReadOnly)) {
+		const origLoadReadOnly = Settings.loadReadOnly.bind(Settings);
+		vi.spyOn(Settings, "loadReadOnly").mockImplementation(async (opts) => {
+			const s = await origLoadReadOnly(opts);
+			if (s.get("task.maxRuntimeMs") === undefined || s.get("task.maxRuntimeMs") === 0) {
+				s.override("task.maxRuntimeMs", 60_000);
+			}
+			return s;
+		});
+	}
+
+	if (typeof backendRecord.quoteBudget !== "function") {
+		backendRecord.quoteBudget = async (payload: QuoteBudgetPayload): Promise<BudgetQuoteResult> => {
+			return {
+				type: "quote_budget",
+				status: "inserted",
+				quote: {
+					quote_id: "00000000-0000-0000-0000-000000000021",
+					workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+					scope_id: "00000000-0000-0000-0000-000000000031",
+					resource: "cash",
+					launch_id: payload.launch_id ?? null,
+					account_id: payload.account_id,
+					account_evidence_observed_at: new Date().toISOString(),
+					provider: payload.provider,
+					model: payload.model,
+					effort: payload.effort,
+					rate_card_id: "00000000-0000-0000-0000-000000000011",
+					rate_card_version: "v1",
+					currency: payload.currency,
+					worst_case_amount: "1.000000",
+					usage_ceiling: payload.usage_ceiling,
+					evidence_sha256: "0".repeat(64),
+					quote_sha256: "0".repeat(64),
+					quoted_at: new Date().toISOString(),
+				},
+			};
+		};
+	}
+
+	if (typeof backendRecord.reserveBudget !== "function") {
+		backendRecord.reserveBudget = async (_payload: ReserveBudgetPayload): Promise<BudgetResult> => {
+			return {
+				type: "reserve_budget",
+				reservation_id: "00000000-0000-0000-0000-000000000041",
+				fence: 1,
+				state: "reserved_unsent",
+				replayed: false,
+			};
+		};
 	}
 
 	backendRecord.stageLaunches = stageLaunches;
 	backendRecord.stagePreflights = stagePreflights;
 
-	let lastPreflightIntent: any = undefined;
+	let lastPreflightIntent: StagePreflightIntent | undefined = undefined;
 	backendRecord.beginStagePreflight = async (payload: BeginStagePreflightPayload): Promise<BeginStagePreflightResult> => {
 		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
 		callLog?.push("beginStagePreflight");

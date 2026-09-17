@@ -1,8 +1,18 @@
-import { canonicalJson, payloadHash, sha256Hex, type StageLaunch, type StagePreflightUsage } from "@oh-my-pi/pi-work-client";
+import {
+	canonicalJson,
+	payloadHash,
+	sha256Hex,
+	type StageLaunch,
+	type StagePreflightUsage,
+	type RateCard,
+} from "@oh-my-pi/pi-work-client";
 import { withFileLock } from "@oh-my-pi/pi-utils";
-import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { getAgentDir, Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { Model } from "@oh-my-pi/pi-ai";
 import { join } from "node:path";
 import {
+	nativeStageMaxRuntimeMs,
+	nativeStageRequestCeiling,
 	nativeStageTaskInput,
 	prepareNativeStageRunner,
 	stripUsageCost,
@@ -13,6 +23,38 @@ import {
 import type { KnowledgeBridge, KnowledgeExecutionIdentity } from "./knowledge-bridge";
 import { nativeStageRouteCandidates, resolveNativeStageRoute, type NativeStageRole, type NativeStageRoute } from "./native-stage-profile";
 import type { NativeStageLaunchInput, WorkflowBackend } from "./backend";
+
+export function nativeStageUsageCeiling(
+	model: Model,
+	card: RateCard,
+	requests: number,
+): Record<string, number> {
+	if (!Number.isInteger(requests) || requests <= 0) {
+		throw new Error(`requests must be a positive integer (got ${requests})`);
+	}
+	const ceiling: Record<string, number> = {};
+	for (const category of Object.keys(card.unit_prices)) {
+		if (category === "input" || category === "cacheRead" || category === "cacheWrite") {
+			if (model.contextWindow === undefined || model.contextWindow === null || model.contextWindow <= 0) {
+				throw new Error(`model ${model.provider}/${model.id} is missing positive contextWindow limit for category "${category}"`);
+			}
+			ceiling[category] = model.contextWindow * requests;
+		} else if (category === "output") {
+			if (model.compat?.omitMaxOutputTokens) {
+				throw new Error(`model ${model.provider}/${model.id} specifies omitMaxOutputTokens; output ceiling cannot be bounded`);
+			}
+			if (model.maxTokens === undefined || model.maxTokens === null || model.maxTokens <= 0) {
+				throw new Error(`model ${model.provider}/${model.id} is missing positive maxTokens limit for category "output"`);
+			}
+			ceiling[category] = model.maxTokens * requests;
+		} else if (category === "premiumRequests") {
+			ceiling[category] = 1 * requests;
+		} else {
+			throw new Error(`rate card contains unmapped category "${category}" without an authoritative ceiling`);
+		}
+	}
+	return ceiling;
+}
 
 export interface NativeStageDispatchInput {
 	workKey: string;
@@ -37,6 +79,17 @@ export interface NativeStageDispatchResult {
 
 function isNonNegativeInteger(value: unknown): value is number {
 	return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function deterministicUuid(seed: string): string {
+	const hash = sha256Hex(seed);
+	return [
+		hash.slice(0, 8),
+		hash.slice(8, 12),
+		`4${hash.slice(13, 16)}`,
+		`a${hash.slice(17, 20)}`,
+		hash.slice(20, 32),
+	].join("-");
 }
 
 function parsePersistedUsage(value: unknown): NativeAuditUsage | undefined {
@@ -244,9 +297,11 @@ async function dispatchNativeStageLocked(
 	const preparedContextSha256 = sha256Hex(context);
 	const requestedRouteFields = modelRouteFields(requestedRoute);
 	let resolvedRouteFields = requestedRouteFields;
+	let resolvedRoute = requestedRoute;
 	let launch: StageLaunch | undefined;
 	let handoffAttempted = false;
 	let handoffAcknowledged = false;
+	let stageCeiling: { hardCeiling: number; softBudget: number; maxRuntimeMs: number } | undefined;
 	const recordPreflightAttempt = async (attempt: NativeStagePreflightAttempt) => {
 		const routeFields = modelRouteFields(attempt.route);
 		const sessionId = ctx.sessionManager?.getSessionId?.() ?? null;
@@ -331,7 +386,11 @@ async function dispatchNativeStageLocked(
 			},
 			record: recordPreflightAttempt,
 		},
+		onRequestCeiling: ceiling => {
+			stageCeiling = ceiling;
+		},
 		onRouteSelected: selected => {
+			resolvedRoute = selected;
 			resolvedRouteFields = modelRouteFields(selected);
 		},
 		onHandoff: async () => {
@@ -341,6 +400,25 @@ async function dispatchNativeStageLocked(
 			handoffAcknowledged = true;
 		},
 	}, signal);
+	if (!stageCeiling) {
+		try {
+			const settings = await Settings.loadReadOnly({ cwd: ctx.cwd, agentDir: getAgentDir() });
+			const ceiling = nativeStageRequestCeiling(settings, input.role);
+			let maxRuntimeMs = 0;
+			try {
+				maxRuntimeMs = nativeStageMaxRuntimeMs(settings);
+			} catch {
+				maxRuntimeMs = 0;
+			}
+			stageCeiling = {
+				hardCeiling: ceiling.hardCeiling,
+				softBudget: ceiling.softBudget,
+				maxRuntimeMs,
+			};
+		} catch {
+			// will fail closed below
+		}
+	}
 	const requestSha256 = payloadHash({
 		workspace_id: backend.workspaceId,
 		work_id: item.work_id,
@@ -412,6 +490,120 @@ async function dispatchNativeStageLocked(
 			...(compiled ? { contextBundleId: compiled.bundle.bundle_id, contextBundleSha256: compiled.bundle.bundle_sha256 } : {}),
 		};
 	}
+
+	try {
+		if (signal?.aborted) {
+			throw new DOMException("The operation was aborted", "AbortError");
+		}
+		if (!stageCeiling || stageCeiling.hardCeiling <= 0) {
+			throw new Error("stage request hard ceiling is non-positive; execution refused");
+		}
+		if (stageCeiling.maxRuntimeMs <= 0) {
+			throw new Error("task.maxRuntimeMs is missing or non-positive; native stage execution requires a positive runtime lease");
+		}
+
+		// 1. Query provider accounts and rate cards
+		const [accountsView, rateCardsView] = await Promise.all([
+			backend.workClient.providerAccounts(),
+			backend.workClient.rateCards(),
+		]);
+
+		const nowIso = new Date().toISOString();
+		const provider = resolvedRouteFields.resolvedProvider;
+
+		// Select exactly one enabled, classified provider account compatible with resolved provider
+		// and a currently effective qualified card/currency. Fail on zero or multiple eligible candidates.
+		type EligibleCandidate = {
+			account: NonNullable<typeof accountsView.accounts>[number];
+			card: NonNullable<typeof rateCardsView.rate_cards>[number];
+		};
+		const candidates: EligibleCandidate[] = [];
+
+		for (const acct of accountsView.accounts ?? []) {
+			if (acct.provider !== provider) continue;
+			if (acct.is_disabled) continue;
+			if (!acct.budget_resource) continue;
+			if (!acct.rate_card_version) continue;
+
+			for (const c of rateCardsView.rate_cards ?? []) {
+				if (c.provider !== acct.provider || c.version !== acct.rate_card_version) continue;
+				if (c.qualification !== "qualified") continue;
+				if (c.effective_from && nowIso < c.effective_from) continue;
+				if (c.effective_until && nowIso >= c.effective_until) continue;
+				if (Array.isArray(c.billing_modes) && !c.billing_modes.includes(acct.billing_mode)) continue;
+				candidates.push({ account: acct, card: c });
+			}
+		}
+
+		if (candidates.length === 0) {
+			throw new Error(`no eligible candidate provider account and qualified rate card found for "${provider}"`);
+		}
+		if (candidates.length > 1) {
+			throw new Error(`account_selection_ambiguous: multiple eligible candidate accounts found for "${provider}"`);
+		}
+		const { account, card } = candidates[0];
+
+		// 3. Compute conservative usage ceiling
+		const usageCeiling = nativeStageUsageCeiling(resolvedRoute.model, card, stageCeiling.hardCeiling);
+
+		// 4. Quote budget
+		const quote = await backend.quoteBudget({
+			work_id: item.work_id,
+			revision_id: item.revision.revision_id,
+			candidate_id: identity.candidateId,
+			attempt_id: input.attemptId ?? null,
+			grant_id: input.grantId ?? null,
+			role: input.role,
+			launch_id: launch.launch_id,
+			account_id: account.account_id,
+			provider: resolvedRouteFields.resolvedProvider,
+			model: resolvedRouteFields.resolvedModel,
+			effort: resolvedRouteFields.requestedEffort,
+			currency: card.currency,
+			usage_ceiling: usageCeiling,
+		});
+
+		if (signal?.aborted) {
+			throw new DOMException("The operation was aborted", "AbortError");
+		}
+
+		// 5. Reserve budget with deterministic replay identity
+		const reservedAtMs = launch.reserved_at ? new Date(launch.reserved_at).getTime() : Date.now();
+		const expiresAt = new Date(reservedAtMs + stageCeiling.maxRuntimeMs).toISOString();
+		const transportAttemptId = deterministicUuid(`stage-reservation:${launch.launch_id}:${quote.quote_id}`);
+		await backend.reserveBudget({
+			scope_id: quote.scope_id,
+			account_id: account.account_id,
+			logical_call_id: launch.launch_id,
+			transport_attempt_id: transportAttemptId,
+			provider: resolvedRouteFields.resolvedProvider,
+			model: resolvedRouteFields.resolvedModel,
+			effort: resolvedRouteFields.requestedEffort,
+			resource: quote.resource,
+			worst_case_drawdown: quote.worst_case_amount,
+			context_limit: resolvedRoute.model.contextWindow ?? 0,
+			output_limit: resolvedRoute.model.maxTokens ?? 0,
+			expires_at: expiresAt,
+			launch_id: launch.launch_id,
+			quote_id: quote.quote_id,
+		});
+
+		if (signal?.aborted) {
+			throw new DOMException("The operation was aborted", "AbortError");
+		}
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		try {
+			if (typeof backend.cancelStageLaunch === "function") {
+				await backend.cancelStageLaunch(launch.launch_id, reason);
+			}
+		} catch (cancelErr) {
+			const cancelMsg = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+			throw new Error(`${reason} (subsequent cancelStageLaunch failed: ${cancelMsg})`);
+		}
+		throw error;
+	}
+
 	const run = await runner(input.taskBody, input.toolCallId, signal);
 	if (!handoffAttempted && !handoffAcknowledged && launch.status === "reserved") {
 		await backend.cancelStageLaunch(launch.launch_id, run.error ?? "native stage did not dispatch");

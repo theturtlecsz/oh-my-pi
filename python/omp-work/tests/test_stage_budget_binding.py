@@ -7,6 +7,7 @@ import os
 import secrets
 import threading
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import psycopg
@@ -14,8 +15,11 @@ from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 import pytest
 
+from omp_work.v1.canonical import sha256
 from omp_work.v1.models import CommandEnvelope
 from omp_work.v1.server import create_app
+from test_provider_account_authority import _put_account, _setup_operator
+from test_rate_card_authority import _register_card
 from test_workflow_service import _command, _grant, _execution_grant_audited_attempt, _owner_headers
 
 pytestmark = pytest.mark.skipif(
@@ -872,3 +876,374 @@ def test_concurrent_handoff_and_expire_have_one_winner(service):
     assert launch_b_row["status"] == "handed_off"
     scope_b = _inspect_scope(service, ctx_b["scope_id"])
     assert scope_b["held"].get("included_credit") == "1.00"
+
+
+def test_quoted_stage_reservation_atomic_settlement(service):
+    """Quoted reservation settlement: exact fixed-point sum, replay idempotency, unresolved transitions."""
+    ws = uuid4()
+    _grant(service, ws)
+    _setup_operator(service, ws)
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING",
+            (ws,),
+        )
+
+    # 1. Rate card and account setup
+    card_id = uuid4()
+    _register_card(
+        service,
+        ws,
+        card_id,
+        provider="anthropic",
+        version="2026-q3",
+        billing_modes=["subscription"],
+        effective_from=(datetime.now(UTC) - timedelta(days=1)).isoformat(),
+        currency="USD",
+        unit_prices={"input": "0.000003", "output": "0.000015", "cacheRead": "0.0000003"},
+    )
+    acct_id = uuid4()
+    _put_account(
+        service,
+        ws,
+        acct_id,
+        provider="anthropic",
+        account_identity="settle-acct",
+        rate_card_version="2026-q3",
+        balance_provenance="provider_observed",
+        billing_mode="subscription",
+        budget_resource="included_credit",
+    )
+
+    grant_id, work_id, revision_id, candidate_id, attempt_id, _p, _j, item = (
+        _execution_grant_audited_attempt(service, ws, "settle-quoted-test")
+    )
+    scope_id = uuid4()
+    _command(
+        service,
+        ws,
+        {
+            "type": "create_budget_scope",
+            "payload": {
+                "scope_id": str(scope_id),
+                "work_id": str(work_id),
+                "kind": "work",
+                "policy_version": "economy-v1",
+                "limits": {"included_credit": "100.00"},
+            },
+        },
+    )
+
+    ctx = {
+        "workspace_id": ws,
+        "account_id": acct_id,
+        "scope_id": scope_id,
+        "grant_id": grant_id,
+        "work_id": work_id,
+        "revision_id": revision_id,
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "provider": "anthropic",
+        "model": "claude-3-7-sonnet",
+        "effort": "high",
+    }
+
+    # Case A: Exact fixed-point settlement on qualified usage
+    launch_id, task_sha = _reserve_launch(ctx, service, role="audit")
+    st_q, res_q = _command(
+        service,
+        ws,
+        {
+            "type": "quote_budget",
+            "payload": {
+                "work_id": str(work_id),
+                "revision_id": str(revision_id),
+                "candidate_id": str(candidate_id),
+                "attempt_id": str(attempt_id),
+                "grant_id": str(grant_id),
+                "role": "audit",
+                "launch_id": str(launch_id),
+                "account_id": str(acct_id),
+                "provider": "anthropic",
+                "model": "claude-3-7-sonnet",
+                "effort": "high",
+                "currency": "USD",
+                "usage_ceiling": {"input": 100000, "output": 4000, "cacheRead": 100},
+            },
+        },
+    )
+    assert st_q == 200, res_q
+    quote = res_q["result"]["quote"]
+    # 100000 * 3e-6 = 0.30
+    # 4000 * 1.5e-5 = 0.06
+    # 100 * 3e-7 = 0.00003
+    # worst_case = 0.36003
+    worst_case = quote["worst_case_amount"]
+    assert worst_case == "0.3600300"
+    quote_id = UUID(quote["quote_id"])
+
+    st_res, res_res = _command(
+        service,
+        ws,
+        {
+            "type": "reserve_budget",
+            "payload": {
+                "scope_id": str(scope_id),
+                "account_id": str(acct_id),
+                "logical_call_id": str(uuid4()),
+                "transport_attempt_id": str(uuid4()),
+                "provider": "anthropic",
+                "model": "claude-3-7-sonnet",
+                "effort": "high",
+                "resource": "included_credit",
+                "worst_case_drawdown": worst_case,
+                "context_limit": 100000,
+                "output_limit": 4000,
+                "expires_at": "2030-01-01T00:00:00+00:00",
+                "launch_id": str(launch_id),
+                "quote_id": str(quote_id),
+            },
+        },
+    )
+    assert st_res == 200, res_res
+    res_id = UUID(res_res["result"]["reservation_id"])
+
+    # Handoff
+    st_h, res_h = _command(
+        service,
+        ws,
+        {"type": "handoff_stage_launch", "payload": {"launch_id": str(launch_id), "task_sha256": task_sha}},
+    )
+    assert st_h == 200, res_h
+
+    # Measured usage: input: 10000, output: 500, cacheRead: 50, cacheWrite: 0, totalTokens: 10550
+    # Expected actual: 10000*3e-6 + 500*1.5e-5 + 50*3e-7 = 0.03 + 0.0075 + 0.000015 = 0.037515
+    outcome_a = {
+        "started": True,
+        "usage": {"input": 10000, "output": 500, "cacheRead": 50, "cacheWrite": 0, "totalTokens": 10550},
+        "payload": "{\"verdict\":\"PASS\"}",
+    }
+    settle_payload_a = {
+        "launch_id": str(launch_id),
+        "outcome_sha256": sha256(outcome_a),
+        "outcome": outcome_a,
+        "served_selector": "anthropic/claude-3-7-sonnet:high",
+        "served_model": "claude-3-7-sonnet",
+    }
+    st_settle, res_settle = _command(
+        service,
+        ws,
+        {"type": "settle_stage_launch", "payload": settle_payload_a},
+    )
+    assert st_settle == 200 and res_settle["result"]["status"] == "applied", res_settle
+
+    # Reservation row check
+    res_row = _inspect_reservation(service, res_id)
+    assert res_row["state"] == "settled"
+    assert Decimal(str(res_row["actual_drawdown"])) == Decimal("0.037515")
+    assert res_row["provenance"] == "provider_observed"
+    assert res_row["outcome"] == "success"
+
+    # Scope check: held released (0), spent = 0.037515, unresolved = 0
+    sc = _inspect_scope(service, scope_id)
+    assert sc["held"].get("included_credit", "0") == "0"
+    assert Decimal(sc["spent"]["included_credit"]) == Decimal("0.037515")
+    assert sc["unresolved"].get("included_credit", "0") == "0"
+
+    # Settle replay: receipt is replayed, counters untouched
+    st_rep, res_rep = _command(
+        service,
+        ws,
+        {"type": "settle_stage_launch", "payload": settle_payload_a},
+    )
+    assert st_rep == 200 and res_rep["result"]["status"] == "replayed", res_rep
+    sc_rep = _inspect_scope(service, scope_id)
+    assert Decimal(sc_rep["spent"]["included_credit"]) == Decimal("0.037515")
+
+    # Case B: Missing/malformed usage transitions to unresolved worst case
+    launch_id_b, task_sha_b = _reserve_launch(ctx, service, role="audit")
+    st_qb, res_qb = _command(
+        service,
+        ws,
+        {
+            "type": "quote_budget",
+            "payload": {
+                "work_id": str(work_id),
+                "revision_id": str(revision_id),
+                "candidate_id": str(candidate_id),
+                "attempt_id": str(attempt_id),
+                "grant_id": str(grant_id),
+                "role": "audit",
+                "launch_id": str(launch_id_b),
+                "account_id": str(acct_id),
+                "provider": "anthropic",
+                "model": "claude-3-7-sonnet",
+                "effort": "high",
+                "currency": "USD",
+                "usage_ceiling": {"input": 10000, "output": 1000, "cacheRead": 10},
+            },
+        },
+    )
+    assert st_qb == 200, res_qb
+    quote_b = res_qb["result"]["quote"]
+    worst_b = quote_b["worst_case_amount"]
+    quote_id_b = UUID(quote_b["quote_id"])
+
+    st_rb, res_rb = _command(
+        service,
+        ws,
+        {
+            "type": "reserve_budget",
+            "payload": {
+                "scope_id": str(scope_id),
+                "account_id": str(acct_id),
+                "logical_call_id": str(uuid4()),
+                "transport_attempt_id": str(uuid4()),
+                "provider": "anthropic",
+                "model": "claude-3-7-sonnet",
+                "effort": "high",
+                "resource": "included_credit",
+                "worst_case_drawdown": worst_b,
+                "context_limit": 10000,
+                "output_limit": 1000,
+                "expires_at": "2030-01-01T00:00:00+00:00",
+                "launch_id": str(launch_id_b),
+                "quote_id": str(quote_id_b),
+            },
+        },
+    )
+    assert st_rb == 200, res_rb
+    res_b_id = UUID(res_rb["result"]["reservation_id"])
+
+    _command(service, ws, {"type": "handoff_stage_launch", "payload": {"launch_id": str(launch_id_b), "task_sha256": task_sha_b}})
+
+    # Missing usage in outcome
+    outcome_b = {"started": True}
+    settle_b = {
+        "launch_id": str(launch_id_b),
+        "outcome_sha256": sha256(outcome_b),
+        "outcome": outcome_b,
+        "served_selector": "anthropic/claude-3-7-sonnet:high",
+        "served_model": "claude-3-7-sonnet",
+    }
+    st_sb, res_sb = _command(service, ws, {"type": "settle_stage_launch", "payload": settle_b})
+    assert st_sb == 200 and res_sb["result"]["status"] == "applied", res_sb
+
+    res_b_row = _inspect_reservation(service, res_b_id)
+    assert res_b_row["state"] == "unresolved"
+    assert str(res_b_row["actual_drawdown"]) == worst_b
+    assert res_b_row["provenance"] == "unknown"
+
+    sc_b = _inspect_scope(service, scope_id)
+    assert sc_b["unresolved"]["included_credit"] == worst_b
+
+    # Case C: Positive nested usage transitions to unresolved worst case
+    launch_id_c, task_sha_c = _reserve_launch(ctx, service, role="audit")
+    st_qc, res_qc = _command(
+        service,
+        ws,
+        {
+            "type": "quote_budget",
+            "payload": {
+                "work_id": str(work_id),
+                "revision_id": str(revision_id),
+                "candidate_id": str(candidate_id),
+                "attempt_id": str(attempt_id),
+                "grant_id": str(grant_id),
+                "role": "audit",
+                "launch_id": str(launch_id_c),
+                "account_id": str(acct_id),
+                "provider": "anthropic",
+                "model": "claude-3-7-sonnet",
+                "effort": "high",
+                "currency": "USD",
+                "usage_ceiling": {"input": 10000, "output": 1000, "cacheRead": 10},
+            },
+        },
+    )
+    assert st_qc == 200, res_qc
+    quote_c = res_qc["result"]["quote"]
+    worst_c = quote_c["worst_case_amount"]
+    quote_id_c = UUID(quote_c["quote_id"])
+
+    st_rc, res_rc = _command(
+        service,
+        ws,
+        {
+            "type": "reserve_budget",
+            "payload": {
+                "scope_id": str(scope_id),
+                "account_id": str(acct_id),
+                "logical_call_id": str(uuid4()),
+                "transport_attempt_id": str(uuid4()),
+                "provider": "anthropic",
+                "model": "claude-3-7-sonnet",
+                "effort": "high",
+                "resource": "included_credit",
+                "worst_case_drawdown": worst_c,
+                "context_limit": 10000,
+                "output_limit": 1000,
+                "expires_at": "2030-01-01T00:00:00+00:00",
+                "launch_id": str(launch_id_c),
+                "quote_id": str(quote_id_c),
+            },
+        },
+    )
+    assert st_rc == 200, res_rc
+    res_c_id = UUID(res_rc["result"]["reservation_id"])
+
+    _command(service, ws, {"type": "handoff_stage_launch", "payload": {"launch_id": str(launch_id_c), "task_sha256": task_sha_c}})
+
+    # Nested orchestration usage > 0 forces unresolved
+    outcome_c = {
+        "started": True,
+        "usage": {
+            "input": 1000,
+            "output": 100,
+            "cacheRead": 5,
+            "cacheWrite": 0,
+            "totalTokens": 1105,
+            "orchestration": {"input": 10, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 10},
+        },
+    }
+    settle_c = {
+        "launch_id": str(launch_id_c),
+        "outcome_sha256": sha256(outcome_c),
+        "outcome": outcome_c,
+        "served_selector": "anthropic/claude-3-7-sonnet:high",
+        "served_model": "claude-3-7-sonnet",
+    }
+    st_sc, res_sc = _command(service, ws, {"type": "settle_stage_launch", "payload": settle_c})
+    assert st_sc == 200 and res_sc["result"]["status"] == "applied", res_sc
+
+    res_c_row = _inspect_reservation(service, res_c_id)
+    assert res_c_row["state"] == "unresolved"
+    assert str(res_c_row["actual_drawdown"]) == worst_c
+
+    # Case D: Quote-less legacy reservation is untouched by stage settlement
+    launch_id_d, task_sha_d = _reserve_launch(ctx, service, role="audit")
+    st_rd, res_rd = _reserve_budget_bound(
+        ctx,
+        service,
+        launch_id=launch_id_d,
+        amount="1.00",
+    )
+    assert st_rd == 200, res_rd
+    res_d_id = UUID(res_rd["result"]["reservation_id"])
+    _command(service, ws, {"type": "handoff_stage_launch", "payload": {"launch_id": str(launch_id_d), "task_sha256": task_sha_d}})
+
+    outcome_d = {"started": True}
+    settle_d = {
+        "launch_id": str(launch_id_d),
+        "outcome_sha256": sha256(outcome_d),
+        "outcome": outcome_d,
+        "served_selector": "anthropic/claude-3-7-sonnet:high",
+        "served_model": "claude-3-7-sonnet",
+    }
+    st_sd, res_sd = _command(service, ws, {"type": "settle_stage_launch", "payload": settle_d})
+    assert st_sd == 200 and res_sd["result"]["status"] == "applied", res_sd
+
+    # Unquoted reservation remains potentially_sent (legacy behavior)
+    res_d_row = _inspect_reservation(service, res_d_id)
+    assert res_d_row["state"] == "potentially_sent"
+    assert res_d_row["quote_id"] is None

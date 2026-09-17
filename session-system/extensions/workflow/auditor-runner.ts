@@ -20,7 +20,12 @@ import { getAgentDir, Settings, type ExtensionContext } from "@oh-my-pi/pi-codin
 import { formatModelSelectorValue, formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { resolveAuditPolicy } from "./audit-policy";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task";
-import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import {
+	BUDGET_STOP_GRACE_REQUESTS,
+	resolveSoftRequestBudget,
+	runSubprocess,
+	SOFT_REQUEST_BUDGET,
+} from "@oh-my-pi/pi-coding-agent/task/executor";
 import { nativeStageRouteCandidates, type NativeStageRole, type NativeStageRoute } from "./native-stage-profile";
 import { providerObservationCapability } from "./provider-observation";
 import nativePreflightProbePrompt from "./native-preflight-probe.md" with { type: "text" };
@@ -93,15 +98,46 @@ export type NativeStageRunnerOptions = {
 	onPreflightAttempt?: (attempt: NativeStagePreflightAttempt) => void | Promise<void>;
 	/** Reports the route that survived credential and transport preflight. */
 	onRouteSelected?: (route: NativeStageRoute) => void;
+	/** Reports the request ceiling and runtime budget evaluated before execution. */
+	onRequestCeiling?: (ceiling: { hardCeiling: number; softBudget: number; maxRuntimeMs: number }) => void;
+	maxRuntimeMs?: number;
 	legacyAudit?: boolean;
 };
 
-const nativeStageAgentNames: Readonly<Record<NativeStageRole, string>> = {
+export const nativeStageAgentNames: Readonly<Record<NativeStageRole, string>> = {
 	plan: "planner",
 	implement: "implementer",
 	frontier: "frontier",
 	audit: "auditor",
 };
+
+export function nativeStageRequestCeiling(
+	settings: Settings,
+	role: NativeStageRole,
+	agentName?: string,
+): { hardCeiling: number; softBudget: number } {
+	const effectiveAgent = agentName ?? nativeStageAgentNames[role];
+	const raw = settings.get("task.softRequestBudget");
+	const configured = Math.trunc(Number(raw ?? SOFT_REQUEST_BUDGET.default) || 0);
+	if (configured <= 0) {
+		throw new Error(`task.softRequestBudget is disabled or non-positive (${raw ?? 0}); native stage execution requires a positive request budget`);
+	}
+	const softBudget = resolveSoftRequestBudget(effectiveAgent, configured);
+	if (softBudget <= 0) {
+		throw new Error(`effective soft request budget for "${effectiveAgent}" is non-positive (${softBudget}); native stage execution requires a positive request budget`);
+	}
+	const hardCeiling = Math.ceil(1.5 * softBudget) + BUDGET_STOP_GRACE_REQUESTS;
+	return { hardCeiling, softBudget };
+}
+
+export function nativeStageMaxRuntimeMs(settings: Settings): number {
+	const raw = settings.get("task.maxRuntimeMs");
+	const parsed = Math.trunc(Number(raw) || 0);
+	if (parsed <= 0) {
+		throw new Error(`task.maxRuntimeMs must be configured with a positive integer duration (got ${raw ?? "undefined"})`);
+	}
+	return parsed;
+}
 
 export function nativeStageTaskInput(taskBody: string, context?: string): string {
 	return context?.trim()
@@ -443,6 +479,27 @@ export async function prepareNativeStageRunner(
 		Object.fromEntries(Object.keys(existingFallbackChains).map(role => [role, []])),
 	);
 
+	const requestCeiling = nativeStageRequestCeiling(settings, options.role, agentName);
+	settings.override("task.softRequestBudget", requestCeiling.softBudget);
+
+	let maxRuntimeMs = options.maxRuntimeMs ?? 0;
+	if (maxRuntimeMs <= 0) {
+		try {
+			maxRuntimeMs = nativeStageMaxRuntimeMs(settings);
+		} catch {
+			maxRuntimeMs = 0;
+		}
+	}
+	if (maxRuntimeMs > 0) {
+		settings.override("task.maxRuntimeMs", maxRuntimeMs);
+	}
+
+	options.onRequestCeiling?.({
+		hardCeiling: requestCeiling.hardCeiling,
+		softBudget: requestCeiling.softBudget,
+		maxRuntimeMs,
+	});
+
 	return async (
 		taskBody: string,
 		attemptId: string,
@@ -489,6 +546,7 @@ export async function prepareNativeStageRunner(
 				id: attemptId,
 				signal,
 				settings,
+				maxRuntimeMs: maxRuntimeMs > 0 ? maxRuntimeMs : undefined,
 			});
 
 			started = Boolean(result.requests && result.requests > 0);

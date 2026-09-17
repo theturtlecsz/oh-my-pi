@@ -48,6 +48,10 @@ import {
 	type CancelStagePreflightResult,
 	type RecordStagePreflightPayload,
 	type CandidateSourceVersion,
+	type BudgetQuote,
+	type BudgetResult,
+	type QuoteBudgetPayload,
+	type ReserveBudgetPayload,
 } from "@oh-my-pi/pi-work-client";
 import {
 	type BackendHooks,
@@ -1943,6 +1947,18 @@ export function createWorkBackend(
 			const result = await run("reconcile_stage_launch", { launch_id: launchId, reason });
 			if (result.type !== "reconcile_stage_launch" || !result.launch) throw new Error("native stage reconciliation returned no launch");
 			return result.launch;
+		},
+
+		async quoteBudget(payload: QuoteBudgetPayload): Promise<BudgetQuote> {
+			const result = await run("quote_budget", payload);
+			if (result.type !== "quote_budget" || !result.quote) throw new Error("quote budget returned no quote");
+			return result.quote;
+		},
+
+		async reserveBudget(payload: ReserveBudgetPayload): Promise<BudgetResult> {
+			const result = await run("reserve_budget", payload);
+			if (result.type !== "reserve_budget") throw new Error("reserve budget returned no budget result");
+			return result;
 		},
 
 		async associateCandidateSource(input): Promise<CandidateSourceVersion> {

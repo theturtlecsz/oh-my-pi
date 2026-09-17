@@ -316,6 +316,7 @@ class ProviderAccount(StrictModel):
     balance_provenance: Literal["provider_observed", "locally_estimated", "unknown"]
     reset_at: datetime | None = None
     concurrency_limit: int = Field(ge=1)
+    budget_resource: BudgetResource | None = None
 
 
 class BudgetQuote(StrictModel):
@@ -341,6 +342,8 @@ class BudgetQuote(StrictModel):
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     quote_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     quoted_at: datetime
+    resource: BudgetResource | None = None
+    scope_id: UUID | None = None
 
 
 class BudgetScope(StrictModel):
@@ -1329,6 +1332,7 @@ class PutProviderAccountPayload(StrictModel):
     balance_provenance: Literal["provider_observed", "locally_estimated", "unknown"]
     reset_at: datetime | None = None
     concurrency_limit: int = Field(gt=0)
+    budget_resource: BudgetResource | None = None
 
     @model_validator(mode="after")
     def validate_invariants(self) -> PutProviderAccountPayload:

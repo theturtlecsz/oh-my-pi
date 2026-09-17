@@ -2,9 +2,9 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Model } from "@oh-my-pi/pi-ai";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
-import { canonicalJson, sha256Hex, type BeginStagePreflightPayload, type AdmitStagePreflightPayload, type CancelStagePreflightPayload, type RecordStagePreflightPayload, type StageLaunch, type StagePreflight, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, type BeginStagePreflightPayload, type AdmitStagePreflightPayload, type CancelStagePreflightPayload, type RecordStagePreflightPayload, type StageLaunch, type StagePreflight, type WorkItemView, type ProviderAccount, type RateCard, type BudgetQuote, type BudgetResult, type QuoteBudgetPayload, type ReserveBudgetPayload } from "@oh-my-pi/pi-work-client";
 import * as auditorRunner from "../extensions/workflow/auditor-runner";
-import { dispatchNativeStage } from "../extensions/workflow/native-stage-dispatch";
+import { dispatchNativeStage, nativeStageUsageCeiling } from "../extensions/workflow/native-stage-dispatch";
 import type { KnowledgeBridge } from "../extensions/workflow/knowledge-bridge";
 import type { WorkflowBackend } from "../extensions/workflow/backend";
 
@@ -91,6 +91,90 @@ function launch(status: StageLaunch["status"] = "reserved"): StageLaunch {
 	};
 }
 
+function providerAccount(overrides: Partial<ProviderAccount> = {}): ProviderAccount {
+	return {
+		account_id: "00000000-0000-7000-8000-000000000010",
+		workspace_id: workspaceId,
+		provider: "openai-codex",
+		account_identity: "test-account",
+		entitlement_evidence: "evidence-1",
+		evidence_observed_at: "2026-09-15T00:00:00Z",
+		billing_mode: "metered",
+		rate_card_version: "2026-09-01",
+		observed_balance: "100.00",
+		balance_provenance: "provider_observed",
+		reset_at: null,
+		concurrency_limit: 10,
+		budget_resource: "cash",
+		...overrides,
+	};
+}
+
+function rateCard(overrides: Partial<RateCard> = {}): RateCard {
+	return {
+		rate_card_id: "00000000-0000-7000-8000-000000000020",
+		workspace_id: workspaceId,
+		provider: "openai-codex",
+		version: "2026-09-01",
+		billing_modes: ["metered"],
+		effective_from: "2026-01-01T00:00:00Z",
+		effective_until: null,
+		currency: "USD",
+		unit_prices: {
+			input: "0.000001",
+			output: "0.000002",
+		},
+		evidence_sha256: "f".repeat(64),
+		evidence_source: "test",
+		observed_at: "2026-09-15T00:00:00Z",
+		qualification: "qualified",
+		registered_at: "2026-09-15T00:00:00Z",
+		...overrides,
+	};
+}
+
+function budgetQuote(overrides: Partial<BudgetQuote> = {}): BudgetQuote {
+	return {
+		quote_id: "00000000-0000-7000-8000-000000000030",
+		workspace_id: workspaceId,
+		work_id: workId,
+		revision_id: revisionId,
+		candidate_id: null,
+		attempt_id: null,
+		grant_id: grantId,
+		role: "implement",
+		launch_id: "00000000-0000-7000-8000-000000000006",
+		account_id: "00000000-0000-7000-8000-000000000010",
+		provider: "openai-codex",
+		model: "gpt-5.6-luna",
+		effort: "high",
+		currency: "USD",
+		rate_card_id: "00000000-0000-7000-8000-000000000020",
+		rate_card_version: "2026-09-01",
+		billing_mode: "metered",
+		usage_ceiling: { input: 155000, output: 15500 },
+		worst_case_amount: "1.000000",
+		evidence_sha256: "1".repeat(64),
+		quote_sha256: "2".repeat(64),
+		quoted_at: "2026-09-15T00:00:00Z",
+		resource: "cash",
+		scope_id: "00000000-0000-7000-8000-000000000040",
+		...overrides,
+	};
+}
+
+function budgetResult(overrides: Partial<BudgetResult> = {}): BudgetResult {
+	return {
+		type: "reserve_budget",
+		scope_id: "00000000-0000-7000-8000-000000000040",
+		reservation_id: "00000000-0000-7000-8000-000000000050",
+		fence: 1,
+		state: "reserved_unsent",
+		replayed: false,
+		...overrides,
+	};
+}
+
 describe("native stage dispatch", () => {
 	afterEach(() => {
 		for (const restore of [prepareRestore]) restore?.();
@@ -100,26 +184,36 @@ describe("native stage dispatch", () => {
 		test("reserves, hands off at first provider dispatch, then settles one canonical outcome", async () => {
 		const events: string[] = [];
 		let reservationInput: { fallbackReason?: string | null } | undefined;
+		let quotePayloadCaptured: QuoteBudgetPayload | undefined;
+		let reservePayloadCaptured: ReserveBudgetPayload | undefined;
 		const selectedModel = model();
 		const prepared = launch();
 		const settled = launch("settled");
-		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => async (_task, _id) => {
-			events.push("runner");
-			await options.onHandoff?.();
-			events.push("provider");
-			return { started: true, payload: "{\"ok\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			options.onRequestCeiling?.({ hardCeiling: 155, softBudget: 100, maxRuntimeMs: 60_000 });
+			return async (_task, _id) => {
+				events.push("runner");
+				await options.onHandoff?.();
+				events.push("provider");
+				return { started: true, payload: "{\"ok\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+			};
 		});
 		prepareRestore = () => prepare.mockRestore();
 		const fakeWorkClient = {
 			workItem: async () => item(),
 			workflow: async () => ({ stage_launches: [settled] }),
+			providerAccounts: async () => ({ workspace_id: workspaceId, accounts: [providerAccount()] }),
+			rateCards: async () => ({ workspace_id: workspaceId, rate_cards: [rateCard()] }),
 		};
 		const backend = {
 			workspaceId,
 			workClient: fakeWorkClient,
 			reserveStageLaunch: async input => { events.push("reserve"); reservationInput = input; return prepared; },
+			quoteBudget: async payload => { events.push("quote"); quotePayloadCaptured = payload; return budgetQuote(); },
+			reserveBudget: async payload => { events.push("reserve_budget"); reservePayloadCaptured = payload; return budgetResult(); },
 			handoffStageLaunch: async () => { events.push("handoff"); return { ...prepared, status: "handed_off" as const }; },
 			settleStageLaunch: async () => { events.push("settle"); return settled; },
+			cancelStageLaunch: async () => { events.push("cancel"); return { ...prepared, status: "canceled" as const }; },
 		} as unknown as WorkflowBackend;
 		const bridge = {
 			prepareStageContext: async () => ({ content: "retrieved facts", bundle: { bundle_id: "bundle-1", bundle_sha256: "e".repeat(64) } }),
@@ -141,38 +235,51 @@ describe("native stage dispatch", () => {
 			grantId,
 		});
 
-		expect(events).toEqual(["reserve", "runner", "handoff", "provider", "settle"]);
+		expect(events).toEqual(["reserve", "quote", "reserve_budget", "runner", "handoff", "provider", "settle"]);
 		expect(result.launch.status).toBe("settled");
 		expect(result.contextBundleId).toBe("bundle-1");
 		expect(reservationInput?.fallbackReason).toBe("primary route unavailable or native transport preflight failed");
+		expect(quotePayloadCaptured?.usage_ceiling).toEqual({
+			input: 155000,
+			output: 15500,
+		});
+		expect(reservePayloadCaptured?.scope_id).toBe("00000000-0000-7000-8000-000000000040");
 	});
 
 	test("reconciles lost handoff response and never settles interrupted launch", async () => {
 		const events: string[] = [];
 		const prepared = launch();
 		const interrupted = launch("interrupted");
-		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => async (_task, _id) => {
-			events.push("runner");
-			try {
-				await options.onHandoff?.();
-			} catch {
-				events.push("handoff-error");
-			}
-			events.push("provider");
-			return { started: true, payload: "{\"ok\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			options.onRequestCeiling?.({ hardCeiling: 155, softBudget: 100, maxRuntimeMs: 60_000 });
+			return async (_task, _id) => {
+				events.push("runner");
+				try {
+					await options.onHandoff?.();
+				} catch {
+					events.push("handoff-error");
+				}
+				events.push("provider");
+				return { started: true, payload: "{\"ok\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+			};
 		});
 		prepareRestore = () => prepare.mockRestore();
 		const fakeWorkClient = {
 			workItem: async () => item(),
 			workflow: async () => ({ stage_launches: [interrupted] }),
+			providerAccounts: async () => ({ workspace_id: workspaceId, accounts: [providerAccount()] }),
+			rateCards: async () => ({ workspace_id: workspaceId, rate_cards: [rateCard()] }),
 		};
 		const backend = {
 			workspaceId,
 			workClient: fakeWorkClient,
 			reserveStageLaunch: async () => { events.push("reserve"); return prepared; },
+			quoteBudget: async () => { events.push("quote"); return budgetQuote(); },
+			reserveBudget: async () => { events.push("reserve_budget"); return budgetResult(); },
 			handoffStageLaunch: async () => { events.push("handoff"); throw new Error("connection reset after commit"); },
 			reconcileStageLaunch: async () => { events.push("reconcile"); return interrupted; },
 			settleStageLaunch: async () => { events.push("settle"); throw new Error("interrupted launch cannot settle"); },
+			cancelStageLaunch: async () => { events.push("cancel"); return { ...prepared, status: "canceled" as const }; },
 		} as unknown as WorkflowBackend;
 		const ctx = {
 			models: {
@@ -191,7 +298,7 @@ describe("native stage dispatch", () => {
 			grantId,
 		});
 
-		expect(events).toEqual(["reserve", "runner", "handoff", "handoff-error", "provider", "reconcile"]);
+		expect(events).toEqual(["reserve", "quote", "reserve_budget", "runner", "handoff", "handoff-error", "provider", "reconcile"]);
 		expect(result.launch.status).toBe("interrupted");
 	});
 
@@ -248,10 +355,13 @@ describe("native stage dispatch", () => {
 		const prepared = launch();
 		const settled = launch("settled");
 		let requestSha256 = "";
-		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => async () => {
-			events.push("provider");
-			await options.onHandoff?.();
-			return { started: true, payload: "{\"recovered\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			options.onRequestCeiling?.({ hardCeiling: 155, softBudget: 100, maxRuntimeMs: 60_000 });
+			return async () => {
+				events.push("provider");
+				await options.onHandoff?.();
+				return { started: true, payload: "{\"recovered\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+			};
 		});
 		prepareRestore = () => prepare.mockRestore();
 		const backend = {
@@ -259,10 +369,15 @@ describe("native stage dispatch", () => {
 			workClient: {
 				workItem: async () => item(),
 				workflow: async () => ({ stage_launches: [{ ...prepared, request_sha256: requestSha256, tool_call_id: "call-response-loss" }] }),
+				providerAccounts: async () => ({ workspace_id: workspaceId, accounts: [providerAccount()] }),
+				rateCards: async () => ({ workspace_id: workspaceId, rate_cards: [rateCard()] }),
 			},
 			reserveStageLaunch: async input => { events.push("reserve"); requestSha256 = input.requestSha256; throw new Error("response lost after commit"); },
+			quoteBudget: async () => { events.push("quote"); return budgetQuote(); },
+			reserveBudget: async () => { events.push("reserve_budget"); return budgetResult(); },
 			handoffStageLaunch: async () => { events.push("handoff"); return { ...prepared, status: "handed_off" as const }; },
 			settleStageLaunch: async () => { events.push("settle"); return settled; },
+			cancelStageLaunch: async () => { events.push("cancel"); return { ...prepared, status: "canceled" as const }; },
 		} as unknown as WorkflowBackend;
 		const ctx = { models: { resolve: () => model(), list: () => [model()], current: () => model(), family: () => "openai-codex/gpt-5.6-luna" } } as unknown as ExtensionContext;
 
@@ -270,7 +385,7 @@ describe("native stage dispatch", () => {
 			workKey: "OMP-1", role: "implement", taskBody: "edit sealed file", toolCallId: "call-response-loss", grantId,
 		});
 
-		expect(events).toEqual(["reserve", "provider", "handoff", "settle"]);
+		expect(events).toEqual(["reserve", "quote", "reserve_budget", "provider", "handoff", "settle"]);
 		expect(result.launch.status).toBe("settled");
 	});
 
@@ -287,29 +402,37 @@ describe("native stage dispatch", () => {
 			totalTokens: 180,
 			reasoningTokens: 20,
 		};
-		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => async () => {
-			events.push("runner");
-			await options.onHandoff?.();
-			events.push("provider");
-			return {
-				started: true,
-				payload: "{\"ok\":true}",
-				resolvedModel: "openai-codex/gpt-5.6-luna:high",
-				usage: measuredUsage,
-				requests: 2,
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			options.onRequestCeiling?.({ hardCeiling: 155, softBudget: 100, maxRuntimeMs: 60_000 });
+			return async () => {
+				events.push("runner");
+				await options.onHandoff?.();
+				events.push("provider");
+				return {
+					started: true,
+					payload: "{\"ok\":true}",
+					resolvedModel: "openai-codex/gpt-5.6-luna:high",
+					usage: measuredUsage,
+					requests: 2,
+				};
 			};
 		});
 		prepareRestore = () => prepare.mockRestore();
 		const fakeWorkClient = {
 			workItem: async () => item(),
 			workflow: async () => ({ stage_launches: [settled] }),
+			providerAccounts: async () => ({ workspace_id: workspaceId, accounts: [providerAccount()] }),
+			rateCards: async () => ({ workspace_id: workspaceId, rate_cards: [rateCard()] }),
 		};
 		const backend = {
 			workspaceId,
 			workClient: fakeWorkClient,
 			reserveStageLaunch: async () => { events.push("reserve"); return prepared; },
+			quoteBudget: async () => { events.push("quote"); return budgetQuote(); },
+			reserveBudget: async () => { events.push("reserve_budget"); return budgetResult(); },
 			handoffStageLaunch: async () => { events.push("handoff"); return { ...prepared, status: "handed_off" as const }; },
 			settleStageLaunch: async input => { events.push("settle"); settledInput = input; return settled; },
+			cancelStageLaunch: async () => { events.push("cancel"); return { ...prepared, status: "canceled" as const }; },
 		} as unknown as WorkflowBackend;
 		const ctx = {
 			models: { resolve: () => model(), list: () => [model()], current: () => model(), family: () => "openai-codex/gpt-5.6-luna" },
@@ -323,7 +446,7 @@ describe("native stage dispatch", () => {
 			grantId,
 		});
 
-		expect(events).toEqual(["reserve", "runner", "handoff", "provider", "settle"]);
+		expect(events).toEqual(["reserve", "quote", "reserve_budget", "runner", "handoff", "provider", "settle"]);
 		expect(result.launch.status).toBe("settled");
 		expect(settledInput).toBeDefined();
 		expect(settledInput!.outcome).toMatchObject({
@@ -349,21 +472,29 @@ describe("native stage dispatch", () => {
 		let settledInput: { launchId: string; outcomeSha256: string; outcome: Record<string, unknown> } | undefined;
 		const prepared = launch();
 		const settled = launch("settled");
-		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => async () => {
-			await options.onHandoff?.();
-			return { started: true, payload: "{\"ok\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			options.onRequestCeiling?.({ hardCeiling: 155, softBudget: 100, maxRuntimeMs: 60_000 });
+			return async () => {
+				await options.onHandoff?.();
+				return { started: true, payload: "{\"ok\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+			};
 		});
 		prepareRestore = () => prepare.mockRestore();
 		const fakeWorkClient = {
 			workItem: async () => item(),
 			workflow: async () => ({ stage_launches: [settled] }),
+			providerAccounts: async () => ({ workspace_id: workspaceId, accounts: [providerAccount()] }),
+			rateCards: async () => ({ workspace_id: workspaceId, rate_cards: [rateCard()] }),
 		};
 		const backend = {
 			workspaceId,
 			workClient: fakeWorkClient,
 			reserveStageLaunch: async () => prepared,
+			quoteBudget: async () => budgetQuote(),
+			reserveBudget: async () => budgetResult(),
 			handoffStageLaunch: async () => ({ ...prepared, status: "handed_off" as const }),
 			settleStageLaunch: async input => { settledInput = input; return settled; },
+			cancelStageLaunch: async () => ({ ...prepared, status: "canceled" as const }),
 		} as unknown as WorkflowBackend;
 		const ctx = {
 			models: { resolve: () => model(), list: () => [model()], current: () => model(), family: () => "openai-codex/gpt-5.6-luna" },
@@ -677,6 +808,7 @@ describe("native stage dispatch", () => {
 				effort: "high",
 				isFallback: true,
 			});
+			options.onRequestCeiling?.({ hardCeiling: 155, softBudget: 100, maxRuntimeMs: 60_000 });
 			return async (_task, _id) => {
 				events.push("runner");
 				await options.onHandoff?.();
@@ -689,6 +821,8 @@ describe("native stage dispatch", () => {
 		const fakeWorkClient = {
 			workItem: async () => item(),
 			workflow: async () => ({ stage_launches: [settled] }),
+			providerAccounts: async () => ({ workspace_id: workspaceId, accounts: [providerAccount()] }),
+			rateCards: async () => ({ workspace_id: workspaceId, rate_cards: [rateCard()] }),
 		};
 		const backend = {
 			workspaceId,
@@ -708,6 +842,8 @@ describe("native stage dispatch", () => {
 				reservationInput = input;
 				return prepared;
 			},
+			quoteBudget: async () => { events.push("quote"); return budgetQuote(); },
+			reserveBudget: async () => { events.push("reserve_budget"); return budgetResult(); },
 			handoffStageLaunch: async () => {
 				events.push("handoff");
 				return { ...prepared, status: "handed_off" as const };
@@ -716,6 +852,7 @@ describe("native stage dispatch", () => {
 				events.push("settle");
 				return settled;
 			},
+			cancelStageLaunch: async () => ({ ...prepared, status: "canceled" as const }),
 		} as unknown as WorkflowBackend;
 
 		const ctx = {
@@ -738,7 +875,7 @@ describe("native stage dispatch", () => {
 			grantId,
 		});
 
-		expect(events).toEqual(["preflight", "preflight", "reserve", "runner", "handoff", "provider", "settle"]);
+		expect(events).toEqual(["preflight", "preflight", "reserve", "quote", "reserve_budget", "runner", "handoff", "provider", "settle"]);
 		expect(result.launch.status).toBe("settled");
 		expect(preflightPayloads).toHaveLength(2);
 
@@ -906,6 +1043,7 @@ describe("native stage dispatch", () => {
 				usage: null,
 				providerRequestId: "resp-1",
 			});
+			options.onRequestCeiling?.({ hardCeiling: 155, softBudget: 100, maxRuntimeMs: 60_000 });
 			options.onRouteSelected?.(route);
 			return async (_task, _id) => {
 				await options.onHandoff?.();
@@ -917,6 +1055,8 @@ describe("native stage dispatch", () => {
 		const fakeWorkClient = {
 			workItem: async () => item(),
 			workflow: async () => ({ stage_launches: [settled] }),
+			providerAccounts: async () => ({ workspace_id: workspaceId, accounts: [providerAccount()] }),
+			rateCards: async () => ({ workspace_id: workspaceId, rate_cards: [rateCard()] }),
 		};
 
 		const backend = {
@@ -1045,8 +1185,11 @@ describe("native stage dispatch", () => {
 				} as StagePreflight;
 			},
 			reserveStageLaunch: async () => prepared,
+			quoteBudget: async () => budgetQuote(),
+			reserveBudget: async () => budgetResult(),
 			handoffStageLaunch: async () => ({ ...prepared, status: "handed_off" as const }),
 			settleStageLaunch: async () => settled,
+			cancelStageLaunch: async () => ({ ...prepared, status: "canceled" as const }),
 		} as unknown as WorkflowBackend;
 
 		const ctx = {

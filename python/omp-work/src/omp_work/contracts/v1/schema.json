@@ -3566,6 +3566,16 @@
     },
     "BudgetQuote": {
       "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        },
         "StageLaunchRole": {
           "enum": [
             "plan",
@@ -3691,6 +3701,17 @@
           "title": "Rate Card Version",
           "type": "string"
         },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetResource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "revision_id": {
           "anyOf": [
             {
@@ -3706,6 +3727,19 @@
         },
         "role": {
           "$ref": "#/$defs/StageLaunchRole"
+        },
+        "scope_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope Id"
         },
         "usage_ceiling": {
           "additionalProperties": {
@@ -8103,6 +8137,17 @@
               ],
               "title": "Billing Mode",
               "type": "string"
+            },
+            "budget_resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BudgetResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "concurrency_limit": {
               "exclusiveMinimum": 0,
@@ -16896,6 +16941,18 @@
       "type": "object"
     },
     "ProviderAccount": {
+      "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "account_id": {
@@ -16926,6 +16983,17 @@
           ],
           "title": "Billing Mode",
           "type": "string"
+        },
+        "budget_resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetResource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "concurrency_limit": {
           "minimum": 1,
@@ -17057,6 +17125,16 @@
     },
     "PutProviderAccountCommand": {
       "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        },
         "PutProviderAccountPayload": {
           "additionalProperties": false,
           "properties": {
@@ -17088,6 +17166,17 @@
               ],
               "title": "Billing Mode",
               "type": "string"
+            },
+            "budget_resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BudgetResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "concurrency_limit": {
               "exclusiveMinimum": 0,
@@ -17181,6 +17270,18 @@
       "type": "object"
     },
     "PutProviderAccountPayload": {
+      "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "account_id": {
@@ -17211,6 +17312,17 @@
           ],
           "title": "Billing Mode",
           "type": "string"
+        },
+        "budget_resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetResource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "concurrency_limit": {
           "exclusiveMinimum": 0,

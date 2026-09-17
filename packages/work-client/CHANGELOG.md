@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `budget_resource` on `ProviderAccount`, `resource` and `scope_id` on `BudgetQuote` (legacy nullable compatible), and updated `WORK_CONTRACT_SHA256` digest (OMP-233).
 - Added `quote_budget` command and `BudgetQuoteResult` type, and optional `quote_id` on `ReserveBudgetPayload` (OMP-233).
 
 - Added `rateCards()` and `rateCard(rateCardId)` query methods and `register_rate_card` command execution for immutable rate-card authority.

@@ -25,6 +25,9 @@ from test_stage_budget_binding import (
 )
 from test_budget_authority import _inspect_accounting
 from test_workflow_service import _command
+from omp_work.operations import database as database_module
+from omp_work.operations.config import OperationsConfig
+from pg_native import native_postgres
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
@@ -172,6 +175,7 @@ def _setup_quote_context(
         rate_card_version=rate_card_version,
         balance_provenance=balance_provenance,
         billing_mode="subscription",
+        budget_resource="included_credit",
         concurrency_limit=account_concurrency,
     )
     assert acct_status == 200, acct_res
@@ -180,11 +184,30 @@ def _setup_quote_context(
         _execution_grant_audited_attempt(service, workspace_id, "quote-test")
     )
 
+    work_scope_id = uuid4()
+    status, work_scope_res = _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_budget_scope",
+            "payload": {
+                "scope_id": str(work_scope_id),
+                "parent_scope_id": str(scope_id),
+                "work_id": str(work_id),
+                "kind": "work",
+                "policy_version": "economy-v1",
+                "limits": {"included_credit": scope_limit},
+            },
+        },
+    )
+    assert status == 200, work_scope_res
+
     return {
         "workspace_id": workspace_id,
         "account_id": account_id,
         "account_identity": acct_ident,
-        "scope_id": scope_id,
+        "scope_id": work_scope_id,
+        "session_scope_id": scope_id,
         "grant_id": grant_id,
         "work_id": work_id,
         "revision_id": revision_id,
@@ -299,6 +322,7 @@ def test_account_selection_and_ambiguity(service):
         rate_card_version=ctx["rate_card_version"],
         balance_provenance="provider_observed",
         billing_mode="subscription",
+        budget_resource="included_credit",
     )
     assert st == 200, acct2
 
@@ -333,6 +357,7 @@ def test_account_selection_and_ambiguity(service):
         account_identity="foreign-acct",
         balance_provenance="provider_observed",
         billing_mode="subscription",
+        budget_resource="included_credit",
     )
     payload_foreign = dict(base_payload, account_id=str(foreign_acct_id))
     status_foreign, resp_foreign = _quote_budget(service, workspace_id, payload_foreign)
@@ -387,6 +412,7 @@ def test_fail_closed_matrix_zero_rows(service):
         rate_card_version=None,
         balance_provenance="provider_observed",
         billing_mode="subscription",
+        budget_resource="included_credit",
     )
     p = dict(base_payload, account_id=str(unpriced_acct_id))
     st, res = _quote_budget(service, workspace_id, p)
@@ -401,8 +427,8 @@ def test_fail_closed_matrix_zero_rows(service):
             INSERT INTO omp_work.provider_accounts(
                 account_id, workspace_id, provider, account_identity,
                 entitlement_evidence, evidence_observed_at, billing_mode,
-                rate_card_version, balance_provenance, concurrency_limit
-            ) VALUES (%s, %s, 'anthropic', 'hist-acct', 'ev', clock_timestamp(), 'subscription', 'v-nonexistent', 'provider_observed', 5)
+                rate_card_version, balance_provenance, concurrency_limit, budget_resource
+            ) VALUES (%s, %s, 'anthropic', 'hist-acct', 'ev', clock_timestamp(), 'subscription', 'v-nonexistent', 'provider_observed', 5, 'included_credit')
             """,
             (missing_card_acct, workspace_id),
         )
@@ -437,6 +463,7 @@ def test_fail_closed_matrix_zero_rows(service):
         rate_card_version="expired-v1",
         balance_provenance="provider_observed",
         billing_mode="subscription",
+        budget_resource="included_credit",
     )
     assert st_acct == 200, res_acct
     p = dict(base_payload, account_id=str(expired_acct))
@@ -486,8 +513,8 @@ def test_fail_closed_matrix_zero_rows(service):
             INSERT INTO omp_work.provider_accounts(
                 account_id, workspace_id, provider, account_identity,
                 entitlement_evidence, evidence_observed_at, billing_mode,
-                rate_card_version, balance_provenance, concurrency_limit
-            ) VALUES (%s, %s, 'anthropic', 'unqual-acct', 'ev', clock_timestamp(), 'subscription', 'unqual-v1', 'provider_observed', 5)
+                rate_card_version, balance_provenance, concurrency_limit, budget_resource
+            ) VALUES (%s, %s, 'anthropic', 'unqual-acct', 'ev', clock_timestamp(), 'subscription', 'unqual-v1', 'provider_observed', 5, 'included_credit')
             """,
             (unqual_acct, workspace_id),
         )
@@ -514,8 +541,8 @@ def test_fail_closed_matrix_zero_rows(service):
             INSERT INTO omp_work.provider_accounts(
                 account_id, workspace_id, provider, account_identity,
                 entitlement_evidence, evidence_observed_at, billing_mode,
-                rate_card_version, balance_provenance, concurrency_limit
-            ) VALUES (%s, %s, 'anthropic', 'incomp-acct', 'ev', clock_timestamp(), 'subscription', 'incomp-v1', 'provider_observed', 5)
+                rate_card_version, balance_provenance, concurrency_limit, budget_resource
+            ) VALUES (%s, %s, 'anthropic', 'incomp-acct', 'ev', clock_timestamp(), 'subscription', 'incomp-v1', 'provider_observed', 5, 'included_credit')
             """,
             (incomp_acct, workspace_id),
         )
@@ -532,8 +559,8 @@ def test_fail_closed_matrix_zero_rows(service):
             INSERT INTO omp_work.provider_accounts(
                 account_id, workspace_id, provider, account_identity,
                 entitlement_evidence, evidence_observed_at, billing_mode,
-                rate_card_version, balance_provenance, concurrency_limit
-            ) VALUES (%s, %s, 'anthropic', 'unknown-bal-acct', 'ev', clock_timestamp(), 'subscription', %s, 'unknown', 5)
+                rate_card_version, balance_provenance, concurrency_limit, budget_resource
+            ) VALUES (%s, %s, 'anthropic', 'unknown-bal-acct', 'ev', clock_timestamp(), 'subscription', %s, 'unknown', 5, 'included_credit')
             """,
             (unknown_bal_acct, workspace_id, ctx["rate_card_version"]),
         )
@@ -541,6 +568,60 @@ def test_fail_closed_matrix_zero_rows(service):
     st, res = _quote_budget(service, workspace_id, p)
     assert st == 400 and "unknown_account_evidence" in res["error"]["diagnostics"]
     assert count_quotes() == initial_count
+
+    # (k) Unclassified account (budget_resource IS NULL)
+    unclass_acct_id = uuid4()
+    _put_account(
+        service,
+        workspace_id,
+        unclass_acct_id,
+        provider="anthropic",
+        account_identity="unclass-acct",
+        rate_card_version=ctx["rate_card_version"],
+        balance_provenance="provider_observed",
+        billing_mode="subscription",
+        budget_resource=None,
+    )
+    p = dict(base_payload, account_id=str(unclass_acct_id))
+    st, res = _quote_budget(service, workspace_id, p)
+    assert st == 400 and "account_resource_unclassified" in res["error"]["diagnostics"]
+    assert count_quotes() == initial_count
+
+    # (l) Zero work scopes (budget_scope_missing)
+    ws_l = uuid4()
+    _setup_operator(service, ws_l)
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING", (ws_l,))
+    _register_card(service, ws_l, uuid4(), provider="anthropic", version="2026-q3", billing_modes=["subscription"], effective_from=(datetime.now(UTC) - timedelta(days=1)).isoformat(), currency="USD", unit_prices={"input": "0.000003", "output": "0.000015", "cacheRead": "0.0000003"})
+    acct_l = uuid4()
+    _put_account(service, ws_l, acct_l, provider="anthropic", account_identity="acct-l", rate_card_version="2026-q3", balance_provenance="provider_observed", billing_mode="subscription", budget_resource="included_credit")
+    _g, w_id_no_scope, _r, _c, _a, _p, _j, _it = _execution_grant_audited_attempt(service, ws_l, "no-work-scope")
+    p_no_scope = dict(base_payload, work_id=str(w_id_no_scope), account_id=str(acct_l))
+    st, res = _quote_budget(service, ws_l, p_no_scope)
+    assert st == 400 and "budget_scope_missing" in res["error"]["diagnostics"]
+
+    # (m) Ambiguous work scopes (budget_scope_ambiguous)
+    ws1 = uuid4()
+    ws2 = uuid4()
+    _command(service, ws_l, {"type": "create_budget_scope", "payload": {"scope_id": str(ws1), "work_id": str(w_id_no_scope), "kind": "work", "policy_version": "economy-v1", "limits": {"included_credit": "10.00"}}})
+    _command(service, ws_l, {"type": "create_budget_scope", "payload": {"scope_id": str(ws2), "work_id": str(w_id_no_scope), "kind": "work", "policy_version": "economy-v1", "limits": {"included_credit": "10.00"}}})
+    st, res = _quote_budget(service, ws_l, p_no_scope)
+    assert st == 400 and "budget_scope_ambiguous" in res["error"]["diagnostics"]
+
+    # (n) Missing resource limit (budget_scope_missing_limit)
+    ws_n = uuid4()
+    _setup_operator(service, ws_n)
+    with psycopg.connect(**service.config.connection_kwargs("postgres"), autocommit=True) as conn:
+        conn.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING", (ws_n,))
+    _register_card(service, ws_n, uuid4(), provider="anthropic", version="2026-q3", billing_modes=["subscription"], effective_from=(datetime.now(UTC) - timedelta(days=1)).isoformat(), currency="USD", unit_prices={"input": "0.000003", "output": "0.000015", "cacheRead": "0.0000003"})
+    acct_n = uuid4()
+    _put_account(service, ws_n, acct_n, provider="anthropic", account_identity="acct-n", rate_card_version="2026-q3", balance_provenance="provider_observed", billing_mode="subscription", budget_resource="included_credit")
+    _g, w_id_cash, _r, _c, _a, _p, _j, _it = _execution_grant_audited_attempt(service, ws_n, "cash-only-scope")
+    ws_cash = uuid4()
+    _command(service, ws_n, {"type": "create_budget_scope", "payload": {"scope_id": str(ws_cash), "work_id": str(w_id_cash), "kind": "work", "policy_version": "economy-v1", "limits": {"cash": "10.00"}}})
+    p_cash_scope = dict(base_payload, work_id=str(w_id_cash), account_id=str(acct_n))
+    st, res = _quote_budget(service, ws_n, p_cash_scope)
+    assert st == 400 and "budget_scope_missing_limit" in res["error"]["diagnostics"]
 
 
 def test_launch_binding(service):
@@ -637,6 +718,53 @@ def test_reserve_with_quote_and_guards(service):
     quote_id = UUID(res_quote["result"]["quote"]["quote_id"])
     exact_amount = res_quote["result"]["quote"]["worst_case_amount"]
     assert exact_amount == "0.7200003"
+    assert res_quote["result"]["quote"]["resource"] == "included_credit"
+    assert res_quote["result"]["quote"]["scope_id"] == str(ctx["scope_id"])
+
+    # Mismatched scope -> 400 quote_scope_mismatch
+    foreign_scope_id = uuid4()
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_budget_scope",
+            "payload": {
+                "scope_id": str(foreign_scope_id),
+                "kind": "session",
+                "policy_version": "economy-v1",
+                "limits": {"included_credit": "50.00"},
+            },
+        },
+    )
+    st_bad_scope, res_bad_scope = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=foreign_scope_id,
+        account_id=ctx["account_id"],
+        amount=exact_amount,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        quote_id=quote_id,
+    )
+    assert st_bad_scope == 400, res_bad_scope
+    assert "quote_scope_mismatch" in res_bad_scope["error"]["diagnostics"]
+
+    # Mismatched resource -> 400 quote_resource_mismatch
+    st_bad_res, res_bad_res = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=ctx["scope_id"],
+        account_id=ctx["account_id"],
+        amount=exact_amount,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        resource="cash",
+        quote_id=quote_id,
+    )
+    assert st_bad_res == 400, res_bad_res
+    assert "quote_resource_mismatch" in res_bad_res["error"]["diagnostics"]
 
     # Mismatched amount -> 400 quote_amount_mismatch
     st_bad_amt, res_bad_amt = _reserve_with_quote(
@@ -691,6 +819,85 @@ def test_reserve_with_quote_and_guards(service):
     assert st_reuse == 400, res_reuse
     assert "quote_already_reserved" in res_reuse["error"]["diagnostics"]
 
+    # Launch-bound quote replay: same quote on same launch replays with untouched counters
+    launch_id, _task_sha = _reserve_launch(ctx, service, role="audit")
+    st_q_launch, res_q_launch = _quote_budget(
+        service,
+        workspace_id,
+        dict(payload, launch_id=str(launch_id)),
+    )
+    assert st_q_launch == 200, res_q_launch
+    q_launch_id = UUID(res_q_launch["result"]["quote"]["quote_id"])
+
+    held_before = Decimal(scope_data["held"]["included_credit"])
+    t_attempt = uuid4()
+    st_res_l1, res_res_l1 = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=ctx["scope_id"],
+        account_id=ctx["account_id"],
+        amount=exact_amount,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        launch_id=launch_id,
+        logical_call_id=launch_id,
+        transport_attempt_id=t_attempt,
+        quote_id=q_launch_id,
+    )
+    assert st_res_l1 == 200, res_res_l1
+    assert res_res_l1["result"]["state"] == "reserved_unsent"
+
+    scope_after_l1, _ = _inspect_accounting(service, ctx["scope_id"])
+    assert Decimal(scope_after_l1["held"]["included_credit"]) == held_before + Decimal(exact_amount)
+
+    # Replay same quote on same launch
+    st_res_l2, res_res_l2 = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=ctx["scope_id"],
+        account_id=ctx["account_id"],
+        amount=exact_amount,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        launch_id=launch_id,
+        logical_call_id=launch_id,
+        transport_attempt_id=t_attempt,
+        quote_id=q_launch_id,
+    )
+    assert st_res_l2 == 200, res_res_l2
+    assert res_res_l2["result"].get("replayed") is True
+
+    # Counters remain untouched
+    scope_after_l2, _ = _inspect_accounting(service, ctx["scope_id"])
+    assert Decimal(scope_after_l2["held"]["included_credit"]) == held_before + Decimal(exact_amount)
+
+    # Conflicting quote for same launch fails (launch_reservation_active)
+    st_q_conflict, res_q_conflict = _quote_budget(
+        service,
+        workspace_id,
+        dict(payload, launch_id=str(launch_id), usage_ceiling={"input": 100000, "output": 4000, "cacheRead": 1}),
+    )
+    assert st_q_conflict == 200, res_q_conflict
+    q_conflict_id = UUID(res_q_conflict["result"]["quote"]["quote_id"])
+    c_amount = res_q_conflict["result"]["quote"]["worst_case_amount"]
+
+    st_conflict_res, res_conflict_res = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=ctx["scope_id"],
+        account_id=ctx["account_id"],
+        amount=c_amount,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        launch_id=launch_id,
+        quote_id=q_conflict_id,
+    )
+    assert st_conflict_res == 400, res_conflict_res
+    assert "launch_reservation_active" in res_conflict_res["error"]["diagnostics"]
+
     # Stale account test: create a new quote, update provider account with newer evidence, then try to reserve
     st_q2, res_q2 = _quote_budget(service, workspace_id, payload)
     assert st_q2 == 200, res_q2
@@ -708,6 +915,7 @@ def test_reserve_with_quote_and_guards(service):
         evidence_observed_at=newer_time,
         balance_provenance="provider_observed",
         billing_mode="subscription",
+        budget_resource="included_credit",
     )
 
     st_stale, res_stale = _reserve_with_quote(
@@ -735,6 +943,7 @@ def test_reserve_with_quote_and_guards(service):
         rate_card_version=None,
         balance_provenance="provider_observed",
         billing_mode="subscription",
+        budget_resource="included_credit",
     )
     st_legacy, res_legacy = _reserve_with_quote(
         service,
@@ -857,3 +1066,305 @@ def test_authority_and_cross_workspace_isolation(service):
     st_cross_launch, res_cross_launch = _quote_budget(service, workspace_id, payload_cross_launch)
     assert st_cross_launch == 409, res_cross_launch
     assert "unknown native stage launch" in res_cross_launch["error"]["diagnostics"]
+
+
+def _make_operations_config(tmp_path) -> OperationsConfig:
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = int(sock.getsockname()[1])
+    credentials = tmp_path / "config" / "credentials"
+    credentials.mkdir(parents=True, mode=0o700)
+    for role in ("postgres", "omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup", "gpg-passphrase", "operator-actor-id"):
+        path = credentials / role
+        path.write_text(str(uuid4()) if role == "operator-actor-id" else secrets.token_urlsafe(24))
+        path.chmod(0o600)
+    return OperationsConfig(config_dir=tmp_path / "config", state_dir=tmp_path / "state", data_dir=tmp_path / "data", port=port)
+
+
+def test_reserve_budget_lost_response_replay_identity(service):
+    """8. Lost-response replay: byte-equivalent identity returns replayed reservation without counter modification."""
+    ctx = _setup_quote_context(service)
+    workspace_id = ctx["workspace_id"]
+    launch_id, _ = _reserve_launch(ctx, service, role="audit")
+
+    st_q, res_q = _quote_budget(
+        service,
+        workspace_id,
+        {
+            "work_id": str(ctx["work_id"]),
+            "role": "audit",
+            "launch_id": str(launch_id),
+            "account_id": str(ctx["account_id"]),
+            "provider": ctx["provider"],
+            "model": ctx["model"],
+            "effort": ctx["effort"],
+            "currency": ctx["currency"],
+            "usage_ceiling": {"input": 1000, "output": 100, "cacheRead": 10},
+        },
+    )
+    assert st_q == 200, res_q
+    quote = res_q["result"]["quote"]
+    quote_id = UUID(quote["quote_id"])
+    worst_case = quote["worst_case_amount"]
+
+    transport_attempt_id = uuid4()
+    logical_call_id = launch_id
+    expires_at = "2030-01-01T00:00:00+00:00"
+
+    # First reservation attempt: succeeds with replayed = False
+    st_r1, res_r1 = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=ctx["scope_id"],
+        account_id=ctx["account_id"],
+        amount=worst_case,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        resource=quote["resource"],
+        quote_id=quote_id,
+        launch_id=launch_id,
+        logical_call_id=logical_call_id,
+        transport_attempt_id=transport_attempt_id,
+        expires_at=expires_at,
+    )
+    assert st_r1 == 200, res_r1
+    assert not res_r1["result"].get("replayed")
+    reservation_id = res_r1["result"]["reservation_id"]
+    assert res_r1["result"]["transport_attempt_id"] == str(transport_attempt_id)
+
+    scope_data_1, _ = _inspect_accounting(service, ctx["scope_id"])
+    held_1 = scope_data_1["held"][quote["resource"]]
+    assert held_1 == worst_case
+
+    # Replay with EXACT byte-equivalent payload: returns replayed = True, identical IDs, counters untouched
+    st_r2, res_r2 = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=ctx["scope_id"],
+        account_id=ctx["account_id"],
+        amount=worst_case,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        resource=quote["resource"],
+        quote_id=quote_id,
+        launch_id=launch_id,
+        logical_call_id=logical_call_id,
+        transport_attempt_id=transport_attempt_id,
+        expires_at=expires_at,
+    )
+    assert st_r2 == 200, res_r2
+    assert res_r2["result"]["replayed"] is True
+    assert res_r2["result"]["reservation_id"] == reservation_id
+    assert res_r2["result"]["transport_attempt_id"] == str(transport_attempt_id)
+
+    scope_data_2, _ = _inspect_accounting(service, ctx["scope_id"])
+    assert scope_data_2["held"][quote["resource"]] == held_1
+
+    # Conflicting transport_attempt_id on same quote fails closed
+    st_r_conflict, res_r_conflict = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=ctx["scope_id"],
+        account_id=ctx["account_id"],
+        amount=worst_case,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        resource=quote["resource"],
+        quote_id=quote_id,
+        launch_id=launch_id,
+        logical_call_id=logical_call_id,
+        transport_attempt_id=uuid4(),
+        expires_at=expires_at,
+    )
+    assert st_r_conflict == 400, res_r_conflict
+    assert "quote_already_reserved" in res_r_conflict["error"]["diagnostics"]
+
+    # Cancel stage launch (releases unsent reservation to terminal state)
+    st_c, res_c = _command(
+        service,
+        workspace_id,
+        {"type": "cancel_stage_launch", "payload": {"launch_id": str(launch_id), "reason": "aborted"}},
+    )
+    assert st_c == 200, res_c
+
+    # Replay on terminal reservation fails closed (never returned as active success)
+    st_r_term, res_r_term = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=ctx["scope_id"],
+        account_id=ctx["account_id"],
+        amount=worst_case,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        resource=quote["resource"],
+        quote_id=quote_id,
+        launch_id=launch_id,
+        logical_call_id=logical_call_id,
+        transport_attempt_id=transport_attempt_id,
+        expires_at=expires_at,
+    )
+    assert st_r_term == 409, res_r_term
+    assert "stage launch is cancelled" in res_r_term["error"]["diagnostics"]
+
+    # Non-launch quote: reserve, settle, then replay -> fails closed with reservation_terminal
+    st_q_stand, res_q_stand = _quote_budget(
+        service,
+        workspace_id,
+        {
+            "work_id": str(ctx["work_id"]),
+            "role": "audit",
+            "account_id": str(ctx["account_id"]),
+            "provider": ctx["provider"],
+            "model": ctx["model"],
+            "effort": ctx["effort"],
+            "currency": ctx["currency"],
+            "usage_ceiling": {"input": 500, "output": 50, "cacheRead": 5},
+        },
+    )
+    assert st_q_stand == 200, res_q_stand
+    stand_quote = res_q_stand["result"]["quote"]
+    stand_quote_id = UUID(stand_quote["quote_id"])
+    stand_worst = stand_quote["worst_case_amount"]
+    stand_transport = uuid4()
+    stand_call = uuid4()
+
+    st_r_s1, res_r_s1 = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=ctx["scope_id"],
+        account_id=ctx["account_id"],
+        amount=stand_worst,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        resource=stand_quote["resource"],
+        quote_id=stand_quote_id,
+        logical_call_id=stand_call,
+        transport_attempt_id=stand_transport,
+        expires_at=expires_at,
+    )
+    assert st_r_s1 == 200, res_r_s1
+    stand_res_id = res_r_s1["result"]["reservation_id"]
+
+    # Settle the reservation (reaches terminal state "settled")
+    st_settle, res_settle = _command(
+        service,
+        workspace_id,
+        {
+            "type": "settle_budget",
+            "payload": {
+                "reservation_id": str(stand_res_id),
+                "transport_attempt_id": str(stand_transport),
+                "fence": res_r_s1["result"]["fence"],
+                "state": "settled",
+                "actual_drawdown": stand_worst,
+                "provenance": "locally_estimated",
+                "outcome": "success",
+            },
+        },
+    )
+    assert st_settle == 200, res_settle
+
+    # Replaying reservation on settled terminal quote rejects with reservation_terminal
+    st_r_term2, res_r_term2 = _reserve_with_quote(
+        service,
+        workspace_id,
+        scope_id=ctx["scope_id"],
+        account_id=ctx["account_id"],
+        amount=stand_worst,
+        provider=ctx["provider"],
+        model=ctx["model"],
+        effort=ctx["effort"],
+        resource=stand_quote["resource"],
+        quote_id=stand_quote_id,
+        logical_call_id=stand_call,
+        transport_attempt_id=stand_transport,
+        expires_at=expires_at,
+    )
+    assert st_r_term2 == 400, res_r_term2
+    assert "reservation_terminal" in res_r_term2["error"]["diagnostics"]
+
+
+def test_migration_0035_preserves_historical_pre_0035_budget_quotes(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """9. Migration upgrade: pre-0035 quotes with null resource/scope remain readable and fail closed on reserve."""
+    monkeypatch.setattr("omp_work.operations.database.validate_bundle", lambda **kw: None)
+    cfg = _make_operations_config(tmp_path)
+    original_migrate = database_module.migrate
+
+    # Step 1: Bootstrap up to target migration 34 (prior to 0035)
+    monkeypatch.setattr(
+        database_module,
+        "migrate",
+        lambda c, target=None, lock_timeout=30: original_migrate(c, target=34, lock_timeout=lock_timeout),
+    )
+    with native_postgres(cfg.state_dir, cfg.port):
+        database_module.bootstrap(cfg)
+        monkeypatch.setattr(database_module, "migrate", original_migrate)
+
+        workspace_id = uuid4()
+        work_id = uuid4()
+        account_id = uuid4()
+        card_id = uuid4()
+        quote_id = uuid4()
+        now = datetime.now(UTC)
+
+        # Step 2: Seed pre-0035 quote row
+        with psycopg.connect(**cfg.connection_kwargs("postgres"), autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)", (workspace_id,))
+                cur.execute("INSERT INTO omp_work.work_items(work_id, workspace_id, state) VALUES (%s, %s, 'NOW')", (work_id, workspace_id))
+                cur.execute(
+                    """
+                    INSERT INTO omp_work.rate_cards(
+                        rate_card_id, workspace_id, provider, version, qualification,
+                        currency, billing_modes, unit_prices, evidence_sha256, evidence_source, observed_at, effective_from, effective_until
+                    ) VALUES (%s, %s, 'anthropic', '2026-q3', 'qualified', 'USD', ARRAY['metered'], '{"input": "0.000003"}'::jsonb, %s, 'test', %s, %s, null)
+                    """,
+                    (card_id, workspace_id, "0" * 64, now, now - timedelta(days=1)),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO omp_work.provider_accounts(
+                        account_id, workspace_id, provider, account_identity, entitlement_evidence,
+                        evidence_observed_at, billing_mode, rate_card_version, observed_balance,
+                        balance_provenance, reset_at, concurrency_limit
+                    ) VALUES (%s, %s, 'anthropic', 'acct-pre35', 'ev-1', %s, 'metered', '2026-q3', null, 'unknown', null, 5)
+                    """,
+                    (account_id, workspace_id, now),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO omp_work.budget_quotes(
+                        quote_id, workspace_id, work_id, role, account_id,
+                        account_evidence_observed_at, provider, model, effort, rate_card_id,
+                        rate_card_version, currency, usage_ceiling, worst_case_amount,
+                        evidence_sha256, quote_sha256, quoted_at
+                    ) VALUES (
+                        %s, %s, %s, 'audit', %s,
+                        %s, 'anthropic', 'claude-3-7-sonnet', 'high', %s,
+                        '2026-q3', 'USD', '{"input": 1000}'::jsonb, 0.003,
+                        %s, %s, %s
+                    )
+                    """,
+                    (quote_id, workspace_id, work_id, account_id, now, card_id, "0" * 64, "1" * 64, now),
+                )
+
+        # Step 3: Run migration 0035
+        original_migrate(cfg)
+
+        # Step 4: Verify migration applied without destroying historical quote
+        with psycopg.connect(**cfg.connection_kwargs("postgres")) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT quote_id, resource, scope_id FROM omp_work.budget_quotes WHERE quote_id = %s", (quote_id,))
+                row = cur.fetchone()
+                assert row is not None
+                assert row[0] == quote_id
+                assert row[1] is None, "Historical quote resource must be NULL"
+                assert row[2] is None, "Historical quote scope_id must be NULL"
