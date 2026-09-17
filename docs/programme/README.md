@@ -1,0 +1,9 @@
+# OMP consolidated programme handoff
+
+Start with [the revised goal prompt](GOAL-PROMPT.md), then read both full appendices: [ECC](ECC-IMPLEMENTATION-SPEC.md) and [autoresearch](AUTORESEARCH-IMPLEMENTATION-PLAN.md). Autoresearch inherits ECC requirements and must not travel alone. [Review summary](REVIEW-SUMMARY.md) and [scope check](SCOPE-PRESERVATION.md) describe the document changes and their coverage. [Accepted product decisions](ACCEPTED-DECISIONS.md) preserve exact Q1–Q35 wording; [original obligation inventory](ORIGINAL-OBLIGATIONS.md) maps the ten-part goal.
+
+[MASTER](../../MASTER.md) is the canonical programme specification and sole programme status record. These appendices are full requirement exports, not independently maintained status documents. On amendment, update MASTER first and regenerate the exports; preserve history and byte provenance. The current settled amendments take precedence over conflicting historical wording, while every unaffected requirement remains binding. WorkService retains native authority for scope, grants, identity, evidence, cancellation and completion.
+
+The handoff archive includes MASTER, the glossary, ADRs, all files here, and a SHA256 manifest. Historical evidence and external source links retained inside MASTER and the plans may refer to host-local artifacts or remote repositories; those are references, not bundled acceptance receipts. The full ECC and research specifications themselves are included, not dependent on fetching those references.
+
+Completing the handoff does not authorize Q36 or deploy/start implementation. Preserve existing session authorization and explicit pause/resume instructions. First means order, not reduced scope. Full programme remains incomplete until every retained native acceptance gate passes.

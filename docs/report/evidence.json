@@ -1,0 +1,8 @@
+{
+  "generatedAt": "2026-09-15T00:35:42.037Z",
+  "incremental": true,
+  "notes": [
+    "Stub collector: replace with real scanners (dep-cruiser/madge/pydeps, Dredd/Prism, kubeconform, etc.).",
+    "Safe default: does not touch your repo."
+  ]
+}

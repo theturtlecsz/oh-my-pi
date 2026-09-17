@@ -31,3 +31,15 @@ health colors — the daily glance; milestones = PROMISE sentences ("Guide
 feels like cable"), closed only by the owner's verdict; issues = work. The
 `waiting-on-chris` label is the owner decision queue — anything needing
 Chris goes there.
+
+## Build-directory hygiene (owner ruling 2026-09-11, S13 session)
+
+Any session that compiles under a scratch dir (`~/sNN-scratch/`,
+worktrees, spikes) MUST delete build-output trees — `target/`, `debug/`,
+`release/`, `node_modules/`, `dist/`, `.gradle/` — as soon as that
+session's last compile/test gate has passed, and always before session
+end. Evidence is receipts, logs, and sha256 manifests, never the build
+tree; any binary needed later is copied out as a single hashed file
+first. Exception: a tree an owner-ratified handoff declares immutable
+(e.g. prior-session evidence scratch) is left alone and the leftover is
+reported, not deleted.
