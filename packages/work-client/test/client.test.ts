@@ -638,3 +638,205 @@ test("native collection cursors preserve encoded tokens and zero event bounds", 
 	const u4 = new URL(requests[4].url);
 	expect(u4.search).toBe("");
 });
+
+test("providerAccounts fetches workspace provider-account list view with contract headers", async () => {
+	let request: Request | undefined;
+	const dummyListView = {
+		workspace_id: ENV.workspace_id,
+		accounts: [
+			{
+				account_id: "00000000-0000-7000-8000-000000000001",
+				workspace_id: ENV.workspace_id,
+				provider: "anthropic",
+				account_identity: "acct-1",
+				entitlement_evidence: "evidence-1",
+				evidence_observed_at: "2026-09-17T00:00:00+00:00",
+				billing_mode: "metered" as const,
+				rate_card_version: "2026-09",
+				observed_balance: "100.50",
+				balance_provenance: "provider_observed" as const,
+				reset_at: null,
+				concurrency_limit: 5,
+			},
+		],
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			request = new Request(String(input), init);
+			return Response.json(dummyListView);
+		},
+	);
+
+	const view = await client.providerAccounts();
+	expect(request?.url).toBe(`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/provider-accounts`);
+	expect(request?.method).toBe("GET");
+	expect(request?.headers.get("authorization")).toBe("Bearer token");
+	expect(request?.headers.get("x-omp-workspace-id")).toBe(ENV.workspace_id);
+	expect(request?.headers.get("x-omp-contract-sha256")).toBe(WORK_CONTRACT_SHA256);
+	expect(view).toEqual(dummyListView);
+});
+
+test("providerAccount encodes accountId URL and returns single ProviderAccount", async () => {
+	let request: Request | undefined;
+	const accountId = "test/account id 01";
+	const dummyAccount = {
+		account_id: accountId,
+		workspace_id: ENV.workspace_id,
+		provider: "openai",
+		account_identity: "acct-2",
+		entitlement_evidence: "evidence-2",
+		evidence_observed_at: "2026-09-17T00:00:00+00:00",
+		billing_mode: "subscription" as const,
+		rate_card_version: null,
+		observed_balance: null,
+		balance_provenance: "unknown" as const,
+		reset_at: "2026-10-01T00:00:00+00:00",
+		concurrency_limit: 2,
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			request = new Request(String(input), init);
+			return Response.json(dummyAccount);
+		},
+	);
+
+	const account = await client.providerAccount(accountId);
+	expect(request?.url).toBe(
+		`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/provider-accounts/test%2Faccount%20id%2001`,
+	);
+	expect(request?.method).toBe("GET");
+	expect(request?.headers.get("authorization")).toBe("Bearer token");
+	expect(request?.headers.get("x-omp-contract-sha256")).toBe(WORK_CONTRACT_SHA256);
+	expect(account).toEqual(dummyAccount);
+});
+
+test("providerAccount surfaces typed service error on not found", async () => {
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async () =>
+			Response.json(
+				{
+					error: {
+						code: "invalid_request",
+						request_id: null,
+						correlation_id: null,
+						diagnostics: ["not_found", "provider account not found in workspace"],
+					},
+				},
+				{ status: 400 },
+			),
+	);
+
+	const err = await client.providerAccount("00000000-0000-7000-8000-000000000099").catch(e => e);
+	expect(err).toBeInstanceOf(WorkError);
+	expect((err as WorkError).code).toBe("invalid_request");
+	expect((err as WorkError).status).toBe(400);
+	expect(String(err)).toContain("not_found");
+});
+
+test("executes budget and provider-account commands with typed results", async () => {
+	const reservationId = "00000000-0000-7000-8000-000000000010";
+	const accountId = "00000000-0000-7000-8000-000000000020";
+	const dummyAccount = {
+		account_id: accountId,
+		workspace_id: ENV.workspace_id,
+		provider: "gemini",
+		account_identity: "acct-3",
+		entitlement_evidence: "evidence-3",
+		evidence_observed_at: "2026-09-17T00:00:00+00:00",
+		billing_mode: "subscription" as const,
+		rate_card_version: null,
+		observed_balance: null,
+		balance_provenance: "unknown" as const,
+		reset_at: null,
+		concurrency_limit: 1,
+	};
+
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (_input, init) => {
+			const body = JSON.parse(String(init?.body));
+			if (body.command.type === "reserve_budget") {
+				return Response.json({
+					receipt: RECEIPT,
+					result: {
+						type: "reserve_budget",
+						scope_id: body.command.payload.scope_id,
+						reservation_id: reservationId,
+						fence: 1,
+						state: "reserved_unsent",
+					},
+				});
+			}
+			return Response.json({
+				receipt: RECEIPT,
+				result: {
+					type: "put_provider_account",
+					status: "inserted",
+					account_id: accountId,
+					account: dummyAccount,
+				},
+			});
+		},
+	);
+
+	const reserveRes = await client.execute({
+		...ENV,
+		command: {
+			type: "reserve_budget",
+			payload: {
+				scope_id: "00000000-0000-7000-8000-000000000001",
+				account_id: accountId,
+				logical_call_id: "00000000-0000-7000-8000-000000000002",
+				transport_attempt_id: "00000000-0000-7000-8000-000000000003",
+				provider: "gemini",
+				model: "gemini-3.8-flash",
+				effort: "high",
+				resource: "native_quota",
+				worst_case_drawdown: "1.0",
+				context_limit: 128000,
+				output_limit: 8192,
+				expires_at: "2026-09-17T01:00:00Z",
+			},
+		},
+	});
+	expect(reserveRes.result.type).toBe("reserve_budget");
+	if (reserveRes.result.type === "reserve_budget") {
+		expect(reserveRes.result.reservation_id).toBe(reservationId);
+		expect(reserveRes.result.fence).toBe(1);
+		expect(reserveRes.result.state).toBe("reserved_unsent");
+	}
+
+	const accountRes = await client.execute({
+		...ENV,
+		command: {
+			type: "put_provider_account",
+			payload: {
+				account_id: accountId,
+				provider: "gemini",
+				account_identity: "acct-3",
+				entitlement_evidence: "evidence-3",
+				evidence_observed_at: "2026-09-17T00:00:00+00:00",
+				billing_mode: "subscription",
+				balance_provenance: "unknown",
+				concurrency_limit: 1,
+			},
+		},
+	});
+	expect(accountRes.result.type).toBe("put_provider_account");
+	if (accountRes.result.type === "put_provider_account") {
+		expect(accountRes.result.status).toBe("inserted");
+		expect(accountRes.result.account_id).toBe(accountId);
+		expect(accountRes.result.account.provider).toBe("gemini");
+	}
+});

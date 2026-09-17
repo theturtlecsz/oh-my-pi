@@ -519,6 +519,110 @@ export type AttestCheckpointDeliveryPayload = {
 };
 export type RecordProjectHealthPayload = { project_id: UUID; health: ProjectHealth };
 
+// ---- budget and provider account payloads (OMP-233) ----
+// ponytail: types mirror python/omp-work models.py + api_models.py; automated codegen is a future follow-up.
+
+export type BudgetScopeKind = "account" | "session" | "work" | "tournament" | "role";
+export type BudgetResource = "cash" | "included_credit" | "native_quota" | "local_compute";
+export type ProviderBillingMode = "subscription" | "metered" | "purchased_credit" | "local";
+export type ProviderBalanceProvenance = "provider_observed" | "locally_estimated" | "unknown";
+
+export type ProviderAccount = {
+	account_id: UUID;
+	workspace_id: UUID;
+	provider: string;
+	account_identity: string;
+	entitlement_evidence: string;
+	evidence_observed_at: string;
+	billing_mode: ProviderBillingMode;
+	rate_card_version: string | null;
+	observed_balance: string | null;
+	balance_provenance: ProviderBalanceProvenance;
+	reset_at: string | null;
+	concurrency_limit: number;
+};
+export type ProviderAccountListView = {
+	workspace_id: UUID;
+	accounts: ProviderAccount[];
+};
+
+export type CreateBudgetScopePayload = {
+	scope_id: UUID;
+	parent_scope_id?: UUID | null;
+	kind: BudgetScopeKind;
+	policy_version: string;
+	work_id?: UUID | null;
+	session_id?: string | null;
+	limits: Record<string, string>;
+};
+export type ReserveBudgetPayload = {
+	scope_id: UUID;
+	account_id: UUID;
+	logical_call_id: UUID;
+	transport_attempt_id: UUID;
+	provider: string;
+	model: string;
+	effort: string;
+	resource: BudgetResource;
+	worst_case_drawdown: string;
+	context_limit: number;
+	output_limit: number;
+	expires_at: string;
+	launch_id?: UUID | null;
+};
+export type ClaimBudgetPayload = {
+	reservation_id: UUID;
+	fence: number;
+};
+export type SettleBudgetPayload = {
+	reservation_id: UUID;
+	transport_attempt_id: UUID;
+	fence: number;
+	state: "settled" | "unresolved";
+	actual_drawdown: string;
+	usage?: Record<string, number>;
+	provenance: ProviderBalanceProvenance;
+	provider_request_id?: string | null;
+	outcome: "success" | "error" | "timeout" | "cancelled" | "unknown";
+};
+export type CancelBudgetPayload = {
+	reservation_id: UUID;
+	fence: number;
+	verified_unsent?: boolean;
+};
+export type ExpireBudgetPayload = {
+	reservation_id: UUID;
+	logical_call_id: UUID;
+	transport_attempt_id: UUID;
+	fence: number;
+	expected_state: "reserved_unsent" | "potentially_sent";
+};
+export type IssueFrontierExceptionPayload = {
+	scope_id: UUID;
+	question: string;
+	route: string;
+	effort: string;
+	context_limit: number;
+	output_limit: number;
+	max_attempts: number;
+	resource: BudgetResource;
+	resource_limit: string;
+	expires_at: string;
+};
+export type PutProviderAccountPayload = {
+	account_id: UUID;
+	provider: string;
+	account_identity: string;
+	entitlement_evidence: string;
+	evidence_observed_at: string;
+	billing_mode: ProviderBillingMode;
+	rate_card_version?: string | null;
+	observed_balance?: string | null;
+	balance_provenance: ProviderBalanceProvenance;
+	reset_at?: string | null;
+	concurrency_limit: number;
+};
+
 export type CommandSmokeResult = { command_type: string; passed: boolean };
 export type ReconciliationCounts = {
 	worlds: number;
@@ -705,6 +809,14 @@ export type Command =
 	| { type: "settle_stage_launch"; payload: SettleStageLaunchPayload }
 	| { type: "cancel_stage_launch"; payload: CancelStageLaunchPayload }
 	| { type: "reconcile_stage_launch"; payload: ReconcileStageLaunchPayload }
+	| { type: "create_budget_scope"; payload: CreateBudgetScopePayload }
+	| { type: "reserve_budget"; payload: ReserveBudgetPayload }
+	| { type: "claim_budget"; payload: ClaimBudgetPayload }
+	| { type: "settle_budget"; payload: SettleBudgetPayload }
+	| { type: "cancel_budget"; payload: CancelBudgetPayload }
+	| { type: "expire_budget"; payload: ExpireBudgetPayload }
+	| { type: "issue_frontier_exception"; payload: IssueFrontierExceptionPayload }
+	| { type: "put_provider_account"; payload: PutProviderAccountPayload }
 	| { type: "associate_candidate_source"; payload: AssociateCandidateSourcePayload }
 	| { type: "attest_checkpoint_delivery"; payload: AttestCheckpointDeliveryPayload }
 	| { type: "record_closeout_review"; payload: RecordCloseoutReviewPayload }
@@ -728,7 +840,41 @@ export type CreatedWorkItem = {
 	state: string;
 	row_version: number;
 };
+
+export type BudgetCommandType =
+	| "create_budget_scope"
+	| "reserve_budget"
+	| "claim_budget"
+	| "settle_budget"
+	| "cancel_budget"
+	| "issue_frontier_exception"
+	| "expire_budget";
+
+export type BudgetResult = {
+	type: BudgetCommandType;
+	scope_id?: UUID | null;
+	parent_scope_id?: UUID | null;
+	reservation_id?: UUID | null;
+	transport_attempt_id?: UUID | null;
+	exception_id?: UUID | null;
+	fence?: number | null;
+	state?: string | null;
+	remaining_attempts?: number | null;
+	actual_drawdown?: string | null;
+	overrun?: boolean | null;
+	replayed?: boolean | null;
+};
+
+export type ProviderAccountResult = {
+	type: "put_provider_account";
+	status: "inserted" | "updated" | "unchanged";
+	account_id: UUID;
+	account: ProviderAccount;
+};
+
 export type CommandResult =
+	| BudgetResult
+	| ProviderAccountResult
 	| { type: "create_work_batch"; items: CreatedWorkItem[] }
 	| { type: "create_same_session_child"; item: CreatedWorkItem; receipt: EvidenceReceipt }
 	| { type: "revise_work"; revision_id: UUID; changed: boolean }
@@ -1216,5 +1362,19 @@ export class WorkClient {
 			"GET",
 			`/v1/workspaces/${this.workspaceId}/repositories${query}`,
 		) as Promise<RepositoryListView>;
+	}
+
+	providerAccounts(): Promise<ProviderAccountListView> {
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/provider-accounts`,
+		) as Promise<ProviderAccountListView>;
+	}
+
+	providerAccount(accountId: UUID): Promise<ProviderAccount> {
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/provider-accounts/${encodeURIComponent(accountId)}`,
+		) as Promise<ProviderAccount>;
 	}
 }
