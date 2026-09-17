@@ -5,19 +5,35 @@
  * with no model-transport copy/paste, no agent loop recreation, and no
  * prompt-enforced budget prose.
  */
-import { completeSimple, type Usage } from "@oh-my-pi/pi-ai";
+import { randomUUID } from "node:crypto";
+import { completeSimple, type AssistantMessage, type Usage } from "@oh-my-pi/pi-ai";
+import { sha256Hex } from "@oh-my-pi/pi-work-client";
 import { getAgentDir, Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { formatModelSelectorValue, formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { resolveAuditPolicy } from "./audit-policy";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { nativeStageRouteCandidates, type NativeStageRole, type NativeStageRoute } from "./native-stage-profile";
+import nativePreflightProbePrompt from "./native-preflight-probe.md" with { type: "text" };
 
 export type NativeAuditUsage = Omit<Usage, "cost">;
 
 export function stripUsageCost(usage: Usage | NativeAuditUsage): NativeAuditUsage {
 	const { cost: _cost, ...measured } = usage as unknown as { cost?: unknown } & NativeAuditUsage;
 	return measured;
+}
+
+export interface NativeStagePreflightAttempt {
+	transportAttemptId: string;
+	ordinal: number;
+	route: NativeStageRoute;
+	probeSha256: string;
+	outcome: "selected" | "failed" | "cancelled";
+	stopReason?: string | null;
+	error?: string | null;
+	requests: null;
+	usage?: NativeAuditUsage | null;
+	providerRequestId?: string | null;
 }
 
 export interface NativeAuditRunResult {
@@ -49,6 +65,8 @@ export type NativeStageRunnerOptions = {
 	routes?: readonly NativeStageRoute[];
 	/** Bound immutable route passed from host TCB sealing. */
 	boundRoute?: NativeStageRoute;
+	/** Reports each actual transport preflight probe attempt. */
+	onPreflightAttempt?: (attempt: NativeStagePreflightAttempt) => void | Promise<void>;
 	/** Reports the route that survived credential and transport preflight. */
 	onRouteSelected?: (route: NativeStageRoute) => void;
 	legacyAudit?: boolean;
@@ -114,8 +132,10 @@ export async function prepareNativeStageRunner(
 	} else {
 		routes = routes ?? nativeStageRouteCandidates(ctx.models, options.role);
 	}
+	const probeSha256 = sha256Hex(nativePreflightProbePrompt);
 	let route: NativeStageRoute | undefined;
 	let preflightError: Error | undefined;
+	let ordinal = 0;
 
 	// OMP-251: auditor transport preflight. Launch reservations are budgeted
 	// (3 per attempt); prove credentials + endpoint connectivity BEFORE the
@@ -141,29 +161,120 @@ export async function prepareNativeStageRunner(
 				);
 			}
 		}
-		const probe = await completeSimple(
-			stageModel,
-			{ messages: [{ role: "user", content: "Transport preflight. Reply with the single word OK.", timestamp: Date.now() }] },
-			{ apiKey, maxTokens: 256, temperature: 0, disableReasoning: true, signal },
-		).catch((error: unknown) => {
-			if (signal?.aborted) throw error;
-			preflightError = new Error(
-				options.legacyAudit
-					? `@audit transport preflight failed for ${stageModel.provider}/${stageModel.id}: ${error instanceof Error ? error.message : String(error)}`
-					: `native ${options.role} transport preflight failed for ${stageModel.provider}/${stageModel.id}: ${error instanceof Error ? error.message : String(error)}`,
+
+		const transportAttemptId = randomUUID();
+		const currentOrdinal = ordinal++;
+		let probe: AssistantMessage | undefined;
+		let thrownError: unknown;
+		try {
+			probe = await completeSimple(
+				stageModel,
+				{ messages: [{ role: "user", content: nativePreflightProbePrompt, timestamp: Date.now() }] },
+				{ apiKey, maxTokens: 256, temperature: 0, disableReasoning: true, signal },
 			);
-			return undefined;
-		});
-		if (!probe || probe.stopReason === "error" || probe.stopReason === "aborted") {
-			if (probe) {
-				preflightError = new Error(
-					options.legacyAudit
-						? `@audit transport preflight ${probe.stopReason === "error" ? "error" : probe.stopReason} for ${stageModel.provider}/${stageModel.id}: ${probe.errorMessage || "provider returned no detail"}`
-						: `native ${options.role} transport preflight ${probe.stopReason} for ${stageModel.provider}/${stageModel.id}: ${probe.errorMessage || "provider returned no detail"}`,
-				);
+		} catch (error: unknown) {
+			thrownError = error;
+		}
+
+		if (thrownError !== undefined) {
+			const isAbort =
+				signal?.aborted ||
+				(thrownError instanceof DOMException && thrownError.name === "AbortError") ||
+				(thrownError instanceof Error && thrownError.name === "AbortError");
+			if (isAbort) {
+				const cancelText = options.legacyAudit
+					? `@audit transport preflight cancelled for ${stageModel.provider}/${stageModel.id}`
+					: `native ${options.role} transport preflight cancelled for ${stageModel.provider}/${stageModel.id}`;
+				await options.onPreflightAttempt?.({
+					transportAttemptId,
+					ordinal: currentOrdinal,
+					route: candidate,
+					probeSha256,
+					outcome: "cancelled",
+					stopReason: null,
+					error: cancelText,
+					requests: null,
+					usage: null,
+					providerRequestId: null,
+				});
+				throw thrownError;
+			}
+			const failText = options.legacyAudit
+				? `@audit transport preflight failed for ${stageModel.provider}/${stageModel.id}: ${thrownError instanceof Error ? thrownError.message : String(thrownError)}`
+				: `native ${options.role} transport preflight failed for ${stageModel.provider}/${stageModel.id}: ${thrownError instanceof Error ? thrownError.message : String(thrownError)}`;
+			preflightError = new Error(failText);
+			await options.onPreflightAttempt?.({
+				transportAttemptId,
+				ordinal: currentOrdinal,
+				route: candidate,
+				probeSha256,
+				outcome: "failed",
+				stopReason: null,
+				error: failText,
+				requests: null,
+				usage: null,
+				providerRequestId: null,
+			});
+			continue;
+		}
+
+		if (!probe || probe.stopReason === "error") {
+			const detail = probe?.errorMessage || "provider returned no detail";
+			const failText = options.legacyAudit
+				? `@audit transport preflight error for ${stageModel.provider}/${stageModel.id}: ${detail}`
+				: `native ${options.role} transport preflight error for ${stageModel.provider}/${stageModel.id}: ${detail}`;
+			preflightError = new Error(failText);
+			await options.onPreflightAttempt?.({
+				transportAttemptId,
+				ordinal: currentOrdinal,
+				route: candidate,
+				probeSha256,
+				outcome: "failed",
+				stopReason: probe?.stopReason ?? "error",
+				error: failText,
+				requests: null,
+				usage: probe?.usage ? stripUsageCost(probe.usage) : null,
+				providerRequestId: probe?.responseId ?? null,
+			});
+			continue;
+		}
+
+		if (probe.stopReason === "aborted") {
+			const detail = probe.errorMessage || "provider returned no detail";
+			const abortText = options.legacyAudit
+				? `@audit transport preflight aborted for ${stageModel.provider}/${stageModel.id}: ${detail}`
+				: `native ${options.role} transport preflight aborted for ${stageModel.provider}/${stageModel.id}: ${detail}`;
+			preflightError = new Error(abortText);
+			await options.onPreflightAttempt?.({
+				transportAttemptId,
+				ordinal: currentOrdinal,
+				route: candidate,
+				probeSha256,
+				outcome: "cancelled",
+				stopReason: "aborted",
+				error: abortText,
+				requests: null,
+				usage: probe.usage ? stripUsageCost(probe.usage) : null,
+				providerRequestId: probe.responseId ?? null,
+			});
+			if (signal?.aborted) {
+				throw new DOMException("Native stage preflight cancelled", "AbortError");
 			}
 			continue;
 		}
+
+		await options.onPreflightAttempt?.({
+			transportAttemptId,
+			ordinal: currentOrdinal,
+			route: candidate,
+			probeSha256,
+			outcome: "selected",
+			stopReason: probe.stopReason ?? null,
+			error: null,
+			requests: null,
+			usage: probe.usage ? stripUsageCost(probe.usage) : null,
+			providerRequestId: probe.responseId ?? null,
+		});
 		route = candidate;
 		break;
 	}

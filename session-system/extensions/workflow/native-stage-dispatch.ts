@@ -1,4 +1,4 @@
-import { canonicalJson, payloadHash, sha256Hex, type StageLaunch } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, payloadHash, sha256Hex, type StageLaunch, type StagePreflightUsage } from "@oh-my-pi/pi-work-client";
 import { withFileLock } from "@oh-my-pi/pi-utils";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { join } from "node:path";
@@ -252,6 +252,37 @@ async function dispatchNativeStageLocked(
 		writeRoots: input.writeRoots,
 		routes,
 		boundRoute: input.boundAuditRoute,
+		onPreflightAttempt: async attempt => {
+			const routeFields = modelRouteFields(attempt.route);
+			const sessionId = ctx.sessionManager?.getSessionId?.() ?? null;
+			await backend.recordStagePreflight({
+				work_id: item.work_id,
+				revision_id: item.revision.revision_id,
+				candidate_id: identity.candidateId,
+				grant_id: input.grantId ?? null,
+				attempt_id: input.attemptId ?? null,
+				session_id: sessionId,
+				role: input.role,
+				tool_call_id: input.toolCallId,
+				task_sha256: taskSha256,
+				probe_sha256: attempt.probeSha256,
+				transport_attempt_id: attempt.transportAttemptId,
+				ordinal: attempt.ordinal,
+				requested_selector: routeFields.requestedSelector,
+				requested_provider: routeFields.requestedProvider,
+				requested_model: routeFields.requestedModel,
+				requested_api: routeFields.requestedApi,
+				requested_effort: routeFields.requestedEffort,
+				requested_wire_model: routeFields.requestedWireModel,
+				is_fallback: routeFields.isFallback,
+				outcome: attempt.outcome,
+				stop_reason: attempt.stopReason ?? null,
+				error: attempt.error ?? null,
+				requests: null,
+				usage: attempt.usage ? (stripUsageCost(attempt.usage) as StagePreflightUsage) : null,
+				provider_request_id: attempt.providerRequestId ?? null,
+			});
+		},
 		onRouteSelected: selected => {
 			resolvedRouteFields = modelRouteFields(selected);
 		},

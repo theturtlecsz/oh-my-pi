@@ -39,6 +39,8 @@ import {
 	type ExecutionProvenanceEnvelope,
 	type ExecutionView,
 	type StageLaunch,
+	type StagePreflight,
+	type RecordStagePreflightPayload,
 	type CandidateSourceVersion,
 } from "@oh-my-pi/pi-work-client";
 import {
@@ -1808,6 +1810,12 @@ export function createWorkBackend(
 				...(transport.failed ? { transport_failed: true } : { transport_payload: transport.payload }),
 			});
 			return outcomeOf(result);
+		},
+
+		async recordStagePreflight(payload: RecordStagePreflightPayload): Promise<StagePreflight> {
+			const result = await run("record_stage_preflight", payload);
+			if (result.type !== "record_stage_preflight" || !result.preflight) throw new Error("native stage preflight returned no record");
+			return result.preflight;
 		},
 
 		async reserveStageLaunch(input: NativeStageLaunchInput): Promise<StageLaunch> {

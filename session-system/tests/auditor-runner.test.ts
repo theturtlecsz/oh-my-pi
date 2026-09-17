@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import type { ToolCallEventResult } from "@oh-my-pi/pi-coding-agent/extensibility/shared-events";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { WORK_CONTRACT_SHA256, sha256Hex, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope } from "@oh-my-pi/pi-work-client";
+import { WORK_CONTRACT_SHA256, sha256Hex, type Candidate, type WorkClient, type ExecutionProvenanceEnvelope, type RecordStagePreflightPayload } from "@oh-my-pi/pi-work-client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { z } from "zod";
@@ -20,7 +20,7 @@ import { applyExtensionNewSessionSetup } from "../../packages/coding-agent/src/m
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { createExtensionModelQuery } from "../../packages/coding-agent/src/extensibility/extensions/model-api";
-import { prepareNativeAuditRunner, prepareNativeStageRunner } from "../extensions/workflow/auditor-runner";
+import { prepareNativeAuditRunner, prepareNativeStageRunner, type NativeStagePreflightAttempt } from "../extensions/workflow/auditor-runner";
 import { resolveAuditPolicy } from "../extensions/workflow/audit-policy";
 import type { WorkflowBackend } from "../extensions/workflow/backend";
 import { createWorkflowHost } from "../extensions/workflow/host";
@@ -156,7 +156,9 @@ function attachStageLaunchFixture<T extends Record<string, unknown>>(
 	transitions?: StageLaunchTransitions,
 ): T {
 	const stageLaunches = new Map<string, InMemoryStageLaunch>();
-	let nextId = 1;
+	const stagePreflights: Record<string, unknown>[] = [];
+	let nextLaunchId = 1;
+	let nextPreflightId = 1;
 
 	const backendRecord = mockBackend as Record<string, unknown>;
 	const workClient = backendRecord.workClient as Record<string, unknown> | undefined;
@@ -198,19 +200,36 @@ function attachStageLaunchFixture<T extends Record<string, unknown>>(
 			const existing = origWorkflow ? await origWorkflow(workKey) : {};
 			const rows = Array.from(stageLaunches.values());
 			const existingRows = Array.isArray(existing.stage_launches) ? existing.stage_launches : [];
+			const existingPreflights = Array.isArray(existing.stage_preflights) ? existing.stage_preflights : [];
 			return {
 				...existing,
 				stage_launches: [...existingRows, ...rows],
+				stage_preflights: [...existingPreflights, ...stagePreflights],
 			};
 		};
 	}
 
 	backendRecord.stageLaunches = stageLaunches;
+	backendRecord.stagePreflights = stagePreflights;
+
+	backendRecord.recordStagePreflight = async (payload: RecordStagePreflightPayload) => {
+		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
+		callLog?.push("recordStagePreflight");
+		const preflight_id = `preflight-${nextPreflightId++}`;
+		const preflight = {
+			preflight_id,
+			workspace_id: (backendRecord.workspaceId as string) ?? "ws-1",
+			observed_at: new Date().toISOString(),
+			...payload,
+		};
+		stagePreflights.push(preflight);
+		return preflight;
+	};
 
 	backendRecord.reserveStageLaunch = async (input: StageReservationInput) => {
 		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
 		callLog?.push("reserveStageLaunch");
-		const launch_id = `launch-${nextId++}`;
+		const launch_id = `launch-${nextLaunchId++}`;
 		const row: InMemoryStageLaunch = {
 			launch_id,
 			work_key: input.workKey ?? input.work_key ?? "OMP-1",
@@ -777,10 +796,20 @@ describe("native auditor runner (OMP-168)", () => {
 			modelRegistry: registry, taskDepth: 0,
 		} as unknown as ExtensionContext;
 
-		const runner = await prepareNativeStageRunner(fakeCtx, { role: "implement" });
+		const attempts: NativeStagePreflightAttempt[] = [];
+		const runner = await prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			onPreflightAttempt: attempt => {
+				attempts.push(attempt);
+			},
+		});
 		await runner("edit", "native-fallback");
 		expect(runSubprocessSpy.mock.calls[0]?.[0].modelOverride).toBe("openai-codex/gpt-5.6-luna:high");
 		expect(registry.getApiKey).toHaveBeenCalledTimes(2);
+		expect(attempts).toHaveLength(1);
+		expect(attempts[0].ordinal).toBe(0);
+		expect(attempts[0].route.model.provider).toBe("openai-codex");
+		expect(attempts[0].outcome).toBe("selected");
 	});
 
 	test("native implement preflight falls back after primary transport failure", async () => {
@@ -822,8 +851,248 @@ describe("native auditor runner (OMP-168)", () => {
 			models: { resolve: () => undefined },
 			modelRegistry: registry, taskDepth: 0,
 		} as unknown as ExtensionContext;
-		await expect(prepareNativeStageRunner(fakeCtx, { role: "implement" }, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+		const attempts: NativeStagePreflightAttempt[] = [];
+		await expect(prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			onPreflightAttempt: attempt => {
+				attempts.push(attempt);
+			},
+		}, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
 		expect(registry.getApiKey).not.toHaveBeenCalled();
+		expect(attempts).toHaveLength(0);
+	});
+
+	test("native transport preflight records ordered distinct attempt UUIDs and awaits callback before selection or execution", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const luna = nativeStageModel({ id: "gpt-5.6-luna", provider: "openai-codex", api: "openai-codex-responses" });
+		vi.spyOn(ai, "completeSimple")
+			.mockRejectedValueOnce(new Error("503 no capacity"))
+			.mockResolvedValueOnce({
+				stopReason: "stop",
+				content: [{ type: "text", text: "OK" }],
+				responseId: "resp-2",
+				usage: {
+					input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12,
+					cost: { input: 0.001, output: 0.001, cacheRead: 0, cacheWrite: 0, total: 0.002 },
+				},
+			} as never);
+		const order: string[] = [];
+		const attempts: NativeStagePreflightAttempt[] = [];
+		let selectedRoute: NativeStageRoute | undefined;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async () => {
+			order.push("subprocess");
+			return {
+				index: 0, id: "test-run", agent: "implementer", agentSource: "bundled", task: "edit", exitCode: 0,
+				output: "{}", stderr: "", truncated: false, durationMs: 1, tokens: 2, requests: 1,
+				resolvedModel: "openai-codex/gpt-5.6-luna:high", resolvedModelIsFallback: true,
+			} as executorModule.SingleResult;
+		});
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: (selector: string) => selector.startsWith("google-antigravity/") ? gemini : selector.startsWith("openai-codex/") ? luna : undefined },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		const runner = await prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			onPreflightAttempt: attempt => {
+				order.push(`attempt:${attempt.ordinal}`);
+				attempts.push(attempt);
+			},
+			onRouteSelected: route => {
+				order.push("routeSelected");
+				selectedRoute = route;
+			},
+		});
+		await runner("edit", "test-run");
+
+		expect(order).toEqual(["attempt:0", "attempt:1", "routeSelected", "subprocess"]);
+		expect(attempts).toHaveLength(2);
+		const [att0, att1] = attempts;
+		expect(att0.ordinal).toBe(0);
+		expect(att0.outcome).toBe("failed");
+		expect(att0.stopReason).toBeNull();
+		expect(att0.error).toContain("503 no capacity");
+		expect(att0.requests).toBeNull();
+		expect(att0.usage).toBeNull();
+		expect(att0.providerRequestId).toBeNull();
+
+		expect(att1.ordinal).toBe(1);
+		expect(att1.outcome).toBe("selected");
+		expect(att1.stopReason).toBe("stop");
+		expect(att1.error).toBeNull();
+		expect(att1.requests).toBeNull();
+		expect(att1.providerRequestId).toBe("resp-2");
+		expect(att1.usage).toEqual({ input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12 });
+		expect("cost" in (att1.usage as Record<string, unknown>)).toBe(false);
+
+		const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+		expect(att0.transportAttemptId).toMatch(uuidPattern);
+		expect(att1.transportAttemptId).toMatch(uuidPattern);
+		expect(att0.transportAttemptId).not.toBe(att1.transportAttemptId);
+		expect(selectedRoute?.model.id).toBe("gpt-5.6-luna");
+	});
+
+	test("in-band preflight error preserves returned cost-free usage including zero, while thrown failure has null usage", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const luna = nativeStageModel({ id: "gpt-5.6-luna", provider: "openai-codex", api: "openai-codex-responses" });
+
+		vi.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce({
+				stopReason: "error",
+				errorMessage: "rate limit exceeded",
+				responseId: "resp-err",
+				usage: {
+					input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			} as never)
+			.mockRejectedValueOnce(new Error("socket hang up"));
+
+		const attempts: NativeStagePreflightAttempt[] = [];
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: (selector: string) => selector.startsWith("google-antigravity/") ? gemini : selector.startsWith("openai-codex/") ? luna : undefined },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		await expect(prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			onPreflightAttempt: attempt => {
+				attempts.push(attempt);
+			},
+		})).rejects.toThrow("socket hang up");
+
+		expect(attempts).toHaveLength(2);
+		const [errAtt, throwAtt] = attempts;
+		expect(errAtt.outcome).toBe("failed");
+		expect(errAtt.stopReason).toBe("error");
+		expect(errAtt.error).toContain("rate limit exceeded");
+		expect(errAtt.usage).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 });
+		expect("cost" in (errAtt.usage as Record<string, unknown>)).toBe(false);
+		expect(errAtt.providerRequestId).toBe("resp-err");
+		expect(errAtt.requests).toBeNull();
+
+		expect(throwAtt.outcome).toBe("failed");
+		expect(throwAtt.stopReason).toBeNull();
+		expect(throwAtt.error).toContain("socket hang up");
+		expect(throwAtt.usage).toBeNull();
+		expect(throwAtt.providerRequestId).toBeNull();
+		expect(throwAtt.requests).toBeNull();
+	});
+
+	test("abort after send records cancelled preflight attempt before rejection", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const controller = new AbortController();
+		vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
+			controller.abort();
+			throw new DOMException("The operation was aborted", "AbortError");
+		});
+
+		const attempts: NativeStagePreflightAttempt[] = [];
+		let routeSelected = false;
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => gemini },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		await expect(prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			onPreflightAttempt: attempt => {
+				attempts.push(attempt);
+			},
+			onRouteSelected: () => {
+				routeSelected = true;
+			},
+		}, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+
+		expect(attempts).toHaveLength(1);
+		expect(attempts[0].outcome).toBe("cancelled");
+		expect(attempts[0].stopReason).toBeNull();
+		expect(attempts[0].error).toBe("native implement transport preflight cancelled for google-antigravity/gemini-3.8-flash");
+		expect(attempts[0].requests).toBeNull();
+		expect(attempts[0].usage).toBeNull();
+		expect(routeSelected).toBe(false);
+	});
+
+	test("record callback failure prevents route selection and subprocess", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "OK" }],
+		} as never);
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess");
+		let routeSelected = false;
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => gemini },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		await expect(prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			onPreflightAttempt: async () => {
+				throw new Error("WorkService unavailable");
+			},
+			onRouteSelected: () => {
+				routeSelected = true;
+			},
+		})).rejects.toThrow("WorkService unavailable");
+
+		expect(routeSelected).toBe(false);
+		expect(runSubprocessSpy).not.toHaveBeenCalled();
+	});
+
+	test("probe hash matches exact sent content", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		let sentContent = "";
+		vi.spyOn(ai, "completeSimple").mockImplementation(async (_model, context) => {
+			sentContent = context.messages[0]?.content as string;
+			return { stopReason: "stop", content: [{ type: "text", text: "OK" }] } as never;
+		});
+		let attemptRecorded: NativeStagePreflightAttempt | undefined;
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => gemini },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		await prepareNativeStageRunner(fakeCtx, {
+			role: "implement",
+			onPreflightAttempt: attempt => {
+				attemptRecorded = attempt;
+			},
+		});
+
+		expect(sentContent).toBe("Transport preflight. Reply with the single word OK.");
+		expect(attemptRecorded?.probeSha256).toBe("968ec1efc411d085cb287574524382c932fb0a435154bb15fa175aaf1e471617");
+		expect(attemptRecorded?.probeSha256).toBe(sha256Hex(sentContent));
 	});
 
 	test("native stage refuses a subprocess that reports an unallowlisted served model", async () => {

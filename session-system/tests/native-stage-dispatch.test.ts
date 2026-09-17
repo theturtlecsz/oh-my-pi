@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { canonicalJson, sha256Hex, type StageLaunch, type WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, type RecordStagePreflightPayload, type StageLaunch, type StagePreflight, type WorkItemView } from "@oh-my-pi/pi-work-client";
 import * as auditorRunner from "../extensions/workflow/auditor-runner";
 import { dispatchNativeStage } from "../extensions/workflow/native-stage-dispatch";
 import type { KnowledgeBridge } from "../extensions/workflow/knowledge-bridge";
@@ -625,5 +625,245 @@ describe("native stage dispatch", () => {
 		expect("cost" in (result.run.usage as Record<string, unknown>)).toBe(false);
 		expect("unknownTopLevelKey" in (result.run.usage as Record<string, unknown>)).toBe(false);
 		expect("extraOrchKey" in ((result.run.usage as Record<string, unknown>).orchestration as Record<string, unknown>)).toBe(false);
+	});
+
+	test("records ordered preflight attempts with authoritative identities before reservation", async () => {
+		const events: string[] = [];
+		const preflightPayloads: RecordStagePreflightPayload[] = [];
+		let reservationInput: Record<string, unknown> | undefined;
+		const selectedModel = model();
+		const prepared = launch();
+		const settled = launch("settled");
+
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			await options.onPreflightAttempt?.({
+				transportAttemptId: "11111111-1111-4111-8111-111111111111",
+				ordinal: 0,
+				route: {
+					requestedSelector: "google-antigravity/gemini-3.8-flash:high",
+					model: { id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli" } as Model,
+					effort: "high",
+					isFallback: false,
+				},
+				probeSha256: "f".repeat(64),
+				outcome: "failed",
+				stopReason: null,
+				error: "503 unavailable",
+				requests: null,
+				usage: null,
+				providerRequestId: null,
+			});
+			await options.onPreflightAttempt?.({
+				transportAttemptId: "22222222-2222-4222-8222-222222222222",
+				ordinal: 1,
+				route: {
+					requestedSelector: "openai-codex/gpt-5.6-luna:high",
+					model: selectedModel,
+					effort: "high",
+					isFallback: true,
+				},
+				probeSha256: "f".repeat(64),
+				outcome: "selected",
+				stopReason: "stop",
+				error: null,
+				requests: null,
+				usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+				providerRequestId: "resp-prov-2",
+			});
+			options.onRouteSelected?.({
+				requestedSelector: "openai-codex/gpt-5.6-luna:high",
+				model: selectedModel,
+				effort: "high",
+				isFallback: true,
+			});
+			return async (_task, _id) => {
+				events.push("runner");
+				await options.onHandoff?.();
+				events.push("provider");
+				return { started: true, payload: "{\"ok\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+			};
+		});
+		prepareRestore = () => prepare.mockRestore();
+
+		const fakeWorkClient = {
+			workItem: async () => item(),
+			workflow: async () => ({ stage_launches: [settled] }),
+		};
+		const backend = {
+			workspaceId,
+			workClient: fakeWorkClient,
+			recordStagePreflight: async payload => {
+				events.push("preflight");
+				preflightPayloads.push(payload);
+				return {
+					preflight_id: "preflight-1",
+					workspace_id: workspaceId,
+					observed_at: new Date().toISOString(),
+					...payload,
+				} as StagePreflight;
+			},
+			reserveStageLaunch: async input => {
+				events.push("reserve");
+				reservationInput = input;
+				return prepared;
+			},
+			handoffStageLaunch: async () => {
+				events.push("handoff");
+				return { ...prepared, status: "handed_off" as const };
+			},
+			settleStageLaunch: async () => {
+				events.push("settle");
+				return settled;
+			},
+		} as unknown as WorkflowBackend;
+
+		const ctx = {
+			models: {
+				resolve: () => selectedModel,
+				list: () => [selectedModel],
+				current: () => selectedModel,
+				family: () => "openai-codex/gpt-5.6-luna",
+			},
+			sessionManager: {
+				getSessionId: () => "session-1",
+			},
+		} as unknown as ExtensionContext;
+
+		const result = await dispatchNativeStage(ctx, backend, undefined, {
+			workKey: "OMP-1",
+			role: "implement",
+			taskBody: "edit sealed file",
+			toolCallId: "call-1",
+			grantId,
+		});
+
+		expect(events).toEqual(["preflight", "preflight", "reserve", "runner", "handoff", "provider", "settle"]);
+		expect(result.launch.status).toBe("settled");
+		expect(preflightPayloads).toHaveLength(2);
+
+		expect(preflightPayloads[0]).toEqual({
+			work_id: workId,
+			revision_id: revisionId,
+			candidate_id: null,
+			grant_id: grantId,
+			attempt_id: null,
+			session_id: "session-1",
+			role: "implement",
+			tool_call_id: "call-1",
+			task_sha256: reservationInput?.taskSha256 as string,
+			probe_sha256: "f".repeat(64),
+			transport_attempt_id: "11111111-1111-4111-8111-111111111111",
+			ordinal: 0,
+			requested_selector: "google-antigravity/gemini-3.8-flash:high",
+			requested_provider: "google-antigravity",
+			requested_model: "gemini-3.8-flash",
+			requested_api: "google-gemini-cli",
+			requested_effort: "high",
+			requested_wire_model: "gemini-3.8-flash",
+			is_fallback: false,
+			outcome: "failed",
+			stop_reason: null,
+			error: "503 unavailable",
+			requests: null,
+			usage: null,
+			provider_request_id: null,
+		});
+
+		expect(preflightPayloads[1]).toEqual({
+			work_id: workId,
+			revision_id: revisionId,
+			candidate_id: null,
+			grant_id: grantId,
+			attempt_id: null,
+			session_id: "session-1",
+			role: "implement",
+			tool_call_id: "call-1",
+			task_sha256: reservationInput?.taskSha256 as string,
+			probe_sha256: "f".repeat(64),
+			transport_attempt_id: "22222222-2222-4222-8222-222222222222",
+			ordinal: 1,
+			requested_selector: "openai-codex/gpt-5.6-luna:high",
+			requested_provider: "openai-codex",
+			requested_model: "gpt-5.6-luna",
+			requested_api: "openai-codex-responses",
+			requested_effort: "high",
+			requested_wire_model: "gpt-5.6-luna",
+			is_fallback: true,
+			outcome: "selected",
+			stop_reason: "stop",
+			error: null,
+			requests: null,
+			usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+			provider_request_id: "resp-prov-2",
+		});
+		expect("cost" in (preflightPayloads[1].usage as Record<string, unknown>)).toBe(false);
+	});
+
+	test("dispatch record failure prevents reservation, handoff, and runner execution", async () => {
+		const events: string[] = [];
+		const selectedModel = model();
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => {
+			await options.onPreflightAttempt?.({
+				transportAttemptId: "33333333-3333-4333-8333-333333333333",
+				ordinal: 0,
+				route: {
+					requestedSelector: "openai-codex/gpt-5.6-luna:high",
+					model: selectedModel,
+					effort: "high",
+					isFallback: false,
+				},
+				probeSha256: "f".repeat(64),
+				outcome: "selected",
+				stopReason: "stop",
+				error: null,
+				requests: null,
+				usage: null,
+				providerRequestId: "resp-1",
+			});
+			return async (_task, _id) => {
+				events.push("runner");
+				await options.onHandoff?.();
+				events.push("provider");
+				return { started: true, payload: "{\"ok\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+			};
+		});
+		prepareRestore = () => prepare.mockRestore();
+
+		const backend = {
+			workspaceId,
+			workClient: {
+				workItem: async () => item(),
+			},
+			recordStagePreflight: async () => {
+				throw new Error("WorkService preflight storage failed");
+			},
+			reserveStageLaunch: async () => {
+				events.push("reserve");
+				return launch();
+			},
+			handoffStageLaunch: async () => {
+				events.push("handoff");
+				return launch("handed_off");
+			},
+		} as unknown as WorkflowBackend;
+
+		const ctx = {
+			models: {
+				resolve: () => selectedModel,
+				list: () => [selectedModel],
+				current: () => selectedModel,
+				family: () => "openai-codex/gpt-5.6-luna",
+			},
+		} as unknown as ExtensionContext;
+
+		await expect(dispatchNativeStage(ctx, backend, undefined, {
+			workKey: "OMP-1",
+			role: "implement",
+			taskBody: "edit",
+			toolCallId: "call-1",
+			grantId,
+		})).rejects.toThrow("WorkService preflight storage failed");
+
+		expect(events).toEqual([]);
 	});
 });
