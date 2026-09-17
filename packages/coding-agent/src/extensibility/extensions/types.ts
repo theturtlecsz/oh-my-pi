@@ -53,6 +53,7 @@ import type {
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
 import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
+import type { ResolvedModelRoleValue } from "../../config/model-resolver";
 import type { EditToolDetails } from "../../edit";
 import type { PythonResult } from "../../eval/py/executor";
 import type { BashResult } from "../../exec/bash-executor";
@@ -125,6 +126,7 @@ import type { SlashCommandInfo } from "../slash-commands";
 
 export type { OverlayHandle, OverlayOptions } from "@oh-my-pi/pi-tui";
 export type { AppKeybinding, KeybindingsManager } from "../../config/keybindings";
+export type { ResolvedModelRoleValue } from "../../config/model-resolver";
 export type { ExecOptions, ExecResult } from "../../exec/exec";
 export type { AgentToolResult, AgentToolUpdateCallback };
 
@@ -458,6 +460,11 @@ export interface ExtensionModelQuery {
 	 */
 	resolve(spec: string): Model | undefined;
 	/**
+	 * Resolve a model string or role alias to its full resolution outcome, including
+	 * the resolved model, explicit thinking level, matched pattern index, and warning.
+	 */
+	resolveSelection(spec: string): ResolvedModelRoleValue;
+	/**
 	 * Opaque lineage token for "are these the same family?" comparisons — every Claude
 	 * point release shares a token, Claude and GPT differ. Backed by catalog canonical
 	 * identity. Compare it; do not persist it (the vocabulary tracks new releases).
@@ -647,6 +654,13 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	loadMode?: ToolLoadMode;
 	/** If true, tool may stage deferred changes that require explicit resolve/discard. */
 	deferrable?: boolean;
+	/**
+	 * Concurrency mode for tool scheduling when multiple calls are in one turn.
+	 * Same semantics as `AgentTool.concurrency`: `"shared"` (default) runs
+	 * alongside other shared tools; `"exclusive"` runs alone and later calls wait
+	 * for it; a function resolves the mode per call from the prepared arguments.
+	 */
+	concurrency?: "shared" | "exclusive" | ((args: Partial<Static<TParams>>) => "shared" | "exclusive");
 	/** Tool approval tier. Defaults to `"exec"` when omitted.
 	 *  `"read"`: read-only operations. `"write"`: mutations. `"exec"`: code execution. */
 	approval?: ToolApproval;
@@ -1706,6 +1720,8 @@ export interface ExtensionDeliveryPayload {
 	display?: boolean;
 	details?: unknown;
 	triggerTurn?: boolean;
+	/** Queue into caller's next turn; used when another continuation already owns its prompt. */
+	deferUntilNextTurn?: boolean;
 }
 
 /** Resolves only after the message was injected (streaming or idle); rejects on

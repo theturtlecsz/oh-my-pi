@@ -775,7 +775,7 @@ describe("pending-ops claim lifecycle and housekeeping", () => {
 		expect(await Bun.file(claim.path).text()).toBe(bytesBefore);
 	});
 
-	test("getPendingExecutionClaims leaves unadmitted grant-bound claims untouched and unfetched", async () => {
+	test("getPendingExecutionClaims leaves unadmitted begin/activate claims untouched and unfetched while reconciling a committed complete_execution_item claim", async () => {
 		const workspaceId = "00000000-0000-7000-8000-000000000000";
 		const ownerId = "00000000-0000-7000-8000-000000000002";
 		const grantId = "00000000-0000-7000-8000-000000000003";
@@ -1051,18 +1051,29 @@ describe("pending-ops claim lifecycle and housekeeping", () => {
 
 		const recovered = await backend.getPendingExecutionClaims!(grantId);
 
+		// begin/activate omit defaulted keys: never fetched, never rewritten.
 		expect(postCount).toBe(0);
-		expect(operationsRequested).toEqual([]);
+		expect(operationsRequested).toEqual([completeOpId]);
 		expect(await Bun.file(activateClaim.path).text()).toBe(activateBytesBefore);
 		expect(await Bun.file(beginClaim.path).text()).toBe(beginBytesBefore);
-		expect(await Bun.file(completeClaim.path).text()).toBe(completeBytesBefore);
 
-		// Returned projection preserves lines 2110–2112: begin_execution included with undefined result
+		// complete_execution_item (OMP-246): the committed operation is read once by
+		// identity and the claim is resolved on disk with the stored result — no POST.
+		expect(await Bun.file(completeClaim.path).text()).not.toBe(completeBytesBefore);
+		const resolvedComplete = JSON.parse(await Bun.file(completeClaim.path).text()) as { result?: { type?: string }; resolved_at?: string };
+		expect(resolvedComplete.result?.type).toBe("complete_execution_item");
+		expect(typeof resolvedComplete.resolved_at).toBe("string");
+
+		// Returned projection: begin_execution included with undefined result,
+		// activate excluded, the reconciled completion included with its result.
 		const returnedBegin = recovered.find(r => r.command.type === "begin_execution");
 		expect(returnedBegin).toBeDefined();
 		expect(returnedBegin!.result).toBeUndefined();
 		expect(recovered.find(r => r.command.type === "activate_execution_item")).toBeUndefined();
-		expect(recovered.find(r => r.command.type === "complete_execution_item")).toBeUndefined();
+		expect(recovered.find(r => r.command.type === "complete_execution_item")?.result).toMatchObject({
+			type: "complete_execution_item",
+			grant: { grant_id: grantId, grant_version: 2 },
+		});
 	});
 
 	test("pre-OMP-277 set_execution_state claim without reason key is refused as identity mismatch", async () => {

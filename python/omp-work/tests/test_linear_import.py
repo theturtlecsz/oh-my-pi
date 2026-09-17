@@ -55,10 +55,13 @@ from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.models import RelationEdge, RelationKind
 from omp_work.v1.semantics import would_create_cycle
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
-    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+        reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+    ),
+    pytest.mark.usefixtures("prospective_contract"),
+]
 
 
 def _free_port() -> int:

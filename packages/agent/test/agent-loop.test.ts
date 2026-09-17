@@ -4456,6 +4456,208 @@ describe("agentLoopContinue with AgentMessage", () => {
 		expect(turnEndCalls).toEqual([{ willContinue: false, signalAborted: false }]);
 	});
 
+	/**
+	 * OMP-246 at the loop seam. The session raises TERMINAL_TOOL_RESULT_ABORT_REASON
+	 * from its afterToolCall hook the moment a terminal result lands, which is
+	 * before the loop has observed that record's `endTurn` marker (and a terminal
+	 * `yield` carries no marker at all). A trailing call in the same response must
+	 * then be paired with the synthetic "not executed" result of an ended turn,
+	 * never with the run-abort result reserved for a genuine external abort.
+	 */
+	function toolEndsOf(events: AgentEvent[]): Array<Extract<AgentEvent, { type: "tool_execution_end" }>> {
+		return events.filter(
+			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
+		);
+	}
+	function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
+		const block = result.content[0];
+		if (block?.type !== "text" || typeof block.text !== "string") throw new Error("tool result must be text");
+		return block.text;
+	}
+	function exclusiveRecorder(name: string, executed: string[], details?: Record<string, unknown>) {
+		const schema = type({ value: "string" });
+		const tool: AgentTool<typeof schema, Record<string, unknown>> = {
+			name,
+			label: name,
+			description: `${name} tool`,
+			parameters: schema,
+			concurrency: "exclusive",
+			async execute(_toolCallId, params) {
+				executed.push(`${name}:${params.value}`);
+				return {
+					content: [{ type: "text", text: `${name}:${params.value}` }],
+					details: details ?? { value: params.value },
+				};
+			},
+		};
+		return tool;
+	}
+
+	it("pairs a trailing call fenced by a terminal endTurn result with the ended-turn synthetic result, not a run abort (OMP-246)", async () => {
+		const controller = new AbortController();
+		const executed: string[] = [];
+		const submit = exclusiveRecorder("submit", executed, { endTurn: true });
+		const record = exclusiveRecorder("record", executed);
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [submit, record] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "call-submit", name: "submit", arguments: { value: "report" } },
+						{ type: "toolCall", id: "call-record", name: "record", arguments: { value: "late-write" } },
+					],
+				},
+				{ content: ["must not be reached"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			// The session's controller half: abort with the terminal reason from
+			// inside the hook, before the loop sees the marker on the finished record.
+			afterToolCall: async ctx => {
+				const details = ctx.result.details as { endTurn?: unknown } | undefined;
+				if (!ctx.isError && details?.endTurn === true) controller.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop(
+			[createUserMessage("report, then write")],
+			context,
+			config,
+			controller.signal,
+			mock.stream,
+		);
+		for await (const event of stream) events.push(event);
+
+		expect(executed).toEqual(["submit:report"]);
+		expect(mock.calls).toHaveLength(1);
+		const toolEnds = toolEndsOf(events);
+		expect(toolEnds.map(e => e.toolCallId)).toEqual(["call-submit", "call-record"]);
+		expect(toolEnds[0].isError).toBe(false);
+		expect(toolEnds[1].isError).toBe(true);
+		expect(toolEnds[1].result.details).toEqual({ __synthetic: true, source: "interrupt_skipped", executed: false });
+		const fenced = textOf(toolEnds[1].result);
+		expect(fenced).toContain("Tool was not executed: an earlier tool result in this response ended the turn");
+		expect(fenced).not.toContain("run was aborted");
+		expect(fenced).not.toContain("Skipped due to");
+		// A terminal abort is a graceful end, not a user interrupt: no aborted assistant boundary.
+		expect(
+			events.some(
+				e => e.type === "message_end" && e.message.role === "assistant" && e.message.stopReason === "aborted",
+			),
+		).toBe(false);
+		const persisted = (await stream.result()).filter((m): m is ToolResultMessage => m.role === "toolResult");
+		expect(persisted.map(m => m.toolCallId)).toEqual(["call-submit", "call-record"]);
+		expect(persisted[1]?.details).toEqual({ __synthetic: true, source: "interrupt_skipped", executed: false });
+	});
+
+	it("pairs a trailing call behind a marker-less terminal abort with the ended-turn synthetic result (OMP-246)", async () => {
+		const controller = new AbortController();
+		const executed: string[] = [];
+		// A terminal yield: successful, no `endTurn` marker, so the loop's own
+		// marker path never marks the turn; only the abort reason can.
+		const yieldTool = exclusiveRecorder("yield", executed, { status: "success" });
+		const record = exclusiveRecorder("record", executed);
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [yieldTool, record] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "call-yield", name: "yield", arguments: { value: "final" } },
+						{ type: "toolCall", id: "call-record", name: "record", arguments: { value: "late-write" } },
+					],
+				},
+				{ content: ["must not be reached"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			afterToolCall: async ctx => {
+				if (ctx.toolCall.name === "yield" && !ctx.isError) controller.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop(
+			[createUserMessage("yield, then write")],
+			context,
+			config,
+			controller.signal,
+			mock.stream,
+		);
+		for await (const event of stream) events.push(event);
+
+		expect(executed).toEqual(["yield:final"]);
+		expect(mock.calls).toHaveLength(1);
+		const toolEnds = toolEndsOf(events);
+		expect(toolEnds.map(e => e.toolCallId)).toEqual(["call-yield", "call-record"]);
+		expect(toolEnds[0].isError).toBe(false);
+		expect(toolEnds[1].isError).toBe(true);
+		expect(toolEnds[1].result.details).toEqual({ __synthetic: true, source: "interrupt_skipped", executed: false });
+		const fenced = textOf(toolEnds[1].result);
+		expect(fenced).toContain("Tool was not executed: an earlier tool result in this response ended the turn");
+		expect(fenced).not.toContain("run was aborted");
+		expect(fenced).not.toContain("Skipped due to");
+	});
+
+	it("keeps the run-abort pairing for a trailing call skipped by a genuine external abort", async () => {
+		const controller = new AbortController();
+		const executed: string[] = [];
+		const schema = type({ value: "string" });
+		const slow: AgentTool<typeof schema, { value: string }> = {
+			name: "slow",
+			label: "Slow",
+			description: "Completes while the user aborts the run",
+			parameters: schema,
+			concurrency: "exclusive",
+			async execute(_toolCallId, params) {
+				executed.push(`slow:${params.value}`);
+				controller.abort("Stopped by user");
+				return { content: [{ type: "text", text: `slow:${params.value}` }], details: { value: params.value } };
+			},
+		};
+		const record = exclusiveRecorder("record", executed);
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [slow, record] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "call-slow", name: "slow", arguments: { value: "first" } },
+						{ type: "toolCall", id: "call-record", name: "record", arguments: { value: "second" } },
+					],
+				},
+				{ content: ["must not be observed"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("go")], context, config, controller.signal, mock.stream);
+		for await (const event of stream) events.push(event);
+
+		// The completed tool keeps its real result; the not-yet-started sibling is
+		// paired with the run-abort result carrying the user's reason, with no
+		// synthetic discriminator and no steering wording.
+		expect(executed).toEqual(["slow:first"]);
+		const toolEnds = toolEndsOf(events);
+		expect(toolEnds.map(e => e.toolCallId)).toEqual(["call-slow", "call-record"]);
+		expect(toolEnds[0].isError).toBe(false);
+		expect(toolEnds[1].isError).toBe(true);
+		expect(textOf(toolEnds[1].result)).toBe("Tool was not executed because the run was aborted: Stopped by user.");
+		expect(toolEnds[1].result.details).toEqual({});
+		expect(textOf(toolEnds[1].result)).not.toContain("ended the turn");
+		expect(textOf(toolEnds[1].result)).not.toContain("Skipped due to");
+		// External abort semantics are untouched: the run still closes on an aborted assistant boundary.
+		expect(
+			events.some(
+				e => e.type === "message_end" && e.message.role === "assistant" && e.message.stopReason === "aborted",
+			),
+		).toBe(true);
+	});
+
 	it("preserves an external abort boundary when a completed tool ignores cancellation", async () => {
 		const toolSchema = type({ value: "string" });
 		const controller = new AbortController();

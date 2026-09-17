@@ -104,6 +104,32 @@ export function targetsLocalSandbox(session: ToolSession, targetPath: string): b
 	}
 }
 
+/** Enforce host supplied native implementer roots before any write router or
+ * file operation runs. Realpath both existing targets and their parents so a
+ * symlink cannot turn an allowed lexical path into an outside write. */
+export function enforceNativeStageWrite(session: ToolSession, targetPath: string): void {
+	const roots = session.nativeStageWriteRoots;
+	if (!roots || roots.length === 0) return;
+	let resolved: string;
+	try {
+		resolved = path.resolve(resolvePlanPath(session, targetPath));
+	} catch {
+		throw new ToolError("Native stage write target could not be resolved.");
+	}
+	const canonical = (candidate: string): string => {
+		try {
+			return fs.realpathSync.native(candidate);
+		} catch {
+			const parent = path.dirname(candidate);
+			if (parent === candidate) return candidate;
+			return path.join(canonical(parent), path.basename(candidate));
+		}
+	};
+	const target = canonical(resolved);
+	if (roots.some(root => isWithinRoot(target, canonical(path.resolve(root))))) return;
+	throw new ToolError("Native stage write target is outside sealed implementation paths.");
+}
+
 /**
  * Resolve a write/edit target to its absolute filesystem path, honoring the
  * `local://` and `vault://` schemes. Plain paths resolve against the session cwd.

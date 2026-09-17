@@ -44,6 +44,8 @@ export class YieldQueue {
 	readonly #options: YieldQueueOptions;
 	readonly #dispatchers = new Map<string, StoredDispatcher>();
 	readonly #entries = new Map<string, StoredEntry[]>();
+	/** Streaming deliveries committed to live context but awaiting journal persistence. */
+	readonly #committed = new Map<AgentMessage, StoredEntry[]>();
 	#idleFlushPending = false;
 
 	constructor(options: YieldQueueOptions) {
@@ -127,7 +129,7 @@ export class YieldQueue {
 				try {
 					if (!this.#options.injectStreaming) throw new Error("Streaming injection is unavailable");
 					this.#options.injectStreaming(built.message);
-					this.#resolveEntries(built.entries);
+					this.#committed.set(built.message, built.entries);
 				} catch (error) {
 					const dispatchError = error instanceof Error ? error : new Error(String(error));
 					this.#rejectEntries(built.entries, dispatchError);
@@ -190,7 +192,18 @@ export class YieldQueue {
 		}
 		for (const entries of this.#entries.values()) this.#rejectEntries(entries, error);
 		this.#entries.clear();
+		for (const entries of this.#committed.values()) this.#rejectEntries(entries, error);
+		this.#committed.clear();
 		this.#idleFlushPending = false;
+	}
+
+	/** Settle receipts after host appends committed message to session journal. */
+	settlePersisted(message: AgentMessage, error?: Error): void {
+		const entries = this.#committed.get(message);
+		if (!entries) return;
+		this.#committed.delete(message);
+		if (error) this.#rejectEntries(entries, error);
+		else this.#resolveEntries(entries);
 	}
 
 	/** Clear a scheduled-flush latch when its host task is cancelled before running. */
@@ -264,7 +277,7 @@ export class YieldQueue {
 				value: () => {
 					if (settled) return;
 					settled = true;
-					this.#resolveEntries(built.entries);
+					this.#committed.set(built.message, built.entries);
 				},
 			},
 			[ASIDE_MESSAGE_DISCARD]: {

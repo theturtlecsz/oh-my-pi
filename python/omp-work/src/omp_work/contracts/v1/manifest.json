@@ -10,6 +10,7 @@
     "decisions/0006-batch-completion-rider-authority.md",
     "decisions/0007-omp-147-bookends-closure.md",
     "decisions/0008-execution-cycle-authority.md",
+    "decisions/0009-native-foundation-reads-and-event-cursor.md",
     "examples.json",
     "manifest.json",
     "schema.json"

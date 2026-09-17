@@ -40,10 +40,13 @@ from omp_work.v1.service import Principal, WorkError, WorkService
 from omp_work.v1.store import PostgresWorkStore, WorkStoreError
 from pg_native import native_postgres, seed_authority
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
-    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+        reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+    ),
+    pytest.mark.usefixtures("prospective_contract"),
+]
 
 BOUNDARY = datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)
 RAW_HASH = "a" * 64

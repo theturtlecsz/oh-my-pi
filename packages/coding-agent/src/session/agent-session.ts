@@ -3704,14 +3704,22 @@ export class AgentSession {
 			// Prewalk's plan nudge is a one-run steering instruction. Persisting it would
 			// resurrect the consumed prompt on resume, fork, or any context rebuild.
 			if (!isPrewalkPlanNudge(message)) {
-				const entryId = this.sessionManager.appendCustomMessageEntry(
-					message.customType,
-					message.content,
-					message.display,
-					message.details,
-					message.attribution ?? "agent",
-				);
+				let entryId: string;
+				try {
+					entryId = this.sessionManager.appendCustomMessageEntry(
+						message.customType,
+						message.content,
+						message.display,
+						message.details,
+						message.attribution ?? "agent",
+					);
+				} catch (error) {
+					this.yieldQueue.settlePersisted(message, error instanceof Error ? error : new Error(String(error)));
+					throw error;
+				}
 				this.#recordPreparedMessage(message, entryId);
+				// Yield-queue receipts settle only after journal entry precedes receipt appends.
+				this.yieldQueue.settlePersisted(message);
 			}
 			if (message.role === "custom" && message.customType === "ttsr-injection") {
 				this.#ttsr.markInjectedFromDetails(message.details);
@@ -9328,7 +9336,7 @@ export class AgentSession {
 			EXTENSION_DELIVERY_MESSAGE_TYPE,
 			stamped,
 		);
-		this.yieldQueue.requestIdleFlush();
+		if (!stamped.deferUntilNextTurn) this.yieldQueue.requestIdleFlush();
 		return delivered;
 	}
 
@@ -10345,9 +10353,21 @@ export class AgentSession {
 		return this.#maintenance.handoff(customInstructions, options);
 	}
 
+	/**
+	 * A tool result is terminal when it is a successful `yield` that did not
+	 * return a typed lease, or when any successful tool result carries
+	 * `details.endTurn === true` — the extension's explicit "end the turn now"
+	 * marker (e.g. an accepted `begin_execution_review` submission, whose
+	 * frozen candidate must not be touched by later calls in the same
+	 * response). Error results are never terminal.
+	 */
 	#isTerminalYieldToolResult(event: { toolName: string; isError?: boolean; result?: { details?: unknown } }): boolean {
-		if (event.toolName !== "yield" || event.isError) return false;
+		if (event.isError) return false;
 		const details = event.result?.details;
+		if (typeof details === "object" && details !== null && "endTurn" in details && details.endTurn === true) {
+			return true;
+		}
+		if (event.toolName !== "yield") return false;
 		if (!details || typeof details !== "object") return true;
 		const record = details as Record<string, unknown>;
 		return !(

@@ -21,7 +21,8 @@ from omp_work import contract_sha256
 from omp_work.operations.config import OperationsConfig
 from omp_work.operations.database import bootstrap
 from omp_work.operations.fingerprints import service_runtime_fingerprint
-from omp_work.v1.canonical import sha256, text_sha256
+from omp_work.v1.canonical import command_sha256, sha256, text_sha256
+from omp_work.v1.models import CommandEnvelope
 from omp_work.v1.server import create_app
 from omp_work.v1.store import PostgresWorkStore
 from pg_native import native_postgres, seed_authority
@@ -271,6 +272,7 @@ def _execution_grant_audited_attempt(
     after_begin: Callable[[], None] | None = None,
     owner_started_at: str | None = None,
     authorization_kind: str = "execution",
+    candidate_tree_sha: str | None = None,
 ) -> tuple[str, str, str, str, str, str, str, dict]:
     item = _create(service, workspace_id, title, description="The request description")
     work_id = item["work_id"]
@@ -417,7 +419,7 @@ def _execution_grant_audited_attempt(
                 "diff_sha256": "5" * 64,
                 "authorization_kind": authorization_kind,
                 "execution_grant_id": grant_id,
-                "candidate_tree_sha": final_cand_sha,
+                "candidate_tree_sha": candidate_tree_sha or final_cand_sha,
                 "original_request_sha256": text_sha256("The request description"),
                 "criteria_sha256": sha256(["AC-1: criteria one"]),
                 "plan_stamp_sha256": plan_stamp_sha,
@@ -485,6 +487,189 @@ def _create(service, workspace_id, title: str = "item", **extra) -> dict:
     )
     assert status == 200, body
     return body["result"]["items"][0]
+
+
+def test_native_stage_launch_is_idempotent_and_preserves_response_loss_state(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    grant_id, work_id, revision_id, candidate_id, attempt_id, _push_id, _judge, item = _execution_grant_audited_attempt(
+        service, workspace_id, "native stage launch"
+    )
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    request_sha = "a" * 64
+    task_sha = "b" * 64
+    payload = {
+        "work_id": work_id,
+        "revision_id": revision_id,
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "grant_id": grant_id,
+        "role": "audit",
+        "request_sha256": request_sha,
+        "tool_call_id": "native-stage-loss-1",
+        "task_sha256": task_sha,
+        "prepared_context_sha256": "c" * 64,
+        "requested_selector": "kimi-code/k3:high",
+        "requested_provider": "kimi-code",
+        "requested_model": "k3",
+        "requested_api": "openai-completions",
+        "requested_effort": "high",
+        "requested_wire_model": "k3",
+    }
+    status, body = _command(service, workspace_id, {"type": "reserve_stage_launch", "payload": payload})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    launch_id = body["result"]["launch"]["launch_id"]
+    status, replay = _command(
+        service,
+        workspace_id,
+        {"type": "reserve_stage_launch", "payload": payload},
+    )
+    assert status == 200 and replay["result"]["status"] == "replayed", replay
+    assert replay["result"]["launch"]["launch_id"] == launch_id
+
+    raced = dict(payload, request_sha256="9" * 64, tool_call_id="native-stage-loss-race")
+    status, body = _command(service, workspace_id, {"type": "reserve_stage_launch", "payload": raced})
+    assert status == 409 and body["error"]["code"] == "stage_launch_conflict", body
+
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "handoff_stage_launch", "payload": {"launch_id": launch_id, "task_sha256": task_sha}},
+    )
+    assert status == 200 and body["result"]["launch"]["status"] == "handed_off", body
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "reconcile_stage_launch",
+            "payload": {"launch_id": launch_id, "reason": "host response lost after handoff"},
+        },
+    )
+    assert status == 200 and body["result"]["launch"]["status"] == "interrupted", body
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "settle_stage_launch",
+            "payload": {
+                "launch_id": launch_id,
+                "outcome_sha256": "d" * 64,
+                "outcome": {"started": True},
+            },
+        },
+    )
+    assert status == 400 and body["error"]["code"] == "invalid_request", body
+
+    stale = dict(payload, tool_call_id="native-stage-stale-1", candidate_id=str(uuid4()))
+    status, body = _command(service, workspace_id, {"type": "reserve_stage_launch", "payload": stale})
+    assert status == 409 and body["error"]["code"] == "stale_evidence", body
+
+
+def test_native_stage_settlement_replays_exact_outcome(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    grant_id, work_id, revision_id, candidate_id, attempt_id, _push_id, _judge, item = _execution_grant_audited_attempt(
+        service, workspace_id, "native stage settled replay", candidate_tree_sha="3" * 40
+    )
+    task_sha = "e" * 64
+    payload = {
+        "work_id": work_id,
+        "revision_id": revision_id,
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "grant_id": grant_id,
+        "role": "audit",
+        "request_sha256": "f" * 64,
+        "tool_call_id": "native-stage-settle-replay",
+        "task_sha256": task_sha,
+        "prepared_context_sha256": "1" * 64,
+        "requested_selector": "kimi-code/k3:high",
+        "requested_provider": "kimi-code",
+        "requested_model": "k3",
+        "requested_api": "openai-completions",
+        "requested_effort": "high",
+        "requested_wire_model": "k3",
+    }
+    status, body = _command(service, workspace_id, {"type": "reserve_stage_launch", "payload": payload})
+    assert status == 200, body
+    launch_id = body["result"]["launch"]["launch_id"]
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "handoff_stage_launch", "payload": {"launch_id": launch_id, "task_sha256": task_sha}},
+    )
+    assert status == 200, body
+    outcome = {"started": True, "payload": "{\"verdict\":\"PASS\"}"}
+    settle = {
+        "type": "settle_stage_launch",
+        "payload": {
+            "launch_id": launch_id,
+            "outcome_sha256": sha256(outcome),
+            "outcome": outcome,
+            "served_selector": "kimi-code/k3:high",
+            "served_model": "k3",
+        },
+    }
+    status, body = _command(service, workspace_id, settle)
+    assert status == 200 and body["result"]["status"] == "applied", body
+    status, replay = _command(service, workspace_id, settle)
+    assert status == 200 and replay["result"]["status"] == "replayed", replay
+    assert replay["result"]["launch"]["outcome"] == outcome
+
+
+def test_candidate_source_association_binds_current_candidate_and_hash_domains(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    _grant_id, work_id, revision_id, candidate_id, _attempt_id, _push_id, _judge, item = _execution_grant_audited_attempt(
+        service, workspace_id, "candidate source association"
+    )
+    repository_id = str(uuid4())
+    with psycopg.connect(
+        **service.config.connection_kwargs("omp_work_app"), autocommit=True
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                (str(workspace_id), str(OWNER)),
+            )
+            cur.execute(
+                "INSERT INTO omp_work.repositories(repository_id,workspace_id,key,name,url,provenance) VALUES (%s,%s,%s,%s,%s,%s)",
+                (repository_id, str(workspace_id), "native-source", "native-source", "https://example.invalid/native", json.dumps({"source": "test"})),
+            )
+            cur.execute(
+                "UPDATE omp_work.work_items SET repository_id=%s WHERE workspace_id=%s AND work_id=%s",
+                (repository_id, str(workspace_id), work_id),
+            )
+    fields = {
+        "candidate_id": candidate_id,
+        "workspace_id": str(workspace_id),
+        "work_id": work_id,
+        "revision_id": revision_id,
+        "repository_id": repository_id,
+        "source_version_id": "source-version-1",
+        "snapshot_id": "sha256:" + "a" * 64,
+        "base_commit": "1" * 40,
+        "analyzed_commit": "2" * 40,
+        "tree_sha": "3" * 40,
+        "source_manifest_sha256": "4" * 64,
+        "snapshot_manifest_sha256": "5" * 64,
+        "content_sha256": "6" * 64,
+        "producer": "enola/native-runtime",
+        "producer_receipt_sha256": "7" * 64,
+    }
+    payload_fields = {key: value for key, value in fields.items() if key != "workspace_id"}
+    payload = dict(payload_fields, association_sha256=sha256(fields))
+    status, body = _command(service, workspace_id, {"type": "associate_candidate_source", "payload": payload})
+    assert status == 200 and body["result"]["status"] == "applied", body
+    status, replay = _command(service, workspace_id, {"type": "associate_candidate_source", "payload": payload})
+    assert status == 200 and replay["result"]["status"] == "replayed", replay
+    assert replay["result"]["association"]["snapshot_id"] == fields["snapshot_id"]
+
+    forged = dict(payload, source_manifest_sha256="8" * 64)
+    status, body = _command(service, workspace_id, {"type": "associate_candidate_source", "payload": forged})
+    assert status == 409 and body["error"]["code"] == "stale_evidence", body
 
 
 def _plan(service, workspace_id, item: dict, candidate_hash: str | None = None) -> dict:
@@ -3808,7 +3993,10 @@ def _tcb_manifest():
     return sha256(manifest), manifest
 
 
-def test_execution_lookup_accepts_grant_id_work_id_and_key(service) -> None:
+@pytest.mark.parametrize("mismatch_first", [False, True])
+def test_execution_lookup_accepts_grant_id_work_id_and_key(
+    service, mismatch_first: bool
+) -> None:
     workspace_id = uuid4()
     _grant(service, workspace_id)
     item = _create(
@@ -3819,40 +4007,53 @@ def test_execution_lookup_accepts_grant_id_work_id_and_key(service) -> None:
     )
     grant_id = str(uuid4())
     judge_sha, judge_manifest = _tcb_manifest()
+    payload = {
+        "grant_id": grant_id,
+        "provenance": {
+            "owner_input_id": str(uuid4()),
+            "owner_session_id": "session-lookup",
+            "normalized_command": f"/execute {item['key']}",
+            "workspace_id": str(workspace_id),
+            "repository": "oh-my-pi",
+            "nonce": str(uuid4()),
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "remote_ref": "refs/heads/main",
+        "mode": "single",
+        "items": [
+            {
+                "work_id": item["work_id"],
+                "revision_id": item["revision_id"],
+                "position": 0,
+                "original_request": "Lookup this execution by grant, work id, or key",
+                "original_request_sha256": text_sha256(
+                    "Lookup this execution by grant, work id, or key"
+                ),
+                "initial_git_baseline": "0" * 40,
+            }
+        ],
+        "expected_focus_version": 0,
+        "judge_sha256": judge_sha,
+        "judge_manifest": judge_manifest,
+    }
+    if mismatch_first:
+        mismatch_status, mismatch_body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "begin_execution",
+                "payload": {**payload, "judge_sha256": "0" * 64},
+            },
+        )
+        assert mismatch_status == 409, mismatch_body
+        assert mismatch_body["error"]["code"] == "execution_judge_drift"
+
     status, body = _command(
         service,
         workspace_id,
         {
             "type": "begin_execution",
-            "payload": {
-                "grant_id": grant_id,
-                "provenance": {
-                    "owner_input_id": str(uuid4()),
-                    "owner_session_id": "session-lookup",
-                    "normalized_command": f"/execute {item['key']}",
-                    "workspace_id": str(workspace_id),
-                    "repository": "oh-my-pi",
-                    "nonce": str(uuid4()),
-                    "issued_at": datetime.now(timezone.utc).isoformat(),
-                },
-                "remote_ref": "refs/heads/main",
-                "mode": "single",
-                "items": [
-                    {
-                        "work_id": item["work_id"],
-                        "revision_id": item["revision_id"],
-                        "position": 0,
-                        "original_request": "Lookup this execution by grant, work id, or key",
-                        "original_request_sha256": text_sha256(
-                            "Lookup this execution by grant, work id, or key"
-                        ),
-                        "initial_git_baseline": "0" * 40,
-                    }
-                ],
-                "expected_focus_version": 0,
-                "judge_sha256": judge_sha,
-                "judge_manifest": judge_manifest,
-            },
+            "payload": payload,
         },
     )
     assert status == 200, body
@@ -7468,6 +7669,129 @@ def test_complete_execution_item_allows_retained_terminal_predecessor(service) -
         f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
     ).json()
     assert after["relations"] == workflow["relations"]
+    assert after["item"]["state"] == "DONE"
+
+
+def test_completed_execution_refuses_second_finalize_and_preserves_candidate(service) -> None:
+    """A submitted execution candidate cannot be replaced after completion."""
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    (
+        grant_id,
+        work_id,
+        revision_id,
+        candidate_id,
+        attempt_id,
+        push_receipt_id,
+        judge_sha,
+        item,
+    ) = _execution_grant_audited_attempt(service, workspace_id, title="Second finalize fence")
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    execution = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{grant_id}",
+        headers=_owner_headers(workspace_id),
+    ).json()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": execution["grant"]["grant_version"],
+                "work_id": work_id,
+                "attempt_id": attempt_id,
+                "evidence": _build_completion_evidence_from_view(workflow, push_receipt_id),
+                "judge_sha256": judge_sha,
+            },
+        },
+    )
+    assert status == 200, body
+    completed = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    assert completed["item"]["state"] == "DONE"
+    assert completed["item"]["candidate"]["candidate_id"] == candidate_id
+
+    status, body = _finalize(
+        service,
+        workspace_id,
+        item,
+        candidate_id,
+        commit="d" * 40,
+        final_id=str(uuid4()),
+        candidate_hash="e" * 64,
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "stale_evidence"
+    after = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    assert after["item"]["state"] == "DONE"
+    assert after["item"]["candidate"]["candidate_id"] == candidate_id
+
+
+def test_complete_execution_request_hash_replays_exact_operation(service) -> None:
+    """Native completion stores canonical request bytes and replays one operation."""
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    (
+        grant_id,
+        work_id,
+        revision_id,
+        _candidate_id,
+        attempt_id,
+        push_receipt_id,
+        judge_sha,
+        item,
+    ) = _execution_grant_audited_attempt(service, workspace_id, title="Completion replay hash")
+    workflow = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
+    execution = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{grant_id}",
+        headers=_owner_headers(workspace_id),
+    ).json()
+    envelope = {
+        "api_version": "work.omp.dev/v1",
+        "workspace_id": str(workspace_id),
+        "operation_id": str(uuid4()),
+        "request_id": str(uuid4()),
+        "correlation_id": str(uuid4()),
+        "command": {
+            "type": "complete_execution_item",
+            "payload": {
+                "grant_id": grant_id,
+                "expected_grant_version": execution["grant"]["grant_version"],
+                "work_id": work_id,
+                "attempt_id": attempt_id,
+                "evidence": _build_completion_evidence_from_view(workflow, push_receipt_id),
+                "judge_sha256": judge_sha,
+            },
+        },
+    }
+    expected_request_sha = command_sha256(CommandEnvelope.model_validate(envelope))
+    first = service.client.post(
+        "/v1/commands", headers=_owner_headers(workspace_id), json=envelope
+    )
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body["receipt"]["state"] == "applied"
+    assert first_body["receipt"]["request_sha256"] == expected_request_sha
+
+    replay = service.client.post(
+        "/v1/commands", headers=_owner_headers(workspace_id), json=envelope
+    )
+    assert replay.status_code == 200, replay.text
+    replay_body = replay.json()
+    assert replay_body["receipt"]["state"] == "replayed"
+    assert replay_body["receipt"]["request_sha256"] == expected_request_sha
+    assert replay_body["result"] == first_body["result"]
+    after = service.client.get(
+        f"/v1/work-items/{item['key']}/workflow", headers=_owner_headers(workspace_id)
+    ).json()
     assert after["item"]["state"] == "DONE"
 
 

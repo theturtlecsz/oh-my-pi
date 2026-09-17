@@ -38,6 +38,8 @@ import {
 	type ExecutionMode,
 	type ExecutionProvenanceEnvelope,
 	type ExecutionView,
+	type StageLaunch,
+	type CandidateSourceVersion,
 } from "@oh-my-pi/pi-work-client";
 import {
 	type BackendHooks,
@@ -76,6 +78,7 @@ import {
 	type WorkflowCheckpoint,
 	type ExecutionSnapshot,
 	type ExecutionChildren,
+	type NativeStageLaunchInput,
 } from "./backend";
 import { pendingOpsDir, type WorkClientConfig } from "./config";
 import { candidateDrift, type CandidateDriftShape, freezeCandidateCommit, headCommit, pushCandidate } from "./git";
@@ -518,19 +521,26 @@ export function buildCompletionEvidence(
 
 /** Execution mutations reconciled at startup/resume. Only types whose client
  *  payload emits every service-model field, so payloadHash(envelope) equals the
- *  stored receipt request_sha256 (canonical.py command_sha256 over model_dump),
- *  and which are whole-process qualified (test_installed_execution_recovery.py).
- *  begin_execution / activate_execution_item omit defaulted keys
- *  (project_id, expected_project_id, expected_blocker_ids) and
- *  complete_execution_item is not installed-qualified: those claims stay
- *  skipped here exactly as before OMP-277. */
+ *  stored receipt request_sha256 (canonical.py command_sha256 over model_dump).
+ *  complete_execution_item qualifies: buildCompletionEvidence emits every
+ *  CompletionEvidence key (nullable ones as null), and a committed completion
+ *  whose response was lost must resolve by operation identity at the next
+ *  session start so a queue grant can advance (OMP-246). begin_execution /
+ *  activate_execution_item omit defaulted keys (project_id,
+ *  expected_project_id, expected_blocker_ids): those claims stay skipped here
+ *  exactly as before OMP-277. */
 type ReconciledExecutionCommand = Extract<
 	Command,
-	{ type: "seal_execution_criteria" | "stamp_execution_plan" | "set_execution_state" }
+	{ type: "seal_execution_criteria" | "stamp_execution_plan" | "set_execution_state" | "complete_execution_item" }
 >;
 
 function isReconciledExecutionCommand(cmd: Command): cmd is ReconciledExecutionCommand {
-	return cmd.type === "seal_execution_criteria" || cmd.type === "stamp_execution_plan" || cmd.type === "set_execution_state";
+	return (
+		cmd.type === "seal_execution_criteria" ||
+		cmd.type === "stamp_execution_plan" ||
+		cmd.type === "set_execution_state" ||
+		cmd.type === "complete_execution_item"
+	);
 }
 
 export function createWorkBackend(
@@ -1800,6 +1810,86 @@ export function createWorkBackend(
 			return outcomeOf(result);
 		},
 
+		async reserveStageLaunch(input: NativeStageLaunchInput): Promise<StageLaunch> {
+			const result = await run("reserve_stage_launch", {
+				work_id: input.workId,
+				...(input.revisionId !== undefined ? { revision_id: input.revisionId } : {}),
+				...(input.candidateId !== undefined ? { candidate_id: input.candidateId } : {}),
+				...(input.attemptId !== undefined ? { attempt_id: input.attemptId } : {}),
+				...(input.grantId !== undefined ? { grant_id: input.grantId } : {}),
+				role: input.role,
+				request_sha256: input.requestSha256,
+				tool_call_id: input.toolCallId,
+				task_sha256: input.taskSha256,
+				prepared_context_sha256: input.preparedContextSha256,
+				requested_selector: input.requestedSelector,
+				requested_provider: input.requestedProvider,
+				requested_model: input.requestedModel,
+				requested_api: input.requestedApi,
+				requested_effort: input.requestedEffort,
+				requested_wire_model: input.requestedWireModel,
+				...(input.resolvedSelector !== undefined ? { resolved_selector: input.resolvedSelector } : {}),
+				...(input.resolvedProvider !== undefined ? { resolved_provider: input.resolvedProvider } : {}),
+				...(input.resolvedModel !== undefined ? { resolved_model: input.resolvedModel } : {}),
+				...(input.isFallback !== undefined ? { is_fallback: input.isFallback } : {}),
+				...(input.fallbackReason !== undefined ? { fallback_reason: input.fallbackReason } : {}),
+			});
+			if (result.type !== "reserve_stage_launch" || !result.launch) throw new Error("native stage reservation returned no launch");
+			return result.launch;
+		},
+
+		async handoffStageLaunch(launchId: string, taskSha256: string): Promise<StageLaunch> {
+			const result = await run("handoff_stage_launch", { launch_id: launchId, task_sha256: taskSha256 });
+			if (result.type !== "handoff_stage_launch" || !result.launch) throw new Error("native stage handoff returned no launch");
+			return result.launch;
+		},
+
+		async settleStageLaunch(input: { launchId: string; outcomeSha256: string; outcome: Record<string, unknown>; servedSelector?: string | null; servedModel?: string | null }): Promise<StageLaunch> {
+			const result = await run("settle_stage_launch", {
+				launch_id: input.launchId,
+				outcome_sha256: input.outcomeSha256,
+				outcome: input.outcome,
+				...(input.servedSelector !== undefined ? { served_selector: input.servedSelector } : {}),
+				...(input.servedModel !== undefined ? { served_model: input.servedModel } : {}),
+			});
+			if (result.type !== "settle_stage_launch" || !result.launch) throw new Error("native stage settlement returned no launch");
+			return result.launch;
+		},
+
+		async cancelStageLaunch(launchId: string, reason: string): Promise<StageLaunch> {
+			const result = await run("cancel_stage_launch", { launch_id: launchId, reason });
+			if (result.type !== "cancel_stage_launch" || !result.launch) throw new Error("native stage cancellation returned no launch");
+			return result.launch;
+		},
+
+		async reconcileStageLaunch(launchId: string, reason: string): Promise<StageLaunch> {
+			const result = await run("reconcile_stage_launch", { launch_id: launchId, reason });
+			if (result.type !== "reconcile_stage_launch" || !result.launch) throw new Error("native stage reconciliation returned no launch");
+			return result.launch;
+		},
+
+		async associateCandidateSource(input): Promise<CandidateSourceVersion> {
+			const result = await run("associate_candidate_source", {
+				candidate_id: input.candidateId,
+				work_id: input.workId,
+				revision_id: input.revisionId,
+				repository_id: input.repositoryId,
+				source_version_id: input.sourceVersionId,
+				snapshot_id: input.snapshotId,
+				base_commit: input.baseCommit,
+				...(input.analyzedCommit !== undefined ? { analyzed_commit: input.analyzedCommit } : {}),
+				...(input.treeSha !== undefined ? { tree_sha: input.treeSha } : {}),
+				source_manifest_sha256: input.sourceManifestSha256,
+				snapshot_manifest_sha256: input.snapshotManifestSha256,
+				content_sha256: input.contentSha256,
+				association_sha256: input.associationSha256,
+				producer: input.producer,
+				producer_receipt_sha256: input.producerReceiptSha256,
+			});
+			if (result.type !== "associate_candidate_source" || !result.association) throw new Error("candidate source association returned no association");
+			return result.association;
+		},
+
 		async pendingDeliveries(key: string): Promise<CloseEventView[]> {
 			const view = await client.workflow(key);
 			const latestByEvent = new Map<string, string>();
@@ -2118,7 +2208,7 @@ export function createWorkBackend(
 				const env = record.envelope as CommandEnvelope | undefined;
 				const cmd = env?.command;
 				const res = record.result as CommandResult | undefined;
-				if (cmd && (cmd.type === "set_execution_state" || cmd.type === "begin_execution")) {
+				if (cmd && (cmd.type === "set_execution_state" || cmd.type === "begin_execution" || cmd.type === "complete_execution_item")) {
 					results.push({ command: cmd, result: res });
 				}
 			}

@@ -240,6 +240,14 @@ export function headCommit(cwd: string): string | null {
 	return head.ok && /^[0-9a-f]{40,64}$/.test(head.out) ? head.out : null;
 }
 
+/** Git tree identity for one exact commit. This is distinct from the
+ * candidate payload hash, which also includes sealed-path metadata. */
+export function treeSha(cwd: string, commit: string): string | null {
+	if (!/^[0-9a-f]{40,64}$/.test(commit)) return null;
+	const tree = runGit(cwd, ["rev-parse", `${commit}^{tree}`]);
+	return tree.ok && /^[0-9a-f]{40,64}$/.test(tree.out) ? tree.out : null;
+}
+
 /** First commit before a candidate's implementation range. */
 export function parentCommit(cwd: string, commit: string): string | null {
 	const parent = runGit(cwd, ["rev-parse", `${commit}^`]);

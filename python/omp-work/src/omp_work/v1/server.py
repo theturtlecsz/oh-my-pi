@@ -146,13 +146,34 @@ def create_app(
         }
 
     def read_route(
-        request: Request, workspace_id: UUID, kind: str, value: str
+        request: Request,
+        workspace_id: UUID,
+        kind: str,
+        value: str = "",
+        *,
+        selector: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+        after_sequence: int | None = None,
+        through_sequence: int | None = None,
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
             principal = _principal(request, capabilities_dir)
             return JSONResponse(
-                jsonable_encoder(service.read(principal, workspace_id, kind, value))
+                jsonable_encoder(
+                    service.read(
+                        principal,
+                        workspace_id,
+                        kind,
+                        value,
+                        selector=selector,
+                        limit=limit,
+                        cursor=cursor,
+                        after_sequence=after_sequence,
+                        through_sequence=through_sequence,
+                    )
+                )
             )
         except WorkError as error:
             return JSONResponse(
@@ -182,6 +203,90 @@ def create_app(
         x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
     ) -> JSONResponse:
         return read_route(request, x_omp_workspace_id, "workflow", key)
+
+    @app.get("/v1/work-items/{key}/revisions")
+    def work_item_revisions(
+        request: Request,
+        key: str,
+        x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
+    ) -> JSONResponse:
+        return read_route(request, x_omp_workspace_id, "revisions", key)
+
+    @app.get("/v1/work-items/{key}/revisions/{revision_selector}")
+    def work_item_revision(
+        request: Request,
+        key: str,
+        revision_selector: str,
+        x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
+    ) -> JSONResponse:
+        return read_route(
+            request,
+            x_omp_workspace_id,
+            "revision",
+            key,
+            selector=revision_selector,
+        )
+
+    @app.get("/v1/receipts/{receipt_id}")
+    def receipt(
+        request: Request,
+        receipt_id: UUID,
+        x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
+    ) -> JSONResponse:
+        return read_route(request, x_omp_workspace_id, "receipt", str(receipt_id))
+
+    @app.get("/v1/workspaces/{workspace_id}/work-items")
+    def work_items(
+        request: Request,
+        workspace_id: UUID,
+        cursor: str | None = None,
+        limit: int = Query(100, ge=1, le=500),
+    ) -> JSONResponse:
+        return read_route(
+            request,
+            workspace_id,
+            "work_items",
+            "",
+            limit=limit,
+            cursor=cursor,
+        )
+
+    @app.get("/v1/workspaces/{workspace_id}/events")
+    def events(
+        request: Request,
+        workspace_id: UUID,
+        cursor: str | None = None,
+        after_sequence: int | None = Query(None, ge=0),
+        through_sequence: int | None = Query(None, ge=0),
+        limit: int = Query(100, ge=1, le=500),
+    ) -> JSONResponse:
+        return read_route(
+            request,
+            workspace_id,
+            "events",
+            "",
+            limit=limit,
+            cursor=cursor,
+            after_sequence=after_sequence,
+            through_sequence=through_sequence,
+        )
+
+    @app.get("/v1/workspaces/{workspace_id}/repositories")
+    def repositories(
+        request: Request,
+        workspace_id: UUID,
+        cursor: str | None = Query(None),
+        limit: int = Query(100, ge=1, le=500),
+    ) -> JSONResponse:
+        return read_route(
+            request,
+            workspace_id,
+            "repositories",
+            "",
+            cursor=cursor,
+            limit=limit,
+        )
+
 
     @app.get("/v1/workspaces/{workspace_id}/tree")
     def tree(request: Request, workspace_id: UUID) -> JSONResponse:

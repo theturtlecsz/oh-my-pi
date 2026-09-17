@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Generator
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Literal
@@ -33,6 +34,7 @@ from installed_runtime_support import (
 )
 from omp_work.operations.config import OperationsConfig
 from omp_work.v1.api_models import CommandResponse
+from omp_work.v1.models import LIVE_CLOSE_ATTEMPT_STATES
 from pg_native import native_postgres, seed_authority
 from psycopg.rows import dict_row
 from test_workflow_service import _build_completion_evidence_from_view, _receipt
@@ -51,13 +53,38 @@ class FirstRunCutMiss(AssertionError):
     """Observed first-run completion did not satisfy the frozen cut; preserve and retry fresh."""
 
 
+Checkpoint = Literal["review", "resume", "persisted", "task-active", "complete"]
+
+# Scripted auditor verdict (judgment scripted; transport, runner and ledger real).
+# Same five-section shape the execute-cycle smoke settles with.
+SCRIPTED_PASS_REPORT = (
+    "VERDICT: PASS\n\nFINDINGS\n(none)\n\nACCEPTANCE COVERAGE\n"
+    "AC-1 result.txt contains after\n\nOUT OF SCOPE\nnone\n\nCHECKS RUN\n"
+    "scripted local provider: no checks run, verdict scripted\n\nREMAINING QUESTIONS\nnone"
+)
+MAX_COMPLETION_REVIEW_CALLS = 8
+# Upper bound on how long the provider holds the response to the request that
+# carries the settled "Audit PASS recorded" tool result while the test driver
+# scripts the owner merge (fast-forward of the disposable bare remote). The
+# driver's work is a workflow GET, a journal read and three git commands; the
+# bound only turns a driver failure into a fixture error instead of a hang.
+OWNER_MERGE_RELEASE_TIMEOUT_S = 60
+# The execute continuation prompt's own heading
+# (session-system/extensions/workflow/execute-prompt.md): the only input that
+# may drive the completion review forward.
+EXECUTE_CONTINUATION_MARKER = "Autonomous Delivery Cycle (/execute)"
+# Text the controller injects through the receipt-backed checkpoint delivery:
+# the service-rendered close-attempt event and the digest's pending bookend.
+CHECKPOINT_TURN_MARKERS = ("CHECKPOINT DELIVERY PENDING", "CLOSE ATTEMPT — ")
+
+
 class RecoveryProvider:
     """Pause a real HTTP request after production review returned its tool result."""
 
     def __init__(
         self,
         root: Path,
-        checkpoint: Literal["review", "resume", "persisted", "task-active"],
+        checkpoint: Checkpoint,
         progress: bool = False,
         task_fault: TaskFault = "child-request",
     ):
@@ -71,6 +98,30 @@ class RecoveryProvider:
         self.barrier = threading.Event()
         self.release = threading.Event()
         self.recovered = threading.Event()
+        # checkpoint "complete": the controller's own review -> audit -> complete path.
+        self.pass_recorded = threading.Event()
+        # Where the settled "Audit PASS recorded" tool result was first seen in
+        # a request's history (the host returns it with `endTurn`, so it is
+        # never the latest message of any provider request; see
+        # `observe_audit_pass`).
+        self.pass_observation: dict | None = None
+        self.merge_released = threading.Event()
+        # checkpoint "complete": the request whose response was held open until
+        # the driver released the scripted owner merge (see
+        # `hold_for_owner_merge`); normally the same request as
+        # `pass_observation`.
+        self.merge_gate: dict | None = None
+        # Set once that response is actually being held, so the driver can
+        # assert the hold rather than race the provider for `merge_gate`.
+        self.pass_response_held = threading.Event()
+        self.completed = threading.Event()
+        self.audit_requests = 0
+        self.audit_request_ordinals: list[int] = []
+        self.review_calls = 0
+        # checkpoint "complete": turns whose fresh input was an injected
+        # checkpoint (yielded) versus the execute continuation (acted on).
+        self.checkpoint_turn_ordinals: list[int] = []
+        self.continuation_turn_ordinals: list[int] = []
         self.restarting = False
         self.error: str | None = None
         self.recovery_calls = 0
@@ -307,6 +358,34 @@ class RecoveryProvider:
                 "content": "Disconnected pre-kill child response released for fixture cleanup."
             }
         tools = request.get("tools", [])
+        if self.checkpoint == "complete" and self.is_audit_request(request):
+            return self.respond_audit(request)
+        # The settled PASS arrives in this request's history, never as its
+        # latest message, and the checkpoint turn that carries it yields below
+        # without reaching `respond_completion`. Observe it here so the driver
+        # can release the scripted owner merge while that yield is still the
+        # current turn, and hold this very response until that release: the
+        # controller attempts completion as soon as the PASS-carrying turn
+        # ends, and origin/main must already be fast-forwarded by then. The
+        # hold is what keeps the next continuation from racing the owner
+        # merge; the continuation's own wait in `respond_completion` is then
+        # already satisfied.
+        if self.checkpoint == "complete":
+            self.observe_audit_pass(request)
+            if self.pass_recorded.is_set() and not self.hold_for_owner_merge(request):
+                return {"content": "Fixture completion path failed."}
+        # The production delivery worker injects its checkpoint through its own
+        # turn, and the execute continuation is sent only after that
+        # checkpoint's attestation settles. A model sees the checkpoint in that
+        # turn and must yield; issuing begin_execution_review there would find
+        # the checkpoint still pending and yield again. The match is scoped to
+        # the current turn's fresh input: matching the whole history kept
+        # firing after the continuation arrived, so the review never reached
+        # the scripted audit.
+        if self.checkpoint == "complete" and self.is_checkpoint_turn(request):
+            with self.request_lock:
+                self.checkpoint_turn_ordinals.append(self.ordinal_of(request))
+            return {"content": "Checkpoint delivery observed; yielding for continuation."}
         if not any(tool.get("function", {}).get("name") == "work" for tool in tools):
             return {"content": "Recovery fixture"}
         if self.restarting:
@@ -400,6 +479,8 @@ class RecoveryProvider:
             return {"content": "Turn ended."}
         messages = request.get("messages", [])
         results = [message for message in messages if message.get("role") == "tool"]
+        if self.checkpoint == "complete" and len(results) >= len(self.scripted_actions()):
+            return self.respond_completion(messages, results)
         if results:
             latest = str(results[-1].get("content", ""))
             if "END YOUR TURN NOW" in latest:
@@ -418,7 +499,177 @@ class RecoveryProvider:
                 self.error = latest
                 self.barrier.set()
                 return {"content": "Fixture setup failed."}
-        actions = [
+        actions = self.scripted_actions()
+        index = len(results)
+        if index >= len(actions):
+            self.error = (
+                f"Unexpected tool result without checkpoint barrier: {results[-1]}"
+            )
+            self.barrier.set()
+            return {"content": "Fixture setup failed."}
+        name, arguments = actions[index]
+        return self.tool_call(f"recovery-{index}", name, arguments)
+
+    @staticmethod
+    def tool_call(call_id: str, name: str, arguments: dict) -> dict:
+        return {
+            "tool_calls": [
+                {
+                    "index": 0,
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(arguments)},
+                }
+            ]
+        }
+
+    def ordinal_of(self, request: dict) -> int:
+        """1-based request ordinal, by identity (the server is threaded)."""
+        return next(
+            (index + 1 for index, call in enumerate(self.calls) if call is request),
+            len(self.calls),
+        )
+
+    @staticmethod
+    def current_turn_messages(messages: list[dict]) -> list[dict]:
+        """The input injected since the model last answered: every message after
+        the final assistant message. That is the only slice a turn-scoped match
+        may inspect; anything earlier belongs to a turn already answered."""
+        start = 0
+        for index, message in enumerate(messages):
+            if message.get("role") == "assistant":
+                start = index + 1
+        return messages[start:]
+
+    @classmethod
+    def fresh_input_text(cls, messages: list[dict]) -> str:
+        """The current turn's non-tool input, with the service's em dash intact."""
+        return json.dumps(
+            [
+                message
+                for message in cls.current_turn_messages(messages)
+                if message.get("role") != "tool"
+            ],
+            ensure_ascii=False,
+        )
+
+    def is_checkpoint_turn(self, request: dict) -> bool:
+        """True when this turn's fresh input is an injected checkpoint and not
+        the execute continuation. The continuation wins when both are present:
+        it is sent only after the checkpoint's attestation, so acting on it is
+        never premature."""
+        fresh = self.fresh_input_text(request.get("messages", []))
+        if EXECUTE_CONTINUATION_MARKER in fresh:
+            return False
+        return any(marker in fresh for marker in CHECKPOINT_TURN_MARKERS)
+
+    def observe_audit_pass(self, request: dict) -> None:
+        """Record the controller's settled audit PASS from this request's history.
+
+        `begin_execution_review` settles the scripted PASS and returns
+        `yieldForDeliveries([...], "Audit PASS recorded")` with `endTurn`, so
+        the controller ends the turn on that tool result instead of sending it
+        back to the model. The next provider request carries the PASS result
+        behind the injected checkpoint (and, one turn later, behind the execute
+        continuation): it is never the latest message of any request. Matching
+        only the latest message therefore never set `pass_recorded`, the driver
+        never released the disposable remote merge, and the host correctly
+        denied `complete_execution_item` on merge confirmation. Only tool
+        results are inspected (the injected checkpoint text is a user message),
+        only the first sighting is recorded, and nothing about which turns the
+        provider yields on or acts on changes."""
+        if self.pass_recorded.is_set():
+            return
+        messages = request.get("messages", [])
+        for index, message in enumerate(messages):
+            if message.get("role") != "tool":
+                continue
+            if "Audit PASS recorded" not in str(message.get("content", "")):
+                continue
+            with self.request_lock:
+                if self.pass_observation is None:
+                    self.pass_observation = {
+                        "requestOrdinal": self.ordinal_of(request),
+                        "messageIndex": index,
+                        "messageCount": len(messages),
+                        "latestMessage": index == len(messages) - 1,
+                        "checkpointTurn": self.is_checkpoint_turn(request),
+                        "continuationTurn": EXECUTE_CONTINUATION_MARKER
+                        in self.fresh_input_text(messages),
+                        "observedAt": time.time(),
+                    }
+            self.pass_recorded.set()
+            return
+
+    def hold_for_owner_merge(self, request: dict) -> bool:
+        """Hold this response until the driver releases the scripted owner merge.
+
+        Called for every "complete" request once `pass_recorded` is set. The
+        first such request is the one whose history carries the `endTurn`
+        "Audit PASS recorded" tool result (the checkpoint turn): its response
+        is the last thing the controller waits on before it ends that turn and
+        attempts completion, so returning it before origin/main is
+        fast-forwarded lets `complete_execution_item` deny on merge
+        confirmation (the fixture intentionally has no `gh pr merge`). Holding
+        the response is fixture coordination only: the yield text, the turn
+        classification, and the driver-issued release are unchanged, and no
+        production merge check is bypassed. A request replayed by the
+        controller while the release is still pending (a lost or timed-out
+        response) is held the same way, so the gate survives replay. Returns
+        False, with the fixture error recorded, when the release does not
+        arrive within `OWNER_MERGE_RELEASE_TIMEOUT_S` or the fixture is torn
+        down first."""
+        if self.merge_released.is_set():
+            return True
+        ordinal = self.ordinal_of(request)
+        held_at = time.time()
+        with self.request_lock:
+            if self.merge_gate is None:
+                self.merge_gate = {
+                    "requestOrdinal": ordinal,
+                    "checkpointTurn": self.is_checkpoint_turn(request),
+                    "continuationTurn": EXECUTE_CONTINUATION_MARKER
+                    in self.fresh_input_text(request.get("messages", [])),
+                    "heldAt": held_at,
+                    "released": False,
+                    "replayHoldOrdinals": [],
+                }
+            else:
+                self.merge_gate["replayHoldOrdinals"].append(ordinal)
+        self.pass_response_held.set()
+        deadline = held_at + OWNER_MERGE_RELEASE_TIMEOUT_S
+        while not self.merge_released.is_set():
+            if self.release.is_set() or time.time() >= deadline:
+                break
+            self.merge_released.wait(0.05)
+        released = self.merge_released.is_set()
+        with self.request_lock:
+            if self.merge_gate["requestOrdinal"] == ordinal:
+                self.merge_gate["released"] = released
+                self.merge_gate["releasedAt"] = time.time()
+                self.merge_gate["heldSeconds"] = time.time() - held_at
+        if not released:
+            self.error = (
+                "Scripted owner merge input was not released within "
+                f"{OWNER_MERGE_RELEASE_TIMEOUT_S}s while the response to request "
+                f"{ordinal} (carrying the settled PASS) was held"
+            )
+            self.barrier.set()
+            return False
+        return True
+
+    def review_action(self) -> tuple[str, dict]:
+        return (
+            "work",
+            {
+                "action": "begin_execution_review",
+                "work": self.key,
+                "body": "The real read tool read result.txt and returned after. Disposable recovery fixture; no audit verdict asserted.",
+            },
+        )
+
+    def scripted_actions(self) -> list[tuple[str, dict]]:
+        return [
             (
                 "work",
                 {
@@ -438,33 +689,129 @@ class RecoveryProvider:
             ),
             ("write", {"path": "result.txt", "content": "after\n"}),
             ("read", {"path": "result.txt"}),
-            (
-                "work",
-                {
-                    "action": "begin_execution_review",
-                    "work": self.key,
-                    "body": "The real read tool read result.txt and returned after. Disposable recovery fixture; no audit verdict asserted.",
-                },
-            ),
+            self.review_action(),
         ]
-        index = len(results)
-        if index >= len(actions):
+
+    @staticmethod
+    def is_audit_request(request: dict) -> bool:
+        """The native auditor subprocess: `@audit` model, `yield` tool, no `work` tool,
+        and the sealed manifest task body (never the transport preflight probe)."""
+        names = {
+            tool.get("function", {}).get("name") for tool in request.get("tools", [])
+        }
+        return (
+            request.get("model") == "local-recovery"
+            and "yield" in names
+            and "work" not in names
+            and "Mode: git-range-sha256" in json.dumps(request.get("messages", []))
+        )
+
+    def respond_audit(self, request: dict) -> dict:
+        """Scripted auditor verdict over the real subprocess runner and transport."""
+        with self.request_lock:
+            self.audit_requests += 1
+            ordinal = next(
+                (index + 1 for index, call in enumerate(self.calls) if call is request),
+                len(self.calls),
+            )
+            self.audit_request_ordinals.append(ordinal)
+        delta = self.tool_call(
+            f"scripted-audit-{ordinal}",
+            "yield",
+            {"result": {"data": {"report": SCRIPTED_PASS_REPORT}}},
+        )
+        (self.root / f"installed-completion-audit-{ordinal}-request.json").write_text(
+            json.dumps(request, indent=2)
+        )
+        (self.root / f"installed-completion-audit-{ordinal}-response.json").write_text(
+            json.dumps(
+                {
+                    "label": "scripted auditor verdict: judgment scripted, transport/runner/ledger real",
+                    "providerAcceptance": "not claimed",
+                    "delta": delta,
+                },
+                indent=2,
+            )
+        )
+        return delta
+
+    def respond_completion(self, messages: list[dict], results: list[dict]) -> dict:
+        """Drive the controller's own review -> audit -> complete path across turns."""
+        latest = str(results[-1].get("content", ""))
+        if messages and messages[-1].get("role") == "tool":
+            if "Execution grant completed!" in latest or "Advanced to next queue item" in latest:
+                # Completion is only ever legitimate after the scripted owner
+                # merge (remote main fast-forward) was released by the driver
+                # in response to the settled PASS; anything earlier means the
+                # host completed without merge confirmation.
+                if not self.merge_released.is_set():
+                    self.error = (
+                        "Premature completion: item completed before the scripted "
+                        f"owner merge was released: {latest[:4000]}"
+                    )
+                    self.barrier.set()
+                    return {"content": "Fixture completion path failed."}
+                self.completed.set()
+                return {"content": "Done."}
+            if "Audit PASS recorded" in latest:
+                # Non-`endTurn` shape; the `endTurn` shape is observed from the
+                # history by `observe_audit_pass` before this branch is reached.
+                # Either way `respond` has already recorded the PASS and held
+                # this response until the owner merge was released.
+                self.pass_recorded.set()
+                return {"content": "Turn ended."}
+            if "END YOUR TURN NOW" in latest:
+                return {"content": "Turn ended."}
+            if "pending merge confirmation" in latest:
+                self.error = (
+                    (
+                        "Controller attempted completion before the scripted owner "
+                        "merge was released (PASS not observed by the fixture in time): "
+                    )
+                    if not self.merge_released.is_set()
+                    else "Merge confirmation denied after the scripted owner merge was released: "
+                ) + latest[:4000]
+                self.barrier.set()
+                return {"content": "Fixture completion path failed."}
+            self.error = f"Unexpected completion-path tool result: {latest[:4000]}"
+            self.barrier.set()
+            return {"content": "Fixture completion path failed."}
+        # The execution continuation prompt after an ended turn: continue the
+        # review from service state. Only that prompt may drive the review;
+        # the checkpoint turn that precedes it yields in `respond`. Reaching
+        # this branch on any other input means the controller resumed review
+        # without the continuation, which is the ordering defect itself.
+        fresh = self.fresh_input_text(messages)
+        if EXECUTE_CONTINUATION_MARKER not in fresh:
             self.error = (
-                f"Unexpected tool result without checkpoint barrier: {results[-1]}"
+                f"Completion path resumed outside an execute continuation turn: {fresh[:4000]}"
             )
             self.barrier.set()
-            return {"content": "Fixture setup failed."}
-        name, arguments = actions[index]
-        return {
-            "tool_calls": [
-                {
-                    "index": 0,
-                    "id": f"recovery-{index}",
-                    "type": "function",
-                    "function": {"name": name, "arguments": json.dumps(arguments)},
-                }
-            ]
-        }
+            return {"content": "Fixture completion path failed."}
+        with self.request_lock:
+            self.continuation_turn_ordinals.append(len(self.calls))
+        # After the scripted audit PASS the driver must first supply the
+        # scripted owner merge input (remote main fast-forward), otherwise
+        # completeItem denies on merge confirmation. `pass_recorded` was set
+        # from this request's (or the preceding checkpoint turn's) history by
+        # `observe_audit_pass`, and `hold_for_owner_merge` already held the
+        # PASS-carrying response until the release, so this wait is normally
+        # satisfied on entry; it stays as the continuation's own guard. The
+        # release itself stays with the driver.
+        if self.pass_recorded.is_set() and not self.merge_released.wait(60):
+            self.error = "Scripted owner merge input was not released within 60s"
+            self.barrier.set()
+            return {"content": "Fixture completion path failed."}
+        # Controller/provider latency only: the continuation is sent after the
+        # checkpoint's attestation, so nothing here depends on this pause.
+        time.sleep(0.25)
+        self.review_calls += 1
+        if self.review_calls > MAX_COMPLETION_REVIEW_CALLS:
+            self.error = f"Review continuation loop exceeded {MAX_COMPLETION_REVIEW_CALLS} calls"
+            self.barrier.set()
+            return {"content": "Fixture completion path failed."}
+        name, arguments = self.review_action()
+        return self.tool_call(f"recovery-review-{self.review_calls}", name, arguments)
 
     @contextlib.contextmanager
     def serve(self) -> Generator[str]:
@@ -3278,6 +3625,10 @@ def _perform_committed_response_loss_cut(
         assert len(committed) == 2, (
             f"Expected exactly 2 committed rows (pause + resume) for set_execution_state, got {len(committed)}"
         )
+    elif committed_post_loss == "complete_execution_item":
+        assert len(committed) == 1, (
+            f"Expected exactly 1 committed completion row, got {len(committed)}"
+        )
     assert held_op["state"] == "applied"
     assert held_op["request_id"] == envelope["request_id"]
     assert CommandResponse.model_validate(upstream) == CommandResponse.model_validate(
@@ -3301,6 +3652,32 @@ def _perform_committed_response_loss_cut(
         assert visible["grant"]["state"] == "active"
         if paused_version is not None:
             assert visible["grant"]["grant_version"] == paused_version + 1
+    elif committed_post_loss == "complete_execution_item":
+        # Committed completion, response lost: grant active at completion
+        # version, first item completed, sibling still pending. The native
+        # execution read derives active_item as the first non-terminal
+        # sibling, so the visible cursor is the pending position-1 item that
+        # no activation has touched yet.
+        assert visible["grant"]["state"] == "active"
+        assert [item["phase"] for item in visible["items"]] == ["completed", "pending"]
+        completed_item, pending_item = visible["items"]
+        assert completed_item["position"] == 0
+        assert completed_item["work_id"] == upstream["result"]["work_id"]
+        assert completed_item["completed_at"] is not None
+        assert completed_item["closeout_receipt_id"] == upstream["result"]["closeout_receipt"]["receipt_id"]
+        assert visible["active_item"] == pending_item
+        assert pending_item["position"] == 1
+        assert pending_item["phase"] == "pending"
+        assert pending_item["activated_at"] is None
+        assert pending_item["completed_at"] is None
+        assert pending_item["closeout_receipt_id"] is None
+        assert upstream["result"]["state"] == "DONE"
+        # Nothing has advanced the queue before the restart: one committed
+        # completion, no activation, no continuation reservation.
+        assert read_progress_operations("activate_execution_item") == []
+        assert read_progress_operations("set_execution_state") == []
+    completion_version = visible["grant"]["grant_version"]
+    completion_loss = committed_post_loss == "complete_execution_item"
 
     journal_dir = state / "config/omp-work/pending-operations"
     claims = [
@@ -3380,14 +3757,18 @@ def _perform_committed_response_loss_cut(
         restarted_rpc = RpcProcess(restarted, restart_log)
         assert restarted_rpc.request("get_state")["sessionId"] == initial["sessionId"]
 
-        restarted_rpc.request("prompt", message=f"/execute resume {provider.key}")
-        resume_deadline = time.monotonic() + 10
-        while (
-            restarted_rpc.request("get_state")["isStreaming"]
-            and time.monotonic() < resume_deadline
-        ):
-            time.sleep(0.05)
-        assert not restarted_rpc.request("get_state")["isStreaming"]
+        if not completion_loss:
+            # The grant is active after a lost completion; `/execute resume`
+            # is refused there (host.ts resume gate), so only the seal/stamp/
+            # resume cases prompt. Completion recovery is session-start work.
+            restarted_rpc.request("prompt", message=f"/execute resume {provider.key}")
+            resume_deadline = time.monotonic() + 10
+            while (
+                restarted_rpc.request("get_state")["isStreaming"]
+                and time.monotonic() < resume_deadline
+            ):
+                time.sleep(0.05)
+            assert not restarted_rpc.request("get_state")["isStreaming"]
 
         deadline = time.monotonic() + 30
         resolution_observations = []
@@ -3467,14 +3848,28 @@ def _perform_committed_response_loss_cut(
         resolved_claims = [row for row in original_claims if "result" in row]
         assert resolved_claims[0]["result"] == stored_op["result"]
 
-        restarted_rpc.request("prompt", message=f"/execute resume {provider.key}")
-        resume_deadline = time.monotonic() + 10
-        while (
-            restarted_rpc.request("get_state")["isStreaming"]
-            and time.monotonic() < resume_deadline
-        ):
-            time.sleep(0.05)
-        assert not restarted_rpc.request("get_state")["isStreaming"]
+        if completion_loss:
+            # Session-start recovery activates the sibling and delivers one
+            # continuation; the provider answers it once.
+            assert provider.recovered.wait(60), (
+                f"Restarted controller did not deliver the queue continuation: {restart_log.read_text()[-6000:]}"
+            )
+            settle_deadline = time.monotonic() + 10
+            while (
+                restarted_rpc.request("get_state")["isStreaming"]
+                and time.monotonic() < settle_deadline
+            ):
+                time.sleep(0.05)
+            assert provider.recovery_calls == 1
+        else:
+            restarted_rpc.request("prompt", message=f"/execute resume {provider.key}")
+            resume_deadline = time.monotonic() + 10
+            while (
+                restarted_rpc.request("get_state")["isStreaming"]
+                and time.monotonic() < resume_deadline
+            ):
+                time.sleep(0.05)
+            assert not restarted_rpc.request("get_state")["isStreaming"]
 
         assert read_progress_operations(committed_post_loss) == committed
         observed = client.get(execution_url)
@@ -3517,6 +3912,43 @@ def _perform_committed_response_loss_cut(
             ]
             assert len(continuations) == 1, (
                 f"Expected exactly 1 continuation for postVersion {visible['grant']['grant_version']}, got {len(continuations)}"
+            )
+        elif committed_post_loss == "complete_execution_item":
+            # One activation (CAS on the completion version) and one continuation
+            # reservation, both through the controller's single queue path.
+            assert observed_exec["grant"]["state"] == "active"
+            assert observed_exec["grant"]["grant_version"] == completion_version + 2
+            assert observed_exec["active_item"] is not None
+            assert observed_exec["active_item"]["position"] == 1
+            assert observed_exec["active_item"]["phase"] == "criteria_pending"
+            assert observed_exec["active_item"]["activated_at"] is not None
+            assert [item["phase"] for item in observed_exec["items"]] == ["completed", "criteria_pending"]
+            assert observed_exec["items"][0]["closeout_receipt_id"] == upstream["result"]["closeout_receipt"]["receipt_id"]
+            assert len(read_progress_operations("complete_execution_item")) == 1
+            activations = read_progress_operations("activate_execution_item")
+            assert len(activations) == 1, f"Expected exactly 1 activation row, got {activations}"
+            assert activations[0]["state"] == "applied"
+            assert activations[0]["response"]["grant"]["grant_version"] == completion_version + 1
+            assert activations[0]["response"]["item"]["position"] == 1
+            assert activations[0]["response"]["item"]["work_id"] == observed_exec["active_item"]["work_id"]
+            reservations = read_progress_operations("set_execution_state")
+            assert len(reservations) == 1, f"Expected exactly 1 continuation reservation row, got {reservations}"
+            assert reservations[0]["response"]["grant"]["grant_version"] == completion_version + 2
+            resumed_entries = [
+                json.loads(line)
+                for line in own_path.read_text().splitlines()
+                if line.strip()
+            ]
+            continuations = [
+                entry
+                for entry in resumed_entries
+                if entry.get("type") == "custom_message"
+                and entry.get("customType") == "work-execute"
+                and entry.get("details", {}).get("executionContinuation", {}).get("postVersion")
+                == completion_version + 2
+            ]
+            assert len(continuations) == 1, (
+                f"Expected exactly 1 continuation for postVersion {completion_version + 2}, got {len(continuations)}"
             )
 
         remaining = [
@@ -3562,6 +3994,10 @@ def _perform_committed_response_loss_cut(
             f"Expected restarted CLI to make GET for operation {operation_id}, got {operation_gets}"
         )
         assert restarted_operation_gets[0]["status"] == 200
+        if completion_loss:
+            assert len(restarted_operation_gets) == 1, (
+                f"Expected exactly one reconciliation GET by operation identity, got {restarted_operation_gets}"
+            )
         evidence["restartedOperationGets"] = restarted_operation_gets
 
         evidence["startupResolutionObservations"] = resolution_observations
@@ -3583,6 +4019,8 @@ def _perform_committed_response_loss_cut(
         # legitimately have reserved once (session_start_recovery) on restart 1.
         db_before_second = read_progress_operations(committed_post_loss)
         set_ops_before_second = read_progress_operations("set_execution_state")
+        activations_before_second = read_progress_operations("activate_execution_item")
+        recovery_calls_before_second = provider.recovery_calls
         exec_before_second_resp = client.get(execution_url)
         exec_before_second_resp.raise_for_status()
         exec_before_second = exec_before_second_resp.json()
@@ -3629,7 +4067,8 @@ def _perform_committed_response_loss_cut(
         second_rpc = RpcProcess(second, second_log)
         assert cli.pid != evidence["restartPid"] != second.pid != cli.pid
         assert second_rpc.request("get_state")["sessionId"] == initial["sessionId"]
-        second_rpc.request("prompt", message=f"/execute resume {provider.key}")
+        if not completion_loss:
+            second_rpc.request("prompt", message=f"/execute resume {provider.key}")
         deadline = time.monotonic() + 10
         while second_rpc.request("get_state")["isStreaming"] and time.monotonic() < deadline:
             time.sleep(0.05)
@@ -3640,6 +4079,7 @@ def _perform_committed_response_loss_cut(
         # durable rows: unchanged identities, no extra row, no new reservation
         assert read_progress_operations(committed_post_loss) == committed
         assert read_progress_operations("set_execution_state") == set_ops_before_second
+        assert read_progress_operations("activate_execution_item") == activations_before_second
         assert client.get(f"/v1/operations/{operation_id}").json()["result"] == held_op["response"]
         exec_after_resp = client.get(execution_url)
         exec_after_resp.raise_for_status()
@@ -3662,6 +4102,17 @@ def _perform_committed_response_loss_cut(
             assert receipts[0]["receipt_id"] == upstream["result"]["receipt"]["receipt_id"]
         elif committed_post_loss == "set_execution_state":
             assert exec_after["grant"]["grant_version"] == visible["grant"]["grant_version"]  # still paused+1
+        elif committed_post_loss == "complete_execution_item":
+            # Second restart: no second activation, no second reservation, no
+            # second continuation turn; the sibling stays where restart 1 left it.
+            assert exec_after["grant"]["grant_version"] == completion_version + 2
+            assert exec_after["active_item"]["position"] == 1
+            assert exec_after["active_item"]["phase"] == "criteria_pending"
+            assert [item["phase"] for item in exec_after["items"]] == ["completed", "criteria_pending"]
+            assert len(activations_before_second) == 1 and len(set_ops_before_second) == 1
+            assert provider.recovery_calls == recovery_calls_before_second == 1, (
+                "A second restart duplicated the recovered continuation turn"
+            )
 
         # journal: resolved claim reused byte-for-byte, nothing new for this grant/type, nothing unresolved
         assert claim_path.read_bytes() == resolved_claim_bytes
@@ -3717,6 +4168,9 @@ def _perform_committed_response_loss_cut(
                     "databaseAfterSecondRestart": read_progress_operations(committed_post_loss),
                     "setStateRowsBeforeSecondKill": set_ops_before_second,
                     "setStateRowsAfterSecondRestart": read_progress_operations("set_execution_state"),
+                    "activationRowsBeforeSecondKill": activations_before_second,
+                    "activationRowsAfterSecondRestart": read_progress_operations("activate_execution_item"),
+                    "providerRecoveryCalls": provider.recovery_calls,
                     "executionBeforeSecondKill": exec_before_second,
                     "executionAfterSecondRestart": exec_after,
                     "resolvedClaimSha256": hashlib.sha256(resolved_claim_bytes).hexdigest(),
@@ -3732,10 +4186,526 @@ def _perform_committed_response_loss_cut(
         )
 
 
+def _parse_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _continuation_message_id(entry: dict) -> str | None:
+    """The continuation identity persisted with a real execute prompt, in either
+    persisted shape (direct custom message or receipt-backed delivery batch)."""
+    if entry.get("type") != "custom_message":
+        return None
+    details = entry.get("details", {})
+    if entry.get("customType") == "work-execute":
+        return details.get("executionContinuation", {}).get("messageId")
+    for delivery in details.get("deliveries", []):
+        if delivery.get("customType") == "work-execute":
+            return (
+                delivery.get("details", {})
+                .get("executionContinuation", {})
+                .get("messageId")
+            )
+    return None
+
+
+def _assert_checkpoint_before_continuation(
+    *,
+    session_path: Path,
+    workflow: dict,
+    destination: Path,
+    check_yields: int | None,
+    minimum_yields: int,
+) -> dict:
+    """The real ordering the checkpoint yield must produce, read from the
+    controller's own journal and the installed service's delivery rows.
+
+    A checkpoint-yield continuation is the one `begin_execution_review`
+    schedules with no reservation spent (pre == post grant version); every
+    other execute prompt carries a reservation. For each checked continuation:
+    a receipt-backed checkpoint injection carrying service-rendered event text
+    precedes its fail-closed `pending` outbox record in the transcript; the
+    service recorded that checkpoint's `delivered` attestation before the
+    record was written; exactly one `queued` record and exactly one persisted
+    execute prompt carry its message id, the prompt after the record; and no
+    second `pending` record shares the id (no duplicate continuation)."""
+    branch = durable_session_branch(read_complete_session(session_path))
+    events = {
+        event["event_id"]: event
+        for event in workflow.get("close_attempt_events", [])
+        if event["requires_delivery"]
+    }
+    attested = sorted(
+        (_parse_time(row["created_at"]), row["event_id"])
+        for row in workflow.get("checkpoint_deliveries", [])
+        if row["status"] == "delivered"
+    )
+    injections: list[dict] = []
+    for index, entry in enumerate(branch):
+        if (
+            entry.get("type") != "custom_message"
+            or entry.get("customType") != "extension-delivery"
+        ):
+            continue
+        deliveries = entry.get("details", {}).get("deliveries", [])
+        if not any(
+            delivery.get("customType") == "close-attempt-checkpoint"
+            for delivery in deliveries
+        ):
+            continue
+        content = entry.get("content", "")
+        carried = [
+            event_id
+            for event_id, event in events.items()
+            if event["rendered_text"] in content
+        ]
+        assert carried, (
+            f"Checkpoint injection carries no service-rendered event text: {entry}"
+        )
+        injections.append(
+            {
+                "index": index,
+                "id": entry.get("id"),
+                "timestamp": entry.get("timestamp"),
+                "eventIds": carried,
+            }
+        )
+    outbox = [
+        (index, entry)
+        for index, entry in enumerate(branch)
+        if entry.get("type") == "custom"
+        and entry.get("customType") == "work-now-execute-outbox"
+    ]
+    yields = [
+        (index, entry)
+        for index, entry in outbox
+        if entry["data"]["status"] == "pending"
+        and entry["data"]["preReservationVersion"] == entry["data"]["postVersion"]
+    ]
+    assert len(yields) >= minimum_yields, (
+        f"Expected at least {minimum_yields} checkpoint-yield continuation(s), got {yields}"
+    )
+    checked = yields if check_yields is None else yields[:check_yields]
+    prompts = [
+        (index, _continuation_message_id(entry))
+        for index, entry in enumerate(branch)
+        if _continuation_message_id(entry)
+    ]
+    records: list[dict] = []
+    for ordinal, (pending_index, pending) in enumerate(checked, start=1):
+        data = pending["data"]
+        message_id = data["messageId"]
+        sent_at = _parse_time(data["at"])
+        preceding = [
+            injection for injection in injections if injection["index"] < pending_index
+        ]
+        assert len(preceding) >= ordinal, (
+            f"Continuation {ordinal} ({message_id}) was scheduled before its checkpoint "
+            f"reached the transcript: injections {injections}, pending record at {pending_index}"
+        )
+        attested_before = [row for row in attested if row[0] <= sent_at]
+        assert len(attested_before) >= ordinal, (
+            f"Continuation {ordinal} ({message_id}) was scheduled at {data['at']} before "
+            f"the service recorded its checkpoint delivery: {attested}"
+        )
+        same_id = [
+            entry for _, entry in yields if entry["data"]["messageId"] == message_id
+        ]
+        assert len(same_id) == 1, f"Duplicate pending records for one continuation: {same_id}"
+        queued = [
+            entry
+            for _, entry in outbox
+            if entry["data"]["messageId"] == message_id
+            and entry["data"]["status"] == "queued"
+        ]
+        assert len(queued) == 1, f"Expected one queued record for {message_id}, got {queued}"
+        matching = [index for index, prompt_id in prompts if prompt_id == message_id]
+        assert len(matching) == 1, (
+            f"Expected exactly one execute prompt for {message_id}, got {matching}"
+        )
+        assert matching[0] > pending_index, (
+            "Execute prompt persisted before its fail-closed pending record"
+        )
+        records.append(
+            {
+                "ordinal": ordinal,
+                "messageId": message_id,
+                "grantVersion": data["postVersion"],
+                "pendingIndex": pending_index,
+                "sentAt": data["at"],
+                "promptIndex": matching[0],
+                "checkpointInjectionsBefore": preceding,
+                "deliveriesAttestedBefore": [
+                    {"createdAt": row[0].isoformat(), "eventId": row[1]}
+                    for row in attested_before
+                ],
+            }
+        )
+    summary = {
+        "label": (
+            "checkpoint injection and service attestation precede the execute "
+            "continuation (controller journal + installed service rows)"
+        ),
+        "session": str(session_path),
+        "yieldContinuations": len(yields),
+        "checkedContinuations": records,
+        "checkpointInjections": injections,
+    }
+    destination.write_text(json.dumps(summary, indent=2, default=str))
+    return summary
+
+
+def _drive_scripted_delivery_merge(
+    *,
+    client: httpx.Client,
+    provider: RecoveryProvider,
+    remote: Path,
+    env: dict[str, str],
+    tmp_path: Path,
+    cli_log: Path,
+    execution_workspace: Path,
+    session_path: Path,
+) -> dict:
+    """Scripted owner merge input: after the controller records the scripted audit
+    PASS, the test driver fast-forwards the bare remote's main to the frozen
+    candidate, which is what `verifyMergeConfirmation`'s already-delivered arm
+    (ancestry + tree equality against origin/<default>) accepts. No gh, no PR."""
+    assert provider.pass_recorded.wait(180), (
+        f"Controller did not record the scripted audit PASS: provider error {provider.error!r}; "
+        f"stderr tail: {cli_log.read_text()[-6000:]}"
+    )
+    assert provider.error is None, provider.error
+    workflow_response = client.get(f"/v1/work-items/{provider.key}/workflow")
+    workflow_response.raise_for_status()
+    workflow = workflow_response.json()
+    # The review's own checkpoint yield is complete by now (its continuation is
+    # what reached the audit): prove its real order. The PASS yield may still
+    # be settling, so only the first continuation is checked here.
+    review_ordering = _assert_checkpoint_before_continuation(
+        session_path=session_path,
+        workflow=workflow,
+        destination=tmp_path / "checkpoint-continuation-ordering-review.json",
+        check_yields=1,
+        minimum_yields=1,
+    )
+    candidate = workflow["item"]["candidate"]
+    assert candidate is not None and candidate["kind"] == "final", candidate
+    commit_sha = candidate["commit_sha"]
+    assert isinstance(commit_sha, str) and len(commit_sha) == 40, candidate
+    # Release the owner merge only against a real, settled PASS: the provider
+    # saw the host's "Audit PASS recorded" tool result in a request history
+    # (never as the latest message, since the host returns it with `endTurn`),
+    # exactly one scripted auditor request reached the transport, and the
+    # service holds the PASS audit receipt for this candidate. Nothing may have
+    # completed yet: the item is still open and the provider has not seen a
+    # completion result.
+    pass_observation = provider.pass_observation
+    assert pass_observation is not None, "PASS recorded without a request observation"
+    assert not pass_observation["latestMessage"], (
+        "The PASS tool result was the latest message of a provider request; the "
+        f"host's `endTurn` yield should have ended that turn: {pass_observation}"
+    )
+    assert not pass_observation["continuationTurn"], (
+        "The PASS was first observed on an execute continuation turn, after the "
+        f"checkpoint turn that should have carried it: {pass_observation}"
+    )
+    assert provider.audit_requests == 1, provider.audit_requests
+    # The provider is still holding its response to the PASS-carrying request
+    # (`hold_for_owner_merge`): the controller cannot end that turn, let alone
+    # attempt completion, until this driver releases the owner merge below.
+    # `pass_recorded` is set a moment before the hold is recorded, so wait for
+    # the hold itself instead of reading `merge_gate` racily.
+    assert provider.pass_response_held.wait(10), (
+        "The provider recorded the PASS but never held the PASS-carrying response for the owner merge"
+    )
+    pass_request = provider.request_observations[pass_observation["requestOrdinal"] - 1]
+    assert not pass_request["responseStarted"], (
+        "The response to the PASS-carrying request was returned before the scripted "
+        f"owner merge was released: {pass_request}"
+    )
+    merge_gate = provider.merge_gate
+    assert merge_gate is not None and merge_gate["requestOrdinal"] == pass_observation["requestOrdinal"], (
+        f"The PASS-carrying request {pass_observation['requestOrdinal']} is not the one held for "
+        f"the owner merge release: {merge_gate}"
+    )
+    audit_receipts = [
+        receipt
+        for receipt in workflow.get("receipts", [])
+        if receipt.get("kind") == "audit" and receipt.get("candidate_id") == candidate["candidate_id"]
+    ]
+    pass_receipts = [receipt for receipt in audit_receipts if receipt.get("verdict") == "PASS"]
+    assert len(pass_receipts) == 1, (
+        f"Expected exactly one settled PASS audit receipt for the candidate before releasing "
+        f"the owner merge, got {audit_receipts}"
+    )
+    assert workflow["item"]["state"] != "DONE", (
+        f"Item reached DONE before the scripted owner merge was released: {workflow['item']}"
+    )
+    assert not provider.completed.is_set(), (
+        "Provider observed a completion result before the scripted owner merge was released"
+    )
+    main_before = _run(["git", "rev-parse", "refs/heads/main"], remote, env).strip()
+    # Fast-forward only: the candidate descends from the pushed baseline. The
+    # ancestry check runs inside the bare remote, so it also proves the frozen
+    # candidate object is already there (the controller's push receipt put it
+    # on the execution branch); no driver push is needed before the owner
+    # update. The compare-and-swap below is the single scripted owner mutation.
+    _run(["git", "merge-base", "--is-ancestor", main_before, commit_sha], remote, env)
+    _run(["git", "update-ref", "refs/heads/main", commit_sha, main_before], remote, env)
+    main_after = _run(["git", "rev-parse", "refs/heads/main"], remote, env).strip()
+    assert main_after == commit_sha
+    # Refresh installed execution workspace's origin/main before controller
+    # completion checks its already-delivered arm. Bare remote update is the
+    # scripted owner merge; fetch is the real git transport observed by host.
+    _run(["git", "fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"], execution_workspace, env)
+    merge = {
+        "label": "scripted owner input: test driver update-ref",
+        "auditVerdict": "scripted local provider (transport real, judgment scripted)",
+        "providerAcceptance": "not claimed",
+        "remote": str(remote),
+        "ref": "refs/heads/main",
+        "before": main_before,
+        "after": main_after,
+        "candidate": candidate,
+        "auditRequests": provider.audit_requests,
+        "auditRequestOrdinals": provider.audit_request_ordinals,
+        "auditReceipts": audit_receipts,
+        "passObservation": pass_observation,
+        "passResponseHeldAtRelease": not pass_request["responseStarted"],
+        "itemStateAtRelease": workflow["item"]["state"],
+        "completedBeforeRelease": provider.completed.is_set(),
+        "checkpointOrdering": review_ordering,
+        "releasedAt": time.time(),
+    }
+    (tmp_path / "delivery-merge.json").write_text(json.dumps(merge, indent=2))
+    assert not provider.completed.is_set(), (
+        "Provider observed a completion result while the owner merge was being scripted"
+    )
+    provider.merge_released.set()
+    return workflow
+
+
+def _assert_installed_completion(
+    *,
+    client: httpx.Client,
+    provider: RecoveryProvider,
+    remote: Path,
+    env: dict[str, str],
+    tmp_path: Path,
+    cli_log: Path,
+    setup: dict,
+    execution_url: str,
+    read_progress_operations: Callable[..., list[dict]],
+    release: InstalledRelease,
+    session_path: Path,
+) -> None:
+    """Contract 2 green: controller review -> native auditor runner (scripted
+    verdict) -> settle PASS -> completion evidence -> complete_execution_item,
+    all inside the installed controller, service and disposable PostgreSQL."""
+    assert provider.completed.wait(180), (
+        f"Controller did not complete the item: provider error {provider.error!r}; "
+        f"stderr tail: {cli_log.read_text()[-6000:]}"
+    )
+    assert provider.error is None, provider.error
+    workflow_response = client.get(f"/v1/work-items/{provider.key}/workflow")
+    workflow_response.raise_for_status()
+    workflow = workflow_response.json()
+    assert workflow["item"]["state"] == "DONE", workflow["item"]["state"]
+    # Every checkpoint yield on the way here (the review's and the PASS's, at
+    # least) was consumed through its own continuation turn: prove the real
+    # order of all of them, and that the provider only ever acted on execute
+    # continuation turns, yielding on the checkpoint turn that preceded each.
+    ordering = _assert_checkpoint_before_continuation(
+        session_path=session_path,
+        workflow=workflow,
+        destination=tmp_path / "checkpoint-continuation-ordering-completion.json",
+        check_yields=None,
+        minimum_yields=2,
+    )
+    assert len(provider.continuation_turn_ordinals) == ordering["yieldContinuations"], (
+        f"Provider continuation turns {provider.continuation_turn_ordinals} do not match "
+        f"the {ordering['yieldContinuations']} checkpoint-yield continuation(s) in the journal"
+    )
+    assert provider.checkpoint_turn_ordinals, (
+        "The injected checkpoint never reached the provider as its own turn"
+    )
+    assert provider.checkpoint_turn_ordinals[0] < provider.continuation_turn_ordinals[0], (
+        f"Provider acted on continuation request {provider.continuation_turn_ordinals[0]} "
+        f"before the checkpoint turn {provider.checkpoint_turn_ordinals[0]}"
+    )
+    # The settled PASS was observed strictly between the continuation that
+    # drove the review to the auditor and the continuation that completed the
+    # item, and the merge was released (on that observation) before completion.
+    pass_observation = provider.pass_observation
+    assert pass_observation is not None, "Completed without a recorded PASS observation"
+    assert (
+        provider.continuation_turn_ordinals[0]
+        < pass_observation["requestOrdinal"]
+        < provider.continuation_turn_ordinals[-1]
+    ), (
+        f"PASS observed on request {pass_observation['requestOrdinal']} is not between the "
+        f"review continuation and the completing continuation {provider.continuation_turn_ordinals}"
+    )
+    assert pass_observation["requestOrdinal"] in provider.checkpoint_turn_ordinals, (
+        f"PASS observed on request {pass_observation['requestOrdinal']}, which the provider did "
+        f"not yield on as a checkpoint turn {provider.checkpoint_turn_ordinals}"
+    )
+    assert provider.merge_released.is_set(), "Completed without the scripted owner merge release"
+    # The response to the PASS-carrying request was held until the driver's
+    # release, and every continuation the controller sent after that request
+    # arrived after the release: nothing could have attempted completion
+    # against a remote main that was not yet fast-forwarded.
+    merge_gate = provider.merge_gate
+    assert merge_gate is not None, "The PASS-carrying response was never held for the owner merge"
+    assert merge_gate["requestOrdinal"] == pass_observation["requestOrdinal"], (
+        f"Held request {merge_gate['requestOrdinal']} is not the PASS-carrying request "
+        f"{pass_observation['requestOrdinal']}"
+    )
+    assert merge_gate["released"], f"The held PASS-carrying response was not released: {merge_gate}"
+    merge = json.loads((tmp_path / "delivery-merge.json").read_text())
+    released_at = merge["releasedAt"]
+    pass_request = provider.request_observations[merge_gate["requestOrdinal"] - 1]
+    assert pass_request["responseStarted"] and pass_request["responseStartedAt"] >= released_at, (
+        f"The PASS-carrying response started before the owner merge release: {pass_request} "
+        f"vs release at {released_at}"
+    )
+    late_continuations = [
+        provider.request_observations[ordinal - 1]
+        for ordinal in provider.continuation_turn_ordinals
+        if ordinal > merge_gate["requestOrdinal"]
+    ]
+    assert late_continuations, "No execute continuation followed the PASS-carrying request"
+    assert all(observation["arrivedAt"] >= released_at for observation in late_continuations), (
+        f"An execute continuation raced the owner merge release at {released_at}: {late_continuations}"
+    )
+    candidate = workflow["item"]["candidate"]
+    commit_sha = candidate["commit_sha"]
+    grant_id = setup["execution"]["grant"]["grant_id"]
+    attempts = [
+        attempt
+        for attempt in workflow["close_attempts"]
+        if attempt["candidate_id"] == candidate["candidate_id"]
+        and attempt["execution_grant_id"] == grant_id
+    ]
+    assert len(attempts) == 1, attempts
+    attempt = attempts[0]
+    launches = [
+        launch for launch in workflow["auditor_launches"] if launch["attempt_id"] == attempt["attempt_id"]
+    ]
+    assert len(launches) == 1, f"Expected exactly one auditor launch, got {launches}"
+    launch = launches[0]
+    # The workflow view projects audit_manifest only while a close attempt is
+    # live (LIVE_CLOSE_ATTEMPT_STATES). Completion moved this attempt to
+    # `completed`, so the omission is the contract, not lost evidence.
+    assert attempt["state"] == "completed", attempt
+    assert attempt["state"] not in {state.value for state in LIVE_CLOSE_ATTEMPT_STATES}
+    assert workflow["audit_manifest"] is None, workflow["audit_manifest"]
+    # Durable exact-candidate bindings survive that projection: the launch
+    # names the sealed manifest and task digest, the PASS audit receipt names
+    # both launch and manifest for this candidate, and the committed
+    # completion's closeout receipt names that audit receipt and the push.
+    assert launch["manifest_id"], launch
+    assert launch["task_sha256"], launch
+    audits = [
+        receipt
+        for receipt in workflow["receipts"]
+        if receipt["kind"] == "audit"
+        and receipt.get("verdict") == "PASS"
+        and receipt["payload"].get("launch_id") == launch["launch_id"]
+    ]
+    assert len(audits) == 1, f"Expected exactly one PASS audit receipt bound to the launch, got {audits}"
+    assert audits[0]["payload"]["manifest_id"] == launch["manifest_id"]
+    assert audits[0]["candidate_id"] == candidate["candidate_id"]
+    assert audits[0]["candidate_sha256"] == candidate["candidate_sha256"]
+    assert audits[0]["candidate_commit"] == commit_sha
+    receipts_by_id = {receipt["receipt_id"]: receipt for receipt in workflow["receipts"]}
+    # Scripted verdict, real transport: exactly one auditor request reached the
+    # provider and it carried the sealed git-range manifest for this candidate.
+    assert provider.audit_requests == 1, provider.audit_requests
+    audit_request = provider.calls[provider.audit_request_ordinals[0] - 1]
+    audit_text = json.dumps(audit_request.get("messages", []))
+    assert "Mode: git-range-sha256" in audit_text
+    assert f"Final commit: {commit_sha}" in audit_text
+    completions = read_progress_operations("complete_execution_item")
+    assert len(completions) == 1, f"Expected exactly one completion row, got {completions}"
+    assert completions[0]["state"] == "applied"
+    assert completions[0]["response"]["state"] == "DONE"
+    assert completions[0]["response"]["grant"]["grant_id"] == grant_id
+    # The committed completion is readable by operation identity after DONE
+    # and carries the closeout receipt that binds audit and push receipts.
+    operation_response = client.get(f"/v1/operations/{completions[0]['operation_id']}")
+    operation_response.raise_for_status()
+    operation = operation_response.json()
+    assert operation["command_type"] == "complete_execution_item"
+    assert operation["receipt"]["state"] == "applied"
+    assert operation["receipt"]["result_sha256"] == completions[0]["result_sha256"]
+    assert operation["result"] == completions[0]["response"]
+    closeout = operation["result"]["closeout_receipt"]
+    assert closeout["kind"] == "closeout"
+    assert closeout["candidate_id"] == candidate["candidate_id"]
+    assert closeout["candidate_sha256"] == candidate["candidate_sha256"]
+    assert closeout["candidate_commit"] == commit_sha
+    assert closeout["payload"]["grant_id"] == grant_id
+    assert closeout["payload"]["attempt_id"] == attempt["attempt_id"]
+    assert closeout["payload"]["audit_receipt_id"] == audits[0]["receipt_id"]
+    push = receipts_by_id[closeout["payload"]["push_receipt_id"]]
+    assert push["kind"] == "push"
+    assert push["candidate_id"] == candidate["candidate_id"]
+    assert push["candidate_commit"] == commit_sha
+    assert receipts_by_id[closeout["receipt_id"]]["payload"] == closeout["payload"]
+    execution_response = client.get(execution_url)
+    execution_response.raise_for_status()
+    execution = execution_response.json()
+    assert execution["grant"]["grant_id"] == grant_id
+    assert execution["grant"]["state"] == "completed", execution["grant"]
+    assert execution["active_item"] is None
+    assert [item["phase"] for item in execution["items"]] == ["completed"]
+    assert execution["items"][0]["closeout_receipt_id"] == closeout["receipt_id"]
+    assert execution["items"][0]["push_receipt_id"] == push["receipt_id"]
+    remote_ref = execution["grant"]["remote_ref"]
+    assert _run(["git", "rev-parse", "refs/heads/main"], remote, env).strip() == commit_sha
+    assert _run(["git", "rev-parse", remote_ref], remote, env).strip() == commit_sha
+    workspace_head = _run(["git", "rev-parse", "HEAD"], Path(setup["workspace"]["path"]), env).strip()
+    assert workspace_head == commit_sha, "Completion changed the execution workspace HEAD"
+    (tmp_path / "installed-completion-acceptance.json").write_text(
+        json.dumps(
+            {
+                "release": str(release.root),
+                "manifest": release.digest,
+                "auditVerdict": "scripted local provider (transport real, judgment scripted)",
+                "deliveryMerge": "scripted owner input (driver update-ref)",
+                "providerAcceptance": "not claimed",
+                "attempt": attempt,
+                "launch": launch,
+                "auditManifestProjection": "omitted after DONE: workflow view projects live attempts only",
+                "auditReceipt": audits[0],
+                "completionOperation": operation,
+                "closeoutReceipt": closeout,
+                "pushReceipt": push,
+                "auditRequestOrdinal": provider.audit_request_ordinals[0],
+                "checkpointOrdering": ordering,
+                "providerCheckpointTurnOrdinals": provider.checkpoint_turn_ordinals,
+                "providerContinuationTurnOrdinals": provider.continuation_turn_ordinals,
+                "providerPassObservation": pass_observation,
+                "providerMergeGate": merge_gate,
+                "ownerMergeReleasedAt": released_at,
+                "completionRows": completions,
+                "executionAfterCompletion": execution,
+                "workflowAfterCompletion": workflow,
+                "remoteMain": commit_sha,
+                "remoteRef": remote_ref,
+                "workspaceHead": workspace_head,
+            },
+            indent=2,
+            default=str,
+        )
+    )
+
+
 def exercise_controller_recovery(
     release: InstalledRelease,
     tmp_path: Path,
-    checkpoint: Literal["review", "resume", "persisted", "task-active"],
+    checkpoint: Checkpoint,
     *,
     progress: bool = False,
     task_fault: TaskFault = "child-request",
@@ -3743,13 +4713,23 @@ def exercise_controller_recovery(
     predecessor_case: Literal["startup-read", "paused-read", "reopen"] | None = None,
     completion_route: Literal["execution", "work"] | None = None,
     committed_post_loss: (
-        Literal["seal_execution_criteria", "stamp_execution_plan", "set_execution_state"] | bool | None
+        Literal[
+            "seal_execution_criteria",
+            "stamp_execution_plan",
+            "set_execution_state",
+            "complete_execution_item",
+        ]
+        | bool
+        | None
     ) = None,
+    queue: bool = False,
 ) -> None:
     if committed_post_loss is True:
         committed_post_loss = "seal_execution_criteria"
     elif not committed_post_loss:
         committed_post_loss = None
+    assert committed_post_loss != "complete_execution_item" or checkpoint == "complete"
+    assert not queue or checkpoint == "complete"
     repository = tmp_path / "repository"
     repository.mkdir()
     state = tmp_path / "runtime"
@@ -3880,6 +4860,17 @@ def exercise_controller_recovery(
         (agent_dir / "config.yml").write_text(
             "modelRoles:\n  audit: qualification/local-recovery\n  default: qualification/local-recovery\n  smol: qualification/local-recovery\nadvisor:\n  enabled: false\ntools:\n  xdev: false\n"
         )
+        if checkpoint == "complete":
+            # The native audit runner discovers the `auditor` agent definition;
+            # expose the installed release's own bytes at the user agent root
+            # (mirrors execute-cycle-smoke.ts). Same name, same content, so an
+            # extension-root discovery of the identical file dedups harmlessly.
+            installed_auditor = release.root / "source/session-system/agents/auditor.md"
+            assert installed_auditor.is_file(), installed_auditor
+            (agent_dir / "agents").mkdir(parents=True, exist_ok=True)
+            auditor_target = agent_dir / "agents/auditor.md"
+            if not auditor_target.exists() or auditor_target.resolve() != installed_auditor.resolve():
+                shutil.copyfile(installed_auditor, auditor_target)
         if checkpoint == "task-active":
             model_file = agent_dir / "models.yml"
             model_config = json.loads(model_file.read_text())
@@ -3937,6 +4928,7 @@ def exercise_controller_recovery(
                         str(state),
                         str(repository),
                         *(["CANCELLED" if predecessor_case == "paused-read" else "CANCELED"] if predecessor_case else []),
+                        *(["queue-sibling"] if queue else []),
                     ],
                     source_root,
                     setup_env,
@@ -3944,6 +4936,8 @@ def exercise_controller_recovery(
             )
             (tmp_path / "setup.json").write_text(json.dumps(setup, indent=2))
             provider.key = setup["issue"]["key"]
+            if queue:
+                assert setup.get("sibling"), "queue fixture requires the sibling issue"
             client_config = json.loads(
                 (state / "config/omp-work/client.json").read_text()
             )
@@ -3988,7 +4982,7 @@ def exercise_controller_recovery(
                     )
                     before_admission = rpc.request("get_state")
                     admission_request = rpc.send(
-                        "prompt", message=f"/execute {provider.key}"
+                        "prompt", message=f"/execute {provider.key}{' --queue' if queue else ''}"
                     )
                     rpc.until(
                         lambda event: (
@@ -4039,6 +5033,57 @@ def exercise_controller_recovery(
                         "wrapperArgv": release.command(state, repository, *cli_args),
                     }
                     (tmp_path / "setup.json").write_text(json.dumps(setup, indent=2))
+                    if queue:
+                        queued = setup["execution"]
+                        assert queued["grant"]["mode"] == "queue"
+                        assert [item["phase"] for item in queued["items"]] == ["criteria_pending", "pending"]
+                        assert queued["items"][1]["work_id"] == setup["sibling"]["id"]
+                    if checkpoint == "complete":
+                        execution_url = f"/v1/workspaces/{identity['workspace_id']}/execution/{provider.key}"
+                        _drive_scripted_delivery_merge(
+                            client=client,
+                            provider=provider,
+                            remote=remote,
+                            env=env,
+                            tmp_path=tmp_path,
+                            cli_log=cli_log,
+                            execution_workspace=Path(setup["workspace"]["path"]),
+                            session_path=own_path,
+                        )
+                        if committed_post_loss == "complete_execution_item":
+                            assert authority_proxy is not None
+                            _perform_committed_response_loss_cut(
+                                release=release,
+                                tmp_path=tmp_path,
+                                state=state,
+                                repository=repository,
+                                env=env,
+                                client=client,
+                                authority_proxy=authority_proxy,
+                                cli=cli,
+                                service=service,
+                                provider=provider,
+                                committed_post_loss=committed_post_loss,
+                                read_progress_operations=read_progress_operations,
+                                identity=identity,
+                                own_path=own_path,
+                                initial=initial,
+                            )
+                            return
+                        _assert_installed_completion(
+                            client=client,
+                            provider=provider,
+                            remote=remote,
+                            env=env,
+                            tmp_path=tmp_path,
+                            cli_log=cli_log,
+                            setup=setup,
+                            execution_url=execution_url,
+                            read_progress_operations=read_progress_operations,
+                            release=release,
+                            session_path=own_path,
+                        )
+                        return
                     if committed_post_loss in {
                         "seal_execution_criteria",
                         "stamp_execution_plan",
@@ -4214,23 +5259,45 @@ def exercise_controller_recovery(
                         "Provider barrier must hold the existing turn"
                     )
                     actual_session = Path(str(barrier_state["sessionFile"]))
-                    deadline = time.monotonic() + 5
-                    while True:
-                        entries = [
-                            json.loads(line)
-                            for line in actual_session.read_text().splitlines()
-                            if line
+
+                    def continuation_outbox_ready(entries: list[dict]) -> bool:
+                        """The crash window is open once the hidden continuation's
+                        outbox pair exists but its message has not been injected."""
+                        if checkpoint == "persisted":
+                            return True
+                        outbox_rows = [
+                            entry.get("data", {})
+                            for entry in entries
+                            if entry.get("customType") == "work-now-execute-outbox"
                         ]
-                        if (
-                            checkpoint in ("review", "persisted")
-                            or any(
-                                entry.get("customType") == "work-now-execute-outbox"
-                                and entry.get("data", {}).get("postVersion")
-                                == paused["grant_version"] + 1
-                                for entry in entries
+                        if checkpoint == "resume":
+                            return any(
+                                row.get("postVersion") == paused["grant_version"] + 1
+                                for row in outbox_rows
                             )
-                            or time.monotonic() >= deadline
-                        ):
+                        # review: OMP-199 schedules the continuation only after the
+                        # checkpoint delivery settles, so the provider barrier can
+                        # precede the outbox pair. The admission pair is already
+                        # paired with its injected message; wait for the queued
+                        # entry whose message is absent.
+                        injected = {
+                            entry.get("details", {})
+                            .get("executionContinuation", {})
+                            .get("messageId")
+                            for entry in entries
+                            if entry.get("type") == "custom_message"
+                            and entry.get("customType") == "work-execute"
+                        }
+                        return any(
+                            row.get("status") == "queued"
+                            and row.get("messageId") not in injected
+                            for row in outbox_rows
+                        )
+
+                    deadline = time.monotonic() + 10
+                    while True:
+                        entries = read_complete_session(actual_session)
+                        if continuation_outbox_ready(entries) or time.monotonic() >= deadline:
                             break
                         time.sleep(0.05)
                     outbox = [
@@ -5033,6 +6100,31 @@ def test_committed_plan_stamp_post_response_loss_reconciles_same_operation(
 ) -> None:
     """Controller death after plan stamp commit must reconcile original journal without duplicate receipt."""
     exercise_controller_recovery(installed_release, tmp_path, "review", committed_post_loss="stamp_execution_plan")
+
+
+def test_installed_controller_reaches_scripted_audit_pass_and_completes_candidate(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Controller review -> native auditor runner (scripted verdict over real transport)
+    -> settle PASS -> completion evidence -> complete_execution_item, all in the
+    installed controller/service/PostgreSQL. Provider acceptance is not claimed."""
+    exercise_controller_recovery(installed_release, tmp_path, "complete")
+
+
+def test_committed_completion_post_response_loss_reconciles_and_advances_queue(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Controller death after a committed complete_execution_item whose response was
+    withheld: restart reconciles by operation identity (one GET, zero replay POST),
+    activates the queued sibling once and reserves one continuation; a second
+    restart over the same journal adds nothing."""
+    exercise_controller_recovery(
+        installed_release,
+        tmp_path,
+        "complete",
+        queue=True,
+        committed_post_loss="complete_execution_item",
+    )
 
 
 def test_committed_resume_post_response_loss_reconciles_same_operation(

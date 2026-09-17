@@ -1437,7 +1437,8 @@
             "OMP-180",
             "OMP-194",
             "OMP-222",
-            "OMP-247"
+            "OMP-247",
+            "OMP-279"
           ],
           "title": "Issue",
           "type": "string"
@@ -1451,6 +1452,253 @@
         "issue"
       ],
       "title": "Approval",
+      "type": "object"
+    },
+    "AssociateCandidateSourceCommand": {
+      "$defs": {
+        "AssociateCandidateSourcePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "analyzed_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Analyzed Commit"
+            },
+            "association_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Association Sha256",
+              "type": "string"
+            },
+            "base_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Base Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "producer": {
+              "minLength": 1,
+              "title": "Producer",
+              "type": "string"
+            },
+            "producer_receipt_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Producer Receipt Sha256",
+              "type": "string"
+            },
+            "repository_id": {
+              "format": "uuid",
+              "title": "Repository Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "snapshot_id": {
+              "pattern": "^(?:sha256:)?[0-9a-f]{64}$",
+              "title": "Snapshot Id",
+              "type": "string"
+            },
+            "snapshot_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Snapshot Manifest Sha256",
+              "type": "string"
+            },
+            "source_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Source Manifest Sha256",
+              "type": "string"
+            },
+            "source_version_id": {
+              "minLength": 1,
+              "title": "Source Version Id",
+              "type": "string"
+            },
+            "tree_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tree Sha"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_id",
+            "work_id",
+            "revision_id",
+            "repository_id",
+            "source_version_id",
+            "snapshot_id",
+            "base_commit",
+            "source_manifest_sha256",
+            "snapshot_manifest_sha256",
+            "content_sha256",
+            "association_sha256",
+            "producer",
+            "producer_receipt_sha256"
+          ],
+          "title": "AssociateCandidateSourcePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AssociateCandidateSourcePayload"
+        },
+        "type": {
+          "const": "associate_candidate_source",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "AssociateCandidateSourceCommand",
+      "type": "object"
+    },
+    "AssociateCandidateSourcePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "analyzed_commit": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Analyzed Commit"
+        },
+        "association_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Association Sha256",
+          "type": "string"
+        },
+        "base_commit": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Base Commit",
+          "type": "string"
+        },
+        "candidate_id": {
+          "format": "uuid",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "producer": {
+          "minLength": 1,
+          "title": "Producer",
+          "type": "string"
+        },
+        "producer_receipt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Producer Receipt Sha256",
+          "type": "string"
+        },
+        "repository_id": {
+          "format": "uuid",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "pattern": "^(?:sha256:)?[0-9a-f]{64}$",
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "snapshot_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Manifest Sha256",
+          "type": "string"
+        },
+        "source_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Manifest Sha256",
+          "type": "string"
+        },
+        "source_version_id": {
+          "minLength": 1,
+          "title": "Source Version Id",
+          "type": "string"
+        },
+        "tree_sha": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tree Sha"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "work_id",
+        "revision_id",
+        "repository_id",
+        "source_version_id",
+        "snapshot_id",
+        "base_commit",
+        "source_manifest_sha256",
+        "snapshot_manifest_sha256",
+        "content_sha256",
+        "association_sha256",
+        "producer",
+        "producer_receipt_sha256"
+      ],
+      "title": "AssociateCandidateSourcePayload",
       "type": "object"
     },
     "AttestCheckpointDeliveryCommand": {
@@ -2394,7 +2642,7 @@
               "type": "array"
             },
             "judge_manifest": {
-              "$ref": "#/$defs/ExecutionJudgeManifest"
+              "$ref": "#/$defs/ExecutionJudgeManifestV2"
             },
             "judge_sha256": {
               "pattern": "^[0-9a-f]{64}$",
@@ -2498,12 +2746,17 @@
           "title": "ExecutionGrantItemClaim",
           "type": "object"
         },
-        "ExecutionJudgeManifest": {
+        "ExecutionJudgeManifestV2": {
           "additionalProperties": false,
           "properties": {
             "adapter_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Adapter Sha256",
+              "type": "string"
+            },
+            "audit_policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Audit Policy Sha256",
               "type": "string"
             },
             "auditor_agent_sha256": {
@@ -2529,6 +2782,16 @@
             "host_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Host Sha256",
+              "type": "string"
+            },
+            "manifest_version": {
+              "const": 2,
+              "title": "Manifest Version",
+              "type": "integer"
+            },
+            "native_stage_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Native Stage Sha256",
               "type": "string"
             },
             "runner_sha256": {
@@ -2562,9 +2825,12 @@
             "contract_sha256",
             "service_fingerprint",
             "service_code_fingerprint",
-            "service_migration_sha256"
+            "service_migration_sha256",
+            "manifest_version",
+            "audit_policy_sha256",
+            "native_stage_sha256"
           ],
-          "title": "ExecutionJudgeManifest",
+          "title": "ExecutionJudgeManifestV2",
           "type": "object"
         },
         "ExecutionProvenanceEnvelope": {
@@ -2706,12 +2972,17 @@
           "title": "ExecutionGrantItemClaim",
           "type": "object"
         },
-        "ExecutionJudgeManifest": {
+        "ExecutionJudgeManifestV2": {
           "additionalProperties": false,
           "properties": {
             "adapter_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Adapter Sha256",
+              "type": "string"
+            },
+            "audit_policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Audit Policy Sha256",
               "type": "string"
             },
             "auditor_agent_sha256": {
@@ -2737,6 +3008,16 @@
             "host_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Host Sha256",
+              "type": "string"
+            },
+            "manifest_version": {
+              "const": 2,
+              "title": "Manifest Version",
+              "type": "integer"
+            },
+            "native_stage_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Native Stage Sha256",
               "type": "string"
             },
             "runner_sha256": {
@@ -2770,9 +3051,12 @@
             "contract_sha256",
             "service_fingerprint",
             "service_code_fingerprint",
-            "service_migration_sha256"
+            "service_migration_sha256",
+            "manifest_version",
+            "audit_policy_sha256",
+            "native_stage_sha256"
           ],
-          "title": "ExecutionJudgeManifest",
+          "title": "ExecutionJudgeManifestV2",
           "type": "object"
         },
         "ExecutionProvenanceEnvelope": {
@@ -2848,7 +3132,7 @@
           "type": "array"
         },
         "judge_manifest": {
-          "$ref": "#/$defs/ExecutionJudgeManifest"
+          "$ref": "#/$defs/ExecutionJudgeManifestV2"
         },
         "judge_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -2900,6 +3184,120 @@
         "paths"
       ],
       "title": "BindingManifest",
+      "type": "object"
+    },
+    "BudgetScope": {
+      "$defs": {
+        "BudgetScopeKind": {
+          "enum": [
+            "account",
+            "session",
+            "work",
+            "tournament",
+            "role"
+          ],
+          "title": "BudgetScopeKind",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "held": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Held",
+          "type": "object"
+        },
+        "kind": {
+          "$ref": "#/$defs/BudgetScopeKind"
+        },
+        "limits": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Limits",
+          "type": "object"
+        },
+        "parent_scope_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Scope Id"
+        },
+        "policy_version": {
+          "minLength": 1,
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "scope_id": {
+          "format": "uuid",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
+        },
+        "spent": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Spent",
+          "type": "object"
+        },
+        "unresolved": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Unresolved",
+          "type": "object"
+        },
+        "work_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Id"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope_id",
+        "workspace_id",
+        "kind",
+        "policy_version",
+        "limits",
+        "held",
+        "spent",
+        "unresolved"
+      ],
+      "title": "BudgetScope",
       "type": "object"
     },
     "CancelAuditorLaunchCommand": {
@@ -2963,6 +3361,142 @@
         "launch_id"
       ],
       "title": "CancelAuditorLaunchPayload",
+      "type": "object"
+    },
+    "CancelBudgetCommand": {
+      "$defs": {
+        "CancelBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "fence": {
+              "minimum": 1,
+              "title": "Fence",
+              "type": "integer"
+            },
+            "reservation_id": {
+              "format": "uuid",
+              "title": "Reservation Id",
+              "type": "string"
+            },
+            "verified_unsent": {
+              "default": false,
+              "title": "Verified Unsent",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "reservation_id",
+            "fence"
+          ],
+          "title": "CancelBudgetPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CancelBudgetPayload"
+        },
+        "type": {
+          "const": "cancel_budget",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "CancelBudgetCommand",
+      "type": "object"
+    },
+    "CancelBudgetPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "fence": {
+          "minimum": 1,
+          "title": "Fence",
+          "type": "integer"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "verified_unsent": {
+          "default": false,
+          "title": "Verified Unsent",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reservation_id",
+        "fence"
+      ],
+      "title": "CancelBudgetPayload",
+      "type": "object"
+    },
+    "CancelStageLaunchCommand": {
+      "$defs": {
+        "CancelStageLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "reason"
+          ],
+          "title": "CancelStageLaunchPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CancelStageLaunchPayload"
+        },
+        "type": {
+          "const": "cancel_stage_launch",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "CancelStageLaunchCommand",
+      "type": "object"
+    },
+    "CancelStageLaunchPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "launch_id": {
+          "format": "uuid",
+          "title": "Launch Id",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "launch_id",
+        "reason"
+      ],
+      "title": "CancelStageLaunchPayload",
       "type": "object"
     },
     "CancellationProof": {
@@ -3055,6 +3589,131 @@
       "title": "Candidate",
       "type": "object"
     },
+    "CandidateSourceVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "analyzed_commit": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Analyzed Commit"
+        },
+        "association_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Association Sha256",
+          "type": "string"
+        },
+        "base_commit": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Base Commit",
+          "type": "string"
+        },
+        "candidate_id": {
+          "format": "uuid",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "producer": {
+          "minLength": 1,
+          "title": "Producer",
+          "type": "string"
+        },
+        "producer_receipt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Producer Receipt Sha256",
+          "type": "string"
+        },
+        "repository_id": {
+          "format": "uuid",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "pattern": "^(?:sha256:)?[0-9a-f]{64}$",
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "snapshot_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Manifest Sha256",
+          "type": "string"
+        },
+        "source_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Manifest Sha256",
+          "type": "string"
+        },
+        "source_version_id": {
+          "minLength": 1,
+          "title": "Source Version Id",
+          "type": "string"
+        },
+        "tree_sha": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tree Sha"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "workspace_id",
+        "work_id",
+        "revision_id",
+        "repository_id",
+        "source_version_id",
+        "snapshot_id",
+        "base_commit",
+        "source_manifest_sha256",
+        "snapshot_manifest_sha256",
+        "content_sha256",
+        "association_sha256",
+        "producer",
+        "producer_receipt_sha256",
+        "created_at"
+      ],
+      "title": "CandidateSourceVersion",
+      "type": "object"
+    },
     "CheckpointDelivery": {
       "additionalProperties": false,
       "properties": {
@@ -3119,6 +3778,69 @@
         "created_at"
       ],
       "title": "CheckpointDelivery",
+      "type": "object"
+    },
+    "ClaimBudgetCommand": {
+      "$defs": {
+        "ClaimBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "fence": {
+              "minimum": 1,
+              "title": "Fence",
+              "type": "integer"
+            },
+            "reservation_id": {
+              "format": "uuid",
+              "title": "Reservation Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reservation_id",
+            "fence"
+          ],
+          "title": "ClaimBudgetPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ClaimBudgetPayload"
+        },
+        "type": {
+          "const": "claim_budget",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ClaimBudgetCommand",
+      "type": "object"
+    },
+    "ClaimBudgetPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "fence": {
+          "minimum": 1,
+          "title": "Fence",
+          "type": "integer"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "title": "Reservation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reservation_id",
+        "fence"
+      ],
+      "title": "ClaimBudgetPayload",
       "type": "object"
     },
     "ClearFocusCommand": {
@@ -3992,6 +4714,138 @@
           "title": "AppendEvidencePayload",
           "type": "object"
         },
+        "AssociateCandidateSourceCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/AssociateCandidateSourcePayload"
+            },
+            "type": {
+              "const": "associate_candidate_source",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "AssociateCandidateSourceCommand",
+          "type": "object"
+        },
+        "AssociateCandidateSourcePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "analyzed_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Analyzed Commit"
+            },
+            "association_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Association Sha256",
+              "type": "string"
+            },
+            "base_commit": {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "title": "Base Commit",
+              "type": "string"
+            },
+            "candidate_id": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            },
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "producer": {
+              "minLength": 1,
+              "title": "Producer",
+              "type": "string"
+            },
+            "producer_receipt_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Producer Receipt Sha256",
+              "type": "string"
+            },
+            "repository_id": {
+              "format": "uuid",
+              "title": "Repository Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "snapshot_id": {
+              "pattern": "^(?:sha256:)?[0-9a-f]{64}$",
+              "title": "Snapshot Id",
+              "type": "string"
+            },
+            "snapshot_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Snapshot Manifest Sha256",
+              "type": "string"
+            },
+            "source_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Source Manifest Sha256",
+              "type": "string"
+            },
+            "source_version_id": {
+              "minLength": 1,
+              "title": "Source Version Id",
+              "type": "string"
+            },
+            "tree_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tree Sha"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_id",
+            "work_id",
+            "revision_id",
+            "repository_id",
+            "source_version_id",
+            "snapshot_id",
+            "base_commit",
+            "source_manifest_sha256",
+            "snapshot_manifest_sha256",
+            "content_sha256",
+            "association_sha256",
+            "producer",
+            "producer_receipt_sha256"
+          ],
+          "title": "AssociateCandidateSourcePayload",
+          "type": "object"
+        },
         "AttestCheckpointDeliveryCommand": {
           "additionalProperties": false,
           "properties": {
@@ -4339,7 +5193,7 @@
               "type": "array"
             },
             "judge_manifest": {
-              "$ref": "#/$defs/ExecutionJudgeManifest"
+              "$ref": "#/$defs/ExecutionJudgeManifestV2"
             },
             "judge_sha256": {
               "pattern": "^[0-9a-f]{64}$",
@@ -4375,6 +5229,27 @@
           ],
           "title": "BeginExecutionPayload",
           "type": "object"
+        },
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        },
+        "BudgetScopeKind": {
+          "enum": [
+            "account",
+            "session",
+            "work",
+            "tournament",
+            "role"
+          ],
+          "title": "BudgetScopeKind",
+          "type": "string"
         },
         "CancelAuditorLaunchCommand": {
           "additionalProperties": false,
@@ -4414,6 +5289,91 @@
             "launch_id"
           ],
           "title": "CancelAuditorLaunchPayload",
+          "type": "object"
+        },
+        "CancelBudgetCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/CancelBudgetPayload"
+            },
+            "type": {
+              "const": "cancel_budget",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "CancelBudgetCommand",
+          "type": "object"
+        },
+        "CancelBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "fence": {
+              "minimum": 1,
+              "title": "Fence",
+              "type": "integer"
+            },
+            "reservation_id": {
+              "format": "uuid",
+              "title": "Reservation Id",
+              "type": "string"
+            },
+            "verified_unsent": {
+              "default": false,
+              "title": "Verified Unsent",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "reservation_id",
+            "fence"
+          ],
+          "title": "CancelBudgetPayload",
+          "type": "object"
+        },
+        "CancelStageLaunchCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/CancelStageLaunchPayload"
+            },
+            "type": {
+              "const": "cancel_stage_launch",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "CancelStageLaunchCommand",
+          "type": "object"
+        },
+        "CancelStageLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "reason"
+          ],
+          "title": "CancelStageLaunchPayload",
           "type": "object"
         },
         "CancellationProof": {
@@ -4504,6 +5464,46 @@
             "allocated_at"
           ],
           "title": "Candidate",
+          "type": "object"
+        },
+        "ClaimBudgetCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ClaimBudgetPayload"
+            },
+            "type": {
+              "const": "claim_budget",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ClaimBudgetCommand",
+          "type": "object"
+        },
+        "ClaimBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "fence": {
+              "minimum": 1,
+              "title": "Fence",
+              "type": "integer"
+            },
+            "reservation_id": {
+              "format": "uuid",
+              "title": "Reservation Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reservation_id",
+            "fence"
+          ],
+          "title": "ClaimBudgetPayload",
           "type": "object"
         },
         "ClearFocusCommand": {
@@ -5004,6 +6004,96 @@
             "kind"
           ],
           "title": "CreateBatchRelation",
+          "type": "object"
+        },
+        "CreateBudgetScopeCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/CreateBudgetScopePayload"
+            },
+            "type": {
+              "const": "create_budget_scope",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "CreateBudgetScopeCommand",
+          "type": "object"
+        },
+        "CreateBudgetScopePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/BudgetScopeKind"
+            },
+            "limits": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Limits",
+              "type": "object"
+            },
+            "parent_scope_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Scope Id"
+            },
+            "policy_version": {
+              "minLength": 1,
+              "title": "Policy Version",
+              "type": "string"
+            },
+            "scope_id": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "work_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Id"
+            }
+          },
+          "required": [
+            "scope_id",
+            "kind",
+            "policy_version",
+            "limits"
+          ],
+          "title": "CreateBudgetScopePayload",
           "type": "object"
         },
         "CreateSameSessionChildCommand": {
@@ -5591,12 +6681,17 @@
           "title": "ExecutionGrantItemClaim",
           "type": "object"
         },
-        "ExecutionJudgeManifest": {
+        "ExecutionJudgeManifestV2": {
           "additionalProperties": false,
           "properties": {
             "adapter_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Adapter Sha256",
+              "type": "string"
+            },
+            "audit_policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Audit Policy Sha256",
               "type": "string"
             },
             "auditor_agent_sha256": {
@@ -5622,6 +6717,16 @@
             "host_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Host Sha256",
+              "type": "string"
+            },
+            "manifest_version": {
+              "const": 2,
+              "title": "Manifest Version",
+              "type": "integer"
+            },
+            "native_stage_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Native Stage Sha256",
               "type": "string"
             },
             "runner_sha256": {
@@ -5655,9 +6760,12 @@
             "contract_sha256",
             "service_fingerprint",
             "service_code_fingerprint",
-            "service_migration_sha256"
+            "service_migration_sha256",
+            "manifest_version",
+            "audit_policy_sha256",
+            "native_stage_sha256"
           ],
-          "title": "ExecutionJudgeManifest",
+          "title": "ExecutionJudgeManifestV2",
           "type": "object"
         },
         "ExecutionProvenanceEnvelope": {
@@ -5815,6 +6923,132 @@
           "title": "FocusSlot",
           "type": "object"
         },
+        "HandoffStageLaunchCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/HandoffStageLaunchPayload"
+            },
+            "type": {
+              "const": "handoff_stage_launch",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "HandoffStageLaunchCommand",
+          "type": "object"
+        },
+        "HandoffStageLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "task_sha256"
+          ],
+          "title": "HandoffStageLaunchPayload",
+          "type": "object"
+        },
+        "IssueFrontierExceptionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/IssueFrontierExceptionPayload"
+            },
+            "type": {
+              "const": "issue_frontier_exception",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "IssueFrontierExceptionCommand",
+          "type": "object"
+        },
+        "IssueFrontierExceptionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "context_limit": {
+              "exclusiveMinimum": 0,
+              "title": "Context Limit",
+              "type": "integer"
+            },
+            "effort": {
+              "minLength": 1,
+              "title": "Effort",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "max_attempts": {
+              "exclusiveMinimum": 0,
+              "title": "Max Attempts",
+              "type": "integer"
+            },
+            "output_limit": {
+              "exclusiveMinimum": 0,
+              "title": "Output Limit",
+              "type": "integer"
+            },
+            "question": {
+              "minLength": 1,
+              "title": "Question",
+              "type": "string"
+            },
+            "resource": {
+              "$ref": "#/$defs/BudgetResource"
+            },
+            "resource_limit": {
+              "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+              "title": "Resource Limit",
+              "type": "string"
+            },
+            "route": {
+              "minLength": 1,
+              "title": "Route",
+              "type": "string"
+            },
+            "scope_id": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope_id",
+            "question",
+            "route",
+            "effort",
+            "context_limit",
+            "output_limit",
+            "max_attempts",
+            "resource",
+            "resource_limit",
+            "expires_at"
+          ],
+          "title": "IssueFrontierExceptionPayload",
+          "type": "object"
+        },
         "PromoteImportBatchCommand": {
           "additionalProperties": false,
           "properties": {
@@ -5879,6 +7113,46 @@
             "relation"
           ],
           "title": "PutRelationPayload",
+          "type": "object"
+        },
+        "ReconcileStageLaunchCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ReconcileStageLaunchPayload"
+            },
+            "type": {
+              "const": "reconcile_stage_launch",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ReconcileStageLaunchCommand",
+          "type": "object"
+        },
+        "ReconcileStageLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "reason"
+          ],
+          "title": "ReconcileStageLaunchPayload",
           "type": "object"
         },
         "ReconciliationCounts": {
@@ -6229,6 +7503,307 @@
             "tool_call_id"
           ],
           "title": "ReserveAuditorLaunchPayload",
+          "type": "object"
+        },
+        "ReserveBudgetCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ReserveBudgetPayload"
+            },
+            "type": {
+              "const": "reserve_budget",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ReserveBudgetCommand",
+          "type": "object"
+        },
+        "ReserveBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "context_limit": {
+              "exclusiveMinimum": 0,
+              "title": "Context Limit",
+              "type": "integer"
+            },
+            "effort": {
+              "minLength": 1,
+              "title": "Effort",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "logical_call_id": {
+              "format": "uuid",
+              "title": "Logical Call Id",
+              "type": "string"
+            },
+            "model": {
+              "minLength": 1,
+              "title": "Model",
+              "type": "string"
+            },
+            "output_limit": {
+              "exclusiveMinimum": 0,
+              "title": "Output Limit",
+              "type": "integer"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "resource": {
+              "$ref": "#/$defs/BudgetResource"
+            },
+            "scope_id": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            },
+            "worst_case_drawdown": {
+              "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+              "title": "Worst Case Drawdown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope_id",
+            "account_id",
+            "logical_call_id",
+            "transport_attempt_id",
+            "provider",
+            "model",
+            "effort",
+            "resource",
+            "worst_case_drawdown",
+            "context_limit",
+            "output_limit",
+            "expires_at"
+          ],
+          "title": "ReserveBudgetPayload",
+          "type": "object"
+        },
+        "ReserveStageLaunchCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ReserveStageLaunchPayload"
+            },
+            "type": {
+              "const": "reserve_stage_launch",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ReserveStageLaunchCommand",
+          "type": "object"
+        },
+        "ReserveStageLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "fallback_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fallback Reason"
+            },
+            "grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grant Id"
+            },
+            "is_fallback": {
+              "default": false,
+              "title": "Is Fallback",
+              "type": "boolean"
+            },
+            "prepared_context_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Prepared Context Sha256",
+              "type": "string"
+            },
+            "request_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Request Sha256",
+              "type": "string"
+            },
+            "requested_api": {
+              "minLength": 1,
+              "title": "Requested Api",
+              "type": "string"
+            },
+            "requested_effort": {
+              "minLength": 1,
+              "title": "Requested Effort",
+              "type": "string"
+            },
+            "requested_model": {
+              "minLength": 1,
+              "title": "Requested Model",
+              "type": "string"
+            },
+            "requested_provider": {
+              "minLength": 1,
+              "title": "Requested Provider",
+              "type": "string"
+            },
+            "requested_selector": {
+              "minLength": 1,
+              "title": "Requested Selector",
+              "type": "string"
+            },
+            "requested_wire_model": {
+              "minLength": 1,
+              "title": "Requested Wire Model",
+              "type": "string"
+            },
+            "resolved_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resolved Model"
+            },
+            "resolved_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resolved Provider"
+            },
+            "resolved_selector": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resolved Selector"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision Id"
+            },
+            "role": {
+              "$ref": "#/$defs/StageLaunchRole"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "role",
+            "request_sha256",
+            "tool_call_id",
+            "task_sha256",
+            "prepared_context_sha256",
+            "requested_selector",
+            "requested_provider",
+            "requested_model",
+            "requested_api",
+            "requested_effort",
+            "requested_wire_model"
+          ],
+          "title": "ReserveStageLaunchPayload",
           "type": "object"
         },
         "ReviseWorkCommand": {
@@ -6614,6 +8189,177 @@
           "title": "SettleAuditorLaunchPayload",
           "type": "object"
         },
+        "SettleBudgetCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/SettleBudgetPayload"
+            },
+            "type": {
+              "const": "settle_budget",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "SettleBudgetCommand",
+          "type": "object"
+        },
+        "SettleBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "actual_drawdown": {
+              "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+              "title": "Actual Drawdown",
+              "type": "string"
+            },
+            "fence": {
+              "minimum": 1,
+              "title": "Fence",
+              "type": "integer"
+            },
+            "outcome": {
+              "enum": [
+                "success",
+                "error",
+                "timeout",
+                "cancelled",
+                "unknown"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "provenance": {
+              "enum": [
+                "provider_observed",
+                "locally_estimated",
+                "unknown"
+              ],
+              "title": "Provenance",
+              "type": "string"
+            },
+            "provider_request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Request Id"
+            },
+            "reservation_id": {
+              "format": "uuid",
+              "title": "Reservation Id",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "settled",
+                "unresolved"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            },
+            "usage": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usage",
+              "type": "object"
+            }
+          },
+          "required": [
+            "reservation_id",
+            "transport_attempt_id",
+            "fence",
+            "state",
+            "actual_drawdown",
+            "provenance",
+            "outcome"
+          ],
+          "title": "SettleBudgetPayload",
+          "type": "object"
+        },
+        "SettleStageLaunchCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/SettleStageLaunchPayload"
+            },
+            "type": {
+              "const": "settle_stage_launch",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "SettleStageLaunchCommand",
+          "type": "object"
+        },
+        "SettleStageLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "outcome": {
+              "additionalProperties": true,
+              "title": "Outcome",
+              "type": "object"
+            },
+            "outcome_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Outcome Sha256",
+              "type": "string"
+            },
+            "served_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Served Model"
+            },
+            "served_selector": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Served Selector"
+            }
+          },
+          "required": [
+            "launch_id",
+            "outcome_sha256"
+          ],
+          "title": "SettleStageLaunchPayload",
+          "type": "object"
+        },
         "StageImportBatchCommand": {
           "additionalProperties": false,
           "properties": {
@@ -6653,6 +8399,16 @@
           ],
           "title": "StageImportBatchPayload",
           "type": "object"
+        },
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
         },
         "StampExecutionPlanCommand": {
           "additionalProperties": false,
@@ -6849,23 +8605,33 @@
               "activate_cutover": "#/$defs/ActivateCutoverCommand",
               "activate_execution_item": "#/$defs/ActivateExecutionItemCommand",
               "append_evidence": "#/$defs/AppendEvidenceCommand",
+              "associate_candidate_source": "#/$defs/AssociateCandidateSourceCommand",
               "attest_checkpoint_delivery": "#/$defs/AttestCheckpointDeliveryCommand",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanCommand",
               "begin_close_attempt": "#/$defs/BeginCloseAttemptCommand",
               "begin_execution": "#/$defs/BeginExecutionCommand",
               "cancel_auditor_launch": "#/$defs/CancelAuditorLaunchCommand",
+              "cancel_budget": "#/$defs/CancelBudgetCommand",
+              "cancel_stage_launch": "#/$defs/CancelStageLaunchCommand",
+              "claim_budget": "#/$defs/ClaimBudgetCommand",
               "clear_focus": "#/$defs/ClearFocusCommand",
               "complete_execution_item": "#/$defs/CompleteExecutionItemCommand",
               "complete_work": "#/$defs/CompleteWorkCommand",
+              "create_budget_scope": "#/$defs/CreateBudgetScopeCommand",
               "create_same_session_child": "#/$defs/CreateSameSessionChildCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
               "finalize_candidate": "#/$defs/FinalizeCandidateCommand",
+              "handoff_stage_launch": "#/$defs/HandoffStageLaunchCommand",
+              "issue_frontier_exception": "#/$defs/IssueFrontierExceptionCommand",
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
               "put_relation": "#/$defs/PutRelationCommand",
+              "reconcile_stage_launch": "#/$defs/ReconcileStageLaunchCommand",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
               "remove_relation": "#/$defs/RemoveRelationCommand",
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
+              "reserve_budget": "#/$defs/ReserveBudgetCommand",
+              "reserve_stage_launch": "#/$defs/ReserveStageLaunchCommand",
               "revise_work": "#/$defs/ReviseWorkCommand",
               "seal_audit_manifest": "#/$defs/SealAuditManifestCommand",
               "seal_execution_criteria": "#/$defs/SealExecutionCriteriaCommand",
@@ -6873,6 +8639,8 @@
               "set_focus": "#/$defs/SetFocusCommand",
               "set_work_state": "#/$defs/SetWorkStateCommand",
               "settle_auditor_launch": "#/$defs/SettleAuditorLaunchCommand",
+              "settle_budget": "#/$defs/SettleBudgetCommand",
+              "settle_stage_launch": "#/$defs/SettleStageLaunchCommand",
               "stage_import_batch": "#/$defs/StageImportBatchCommand",
               "stamp_execution_plan": "#/$defs/StampExecutionPlanCommand"
             },
@@ -6923,6 +8691,42 @@
             },
             {
               "$ref": "#/$defs/SettleAuditorLaunchCommand"
+            },
+            {
+              "$ref": "#/$defs/ReserveStageLaunchCommand"
+            },
+            {
+              "$ref": "#/$defs/HandoffStageLaunchCommand"
+            },
+            {
+              "$ref": "#/$defs/SettleStageLaunchCommand"
+            },
+            {
+              "$ref": "#/$defs/CancelStageLaunchCommand"
+            },
+            {
+              "$ref": "#/$defs/ReconcileStageLaunchCommand"
+            },
+            {
+              "$ref": "#/$defs/CreateBudgetScopeCommand"
+            },
+            {
+              "$ref": "#/$defs/ReserveBudgetCommand"
+            },
+            {
+              "$ref": "#/$defs/ClaimBudgetCommand"
+            },
+            {
+              "$ref": "#/$defs/SettleBudgetCommand"
+            },
+            {
+              "$ref": "#/$defs/CancelBudgetCommand"
+            },
+            {
+              "$ref": "#/$defs/IssueFrontierExceptionCommand"
+            },
+            {
+              "$ref": "#/$defs/AssociateCandidateSourceCommand"
             },
             {
               "$ref": "#/$defs/AttestCheckpointDeliveryCommand"
@@ -10416,6 +12220,193 @@
       "title": "CreateBatchRelation",
       "type": "object"
     },
+    "CreateBudgetScopeCommand": {
+      "$defs": {
+        "BudgetScopeKind": {
+          "enum": [
+            "account",
+            "session",
+            "work",
+            "tournament",
+            "role"
+          ],
+          "title": "BudgetScopeKind",
+          "type": "string"
+        },
+        "CreateBudgetScopePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/BudgetScopeKind"
+            },
+            "limits": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Limits",
+              "type": "object"
+            },
+            "parent_scope_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Scope Id"
+            },
+            "policy_version": {
+              "minLength": 1,
+              "title": "Policy Version",
+              "type": "string"
+            },
+            "scope_id": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "work_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Id"
+            }
+          },
+          "required": [
+            "scope_id",
+            "kind",
+            "policy_version",
+            "limits"
+          ],
+          "title": "CreateBudgetScopePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CreateBudgetScopePayload"
+        },
+        "type": {
+          "const": "create_budget_scope",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "CreateBudgetScopeCommand",
+      "type": "object"
+    },
+    "CreateBudgetScopePayload": {
+      "$defs": {
+        "BudgetScopeKind": {
+          "enum": [
+            "account",
+            "session",
+            "work",
+            "tournament",
+            "role"
+          ],
+          "title": "BudgetScopeKind",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/BudgetScopeKind"
+        },
+        "limits": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Limits",
+          "type": "object"
+        },
+        "parent_scope_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Scope Id"
+        },
+        "policy_version": {
+          "minLength": 1,
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "scope_id": {
+          "format": "uuid",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
+        },
+        "work_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Id"
+        }
+      },
+      "required": [
+        "scope_id",
+        "kind",
+        "policy_version",
+        "limits"
+      ],
+      "title": "CreateBudgetScopePayload",
+      "type": "object"
+    },
     "CreateSameSessionChildCommand": {
       "$defs": {
         "CreateSameSessionChildPayload": {
@@ -11496,6 +13487,149 @@
       "title": "DependencyGraph",
       "type": "object"
     },
+    "DispatchReservation": {
+      "$defs": {
+        "BudgetReservationState": {
+          "enum": [
+            "reserved_unsent",
+            "potentially_sent",
+            "settled",
+            "cancelled_unsent",
+            "unresolved"
+          ],
+          "title": "BudgetReservationState",
+          "type": "string"
+        },
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "format": "uuid",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "context_limit": {
+          "exclusiveMinimum": 0,
+          "title": "Context Limit",
+          "type": "integer"
+        },
+        "effort": {
+          "minLength": 1,
+          "title": "Effort",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "fence": {
+          "minimum": 1,
+          "title": "Fence",
+          "type": "integer"
+        },
+        "logical_call_id": {
+          "format": "uuid",
+          "title": "Logical Call Id",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "output_limit": {
+          "exclusiveMinimum": 0,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/BudgetResource"
+        },
+        "scope_id": {
+          "format": "uuid",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/BudgetReservationState"
+        },
+        "transport_attempt_id": {
+          "format": "uuid",
+          "title": "Transport Attempt Id",
+          "type": "string"
+        },
+        "worst_case_drawdown": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Worst Case Drawdown",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reservation_id",
+        "scope_id",
+        "account_id",
+        "logical_call_id",
+        "transport_attempt_id",
+        "fence",
+        "state",
+        "resource",
+        "worst_case_drawdown",
+        "provider",
+        "model",
+        "effort",
+        "context_limit",
+        "output_limit",
+        "expires_at"
+      ],
+      "title": "DispatchReservation",
+      "type": "object"
+    },
+    "EventsCursorPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "after_sequence": {
+          "title": "After Sequence",
+          "type": "integer"
+        },
+        "through_sequence": {
+          "title": "Through Sequence",
+          "type": "integer"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "after_sequence",
+        "through_sequence"
+      ],
+      "title": "EventsCursorPayload",
+      "type": "object"
+    },
     "EvidenceReceipt": {
       "$defs": {
         "EvidenceKind": {
@@ -11723,7 +13857,7 @@
       "title": "ExecutionGrantItemClaim",
       "type": "object"
     },
-    "ExecutionJudgeManifest": {
+    "ExecutionJudgeManifestV1": {
       "additionalProperties": false,
       "properties": {
         "adapter_sha256": {
@@ -11789,7 +13923,94 @@
         "service_code_fingerprint",
         "service_migration_sha256"
       ],
-      "title": "ExecutionJudgeManifest",
+      "title": "ExecutionJudgeManifestV1",
+      "type": "object"
+    },
+    "ExecutionJudgeManifestV2": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Adapter Sha256",
+          "type": "string"
+        },
+        "audit_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Policy Sha256",
+          "type": "string"
+        },
+        "auditor_agent_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Auditor Agent Sha256",
+          "type": "string"
+        },
+        "contract_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Contract Sha256",
+          "type": "string"
+        },
+        "executor_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Executor Sha256",
+          "type": "string"
+        },
+        "freeze_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Freeze Sha256",
+          "type": "string"
+        },
+        "host_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Host Sha256",
+          "type": "string"
+        },
+        "manifest_version": {
+          "const": 2,
+          "title": "Manifest Version",
+          "type": "integer"
+        },
+        "native_stage_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Native Stage Sha256",
+          "type": "string"
+        },
+        "runner_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Runner Sha256",
+          "type": "string"
+        },
+        "service_code_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Service Code Fingerprint",
+          "type": "string"
+        },
+        "service_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Service Fingerprint",
+          "type": "string"
+        },
+        "service_migration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Service Migration Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "auditor_agent_sha256",
+        "host_sha256",
+        "adapter_sha256",
+        "freeze_sha256",
+        "runner_sha256",
+        "executor_sha256",
+        "contract_sha256",
+        "service_fingerprint",
+        "service_code_fingerprint",
+        "service_migration_sha256",
+        "manifest_version",
+        "audit_policy_sha256",
+        "native_stage_sha256"
+      ],
+      "title": "ExecutionJudgeManifestV2",
       "type": "object"
     },
     "ExecutionProvenanceEnvelope": {
@@ -11994,6 +14215,160 @@
       "title": "FocusSlot",
       "type": "object"
     },
+    "FrontierException": {
+      "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "context_limit": {
+          "exclusiveMinimum": 0,
+          "title": "Context Limit",
+          "type": "integer"
+        },
+        "effort": {
+          "minLength": 1,
+          "title": "Effort",
+          "type": "string"
+        },
+        "exception_id": {
+          "format": "uuid",
+          "title": "Exception Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "max_attempts": {
+          "exclusiveMinimum": 0,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "output_limit": {
+          "exclusiveMinimum": 0,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "remaining_attempts": {
+          "minimum": 0,
+          "title": "Remaining Attempts",
+          "type": "integer"
+        },
+        "resource": {
+          "$ref": "#/$defs/BudgetResource"
+        },
+        "resource_limit": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Resource Limit",
+          "type": "string"
+        },
+        "route": {
+          "minLength": 1,
+          "title": "Route",
+          "type": "string"
+        },
+        "scope_id": {
+          "format": "uuid",
+          "title": "Scope Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exception_id",
+        "scope_id",
+        "question",
+        "route",
+        "effort",
+        "context_limit",
+        "output_limit",
+        "max_attempts",
+        "remaining_attempts",
+        "resource",
+        "resource_limit",
+        "expires_at"
+      ],
+      "title": "FrontierException",
+      "type": "object"
+    },
+    "HandoffStageLaunchCommand": {
+      "$defs": {
+        "HandoffStageLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "task_sha256"
+          ],
+          "title": "HandoffStageLaunchPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/HandoffStageLaunchPayload"
+        },
+        "type": {
+          "const": "handoff_stage_launch",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "HandoffStageLaunchCommand",
+      "type": "object"
+    },
+    "HandoffStageLaunchPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "launch_id": {
+          "format": "uuid",
+          "title": "Launch Id",
+          "type": "string"
+        },
+        "task_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "launch_id",
+        "task_sha256"
+      ],
+      "title": "HandoffStageLaunchPayload",
+      "type": "object"
+    },
     "IdempotencyExample": {
       "additionalProperties": false,
       "properties": {
@@ -12082,6 +14457,183 @@
         "new_revision_number"
       ],
       "title": "ImmutableRevisionExample",
+      "type": "object"
+    },
+    "IssueFrontierExceptionCommand": {
+      "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        },
+        "IssueFrontierExceptionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "context_limit": {
+              "exclusiveMinimum": 0,
+              "title": "Context Limit",
+              "type": "integer"
+            },
+            "effort": {
+              "minLength": 1,
+              "title": "Effort",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "max_attempts": {
+              "exclusiveMinimum": 0,
+              "title": "Max Attempts",
+              "type": "integer"
+            },
+            "output_limit": {
+              "exclusiveMinimum": 0,
+              "title": "Output Limit",
+              "type": "integer"
+            },
+            "question": {
+              "minLength": 1,
+              "title": "Question",
+              "type": "string"
+            },
+            "resource": {
+              "$ref": "#/$defs/BudgetResource"
+            },
+            "resource_limit": {
+              "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+              "title": "Resource Limit",
+              "type": "string"
+            },
+            "route": {
+              "minLength": 1,
+              "title": "Route",
+              "type": "string"
+            },
+            "scope_id": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope_id",
+            "question",
+            "route",
+            "effort",
+            "context_limit",
+            "output_limit",
+            "max_attempts",
+            "resource",
+            "resource_limit",
+            "expires_at"
+          ],
+          "title": "IssueFrontierExceptionPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/IssueFrontierExceptionPayload"
+        },
+        "type": {
+          "const": "issue_frontier_exception",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "IssueFrontierExceptionCommand",
+      "type": "object"
+    },
+    "IssueFrontierExceptionPayload": {
+      "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "context_limit": {
+          "exclusiveMinimum": 0,
+          "title": "Context Limit",
+          "type": "integer"
+        },
+        "effort": {
+          "minLength": 1,
+          "title": "Effort",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "max_attempts": {
+          "exclusiveMinimum": 0,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "output_limit": {
+          "exclusiveMinimum": 0,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/BudgetResource"
+        },
+        "resource_limit": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Resource Limit",
+          "type": "string"
+        },
+        "route": {
+          "minLength": 1,
+          "title": "Route",
+          "type": "string"
+        },
+        "scope_id": {
+          "format": "uuid",
+          "title": "Scope Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope_id",
+        "question",
+        "route",
+        "effort",
+        "context_limit",
+        "output_limit",
+        "max_attempts",
+        "resource",
+        "resource_limit",
+        "expires_at"
+      ],
+      "title": "IssueFrontierExceptionPayload",
       "type": "object"
     },
     "OperationReceipt": {
@@ -12191,6 +14743,115 @@
         "import_batch_id"
       ],
       "title": "PromoteImportBatchPayload",
+      "type": "object"
+    },
+    "ProviderAccount": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "format": "uuid",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "account_identity": {
+          "minLength": 1,
+          "title": "Account Identity",
+          "type": "string"
+        },
+        "balance_provenance": {
+          "enum": [
+            "provider_observed",
+            "locally_estimated",
+            "unknown"
+          ],
+          "title": "Balance Provenance",
+          "type": "string"
+        },
+        "billing_mode": {
+          "enum": [
+            "subscription",
+            "metered",
+            "purchased_credit",
+            "local"
+          ],
+          "title": "Billing Mode",
+          "type": "string"
+        },
+        "concurrency_limit": {
+          "minimum": 1,
+          "title": "Concurrency Limit",
+          "type": "integer"
+        },
+        "entitlement_evidence": {
+          "minLength": 1,
+          "title": "Entitlement Evidence",
+          "type": "string"
+        },
+        "evidence_observed_at": {
+          "format": "date-time",
+          "title": "Evidence Observed At",
+          "type": "string"
+        },
+        "observed_balance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Balance"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "rate_card_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rate Card Version"
+        },
+        "reset_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reset At"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_id",
+        "workspace_id",
+        "provider",
+        "account_identity",
+        "entitlement_evidence",
+        "evidence_observed_at",
+        "billing_mode",
+        "balance_provenance",
+        "concurrency_limit"
+      ],
+      "title": "ProviderAccount",
       "type": "object"
     },
     "PushedBranchExample": {
@@ -12383,6 +15044,69 @@
         "relation"
       ],
       "title": "PutRelationPayload",
+      "type": "object"
+    },
+    "ReconcileStageLaunchCommand": {
+      "$defs": {
+        "ReconcileStageLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "reason": {
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "launch_id",
+            "reason"
+          ],
+          "title": "ReconcileStageLaunchPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ReconcileStageLaunchPayload"
+        },
+        "type": {
+          "const": "reconcile_stage_launch",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ReconcileStageLaunchCommand",
+      "type": "object"
+    },
+    "ReconcileStageLaunchPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "launch_id": {
+          "format": "uuid",
+          "title": "Launch Id",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "launch_id",
+        "reason"
+      ],
+      "title": "ReconcileStageLaunchPayload",
       "type": "object"
     },
     "ReconciliationCounts": {
@@ -13206,6 +15930,33 @@
       "title": "RemoveRelationPayload",
       "type": "object"
     },
+    "RepositoryCursorPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "repository_id": {
+          "format": "uuid",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "created_at",
+        "repository_id"
+      ],
+      "title": "RepositoryCursorPayload",
+      "type": "object"
+    },
     "ReserveAuditorLaunchCommand": {
       "$defs": {
         "ReserveAuditorLaunchPayload": {
@@ -13279,6 +16030,618 @@
         "tool_call_id"
       ],
       "title": "ReserveAuditorLaunchPayload",
+      "type": "object"
+    },
+    "ReserveBudgetCommand": {
+      "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        },
+        "ReserveBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "account_id": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            },
+            "context_limit": {
+              "exclusiveMinimum": 0,
+              "title": "Context Limit",
+              "type": "integer"
+            },
+            "effort": {
+              "minLength": 1,
+              "title": "Effort",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "logical_call_id": {
+              "format": "uuid",
+              "title": "Logical Call Id",
+              "type": "string"
+            },
+            "model": {
+              "minLength": 1,
+              "title": "Model",
+              "type": "string"
+            },
+            "output_limit": {
+              "exclusiveMinimum": 0,
+              "title": "Output Limit",
+              "type": "integer"
+            },
+            "provider": {
+              "minLength": 1,
+              "title": "Provider",
+              "type": "string"
+            },
+            "resource": {
+              "$ref": "#/$defs/BudgetResource"
+            },
+            "scope_id": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            },
+            "worst_case_drawdown": {
+              "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+              "title": "Worst Case Drawdown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope_id",
+            "account_id",
+            "logical_call_id",
+            "transport_attempt_id",
+            "provider",
+            "model",
+            "effort",
+            "resource",
+            "worst_case_drawdown",
+            "context_limit",
+            "output_limit",
+            "expires_at"
+          ],
+          "title": "ReserveBudgetPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ReserveBudgetPayload"
+        },
+        "type": {
+          "const": "reserve_budget",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ReserveBudgetCommand",
+      "type": "object"
+    },
+    "ReserveBudgetPayload": {
+      "$defs": {
+        "BudgetResource": {
+          "enum": [
+            "cash",
+            "included_credit",
+            "native_quota",
+            "local_compute"
+          ],
+          "title": "BudgetResource",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "format": "uuid",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "context_limit": {
+          "exclusiveMinimum": 0,
+          "title": "Context Limit",
+          "type": "integer"
+        },
+        "effort": {
+          "minLength": 1,
+          "title": "Effort",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "logical_call_id": {
+          "format": "uuid",
+          "title": "Logical Call Id",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "output_limit": {
+          "exclusiveMinimum": 0,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/BudgetResource"
+        },
+        "scope_id": {
+          "format": "uuid",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "transport_attempt_id": {
+          "format": "uuid",
+          "title": "Transport Attempt Id",
+          "type": "string"
+        },
+        "worst_case_drawdown": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Worst Case Drawdown",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope_id",
+        "account_id",
+        "logical_call_id",
+        "transport_attempt_id",
+        "provider",
+        "model",
+        "effort",
+        "resource",
+        "worst_case_drawdown",
+        "context_limit",
+        "output_limit",
+        "expires_at"
+      ],
+      "title": "ReserveBudgetPayload",
+      "type": "object"
+    },
+    "ReserveStageLaunchCommand": {
+      "$defs": {
+        "ReserveStageLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Attempt Id"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "fallback_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fallback Reason"
+            },
+            "grant_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grant Id"
+            },
+            "is_fallback": {
+              "default": false,
+              "title": "Is Fallback",
+              "type": "boolean"
+            },
+            "prepared_context_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Prepared Context Sha256",
+              "type": "string"
+            },
+            "request_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Request Sha256",
+              "type": "string"
+            },
+            "requested_api": {
+              "minLength": 1,
+              "title": "Requested Api",
+              "type": "string"
+            },
+            "requested_effort": {
+              "minLength": 1,
+              "title": "Requested Effort",
+              "type": "string"
+            },
+            "requested_model": {
+              "minLength": 1,
+              "title": "Requested Model",
+              "type": "string"
+            },
+            "requested_provider": {
+              "minLength": 1,
+              "title": "Requested Provider",
+              "type": "string"
+            },
+            "requested_selector": {
+              "minLength": 1,
+              "title": "Requested Selector",
+              "type": "string"
+            },
+            "requested_wire_model": {
+              "minLength": 1,
+              "title": "Requested Wire Model",
+              "type": "string"
+            },
+            "resolved_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resolved Model"
+            },
+            "resolved_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resolved Provider"
+            },
+            "resolved_selector": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resolved Selector"
+            },
+            "revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision Id"
+            },
+            "role": {
+              "$ref": "#/$defs/StageLaunchRole"
+            },
+            "task_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Task Sha256",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "minLength": 1,
+              "title": "Tool Call Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "role",
+            "request_sha256",
+            "tool_call_id",
+            "task_sha256",
+            "prepared_context_sha256",
+            "requested_selector",
+            "requested_provider",
+            "requested_model",
+            "requested_api",
+            "requested_effort",
+            "requested_wire_model"
+          ],
+          "title": "ReserveStageLaunchPayload",
+          "type": "object"
+        },
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ReserveStageLaunchPayload"
+        },
+        "type": {
+          "const": "reserve_stage_launch",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ReserveStageLaunchCommand",
+      "type": "object"
+    },
+    "ReserveStageLaunchPayload": {
+      "$defs": {
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempt Id"
+        },
+        "candidate_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Reason"
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grant Id"
+        },
+        "is_fallback": {
+          "default": false,
+          "title": "Is Fallback",
+          "type": "boolean"
+        },
+        "prepared_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prepared Context Sha256",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "requested_api": {
+          "minLength": 1,
+          "title": "Requested Api",
+          "type": "string"
+        },
+        "requested_effort": {
+          "minLength": 1,
+          "title": "Requested Effort",
+          "type": "string"
+        },
+        "requested_model": {
+          "minLength": 1,
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "requested_provider": {
+          "minLength": 1,
+          "title": "Requested Provider",
+          "type": "string"
+        },
+        "requested_selector": {
+          "minLength": 1,
+          "title": "Requested Selector",
+          "type": "string"
+        },
+        "requested_wire_model": {
+          "minLength": 1,
+          "title": "Requested Wire Model",
+          "type": "string"
+        },
+        "resolved_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Model"
+        },
+        "resolved_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Provider"
+        },
+        "resolved_selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Selector"
+        },
+        "revision_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision Id"
+        },
+        "role": {
+          "$ref": "#/$defs/StageLaunchRole"
+        },
+        "task_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "minLength": 1,
+          "title": "Tool Call Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "role",
+        "request_sha256",
+        "tool_call_id",
+        "task_sha256",
+        "prepared_context_sha256",
+        "requested_selector",
+        "requested_provider",
+        "requested_model",
+        "requested_api",
+        "requested_effort",
+        "requested_wire_model"
+      ],
+      "title": "ReserveStageLaunchPayload",
       "type": "object"
     },
     "ReviseWorkCommand": {
@@ -14365,6 +17728,314 @@
       "title": "SettleAuditorLaunchPayload",
       "type": "object"
     },
+    "SettleBudgetCommand": {
+      "$defs": {
+        "SettleBudgetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "actual_drawdown": {
+              "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+              "title": "Actual Drawdown",
+              "type": "string"
+            },
+            "fence": {
+              "minimum": 1,
+              "title": "Fence",
+              "type": "integer"
+            },
+            "outcome": {
+              "enum": [
+                "success",
+                "error",
+                "timeout",
+                "cancelled",
+                "unknown"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "provenance": {
+              "enum": [
+                "provider_observed",
+                "locally_estimated",
+                "unknown"
+              ],
+              "title": "Provenance",
+              "type": "string"
+            },
+            "provider_request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Request Id"
+            },
+            "reservation_id": {
+              "format": "uuid",
+              "title": "Reservation Id",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "settled",
+                "unresolved"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "transport_attempt_id": {
+              "format": "uuid",
+              "title": "Transport Attempt Id",
+              "type": "string"
+            },
+            "usage": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usage",
+              "type": "object"
+            }
+          },
+          "required": [
+            "reservation_id",
+            "transport_attempt_id",
+            "fence",
+            "state",
+            "actual_drawdown",
+            "provenance",
+            "outcome"
+          ],
+          "title": "SettleBudgetPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SettleBudgetPayload"
+        },
+        "type": {
+          "const": "settle_budget",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "SettleBudgetCommand",
+      "type": "object"
+    },
+    "SettleBudgetPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "actual_drawdown": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Actual Drawdown",
+          "type": "string"
+        },
+        "fence": {
+          "minimum": 1,
+          "title": "Fence",
+          "type": "integer"
+        },
+        "outcome": {
+          "enum": [
+            "success",
+            "error",
+            "timeout",
+            "cancelled",
+            "unknown"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "provenance": {
+          "enum": [
+            "provider_observed",
+            "locally_estimated",
+            "unknown"
+          ],
+          "title": "Provenance",
+          "type": "string"
+        },
+        "provider_request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Request Id"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "settled",
+            "unresolved"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "transport_attempt_id": {
+          "format": "uuid",
+          "title": "Transport Attempt Id",
+          "type": "string"
+        },
+        "usage": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "required": [
+        "reservation_id",
+        "transport_attempt_id",
+        "fence",
+        "state",
+        "actual_drawdown",
+        "provenance",
+        "outcome"
+      ],
+      "title": "SettleBudgetPayload",
+      "type": "object"
+    },
+    "SettleStageLaunchCommand": {
+      "$defs": {
+        "SettleStageLaunchPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "launch_id": {
+              "format": "uuid",
+              "title": "Launch Id",
+              "type": "string"
+            },
+            "outcome": {
+              "additionalProperties": true,
+              "title": "Outcome",
+              "type": "object"
+            },
+            "outcome_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Outcome Sha256",
+              "type": "string"
+            },
+            "served_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Served Model"
+            },
+            "served_selector": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Served Selector"
+            }
+          },
+          "required": [
+            "launch_id",
+            "outcome_sha256"
+          ],
+          "title": "SettleStageLaunchPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SettleStageLaunchPayload"
+        },
+        "type": {
+          "const": "settle_stage_launch",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "SettleStageLaunchCommand",
+      "type": "object"
+    },
+    "SettleStageLaunchPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "launch_id": {
+          "format": "uuid",
+          "title": "Launch Id",
+          "type": "string"
+        },
+        "outcome": {
+          "additionalProperties": true,
+          "title": "Outcome",
+          "type": "object"
+        },
+        "outcome_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Outcome Sha256",
+          "type": "string"
+        },
+        "served_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Served Model"
+        },
+        "served_selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Served Selector"
+        }
+      },
+      "required": [
+        "launch_id",
+        "outcome_sha256"
+      ],
+      "title": "SettleStageLaunchPayload",
+      "type": "object"
+    },
     "SourceScope": {
       "additionalProperties": false,
       "properties": {
@@ -14451,6 +18122,312 @@
         "raw_export_sha256"
       ],
       "title": "StageImportBatchPayload",
+      "type": "object"
+    },
+    "StageLaunch": {
+      "$defs": {
+        "StageLaunchRole": {
+          "enum": [
+            "plan",
+            "implement",
+            "frontier",
+            "audit"
+          ],
+          "title": "StageLaunchRole",
+          "type": "string"
+        },
+        "StageLaunchStatus": {
+          "enum": [
+            "reserved",
+            "handed_off",
+            "settled",
+            "cancelled",
+            "interrupted",
+            "superseded"
+          ],
+          "title": "StageLaunchStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempt Id"
+        },
+        "candidate_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Reason"
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grant Id"
+        },
+        "handed_off_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Handed Off At"
+        },
+        "is_fallback": {
+          "default": false,
+          "title": "Is Fallback",
+          "type": "boolean"
+        },
+        "launch_id": {
+          "format": "uuid",
+          "title": "Launch Id",
+          "type": "string"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outcome"
+        },
+        "outcome_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outcome Sha256"
+        },
+        "prepared_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prepared Context Sha256",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "requested_api": {
+          "minLength": 1,
+          "title": "Requested Api",
+          "type": "string"
+        },
+        "requested_effort": {
+          "minLength": 1,
+          "title": "Requested Effort",
+          "type": "string"
+        },
+        "requested_model": {
+          "minLength": 1,
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "requested_provider": {
+          "minLength": 1,
+          "title": "Requested Provider",
+          "type": "string"
+        },
+        "requested_selector": {
+          "minLength": 1,
+          "title": "Requested Selector",
+          "type": "string"
+        },
+        "requested_wire_model": {
+          "minLength": 1,
+          "title": "Requested Wire Model",
+          "type": "string"
+        },
+        "reserved_at": {
+          "format": "date-time",
+          "title": "Reserved At",
+          "type": "string"
+        },
+        "resolved_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Model"
+        },
+        "resolved_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Provider"
+        },
+        "resolved_selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Selector"
+        },
+        "revision_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision Id"
+        },
+        "role": {
+          "$ref": "#/$defs/StageLaunchRole"
+        },
+        "served_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Served Model"
+        },
+        "served_selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Served Selector"
+        },
+        "settled_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Settled At"
+        },
+        "status": {
+          "$ref": "#/$defs/StageLaunchStatus"
+        },
+        "task_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "minLength": 1,
+          "title": "Tool Call Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "launch_id",
+        "workspace_id",
+        "work_id",
+        "role",
+        "request_sha256",
+        "tool_call_id",
+        "task_sha256",
+        "prepared_context_sha256",
+        "requested_selector",
+        "requested_provider",
+        "requested_model",
+        "requested_api",
+        "requested_effort",
+        "requested_wire_model",
+        "status",
+        "reserved_at"
+      ],
+      "title": "StageLaunch",
       "type": "object"
     },
     "StaleEvidenceExample": {
@@ -14697,6 +18674,83 @@
       "title": "StrictModel",
       "type": "object"
     },
+    "UsageSettlement": {
+      "additionalProperties": false,
+      "properties": {
+        "actual_drawdown": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Actual Drawdown",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "success",
+            "error",
+            "timeout",
+            "cancelled",
+            "unknown"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "provenance": {
+          "enum": [
+            "provider_observed",
+            "locally_estimated",
+            "unknown"
+          ],
+          "title": "Provenance",
+          "type": "string"
+        },
+        "provider_request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Request Id"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "settled",
+            "unresolved"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "transport_attempt_id": {
+          "format": "uuid",
+          "title": "Transport Attempt Id",
+          "type": "string"
+        },
+        "usage": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "required": [
+        "reservation_id",
+        "transport_attempt_id",
+        "state",
+        "actual_drawdown",
+        "provenance",
+        "outcome"
+      ],
+      "title": "UsageSettlement",
+      "type": "object"
+    },
     "WorkAlias": {
       "additionalProperties": false,
       "properties": {
@@ -14731,6 +18785,33 @@
         "origin"
       ],
       "title": "WorkAlias",
+      "type": "object"
+    },
+    "WorkItemsCursorPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "work_id",
+        "created_at"
+      ],
+      "title": "WorkItemsCursorPayload",
       "type": "object"
     },
     "WorkRevision": {

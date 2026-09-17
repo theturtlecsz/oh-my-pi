@@ -17,7 +17,11 @@ import * as managedGit from "@oh-my-pi/pi-coding-agent/utils/git";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { applyExtensionNewSessionSetup } from "../../packages/coding-agent/src/modes/controllers/extension-ui-controller";
-import { prepareNativeAuditRunner } from "../extensions/workflow/auditor-runner";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { createExtensionModelQuery } from "../../packages/coding-agent/src/extensibility/extensions/model-api";
+import { prepareNativeAuditRunner, prepareNativeStageRunner } from "../extensions/workflow/auditor-runner";
+import { resolveAuditPolicy } from "../extensions/workflow/audit-policy";
 import type { WorkflowBackend } from "../extensions/workflow/backend";
 import { createWorkflowHost } from "../extensions/workflow/host";
 import type { CloseAttemptSnapshot, CloseAttemptSession, ExecutionItemPhase, ExecutionSnapshot } from "../extensions/workflow/backend";
@@ -53,6 +57,260 @@ function executionOwnershipEntry(exec: ExecutionSnapshot, cwd: string, key: stri
 	return { type: "custom", customType: "work-now", id: crypto.randomUUID(), parentId: null, timestamp: new Date().toISOString(), data: {
 		backend: "work", executionWorkspace: { grantId: exec.grant.grant_id, key, primaryRoot: exec.grant.repository, path: cwd, branch: `execution/${key.toLowerCase()}`, baseline: exec.activeItem?.initial_git_baseline, reused: false, ...overrides },
 	} };
+}
+
+function createAuditorTestModel(overrides: Partial<Model> = {}): Model {
+	return buildModel({
+		id: "gpt-5.6-sol",
+		name: "GPT 5.6 Sol",
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		baseUrl: "https://example.test",
+		reasoning: true,
+		thinking: {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+			effortRouting: { medium: "gpt-5.6-sol" },
+		},
+		input: ["text"],
+		cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+		...overrides,
+	});
+}
+
+function createAuditorTestModelQuery(settingsOverride?: Settings, additionalModels: Model[] = []) {
+	const sol = createAuditorTestModel();
+	const available = [sol, ...additionalModels] as Model<Api>[];
+	const registry = {
+		getAvailable: () => available,
+	} as unknown as ModelRegistry;
+	const settings = settingsOverride ?? Settings.isolated({
+		modelRoles: {
+			audit: "openai-codex/gpt-5.6-sol:medium",
+		},
+	});
+	return createExtensionModelQuery(registry, settings, () => sol);
+}
+
+interface InMemoryStageLaunch {
+	launch_id: string;
+	work_key: string;
+	role: string;
+	status: "reserved" | "handed_off" | "settled" | "canceled" | "interrupted";
+	request_sha256?: string;
+	tool_call_id?: string;
+	task_sha256?: string;
+	outcome_sha256?: string;
+	outcome?: unknown;
+	served_model?: string | null;
+	served_selector?: string | null;
+	resolved_model?: string | null;
+	resolved_selector?: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+interface StageReservationInput {
+	workKey?: string;
+	work_key?: string;
+	workId?: string;
+	revisionId?: string;
+	candidateId?: string | null;
+	attemptId?: string | null;
+	grantId?: string | null;
+	role: string;
+	requestSha256?: string;
+	request_sha256?: string;
+	toolCallId?: string;
+	tool_call_id?: string;
+	taskSha256?: string;
+	task_sha256?: string;
+	resolvedModel?: string | null;
+	resolved_model?: string | null;
+	resolvedSelector?: string | null;
+	resolved_selector?: string | null;
+}
+
+interface StageSettleInput {
+	launchId: string;
+	outcomeSha256?: string;
+	outcome?: unknown;
+	servedModel?: string | null;
+	servedSelector?: string | null;
+}
+
+interface StageLaunchTransitions {
+	callLog?: string[];
+	onReserve?: (launch: InMemoryStageLaunch) => void;
+	onHandoff?: (launchId: string, taskSha256?: string) => void;
+	onSettle?: (input: StageSettleInput) => void;
+	onCancel?: (launchId: string, reason?: unknown) => void;
+	onReconcile?: (launchId: string, reason?: string) => void;
+}
+
+function attachStageLaunchFixture<T extends Record<string, unknown>>(
+	mockBackend: T,
+	defaultRepoId = "00000000-0000-7000-8000-000000000005",
+	transitions?: StageLaunchTransitions,
+): T {
+	const stageLaunches = new Map<string, InMemoryStageLaunch>();
+	let nextId = 1;
+
+	const backendRecord = mockBackend as Record<string, unknown>;
+	const workClient = backendRecord.workClient as Record<string, unknown> | undefined;
+
+	if (workClient) {
+		const origWorkItem = typeof workClient.workItem === "function"
+			? (workClient.workItem as (key: string) => Promise<Record<string, unknown> | undefined>).bind(workClient)
+			: undefined;
+		workClient.workItem = async (workKey: string) => {
+			const existing = origWorkItem ? await origWorkItem(workKey) : undefined;
+			return {
+				work_id: existing?.work_id ?? `work-${workKey}`,
+				workspace_id: backendRecord.workspaceId ?? "ws-1",
+				project_id: existing?.project_id ?? "proj-1",
+				repository_id: existing?.repository_id ?? defaultRepoId,
+				revision: existing?.revision ?? {
+					revision_id: `rev-${workKey}`,
+					work_id: existing?.work_id ?? `work-${workKey}`,
+					revision_number: 1,
+					title: "test",
+					description: "test",
+					scope: "repo",
+					acceptance_criteria: [],
+					content_sha256: "0".repeat(64),
+					created_by: "test",
+					created_at: new Date().toISOString(),
+				},
+				candidate: existing?.candidate ?? null,
+				state: existing?.state ?? "executing",
+				archived: false,
+				...existing,
+			};
+		};
+
+		const origWorkflow = typeof workClient.workflow === "function"
+			? (workClient.workflow as (key: string) => Promise<Record<string, unknown>>).bind(workClient)
+			: undefined;
+		workClient.workflow = async (workKey: string) => {
+			const existing = origWorkflow ? await origWorkflow(workKey) : {};
+			const rows = Array.from(stageLaunches.values());
+			const existingRows = Array.isArray(existing.stage_launches) ? existing.stage_launches : [];
+			return {
+				...existing,
+				stage_launches: [...existingRows, ...rows],
+			};
+		};
+	}
+
+	backendRecord.stageLaunches = stageLaunches;
+
+	backendRecord.reserveStageLaunch = async (input: StageReservationInput) => {
+		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
+		callLog?.push("reserveStageLaunch");
+		const launch_id = `launch-${nextId++}`;
+		const row: InMemoryStageLaunch = {
+			launch_id,
+			work_key: input.workKey ?? input.work_key ?? "OMP-1",
+			role: input.role,
+			status: "reserved",
+			request_sha256: input.requestSha256 ?? input.request_sha256,
+			tool_call_id: input.toolCallId ?? input.tool_call_id,
+			task_sha256: input.taskSha256 ?? input.task_sha256,
+			resolved_model: input.resolvedModel ?? input.resolved_model,
+			resolved_selector: input.resolvedSelector ?? input.resolved_selector,
+			created_at: new Date().toISOString(),
+			updated_at: new Date().toISOString(),
+		};
+		stageLaunches.set(launch_id, row);
+		transitions?.onReserve?.(row);
+		return {
+			...row,
+			workspace_id: backendRecord.workspaceId ?? "ws-1",
+			work_id: input.workId ?? input.work_key,
+			revision_id: input.revisionId ?? "rev-1",
+			candidate_id: input.candidateId ?? null,
+			attempt_id: input.attemptId ?? null,
+			grant_id: input.grantId ?? null,
+			status: "reserved" as const,
+		};
+	};
+
+	backendRecord.handoffStageLaunch = async (launchId: string, taskSha256?: string) => {
+		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
+		callLog?.push(`handoffStageLaunch:${launchId}`);
+		const row = stageLaunches.get(launchId);
+		if (row) {
+			row.status = "handed_off";
+			row.task_sha256 = taskSha256;
+			row.updated_at = new Date().toISOString();
+		}
+		transitions?.onHandoff?.(launchId, taskSha256);
+		return {
+			launch_id: launchId,
+			status: "handed_off" as const,
+			task_sha256: taskSha256,
+		};
+	};
+
+	backendRecord.settleStageLaunch = async (input: StageSettleInput) => {
+		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
+		callLog?.push("settleStageLaunch");
+		const row = stageLaunches.get(input.launchId);
+		if (row) {
+			row.status = "settled";
+			row.outcome_sha256 = input.outcomeSha256;
+			row.outcome = input.outcome;
+			row.served_model = input.servedModel;
+			row.served_selector = input.servedSelector;
+			row.updated_at = new Date().toISOString();
+		}
+		transitions?.onSettle?.(input);
+		return {
+			launch_id: input.launchId,
+			status: "settled" as const,
+			outcome_sha256: input.outcomeSha256 ?? null,
+			outcome: input.outcome ?? null,
+			served_model: input.servedModel ?? null,
+			served_selector: input.servedSelector ?? null,
+		};
+	};
+
+	backendRecord.cancelStageLaunch = async (launchId: string, reason?: unknown) => {
+		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
+		callLog?.push(`cancelStageLaunch:${launchId}`);
+		const row = stageLaunches.get(launchId);
+		if (row) {
+			row.status = "canceled";
+			row.outcome = reason;
+			row.updated_at = new Date().toISOString();
+		}
+		transitions?.onCancel?.(launchId, reason);
+		return {
+			launch_id: launchId,
+			status: "canceled" as const,
+		};
+	};
+
+	backendRecord.reconcileStageLaunch = async (launchId: string, reason?: string) => {
+		const callLog = transitions?.callLog ?? (backendRecord.callLog as string[] | undefined);
+		callLog?.push(`reconcileStageLaunch:${launchId}`);
+		const row = stageLaunches.get(launchId);
+		if (row) {
+			row.status = "interrupted";
+			row.outcome = reason;
+			row.updated_at = new Date().toISOString();
+		}
+		transitions?.onReconcile?.(launchId, reason);
+		return {
+			launch_id: launchId,
+			status: "interrupted" as const,
+		};
+	};
+
+	return mockBackend;
 }
 beforeEach(() => {
 	vi.spyOn(taskModule, "discoverAgents").mockResolvedValue({
@@ -161,6 +419,7 @@ describe("execution recovery identity guards", () => {
 		} as unknown as WorkflowBackend;
 		const ctx = {
 			cwd, taskDepth: 0,
+			models: createAuditorTestModelQuery(),
 			sessionManager: { getBranch: () => entries, getCwd: () => cwd, getSessionId: () => sessionId, getLeafId: () => "persisted-entry" },
 			ui: { notify: (text: string) => notices.push(text), theme: { fg: (_color: string, text: string) => text }, setStatus: () => {} },
 		} as unknown as ExtensionContext;
@@ -413,6 +672,24 @@ describe("native auditor runner (OMP-168)", () => {
 		});
 	}
 
+	function nativeStageModel(overrides: Partial<Model>): Model {
+		return {
+			id: "unknown",
+			name: "native stage test",
+			api: "openai-completions",
+			provider: "kimi-code",
+			baseUrl: "https://example.invalid",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1000,
+			maxTokens: 100,
+			compat: {} as Model["compat"],
+			thinking: { mode: "effort", efforts: ["high"] },
+			...overrides,
+		} as Model;
+	}
+
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -420,12 +697,155 @@ describe("native auditor runner (OMP-168)", () => {
 	test("prepareNativeAuditRunner fails if @audit role cannot be resolved", async () => {
 		mockDiscovery();
 		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const emptyQuery = createExtensionModelQuery(
+			{ getAvailable: () => [] as Model<Api>[] } as unknown as ModelRegistry,
+			Settings.isolated({}),
+			() => undefined,
+		);
 		const fakeCtx = {
 			cwd: repoRoot,
-			models: { resolve: () => undefined },
+			models: emptyQuery,
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
 		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow("@audit");
+	});
+
+	test("native stage defaults to installed role name and pins retry settings to allowlisted route", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer",
+			description: "Implementer agent",
+			systemPrompt: "Implement prompt",
+			model: ["google-antigravity/gemini-3.8-flash:high"],
+			tools: ["read", "grep", "glob", "lsp", "write"],
+			output: { properties: { verification_body: { type: "string" } } },
+			source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const gemini = nativeStageModel({
+			id: "gemini-3.8-flash",
+			provider: "google-antigravity",
+			api: "google-gemini-cli",
+			thinking: { mode: "google-level", efforts: ["low", "medium", "high"], effortRouting: { high: "gemini-3.8-flash-high" } },
+		});
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0, id: "native-implement", agent: "implementer", agentSource: "bundled", task: "edit", exitCode: 0,
+			output: JSON.stringify({ verification_body: "checked" }), stderr: "", truncated: false, durationMs: 1, tokens: 2, requests: 1,
+			resolvedModel: "google-antigravity/gemini-3.8-flash:high",
+		} as executorModule.SingleResult);
+		const registry = { getApiKey: vi.fn().mockResolvedValue("gemini-token") };
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: (selector: string) => selector.startsWith("google-antigravity/gemini-3.8-flash") ? gemini : undefined },
+			modelRegistry: registry,
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		const runner = await prepareNativeStageRunner(fakeCtx, { role: "implement", context: "sealed-context", writeRoots: [repoRoot] });
+		await runner("edit", "native-implement");
+		const options = runSubprocessSpy.mock.calls[0]?.[0];
+		expect(options.agent.name).toBe("implementer");
+		expect(options.modelOverride).toBe("google-antigravity/gemini-3.8-flash:high");
+		expect(options.modelRole).toBe("implement");
+		expect(options.context).toBeUndefined();
+		expect(options.task).toBe("edit\n\n<stage_context_data>\nsealed-context\n</stage_context_data>");
+		expect(options.nativeStageWriteRoots).toEqual([repoRoot]);
+		expect(options.parentActiveModelPattern).toBeUndefined();
+		expect(options.settings.get("retry.modelFallback")).toBe(false);
+		for (const chain of Object.values(options.settings.get("retry.fallbackChains"))) expect(chain).toEqual([]);
+	});
+
+	test("native implement preflight selects Luna when Gemini credentials are unavailable", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const luna = nativeStageModel({ id: "gpt-5.6-luna", provider: "openai-codex", api: "openai-codex-responses" });
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0, id: "native-fallback", agent: "implementer", agentSource: "bundled", task: "edit", exitCode: 0,
+			output: "{}", stderr: "", truncated: false, durationMs: 1, tokens: 2, requests: 1,
+			resolvedModel: "openai-codex/gpt-5.6-luna:high", resolvedModelIsFallback: true,
+		} as executorModule.SingleResult);
+		const registry = { getApiKey: vi.fn((model: Model) => Promise.resolve(model.provider === "openai-codex" ? "luna-token" : undefined)) };
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: (selector: string) => selector.startsWith("google-antigravity/") ? gemini : selector.startsWith("openai-codex/") ? luna : undefined },
+			modelRegistry: registry, taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		const runner = await prepareNativeStageRunner(fakeCtx, { role: "implement" });
+		await runner("edit", "native-fallback");
+		expect(runSubprocessSpy.mock.calls[0]?.[0].modelOverride).toBe("openai-codex/gpt-5.6-luna:high");
+		expect(registry.getApiKey).toHaveBeenCalledTimes(2);
+	});
+
+	test("native implement preflight falls back after primary transport failure", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const luna = nativeStageModel({ id: "gpt-5.6-luna", provider: "openai-codex", api: "openai-codex-responses" });
+		const probeSpy = vi.spyOn(ai, "completeSimple").mockRejectedValueOnce(new Error("503 no capacity")).mockResolvedValueOnce({ stopReason: "stop", content: [{ type: "text", text: "OK" }] } as never);
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0, id: "native-probe-fallback", agent: "implementer", agentSource: "bundled", task: "edit", exitCode: 0,
+			output: "{}", stderr: "", truncated: false, durationMs: 1, tokens: 2, requests: 1,
+			resolvedModel: "openai-codex/gpt-5.6-luna:high", resolvedModelIsFallback: true,
+		} as executorModule.SingleResult);
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: (selector: string) => selector.startsWith("google-antigravity/") ? gemini : selector.startsWith("openai-codex/") ? luna : undefined },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+		const runner = await prepareNativeStageRunner(fakeCtx, { role: "implement" });
+		await runner("edit", "native-probe-fallback");
+		expect(probeSpy).toHaveBeenCalledTimes(2);
+		expect(runSubprocessSpy.mock.calls[0]?.[0].modelOverride).toBe("openai-codex/gpt-5.6-luna:high");
+	});
+
+	test("native stage rejects cancellation before trying another route", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const controller = new AbortController();
+		controller.abort();
+		const registry = { getApiKey: vi.fn() };
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: () => undefined },
+			modelRegistry: registry, taskDepth: 0,
+		} as unknown as ExtensionContext;
+		await expect(prepareNativeStageRunner(fakeCtx, { role: "implement" }, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+		expect(registry.getApiKey).not.toHaveBeenCalled();
+	});
+
+	test("native stage refuses a subprocess that reports an unallowlisted served model", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const luna = nativeStageModel({ id: "gpt-5.6-luna", provider: "openai-codex", api: "openai-codex-responses" });
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0, id: "native-disallowed", agent: "implementer", agentSource: "bundled", task: "edit", exitCode: 0,
+			output: "{}", stderr: "", truncated: false, durationMs: 1, tokens: 2, requests: 1,
+			resolvedModel: "openai-codex/gpt-5.6-sol:high",
+		} as executorModule.SingleResult);
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: (selector: string) => selector.startsWith("openai-codex/") ? luna : undefined },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("luna-token") }, taskDepth: 0,
+		} as unknown as ExtensionContext;
+		const runner = await prepareNativeStageRunner(fakeCtx, { role: "implement" });
+		const result = await runner("edit", "native-disallowed");
+		expect(runSubprocessSpy).toHaveBeenCalledTimes(1);
+		expect(result.error).toMatch(/served disallowed model/);
+		expect(result.payload).toBeUndefined();
 	});
 
 	test("prepareNativeAuditRunner returns a runner when preconditions exist", async () => {
@@ -433,7 +853,7 @@ describe("native auditor runner (OMP-168)", () => {
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
-			models: { resolve: (role: string) => (role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
@@ -448,11 +868,11 @@ describe("native auditor runner (OMP-168)", () => {
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
-			models: { resolve: (role: string) => (role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve(undefined) },
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
-		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow("No provider credentials configured for @audit model openai/gpt-5.2");
+		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow("No provider credentials configured for @audit model openai-codex/gpt-5.6-sol");
 		expect(completeSpy).not.toHaveBeenCalled();
 		expect(runSubprocessSpy).not.toHaveBeenCalled();
 	});
@@ -468,12 +888,12 @@ describe("native auditor runner (OMP-168)", () => {
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
-			models: { resolve: (role: string) => (role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
 		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow(
-			"@audit transport preflight error for openai/gpt-5.2: 401 unauthorized",
+			"@audit transport preflight error for openai-codex/gpt-5.6-sol: 401 unauthorized",
 		);
 		expect(runSubprocessSpy).not.toHaveBeenCalled();
 	});
@@ -485,12 +905,12 @@ describe("native auditor runner (OMP-168)", () => {
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
-			models: { resolve: (role: string) => (role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
 		await expect(prepareNativeAuditRunner(fakeCtx)).rejects.toThrow(
-			"@audit transport preflight failed for openai/gpt-5.2: ECONNREFUSED 127.0.0.1:443",
+			"@audit transport preflight failed for openai-codex/gpt-5.6-sol: ECONNREFUSED 127.0.0.1:443",
 		);
 		expect(runSubprocessSpy).not.toHaveBeenCalled();
 	});
@@ -500,7 +920,7 @@ describe("native auditor runner (OMP-168)", () => {
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
-			models: { resolve: (role: string) => (role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
@@ -514,7 +934,7 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(result.payload).toBeUndefined();
 	});
 	test("forwards effective settings to the native auditor subprocess", async () => {
-		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "test/auditor" } });
+		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "openai-codex/gpt-5.6-sol:medium" } });
 		const settingsSpy = vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(sentinelSettings);
 
 		const sentinelOutputSchema = { properties: { report: { type: "string" } } };
@@ -555,10 +975,7 @@ describe("native auditor runner (OMP-168)", () => {
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
-			models: {
-				resolve: (role: string) =>
-					role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined,
-			},
+			models: createAuditorTestModelQuery(sentinelSettings),
 			modelRegistry: sentinelRegistry,
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
@@ -574,7 +991,7 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(runSubprocessSpy).toHaveBeenCalledTimes(1);
 		expect(capturedOptions).toBeDefined();
 		expect(capturedOptions?.settings).toBe(sentinelSettings);
-		expect(capturedOptions?.modelOverride).toEqual(["@audit"]);
+		expect(capturedOptions?.modelOverride).toBe("openai-codex/gpt-5.6-sol:medium");
 		expect(capturedOptions?.modelRole).toBe("audit");
 		expect(capturedOptions?.modelRegistry).toBe(sentinelRegistry);
 		expect(capturedOptions?.outputSchema).toBe(sentinelOutputSchema);
@@ -585,7 +1002,7 @@ describe("native auditor runner (OMP-168)", () => {
 	});
 
 	test("forwards authStorage and getApiKey resolver for OAuth-backed @audit models (OMP-176)", async () => {
-		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "kimi-code/k3:high" } });
+		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "openai-codex/gpt-5.6-sol:medium" } });
 		vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(sentinelSettings);
 		mockDiscovery();
 
@@ -618,10 +1035,7 @@ describe("native auditor runner (OMP-168)", () => {
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
-			models: {
-				resolve: (role: string) =>
-					role === "@audit" ? { id: "k3", provider: "kimi-code" } : undefined,
-			},
+			models: createAuditorTestModelQuery(sentinelSettings),
 			modelRegistry: sentinelRegistry,
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
@@ -635,7 +1049,7 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(capturedOptions?.authStorage).toBe(fakeAuthStorage as unknown as executorModule.ExecutorOptions["authStorage"]);
 		expect(typeof capturedOptions?.getApiKey).toBe("function");
 
-		const testModel = { id: "k3", provider: "kimi-code" } as unknown as Parameters<NonNullable<executorModule.ExecutorOptions["getApiKey"]>>[0];
+		const testModel = createAuditorTestModel();
 		const resolvedKey = await capturedOptions?.getApiKey?.(testModel);
 		expect(fakeResolver).toHaveBeenCalledWith(testModel, "attempt-oauth-1");
 		expect(typeof resolvedKey).toBe("function");
@@ -696,10 +1110,7 @@ describe("native auditor runner (OMP-168)", () => {
 		const repoRoot = path.resolve(import.meta.dir, "../..");
 		const fakeCtx = {
 			cwd: repoRoot,
-			models: {
-				resolve: (role: string) =>
-					role === "@audit" ? { id: "gpt-5.2", provider: "openai" } : undefined,
-			},
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			taskDepth: 0,
 		} as unknown as ExtensionContext;
@@ -739,9 +1150,8 @@ describe("native auditor runner (OMP-168)", () => {
 			executionChildren: async () => ({ umbrella: false, children: [] }),
 			getExecution: async () => {
 				getExecutionCallCount++;
-				const effectiveState = getExecutionCallCount % 2 === 1 ? "active" : grantState;
 				return {
-					grant: { grant_id: "grant-1", grant_version: 1, state: effectiveState, terminal_reason: terminalReason, judge_sha256: mockJudge, repository: path.resolve(import.meta.dir, "../..") },
+					grant: { grant_id: "grant-1", grant_version: 1, state: grantState, terminal_reason: terminalReason, judge_sha256: mockJudge, repository: path.resolve(import.meta.dir, "../..") },
 					items: [{ position: 0, work_id: "work-1", phase: "executing", plan_stamp: { paths: [] } }],
 					activeItem: { position: 0, work_id: "work-1", phase: "executing", plan_stamp: { paths: [] }, close_attempts_started: 0 },
 				};
@@ -758,6 +1168,7 @@ describe("native auditor runner (OMP-168)", () => {
 			},
 		} as unknown as WorkflowBackend;
 
+		attachStageLaunchFixture(mockBackend, path.resolve(import.meta.dir, "../.."));
 		createWorkflowHost({
 			backend: mockBackend,
 			teamNoun: "the ledger",
@@ -768,24 +1179,27 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(registeredExecute).toBeDefined();
 
 		mockDiscovery();
-		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
-			index: 0,
-			id: "att-1",
-			agent: "auditor",
-			agentSource: "bundled",
-			task: "task",
-			exitCode: 0,
-			output: JSON.stringify({ report: "VERDICT: NEEDS_FIX\nAC-1 failed" }),
-			stderr: "",
-			truncated: false,
-			durationMs: 10,
-			tokens: 10,
-			requests: 1,
-		} as executorModule.SingleResult);
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: { onNativeStageHandoff?: () => Promise<void> | void }) => {
+			await options?.onNativeStageHandoff?.();
+			return {
+				index: 0,
+				id: "att-1",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: JSON.stringify({ report: "VERDICT: NEEDS_FIX\nAC-1 failed" }),
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+			} as executorModule.SingleResult;
+		});
 
 		const fakeCtx = {
 			cwd: path.resolve(import.meta.dir, "../.."),
-			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			taskDepth: 0,
 			ui: { notify: () => {} },
@@ -991,6 +1405,7 @@ describe("native auditor runner (OMP-168)", () => {
 			cwd,
 			taskDepth: 0,
 			abort: () => {},
+			models: createAuditorTestModelQuery(),
 			sessionManager: { getBranch: () => [ownershipEntry, ...branchEntries], getSessionId: () => "pause-notice-session", getCwd: () => cwd },
 			ui: {
 				notify: (text: string) => { notifications.push(text); },
@@ -1660,6 +2075,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			const fakeCtx = {
 				cwd: testDir,
 				taskDepth: 0,
+				models: createAuditorTestModelQuery(),
 				ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
 			} as unknown as ExtensionContext;
 
@@ -2081,7 +2497,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const fakeCtx = {
 			cwd,
 			taskDepth: 0,
-			models: {},
+			models: createAuditorTestModelQuery(),
 			sessionManager: {
 				getBranch: () => [ownershipEntry, ...branchEntries],
 				getSessionId: () => "recovery-relocation-session",
@@ -2194,6 +2610,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const fakeCtx = {
 			cwd,
 			taskDepth: 0,
+			models: createAuditorTestModelQuery(),
 			sessionManager: { getBranch: () => [ownershipEntry], getSessionId: () => "sess-1", getCwd: () => cwd },
 			ui: {
 				notify: (text: string) => { notifications.push(text); },
@@ -2296,6 +2713,7 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const fakeCtx = {
 			cwd,
 			taskDepth: 0,
+			models: createAuditorTestModelQuery(),
 			sessionManager: { getBranch: () => [ownershipEntry], getSessionId: () => "sess-1", getCwd: () => cwd },
 			ui: {
 				notify: (text: string) => { notifications.push(text); },
@@ -2339,6 +2757,12 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const contractDir = path.join(dir, "python/omp-work/src/omp_work/contracts/v1");
 		const realContractDir = path.resolve(import.meta.dir, "../../python/omp-work/src/omp_work/contracts/v1");
 		fs.cpSync(realContractDir, contractDir, { recursive: true });
+		// Disposable test repo approval follows candidate contract bytes; production
+		// approval.json remains unchanged and is never used as fixture authority.
+		fs.writeFileSync(
+			path.join(contractDir, "approval.json"),
+			JSON.stringify({ contract_version: "work.omp.dev/v1", contract_sha256: WORK_CONTRACT_SHA256, approved_by: "owner", approved_at: "2026-09-14T00:00:00Z", issue: "OMP-247" }) + "\n",
+		);
 		spawnSync("git", ["add", "."], { cwd: dir });
 		spawnSync("git", ["commit", "-m", "initial commit"], { cwd: dir });
 		const head = headCommit(dir) ?? "0".repeat(40);
@@ -2550,6 +2974,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			callLog.push("restartWorkService");
 		});
 
+		attachStageLaunchFixture(mockBackend, repo.dir);
 		createWorkflowHost({
 			backend: mockBackend,
 			teamNoun: "the ledger",
@@ -2562,20 +2987,23 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		expect(registeredExecute).toBeDefined();
 
 		mockDiscovery();
-		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
-			index: 0,
-			id: "att-199",
-			agent: "auditor",
-			agentSource: "bundled",
-			task: "task",
-			exitCode: 0,
-			output: JSON.stringify({ report: "VERDICT: PASS\n(none)" }),
-			stderr: "",
-			truncated: false,
-			durationMs: 10,
-			tokens: 10,
-			requests: 1,
-		} as executorModule.SingleResult);
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: { onNativeStageHandoff?: () => Promise<void> | void }) => {
+			await options?.onNativeStageHandoff?.();
+			return {
+				index: 0,
+				id: "att-199",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: JSON.stringify({ report: "VERDICT: PASS\n(none)" }),
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+			} as executorModule.SingleResult;
+		});
 
 		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/execution/omp-199", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
 		vi.spyOn(gitModule, "verifyMergeConfirmation").mockReturnValue({ confirmed: true, detail: "PR merged and origin/main contains candidate" });
@@ -2585,7 +3013,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			cwd: repo.dir,
 			taskDepth: 0,
 			sessionManager: { getBranch: () => [] },
-			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			ui: {
 				notify: () => {},
@@ -2619,21 +3047,24 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			expect(callLog).toContain("beginCloseAttempt");
 			expect(callLog).toContain("completeExecutionItem");
 
-			// Verify exact call order: rebind -> restart -> healthReady -> freeze -> beginCloseAttempt -> complete
+			// Verify exact call order: rebind -> restart -> post-restart health -> freeze -> beginCloseAttempt -> final health -> complete.
 			const rebindIdx = callLog.indexOf("setExecutionState:service_refresh");
 			const restartIdx = callLog.indexOf("restartWorkService");
-			const healthIdx = callLog.lastIndexOf("healthReady");
+			const initialHealthIdx = callLog.indexOf("healthReady");
+			const postRestartHealthIdx = restartIdx >= 0 ? callLog.indexOf("healthReady", restartIdx + 1) : -1;
+			const lastHealthIdx = callLog.lastIndexOf("healthReady");
 			const freezeIdx = callLog.indexOf("finalizeExecutionCandidate");
 			const attemptIdx = callLog.indexOf("beginCloseAttempt");
 			const completeIdx = callLog.indexOf("completeExecutionItem");
 
 			if (allowRefresh) {
 				expect(rebindIdx).toBeLessThan(restartIdx);
-				expect(restartIdx).toBeLessThan(healthIdx);
+				expect(restartIdx).toBeLessThan(postRestartHealthIdx);
 			}
-			expect(healthIdx).toBeLessThan(freezeIdx);
+			expect(initialHealthIdx).toBeLessThan(freezeIdx);
 			expect(freezeIdx).toBeLessThan(attemptIdx);
-			expect(attemptIdx).toBeLessThan(completeIdx);
+			expect(attemptIdx).toBeLessThan(lastHealthIdx);
+			expect(lastHealthIdx).toBeLessThan(completeIdx);
 		} finally {
 			repo.cleanup();
 		}
@@ -2782,6 +3213,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			callLog.push("restartWorkService");
 		});
 
+		attachStageLaunchFixture(mockBackend, repo.dir, { callLog });
 		createWorkflowHost({
 			backend: mockBackend,
 			teamNoun: "the ledger",
@@ -2818,7 +3250,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			cwd: repo.dir,
 			taskDepth: 0,
 			sessionManager: { getBranch: () => [] },
-			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			ui: {
 				notify: () => {},
@@ -2835,9 +3267,9 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			}, new AbortController().signal, () => {}, fakeCtx);
 
 			expect(res.content[0]?.text).toContain("Auditor launch failed before start: transport dispatch failed");
-			expect(callLog).toContain("reserveAuditorLaunch");
-			expect(callLog).toContain("cancelAuditorLaunch:launch-251");
-			expect(callLog).not.toContain("settleAuditorLaunch");
+			expect(callLog).toContain("reserveStageLaunch");
+			expect(callLog).toContain("cancelStageLaunch:launch-1");
+			expect(callLog).not.toContain("settleStageLaunch");
 			expect(callLog).not.toContain("completeExecutionItem");
 		} finally {
 			repo.cleanup();
@@ -2994,7 +3426,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			cwd: repo.dir,
 			taskDepth: 0,
 			sessionManager: { getBranch: () => [] },
-			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			ui: {
 				notify: () => {},
@@ -3110,8 +3542,24 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 		const repo = makeTempRepo();
 		let ownershipEntry: CustomEntry | undefined;
 		let registeredExecute: ((id: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: ExtensionContext) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
-		const sentMessages: Array<{ customType?: string; content?: string }> = [];
+		type ContinuationIdentity = { grantId: string; sessionId: string; workId: string; revisionId: string; preReservationVersion: number; postVersion: number; messageId: string };
+		type OutboxRecord = ContinuationIdentity & { status: "pending" | "queued"; at: string };
+		const sentMessages: Array<{ customType?: string; content?: string; details?: { executionContinuation?: ContinuationIdentity } }> = [];
 		const appendedEntries: string[] = [];
+		const appendedOutbox: OutboxRecord[] = [];
+		// The checkpoint side of the seam: what the receipt-backed delivery API
+		// received, and what the service was asked to attest for it.
+		const deliveredCheckpoints: Array<{ customType?: string; content?: string }> = [];
+		const attestations: Array<{ eventId: string; sessionId: string; renderedSha256: string; status: string }> = [];
+		// One ordered log of everything that crosses the seam, in the order it
+		// really happened: the installed journey's defect was purely one of order.
+		const seam: string[] = [];
+		const notifications: string[] = [];
+		// The receipt-backed delivery API resolves only after real injection into
+		// the transcript, which cannot happen before the tool turn yields (OMP-97).
+		// The gate stands in for that yield: nothing that must follow the
+		// checkpoint may be observable before the test releases it.
+		let injection = Promise.withResolvers<void>();
 		const fakePi = {
 			logger: { warn: () => {}, error: () => {}, debug: () => {}, info: () => {} },
 			getSessionId: () => "checkpoint-recovery-session",
@@ -3123,9 +3571,28 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			registerCommand: () => {},
 			registerFlag: () => {},
 			on: () => {},
-			sendMessage: (message: { customType?: string; content?: string }) => { sentMessages.push(message); },
-			appendEntry: (customType: string) => { appendedEntries.push(customType); },
+			sendMessage: (message: typeof sentMessages[number]) => {
+				sentMessages.push(message);
+				seam.push(`sendMessage:${message.customType}`);
+			},
+			deliverMessage: async (message: { customType?: string; content?: string }) => {
+				deliveredCheckpoints.push(message);
+				seam.push(`deliverMessage:${message.customType}`);
+				await injection.promise;
+				seam.push("injected");
+			},
+			appendEntry: (customType: string, data?: unknown) => {
+				appendedEntries.push(customType);
+				if (customType === "work-now-execute-outbox" && data && typeof data === "object") {
+					appendedOutbox.push(data as OutboxRecord);
+					seam.push(`outbox:${(data as OutboxRecord).status}`);
+				}
+			},
 		} as unknown as ExtensionAPI;
+		/** Let the settlement chain (attestation, then the guarded continuation) run to completion. */
+		const settleDeliveries = async () => {
+			for (let i = 0; i < 4; i++) await new Promise<void>(resolve => setTimeout(resolve, 0));
+		};
 
 		// Modify sealed python file
 		fs.writeFileSync(path.join(repo.dir, "python/omp-work/src/omp_work/v1/store.py"), "# modified source\n");
@@ -3134,10 +3601,10 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			cwd: repo.dir,
 			taskDepth: 0,
 			sessionManager: { getBranch: () => ownershipEntry ? [ownershipEntry] : [], getSessionId: () => "checkpoint-recovery-session", getCwd: () => repo.dir },
-			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			ui: {
-				notify: () => {},
+				notify: (text: string) => { notifications.push(text); },
 				theme: { fg: (_c: string, t: string) => t },
 				setStatus: () => {},
 			},
@@ -3210,24 +3677,16 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 
 		const callLog: string[] = [];
 		ownershipEntry = executionOwnershipEntry(exec, repo.dir, "OMP-199");
+		// The view shape the real backend hands to checkpoint delivery (CloseEventView).
 		let pendingEvents = [
 			{
-				event_id: "ev-pending-1",
-				sequence: 1,
-				work_id: "uuid-199",
-				attempt_id: null,
-				launch_id: null,
-				event_type: "close_attempt_started",
-				reason_code: "started",
-				reason: "started",
-				legal_next_actions: [] as string[],
-				remaining_launches: 3,
-				remaining_reports: 2,
-				requires_fresh_authorization: false,
-				rendered_text: "close attempt started",
-				rendered_sha256: "0".repeat(64),
-				requires_delivery: true,
-				created_at: new Date().toISOString(),
+				eventId: "ev-pending-1",
+				eventType: "close_attempt_started",
+				reasonCode: "started",
+				renderedText: "close attempt started",
+				renderedSha256: "0".repeat(64),
+				requiresDelivery: true,
+				requiresFreshAuthorization: false,
 			},
 		];
 		let suppressCheckpointDelivery = false;
@@ -3237,10 +3696,16 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
 			pendingDeliveries: async () => pendingEvents,
+			attestDelivery: async (eventId: string, sessionId: string, renderedSha256: string, status: string) => {
+				attestations.push({ eventId, sessionId, renderedSha256, status });
+				seam.push(`attestDelivery:${status}`);
+				return { status: "applied", event: { eventId, eventType: "close_attempt_started", reasonCode: "delivery_attested", renderedText: "attested", renderedSha256, requiresDelivery: false, requiresFreshAuthorization: false } };
+			},
 			findIssue: async () => ({ id: "uuid-199", key: "OMP-199", title: "Test 199", project: "The Bookends" }),
 			issueDetail: async () => ({ key: "OMP-199", attemptSnapshot: undefined }),
 			executionChildren: async () => ({ umbrella: false, children: [] }),
 			getExecution: async (selector?: string) => {
+				if (selector === exec.grant.grant_id) seam.push("refetch:grant");
 				if (suppressCheckpointDelivery && selector === exec.grant.grant_id) {
 					suppressCheckpointDelivery = false;
 					return {
@@ -3329,6 +3794,7 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			callLog.push("restartWorkService");
 		});
 
+		attachStageLaunchFixture(mockBackend, repo.dir);
 		createWorkflowHost({
 			backend: mockBackend,
 			teamNoun: "the ledger",
@@ -3337,45 +3803,134 @@ describe("service refresh during autonomous execution review (OMP-199)", () => {
 			restartWorkService: restartMock,
 		})(fakePi);
 
-		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
-			index: 0,
-			id: "att-199",
-			agent: "auditor",
-			agentSource: "bundled",
-			task: "task",
-			exitCode: 0,
-			output: JSON.stringify({ report: "VERDICT: PASS\n(none)" }),
-			stderr: "",
-			truncated: false,
-			durationMs: 10,
-			tokens: 10,
-			requests: 1,
-		} as executorModule.SingleResult);
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: { onNativeStageHandoff?: () => Promise<void> | void }) => {
+			await options?.onNativeStageHandoff?.();
+			return {
+				index: 0,
+				id: "att-199",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: JSON.stringify({ report: "VERDICT: PASS\n(none)" }),
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+			} as executorModule.SingleResult;
+		});
 
 		vi.spyOn(gitModule, "pushCandidate").mockResolvedValue({ status: "pushed", remoteRef: "refs/heads/execution/omp-199", remoteCommit: "1".repeat(40), priorTip: repo.headSha });
 		vi.spyOn(gitModule, "verifyMergeConfirmation").mockReturnValue({ confirmed: true, detail: "PR merged and origin/main contains candidate" });
 		vi.spyOn(gitModule, "rangeDiffSha256").mockReturnValue("diff-sha-199");
 
 		try {
-			// First run: active checkpoint continuation uses guarded helper and paired outbox.
+			// First run: the handler returns while the checkpoint is still in flight.
 			const res1 = await registeredExecute!("call-1", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
 			expect(res1.content[0]?.text).toContain("queued for delivery");
+			expect(res1.content[0]?.text).toContain("END YOUR TURN NOW");
+			expect(res1.content[0]?.text).not.toContain("no execution continuation prompt was sent");
+			// The result is the terminal marker the loop fences later same-response calls on (OMP-246).
+			expect((res1 as unknown as { details?: { endTurn?: unknown } }).details).toMatchObject({ endTurn: true });
 			expect(restartCount).toBe(1);
 			expect(callLog.filter(c => c === "setExecutionState:service_refresh")).toHaveLength(1);
 			expect(callLog).not.toContain("finalizeExecutionCandidate");
 			expect(gitModule.dirtyPaths(repo.dir)).toContain("python/omp-work/src/omp_work/v1/store.py");
-			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(1);
-			expect(appendedEntries.filter(type => type === "work-now-execute-outbox")).toHaveLength(2);
-
-			// Original production race: checkpoint queued while active, but grant is
-			// completed at the exact delivery-seam re-fetch. No prompt or outbox.
-			sentMessages.length = 0;
-			appendedEntries.length = 0;
-			suppressCheckpointDelivery = true;
-			const suppressed = await registeredExecute!("call-2", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
-			expect(suppressed.content[0]?.text).toContain("no execution continuation prompt was sent");
+			// The installed journey's defect, stated as the negative: with the
+			// checkpoint handed to the receipt-backed API but not yet injected, NO
+			// continuation has been sent, NO outbox record exists, and the grant has
+			// not been re-fetched for a send. The exact rendered text did reach the
+			// delivery API before the handler returned.
+			await settleDeliveries();
+			expect(deliveredCheckpoints).toEqual([{ customType: "close-attempt-checkpoint", content: "close attempt started" }]);
+			expect(attestations).toEqual([]);
 			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(0);
 			expect(appendedEntries.filter(type => type === "work-now-execute-outbox")).toHaveLength(0);
+			expect(seam).toEqual(["deliverMessage:close-attempt-checkpoint"]);
+
+			// Re-entry while that checkpoint is still settling (the model calling
+			// begin_execution_review again before the yield lands): the event is
+			// deduped in flight and the pending schedule is joined, not doubled.
+			const reentered = await registeredExecute!("call-1b", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(reentered.content[0]?.text).toContain("queued for delivery");
+			expect((reentered as unknown as { details?: { endTurn?: unknown } }).details).toMatchObject({ endTurn: true });
+			expect(restartCount).toBe(1);
+			await settleDeliveries();
+			expect(deliveredCheckpoints).toHaveLength(1);
+			expect(attestations).toEqual([]);
+			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(0);
+			expect(seam).toEqual(["deliverMessage:close-attempt-checkpoint"]);
+
+			// The turn yields: the checkpoint injects, the attestation returns, and
+			// ONLY THEN is exactly one continuation sent through the guarded helper.
+			injection.resolve();
+			await settleDeliveries();
+			expect(attestations).toEqual([{ eventId: "ev-pending-1", sessionId: "checkpoint-recovery-session", renderedSha256: "0".repeat(64), status: "delivered" }]);
+			// Real order across the seam: injection, attestation, the grant re-fetch
+			// at send time, the fail-closed pending record, the prompt, the queued record.
+			expect(seam).toEqual([
+				"deliverMessage:close-attempt-checkpoint",
+				"injected",
+				"attestDelivery:delivered",
+				"refetch:grant",
+				"outbox:pending",
+				"sendMessage:work-execute",
+				"outbox:queued",
+			]);
+			// Exactly one continuation for the two handler calls, bound to the
+			// refreshed grant at its current version (no reservation is spent here,
+			// so pre == post), this session, the active item, and its claimed revision.
+			const continuations = sentMessages.filter(message => message.customType === "work-execute");
+			expect(continuations).toHaveLength(1);
+			const identity = continuations[0]?.details?.executionContinuation;
+			expect(identity).toMatchObject({
+				grantId: "grant-199",
+				sessionId: "checkpoint-recovery-session",
+				workId: "uuid-199",
+				revisionId: "rev-1",
+				preReservationVersion: exec.grant.grant_version,
+				postVersion: exec.grant.grant_version,
+			});
+			expect(typeof identity?.messageId).toBe("string");
+			// One paired outbox: the fail-closed pending record before the send, the
+			// queued record after it, both carrying the delivered message id.
+			expect(appendedEntries.filter(type => type === "work-now-execute-outbox")).toHaveLength(2);
+			expect(appendedOutbox.map(record => record.status)).toEqual(["pending", "queued"]);
+			expect(new Set(appendedOutbox.map(record => record.messageId))).toEqual(new Set([identity?.messageId]));
+			expect(notifications.filter(text => text.includes("no execution continuation prompt was sent"))).toHaveLength(0);
+
+			// Original production race: checkpoint queued while active, but grant is
+			// completed at the delivery-seam re-fetch. That re-fetch now happens only
+			// after the checkpoint settles, so while it is in flight nothing has been
+			// decided: the suppression is unconsumed, no prompt, no outbox.
+			sentMessages.length = 0;
+			appendedEntries.length = 0;
+			appendedOutbox.length = 0;
+			seam.length = 0;
+			injection = Promise.withResolvers<void>();
+			suppressCheckpointDelivery = true;
+			const suppressed = await registeredExecute!("call-2", { action: "begin_execution_review", work: "OMP-199", body: "body" }, new AbortController().signal, () => {}, fakeCtx);
+			expect(suppressed.content[0]?.text).toContain("queued for delivery");
+			expect((suppressed as unknown as { details?: { endTurn?: unknown } }).details).toMatchObject({ endTurn: true });
+			await settleDeliveries();
+			expect(suppressCheckpointDelivery).toBe(true);
+			expect(seam).toEqual(["deliverMessage:close-attempt-checkpoint"]);
+			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(0);
+			// The checkpoint is still delivered and attested a second time; the
+			// guarded send then sees the completed grant: no prompt, no outbox, and
+			// the no-continuation outcome is surfaced as a notice instead.
+			injection.resolve();
+			await settleDeliveries();
+			expect(suppressCheckpointDelivery).toBe(false);
+			expect(deliveredCheckpoints).toHaveLength(2);
+			expect(attestations).toHaveLength(2);
+			expect(attestations[1]).toMatchObject({ eventId: "ev-pending-1", status: "delivered" });
+			expect(seam).toEqual(["deliverMessage:close-attempt-checkpoint", "injected", "attestDelivery:delivered", "refetch:grant"]);
+			expect(sentMessages.filter(message => message.customType === "work-execute")).toHaveLength(0);
+			expect(appendedEntries.filter(type => type === "work-now-execute-outbox")).toHaveLength(0);
+			expect(appendedOutbox).toEqual([]);
+			expect(notifications.filter(text => text.includes("no execution continuation prompt was sent after checkpoint attestation"))).toHaveLength(1);
 
 			// Third run: working tree is STILL dirty, but cached marker prevents a second refresh/restart.
 			pendingEvents = [];
@@ -3426,8 +3981,9 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 				findIssue: async () => ({ id: "work-233", key: "OMP-233", title: "Next child" }),
 				workClient: { healthReady: health, workItem: async () => ({ work_id: "work-233", revision: { revision_id: "rev-233", description: "Next child" } }), workflow: async () => ({ relations: [] }) },
 			} as unknown as WorkflowBackend;
+			attachStageLaunchFixture(backend, repo.dir);
 			createWorkflowHost({ backend, teamNoun: "ledger", entryType: "work-now", acceptEntry: () => true, executionWorkspaceManager: { primaryRoot, ensure, cleanup: vi.fn() } })(pi);
-			const context = { cwd: repo.dir, taskDepth: 0, newSession, ui: { notify: (text: string) => notifications.push(text) } } as unknown as ExtensionContext;
+			const context = { cwd: repo.dir, taskDepth: 0, models: createAuditorTestModelQuery(), newSession, ui: { notify: (text: string) => notifications.push(text) } } as unknown as ExtensionContext;
 			await commands.get("execute")!("OMP-233", context);
 			expect(notifications.join("\n")).toContain("OMP-999");
 			expect(notifications.join("\n")).toContain("Cannot begin execution");
@@ -3513,6 +4069,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			const fakeCtx = {
 				cwd: "/tmp/repo",
 				taskDepth: 0,
+				models: createAuditorTestModelQuery(),
 				// Branch-routing fixture uses a nonpersistent SDK frame; native disk tests live separately.
 				newSession: async (options: Parameters<ExtensionCommandContext["newSession"]>[0]) => {
 					await options?.setup?.(SessionManager.inMemory("/tmp/repo"));
@@ -3676,6 +4233,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 				workItem: async () => ({
 					work_id: "uuid-master",
 					project_id: "proj-1",
+					repository_id: "uuid-master",
 					revision: {
 						revision_id: "rev-master",
 						description: "desc",
@@ -3714,6 +4272,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			},
 		} as unknown as WorkflowBackend;
 
+		attachStageLaunchFixture(mockBackend, "uuid-master");
 		createWorkflowHost({
 			backend: mockBackend,
 			teamNoun: "the ledger",
@@ -3758,20 +4317,23 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 			}],
 			projectAgentsDir: null,
 		});
-		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
-			index: 0,
-			id: "att-master",
-			agent: "auditor",
-			agentSource: "bundled",
-			task: "task",
-			exitCode: 0,
-			output: JSON.stringify({ report: "VERDICT: PASS\n(none)" }),
-			stderr: "",
-			truncated: false,
-			durationMs: 10,
-			tokens: 10,
-			requests: 1,
-		} as executorModule.SingleResult);
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: any) => {
+			await options?.onNativeStageHandoff?.();
+			return {
+				index: 0,
+				id: "att-master",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: JSON.stringify({ report: "VERDICT: PASS\n(none)" }),
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+			} as executorModule.SingleResult;
+		});
 
 		try {
 			const fakeCtx = {
@@ -3782,7 +4344,7 @@ describe("execution grant admission branch selection (OMP-212)", () => {
 					return { cancelled: false };
 				},
 				sessionManager: { getBranch: () => [] },
-				models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+				models: createAuditorTestModelQuery(),
 				modelRegistry: { getApiKey: () => Promise.resolve("key") },
 				ui: { notify: () => {}, theme: { fg: (_c: string, t: string) => t }, setStatus: () => {} },
 			} as unknown as ExtensionContext;
@@ -4286,7 +4848,7 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			cwd: repo.dir,
 			taskDepth: 0,
 			sessionManager,
-			models: { resolve: () => ({ id: "gpt-5.2", provider: "openai" }) },
+			models: createAuditorTestModelQuery(),
 			modelRegistry: { getApiKey: () => Promise.resolve("key") },
 			ui: {
 				notify: () => {},
@@ -4437,6 +4999,7 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			},
 		} as unknown as WorkflowBackend;
 
+		attachStageLaunchFixture(mockBackend, repo.dir);
 		createWorkflowHost({
 			backend: mockBackend,
 			teamNoun: "the ledger",
@@ -4474,22 +5037,25 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 	test("persisted consumer contract after reload binds launch to selector attribution and payload sha", async () => {
 		const f = await setupM2Fixture();
 		const mockOutput = JSON.stringify({ report: "VERDICT: PASS\n(all clean)" });
-		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
-			index: 0,
-			id: "att-199",
-			agent: "auditor",
-			agentSource: "bundled",
-			task: "task",
-			exitCode: 0,
-			output: mockOutput,
-			stderr: "",
-			truncated: false,
-			durationMs: 10,
-			tokens: 10,
-			requests: 1,
-			resolvedModel: "openai/gpt-5.2",
-			resolvedModelIsFallback: true,
-		} as executorModule.SingleResult);
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: { onNativeStageHandoff?: () => Promise<void> | void }) => {
+			await options?.onNativeStageHandoff?.();
+			return {
+				index: 0,
+				id: "att-199",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: mockOutput,
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+				resolvedModel: "openai-codex/gpt-5.6-sol:medium",
+				resolvedModelIsFallback: false,
+			} as executorModule.SingleResult;
+		});
 
 		try {
 			const res = await f.getRegisteredExecute()("call-1", { action: "begin_execution_review", work: "OMP-199", body: "verification evidence" }, new AbortController().signal, () => {}, f.fakeCtx);
@@ -4504,8 +5070,8 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			expect(data.attempt_id).toBe("att-199");
 			expect(data.task_sha256).toBe("task-sha-275");
 			expect(data.payload_sha256).toBe(sha256Hex(mockOutput));
-			expect(data.resolvedModel).toBe("openai/gpt-5.2");
-			expect(data.resolvedModelIsFallback).toBe(true);
+			expect(data.resolvedModel).toBe("openai-codex/gpt-5.6-sol:medium");
+			expect(data.resolvedModelIsFallback).toBe(false);
 			expect(data.attribution).toBe("session-reported-selector");
 			expect(data.session_id).toBe(f.sessionManager.getSessionId());
 			expect(typeof data.at).toBe("string");
@@ -4524,20 +5090,23 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 	test("unknown fields remain absent on reload when runner omits model attribution", async () => {
 		const f = await setupM2Fixture();
 		const mockOutput = JSON.stringify({ report: "VERDICT: PASS\n(clean)" });
-		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
-			index: 0,
-			id: "att-199",
-			agent: "auditor",
-			agentSource: "bundled",
-			task: "task",
-			exitCode: 0,
-			output: mockOutput,
-			stderr: "",
-			truncated: false,
-			durationMs: 10,
-			tokens: 10,
-			requests: 1,
-		} as executorModule.SingleResult);
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: { onNativeStageHandoff?: () => Promise<void> | void }) => {
+			await options?.onNativeStageHandoff?.();
+			return {
+				index: 0,
+				id: "att-199",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: mockOutput,
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+			} as executorModule.SingleResult;
+		});
 
 		try {
 			const res = await f.getRegisteredExecute()("call-2", { action: "begin_execution_review", work: "OMP-199", body: "verification evidence" }, new AbortController().signal, () => {}, f.fakeCtx);
@@ -4569,22 +5138,25 @@ describe("native audit launch attribution parent-session entry (OMP-275 / M2-A)"
 			},
 		});
 		const mockOutput = JSON.stringify({ report: "VERDICT: NEEDS_FIX\nFinding 1" });
-		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
-			index: 0,
-			id: "att-199",
-			agent: "auditor",
-			agentSource: "bundled",
-			task: "task",
-			exitCode: 0,
-			output: mockOutput,
-			stderr: "",
-			truncated: false,
-			durationMs: 10,
-			tokens: 10,
-			requests: 1,
-			resolvedModel: "openai/gpt-5.2",
-			resolvedModelIsFallback: false,
-		} as executorModule.SingleResult);
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options: { onNativeStageHandoff?: () => Promise<void> | void }) => {
+			await options?.onNativeStageHandoff?.();
+			return {
+				index: 0,
+				id: "att-199",
+				agent: "auditor",
+				agentSource: "bundled",
+				task: "task",
+				exitCode: 0,
+				output: mockOutput,
+				stderr: "",
+				truncated: false,
+				durationMs: 10,
+				tokens: 10,
+				requests: 1,
+				resolvedModel: "openai-codex/gpt-5.6-sol:medium",
+				resolvedModelIsFallback: false,
+			} as executorModule.SingleResult;
+		});
 
 		try {
 			// First launch returns NEEDS_FIX

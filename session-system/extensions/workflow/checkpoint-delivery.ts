@@ -76,7 +76,8 @@ function deliverOneEvent(
 	return slot;
 }
 
-/** Queue delivery for one event in the background without awaiting turn yield (for tool handlers). */
+/** Queue delivery for one event in the background without awaiting turn yield (for tool handlers).
+ * Fire-and-forget by contract: continuation decisions belong to caller's guarded path. */
 export function queueCheckpointDelivery(
 	pi: ExtensionAPI,
 	backend: WorkflowBackend,
@@ -84,6 +85,16 @@ export function queueCheckpointDelivery(
 	onNotice?: (notice: string) => void,
 ): void {
 	void deliverOneEvent(pi, backend, event, onNotice);
+}
+
+/** Queue delivery and return its deduplicated settlement for guarded continuations. */
+export function queueCheckpointDeliverySettlement(
+	pi: ExtensionAPI,
+	backend: WorkflowBackend,
+	event: CloseEventView,
+	onNotice?: (notice: string) => void,
+): Promise<"delivered" | "failed"> {
+	return deliverOneEvent(pi, backend, event, onNotice);
 }
 
 /** Queue delivery for all unresolved requires_delivery events for a work item without awaiting turn yield (for tool handlers). */

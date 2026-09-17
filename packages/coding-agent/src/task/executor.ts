@@ -388,6 +388,10 @@ export interface ExecutorOptions {
 	cwd: string;
 	/** Additional workspace directories to seed on the subagent session (multi-root). */
 	additionalDirectories?: string[];
+	/** Host-authorized roots for native implementer file mutations. */
+	nativeStageWriteRoots?: readonly string[];
+	/** Durable handoff callback, awaited immediately before first provider dispatch. */
+	onNativeStageHandoff?: () => void | Promise<void>;
 	/** Exact provider credential resolver inherited from the parent session. */
 	getApiKey?: CreateAgentSessionOptions["getApiKey"];
 	worktree?: string;
@@ -3278,6 +3282,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				disableInheritedAsyncJobs: options.taskRecovery !== undefined,
 				prepareSessionBeforeAttach: options.taskRecovery?.completion?.prepareChild,
 				additionalDirectories: worktree !== undefined ? undefined : options.additionalDirectories,
+				nativeStageWriteRoots: options.nativeStageWriteRoots,
 				authStorage,
 				modelRegistry,
 				getApiKey: options.getApiKey,
@@ -3344,6 +3349,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				onFirstChatDispatch: () => {
 					firstChatDispatchAt ??= performance.now();
 				},
+				admitFirstChatDispatch: options.onNativeStageHandoff,
 			});
 
 			const sessionManager = await awaitAbortable(sessionManagerPromise);

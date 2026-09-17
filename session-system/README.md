@@ -82,6 +82,40 @@ procedure (see OMP-156's `docs/upstream-18.0.6-upgrade.md` for the reference
 run), and `install.sh --print-manifest` provides the read-only live-link
 manifest that cutover and rollback compare against. Restart omp afterward.
 
+## OMP-246 lifecycle package
+
+`tests/omp246-lifecycle.test.ts` drives the real workflow host and the real
+`createWorkBackend` pending-operation journal against a fetch-level WorkService
+double keyed by `operation_id` (`tests/fixtures/omp246-mock-work-service.ts`);
+the worker-level terminal-yield fence is
+`packages/coding-agent/test/agent-session-submission-fence.test.ts`.
+
+```bash
+bun test session-system/tests/omp246-lifecycle.test.ts packages/coding-agent/test/agent-session-submission-fence.test.ts
+```
+
+What the package proves: the recovery dirty-refusal on a submitted candidate
+(contract 1), one continuation from a committed reservation after a crash
+(contract 2), client-side replay of the exact completion command over the
+same journal (contract 3), and queue lost-completion recovery: a committed
+`complete_execution_item` whose response was lost is reconciled by operation
+identity at the next owned session start (one GET, zero POST), the next queue
+item is activated exactly once under the grant-version CAS, one continuation
+is delivered, and a second restart over the same journal and transcript adds
+no completion, activation, or reservation. The fixture refuses a stale grant
+version with the native `revision_conflict` code, which drops the client's
+claim exactly as the service contract does.
+
+Boundaries left NOT_ASSESSED by design: controller report→write admission
+(the package never submits a report through the controller, and the static
+mock cannot discriminate a refusal), service-side refusal of a second finalize
+on a submitted candidate (needs the native WorkService), a whole-process
+controller restart reissue of `complete_execution_item` (the installed
+qualification in `test_installed_execution_recovery.py` has no such case), and
+the end-to-end `begin_execution_review` completion path (needs a git remote
+and the auditor). The `test.todo` entries in the package name each one; they
+do not count as passes.
+
 ## New project (day 1)
 
 Everything native loads from this repo no matter the directory — extension,

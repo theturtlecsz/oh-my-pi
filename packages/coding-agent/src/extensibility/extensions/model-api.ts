@@ -9,7 +9,11 @@
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { modelFamilyToken } from "@oh-my-pi/pi-catalog/identity";
 import type { ModelRegistry } from "../../config/model-registry";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
+import {
+	getModelMatchPreferences,
+	type ResolvedModelRoleValue,
+	resolveModelRoleValue,
+} from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import type { ExtensionModelQuery } from "./types";
 
@@ -22,6 +26,12 @@ export function createExtensionModelQuery(
 	settings: Settings | undefined,
 	getModel: () => Model | undefined,
 ): ExtensionModelQuery {
+	const resolveSelection = (spec: string): ResolvedModelRoleValue =>
+		resolveModelRoleValue(spec, modelRegistry.getAvailable(), {
+			settings,
+			matchPreferences: getModelMatchPreferences(settings),
+		});
+
 	return {
 		list: () => modelRegistry.getAvailable(),
 		current: () => getModel(),
@@ -29,11 +39,8 @@ export function createExtensionModelQuery(
 		// priority list and tries each pattern — the same path core selection uses — so a
 		// fallback model lower in the list still resolves. Plain model strings pass through
 		// as a single pattern.
-		resolve: (spec: string): Model<Api> | undefined =>
-			resolveModelRoleValue(spec, modelRegistry.getAvailable(), {
-				settings,
-				matchPreferences: getModelMatchPreferences(settings),
-			}).model,
+		resolve: (spec: string): Model<Api> | undefined => resolveSelection(spec).model,
+		resolveSelection,
 		family: (model: Model<Api>): string => modelFamilyToken(model.id) || model.provider.toLowerCase(),
 	};
 }

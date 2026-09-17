@@ -156,6 +156,10 @@ export interface DeferredDiagnosticsEntry {
 
 /** Session context for tool factories */
 export interface ToolSession {
+	/** Native implementer write roots. When present, write/edit targets must
+	 * resolve beneath one of these roots; this is an execution boundary, not a
+	 * prompt convention. */
+	nativeStageWriteRoots?: readonly string[];
 	/** Core-owned parent call capture, after the real task approval/policy path. */
 	captureTaskCall?: (
 		toolCallId: string,

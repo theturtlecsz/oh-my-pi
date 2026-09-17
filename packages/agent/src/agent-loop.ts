@@ -2299,7 +2299,27 @@ async function executeToolCalls(
 	const interruptibleSignal: AbortSignal = signal
 		? AbortSignal.any([signal, steeringAbortController.signal, ircAbortController.signal])
 		: AbortSignal.any([steeringAbortController.signal, ircAbortController.signal]);
-	const interruptState: { triggered: boolean; source?: SteeringInterruptSource | "irc" } = { triggered: false };
+	// `turnEnded`: a completed, successful result carried `details.endTurn === true`
+	// (an extension's explicit "end the turn now" marker, e.g. an accepted
+	// submission whose frozen candidate must not be touched by later calls in the
+	// same response). It is raised synchronously inside `runTool`, before the
+	// task resolves, so a queued sibling can never start on the window between
+	// the result and the session's asynchronous terminal abort. Nothing is
+	// hard-aborted: work already admitted keeps its real result.
+	const interruptState: { triggered: boolean; source?: SteeringInterruptSource | "irc"; turnEnded: boolean } = {
+		triggered: false,
+		turnEnded: false,
+	};
+	const skipSource = (): SteeringInterruptSource | "irc" | "endTurn" | undefined =>
+		interruptState.turnEnded ? "endTurn" : interruptState.source;
+	// Terminal abort raised after a completed post-tool hook is an ended turn,
+	// never a user abort. Preserve its fence while keeping core endTurn-marker
+	// handling above the same state machine.
+	const noteTerminalAbort = (recordSignal: AbortSignal): void => {
+		if (!recordSignal.aborted || recordSignal.reason !== TERMINAL_TOOL_RESULT_ABORT_REASON) return;
+		interruptState.triggered = true;
+		interruptState.turnEnded = true;
+	};
 
 	// Streamed messages were prepared (validation + `beforeToolCall`) before
 	// `message_end`, so hook revisions are already part of the message; anything
@@ -2453,7 +2473,11 @@ async function executeToolCalls(
 		// `todo`/`write` gets dropped as "Skipped due to pending peer interrupt"
 		// purely for being ordered after the wait (#7493). User/system steering
 		// still preempts everything queued.
-		if (interruptState.triggered && (record.interruptible || interruptState.source !== "irc")) {
+		noteTerminalAbort(record.signal);
+		if (
+			interruptState.turnEnded ||
+			(interruptState.triggered && (record.interruptible || interruptState.source !== "irc"))
+		) {
 			// Skip both span emission and the collector orphan record here. The
 			// tail sweep below (after `Promise.allSettled`) is the single path
 			// that handles "no result message was produced" — it calls
@@ -2484,7 +2508,11 @@ async function executeToolCalls(
 		}
 		const effectiveArgs = record.args;
 		if (record.signal.aborted) {
+			noteTerminalAbort(record.signal);
 			record.skipped = true;
+			if (interruptState.triggered) {
+				return;
+			}
 			recordSkippedTool(telemetry, {
 				toolCallId: toolCall.id,
 				toolName: toolCall.name,
@@ -2523,6 +2551,12 @@ async function executeToolCalls(
 			try {
 				if (!tool) throw new Error(`Tool ${toolCall.name} not found`);
 				if (record.signal.aborted) {
+					noteTerminalAbort(record.signal);
+					if (interruptState.triggered) {
+						result = createSkippedToolResult(skipSource(), executionStarted);
+						isError = true;
+						return;
+					}
 					result = createToolSignalAbortedResult(record.signal);
 					isError = true;
 					return;
@@ -2619,6 +2653,14 @@ async function executeToolCalls(
 			}
 		});
 
+		// A successful result that ends the turn fences the rest of the batch
+		// before this task resolves (see `interruptState.turnEnded`). Error
+		// results never end the turn.
+		if (!isError && completedToolExecution && hasEndTurnMarker(result.details)) {
+			interruptState.triggered = true;
+			interruptState.turnEnded = true;
+		}
+
 		const interrupted = interruptState.triggered;
 		const perToolAborted = record.signal.aborted;
 		const abortedDuringExecution = perToolAborted && isError && !completedToolExecution;
@@ -2627,7 +2669,7 @@ async function executeToolCalls(
 			// execution may already have performed partial work before throwing on
 			// abort, so preserve that distinction in the placeholder metadata.
 			record.skipped = true;
-			emitToolResult(record, createSkippedToolResult(interruptState.source, executionStarted), true);
+			emitToolResult(record, createSkippedToolResult(skipSource(), executionStarted), true);
 		} else {
 			// No interrupt on this signal, or the tool finished before the interrupt landed
 			// (`completedToolExecution`) — even if the signal aborted around completion. Keep
@@ -2768,7 +2810,7 @@ async function executeToolCalls(
 				toolName: record.toolCall.name,
 				status: "skipped",
 			});
-			emitToolResult(record, createSkippedToolResult(interruptState.source, false), true);
+			emitToolResult(record, createSkippedToolResult(skipSource(), false), true);
 		}
 	}
 
@@ -2926,10 +2968,29 @@ function createToolSignalAbortedResult(signal: AbortSignal): AgentToolResult<unk
 	};
 }
 
+/** Strict narrowing of a tool result's `details` for the `endTurn: true` marker. */
+function hasEndTurnMarker(details: unknown): boolean {
+	return typeof details === "object" && details !== null && "endTurn" in details && details.endTurn === true;
+}
+
 function createSkippedToolResult(
-	source: SteeringInterruptSource | "irc" | undefined,
+	source: SteeringInterruptSource | "irc" | "endTurn" | undefined,
 	executionStarted: boolean,
 ): AgentToolResult<SyntheticToolResultDetails | InterruptedToolResultDetails> {
+	const details: SyntheticToolResultDetails | InterruptedToolResultDetails = executionStarted
+		? { __interrupted: true, source: "interrupt_skipped", execution: "started" }
+		: { __synthetic: true, source: "interrupt_skipped", executed: false };
+	if (source === "endTurn") {
+		return {
+			content: [
+				{
+					type: "text",
+					text: "Tool was not executed: an earlier tool result in this response ended the turn. Do not count this skipped result as completed work or verification. Retry the skipped tool on a later turn if it is still needed.",
+				},
+			],
+			details,
+		};
+	}
 	let reason = "pending steering message";
 	let blocker = "queued message";
 	if (source === "user") {
@@ -2952,8 +3013,6 @@ function createSkippedToolResult(
 				text: `Skipped due to ${reason}. Do not count this skipped result as completed work or verification. After the ${blocker} is handled on the next step, retry the skipped tool if it is still needed.`,
 			},
 		],
-		details: executionStarted
-			? { __interrupted: true, source: "interrupt_skipped", execution: "started" }
-			: { __synthetic: true, source: "interrupt_skipped", executed: false },
+		details,
 	};
 }

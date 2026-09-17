@@ -7,8 +7,11 @@
  */
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { getAgentDir, Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { formatModelSelectorValue, formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { resolveAuditPolicy } from "./audit-policy";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { nativeStageRouteCandidates, type NativeStageRole, type NativeStageRoute } from "./native-stage-profile";
 
 export interface NativeAuditRunResult {
 	started: boolean;
@@ -24,72 +27,153 @@ export type NativeAuditRunner = (
 	signal?: AbortSignal,
 ) => Promise<NativeAuditRunResult>;
 
+export type NativeStageRunnerOptions = {
+	role: NativeStageRole;
+	agentName?: string;
+	/** Sealed implementation paths supplied by WorkService for implementer runs. */
+	writeRoots?: readonly string[];
+	/** Precompiled stage context. Host persists this before dispatch. */
+	context?: string;
+	/** Called at the provider dispatch boundary, before the first request leaves the host. */
+	onHandoff?: () => void | Promise<void>;
+	/** Ordered qualified routes; first credentialed/healthy route wins. */
+	routes?: readonly NativeStageRoute[];
+	/** Bound immutable route passed from host TCB sealing. */
+	boundRoute?: NativeStageRoute;
+	/** Reports the route that survived credential and transport preflight. */
+	onRouteSelected?: (route: NativeStageRoute) => void;
+	legacyAudit?: boolean;
+};
+
+const nativeStageAgentNames: Readonly<Record<NativeStageRole, string>> = {
+	plan: "planner",
+	implement: "implementer",
+	frontier: "frontier",
+	audit: "auditor",
+};
+
+export function nativeStageTaskInput(taskBody: string, context?: string): string {
+	return context?.trim()
+		? `${taskBody}\n\n<stage_context_data>\n${context.trim()}\n</stage_context_data>`
+		: taskBody;
+}
+
 /**
- * Prepares a native auditor runner for the current extension context.
+ * Prepares a native stage runner for current extension context.
  *
  * Fails before a ledger launch reservation unless all preconditions exist:
- * 1. Discovers the installed `auditor` agent definition.
- * 2. Resolves the `@audit` role through `ctx.models`.
- * 3. Verifies provider credentials and live transport for the audit model
+ * 1. Discovers installed role-specific agent definition.
+ * 2. Resolves exact allowlisted route through `ctx.models`.
+ * 3. Verifies provider credentials and live transport for selected model
  *    (OMP-251) — a minimal probe completion must not error, so transport
  *    failures surface here instead of burning a reserved launch.
- * 4. Loads effective settings for `ctx.cwd` / `getAgentDir()`.
+ * 4. Loads effective settings for `ctx.cwd` / `getAgentDir()` and disables
+ *    inherited retry routes.
  */
-export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: AbortSignal): Promise<NativeAuditRunner> {
+export async function prepareNativeStageRunner(
+	ctx: ExtensionContext,
+	options: NativeStageRunnerOptions,
+	signal?: AbortSignal,
+): Promise<NativeAuditRunner> {
+	if (signal?.aborted) throw new DOMException("Native stage preflight cancelled", "AbortError");
 	const discovery = await discoverAgents(ctx.cwd);
-	const agent = getAgent(discovery.agents, "auditor");
+	const agentName = options.agentName ?? nativeStageAgentNames[options.role];
+	const agent = getAgent(discovery.agents, agentName);
 	if (!agent) {
-		throw new Error('Installed "auditor" agent definition not found');
+		throw new Error(`Installed "${agentName}" agent definition not found`);
 	}
 	if (!agent.output) {
-		throw new Error('Installed "auditor" agent definition is missing required output schema');
+		throw new Error(`Installed "${agentName}" agent definition is missing required output schema`);
 	}
 
-	const auditModel = ctx.models.resolve("@audit");
-	if (!auditModel) {
-		throw new Error("Could not resolve @audit role — fix modelRoles.audit and retry");
+	let routes = options.routes;
+	if (options.role === "audit") {
+		const targetRoute = options.boundRoute;
+		if (!targetRoute) {
+			throw new Error("Immutable bound route required for native audit stage");
+		}
+		if (!targetRoute.boundPolicySha256) {
+			throw new Error("Bound audit route missing boundPolicySha256");
+		}
+		const currentPolicyPre = resolveAuditPolicy(ctx.models);
+		if (currentPolicyPre.policySha256 !== targetRoute.boundPolicySha256) {
+			throw new Error(
+				`Audit policy drift before preflight: current hash "${currentPolicyPre.policySha256}" does not match bound hash "${targetRoute.boundPolicySha256}"`,
+			);
+		}
+		routes = [targetRoute];
+	} else {
+		routes = routes ?? nativeStageRouteCandidates(ctx.models, options.role);
 	}
+	let route: NativeStageRoute | undefined;
+	let preflightError: Error | undefined;
 
 	// OMP-251: auditor transport preflight. Launch reservations are budgeted
 	// (3 per attempt); prove credentials + endpoint connectivity BEFORE the
 	// caller reserves one, so auth/network outages deny instead of burning
 	// the audit budget with transport_failed settlements.
-	const auditApiKey = await ctx.modelRegistry.getApiKey(auditModel, undefined, { signal });
-	if (auditApiKey === undefined) {
-		throw new Error(
-			`No provider credentials configured for @audit model ${auditModel.provider}/${auditModel.id} — authenticate the provider and retry`,
-		);
+	for (const candidate of routes) {
+		if (signal?.aborted) throw new DOMException("Native stage preflight cancelled", "AbortError");
+		const stageModel = candidate.model;
+		const apiKey = await ctx.modelRegistry.getApiKey(stageModel, undefined, { signal });
+		if (apiKey === undefined) {
+			preflightError = new Error(
+				options.legacyAudit
+					? `No provider credentials configured for @audit model ${stageModel.provider}/${stageModel.id} — authenticate the provider and retry`
+					: `No provider credentials configured for native ${options.role} model ${stageModel.provider}/${stageModel.id} — authenticate the provider and retry`,
+			);
+			continue;
+		}
+		if (options.role === "audit") {
+			const currentPolicyPostCreds = resolveAuditPolicy(ctx.models);
+			if (currentPolicyPostCreds.policySha256 !== candidate.boundPolicySha256) {
+				throw new Error(
+					`Audit policy drift after credentials: current hash "${currentPolicyPostCreds.policySha256}" does not match bound hash "${candidate.boundPolicySha256}"`,
+				);
+			}
+		}
+		const probe = await completeSimple(
+			stageModel,
+			{ messages: [{ role: "user", content: "Transport preflight. Reply with the single word OK.", timestamp: Date.now() }] },
+			{ apiKey, maxTokens: 256, temperature: 0, disableReasoning: true, signal },
+		).catch((error: unknown) => {
+			if (signal?.aborted) throw error;
+			preflightError = new Error(
+				options.legacyAudit
+					? `@audit transport preflight failed for ${stageModel.provider}/${stageModel.id}: ${error instanceof Error ? error.message : String(error)}`
+					: `native ${options.role} transport preflight failed for ${stageModel.provider}/${stageModel.id}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return undefined;
+		});
+		if (!probe || probe.stopReason === "error" || probe.stopReason === "aborted") {
+			if (probe) {
+				preflightError = new Error(
+					options.legacyAudit
+						? `@audit transport preflight ${probe.stopReason === "error" ? "error" : probe.stopReason} for ${stageModel.provider}/${stageModel.id}: ${probe.errorMessage || "provider returned no detail"}`
+						: `native ${options.role} transport preflight ${probe.stopReason} for ${stageModel.provider}/${stageModel.id}: ${probe.errorMessage || "provider returned no detail"}`,
+				);
+			}
+			continue;
+		}
+		route = candidate;
+		break;
 	}
-	// pi-ai surfaces provider failures IN-BAND (stopReason "error"/"aborted" +
-	// errorMessage, content empty) — completeSimple normally does not throw,
-	// but synchronous dispatch/configuration failures still reject: qualify
-	// those with the audit model too, keeping cancellation errors untouched.
-	const probe = await completeSimple(
-		auditModel,
-		{ messages: [{ role: "user", content: "Transport preflight. Reply with the single word OK.", timestamp: Date.now() }] },
-		{
-			apiKey: auditApiKey,
-			maxTokens: 256,
-			temperature: 0,
-			disableReasoning: true,
-			signal,
-		},
-	).catch((error: unknown) => {
-		if (signal?.aborted) throw error;
-		throw new Error(
-			`@audit transport preflight failed for ${auditModel.provider}/${auditModel.id}: ${error instanceof Error ? error.message : String(error)}`,
-		);
-	});
-	if (probe.stopReason === "error" || probe.stopReason === "aborted") {
-		throw new Error(
-			`@audit transport preflight ${probe.stopReason} for ${auditModel.provider}/${auditModel.id}: ${probe.errorMessage || "provider returned no detail"}`,
-		);
-	}
+	if (!route) throw preflightError ?? new Error(`No qualified native ${options.role} route: primary unavailable or mismatched; allowed fallback routes exhausted`);
+	options.onRouteSelected?.(route);
 
 	const settings = await Settings.loadReadOnly({
 		cwd: ctx.cwd,
 		agentDir: getAgentDir(),
 	});
+	// Native stages own their route allowlist. Do not let ordinary session retry
+	// chains silently switch this child to a role, parent, or provider outside
+	// that allowlist after preflight has selected its route.
+	settings.override("retry.modelFallback", false);
+	const existingFallbackChains = settings.get("retry.fallbackChains") ?? {};
+	settings.override(
+		"retry.fallbackChains",
+		Object.fromEntries(Object.keys(existingFallbackChains).map(role => [role, []])),
+	);
 
 	return async (
 		taskBody: string,
@@ -98,18 +182,30 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: A
 	): Promise<NativeAuditRunResult> => {
 		let started = false;
 		try {
+			if (options.role === "audit") {
+				const currentPolicyPreExec = resolveAuditPolicy(ctx.models);
+				if (currentPolicyPreExec.policySha256 !== route.boundPolicySha256) {
+					return {
+						started: false,
+						error: `Audit policy drift before execution: current hash "${currentPolicyPreExec.policySha256}" does not match bound hash "${route.boundPolicySha256}"`,
+					};
+				}
+			}
+			const taskInput = nativeStageTaskInput(taskBody, options.context);
 			const result = await runSubprocess({
 				index: 0,
 				cwd: ctx.cwd,
+				nativeStageWriteRoots: options.writeRoots,
+				onNativeStageHandoff: options.onHandoff,
 				agent,
-				task: taskBody,
-				modelOverride: agent.model,
+				task: taskInput,
+				modelOverride: route.requestedSelector,
 				modelRegistry: ctx.modelRegistry,
 				authStorage: ctx.modelRegistry?.authStorage,
 				getApiKey: ctx.modelRegistry?.resolver
 					? requestModel => ctx.modelRegistry.resolver(requestModel, attemptId)
 					: undefined,
-				modelRole: "audit",
+				modelRole: options.legacyAudit ? "audit" : options.role,
 				outputSchema: agent.output,
 				outputSchemaSource: "agent",
 				outputSchemaMode: "strict",
@@ -125,6 +221,14 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: A
 			});
 
 			started = Boolean(result.requests && result.requests > 0);
+			if (result.resolvedModel && !nativeResolvedModelMatchesRoute(result.resolvedModel, route)) {
+				return {
+					started,
+					error: `native ${options.role} execution served disallowed model ${result.resolvedModel}; expected ${route.requestedSelector}`,
+					resolvedModel: result.resolvedModel,
+					resolvedModelIsFallback: result.resolvedModelIsFallback,
+				};
+			}
 			const payload =
 				typeof result.output === "string" && result.output.trim().length > 0
 					? result.output
@@ -144,4 +248,27 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: A
 			};
 		}
 	};
+}
+
+function nativeResolvedModelMatchesRoute(resolvedModel: string, route: NativeStageRoute): boolean {
+	const expected = formatModelSelectorValue(formatModelStringWithRouting(route.model), route.effort);
+	return resolvedModel === expected || resolvedModel === route.requestedSelector;
+}
+
+export async function prepareNativeAuditRunner(
+	ctx: ExtensionContext,
+	signal?: AbortSignal,
+	boundRoute?: NativeStageRoute,
+): Promise<NativeAuditRunner> {
+	const resolvedBoundRoute = boundRoute ?? resolveAuditPolicy(ctx.models).route;
+	return prepareNativeStageRunner(
+		ctx,
+		{
+			role: "audit",
+			agentName: "auditor",
+			legacyAudit: true,
+			boundRoute: resolvedBoundRoute,
+		},
+		signal,
+	);
 }

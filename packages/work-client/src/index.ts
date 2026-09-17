@@ -151,6 +151,11 @@ export type EvidenceReceipt = {
 	remote_commit?: string | null;
 };
 
+export type EvidenceReceiptView = Omit<EvidenceReceipt, "issuer" | "independent"> & {
+	issuer: string | null;
+	independent: boolean | null;
+};
+
 // ---- close attempts (OMP-47) ----
 
 export type CloseAttemptState =
@@ -400,6 +405,111 @@ export type SettleAuditorLaunchPayload = {
 	transport_payload?: unknown;
 	transport_failed?: boolean;
 };
+
+export type StageLaunchRole = "plan" | "implement" | "frontier" | "audit";
+export type StageLaunchStatus = "reserved" | "handed_off" | "settled" | "cancelled" | "interrupted" | "superseded";
+export type StageLaunch = {
+	launch_id: UUID;
+	workspace_id: UUID;
+	work_id: UUID;
+	revision_id: UUID | null;
+	candidate_id: UUID | null;
+	attempt_id: UUID | null;
+	grant_id: UUID | null;
+	role: StageLaunchRole;
+	request_sha256: string;
+	tool_call_id: string;
+	task_sha256: string;
+	prepared_context_sha256: string;
+	requested_selector: string;
+	requested_provider: string;
+	requested_model: string;
+	requested_api: string;
+	requested_effort: string;
+	requested_wire_model: string;
+	resolved_selector: string | null;
+	resolved_provider: string | null;
+	resolved_model: string | null;
+	served_selector: string | null;
+	served_model: string | null;
+	is_fallback: boolean;
+	fallback_reason: string | null;
+	status: StageLaunchStatus;
+	outcome_sha256: string | null;
+	outcome: Record<string, unknown> | null;
+	reserved_at: string;
+	handed_off_at: string | null;
+	settled_at: string | null;
+};
+export type ReserveStageLaunchPayload = {
+	work_id: UUID;
+	revision_id?: UUID | null;
+	candidate_id?: UUID | null;
+	attempt_id?: UUID | null;
+	grant_id?: UUID | null;
+	role: StageLaunchRole;
+	request_sha256: string;
+	tool_call_id: string;
+	task_sha256: string;
+	prepared_context_sha256: string;
+	requested_selector: string;
+	requested_provider: string;
+	requested_model: string;
+	requested_api: string;
+	requested_effort: string;
+	requested_wire_model: string;
+	resolved_selector?: string | null;
+	resolved_provider?: string | null;
+	resolved_model?: string | null;
+	is_fallback?: boolean;
+	fallback_reason?: string | null;
+};
+export type HandoffStageLaunchPayload = { launch_id: UUID; task_sha256: string };
+export type SettleStageLaunchPayload = {
+	launch_id: UUID;
+	outcome_sha256: string;
+	outcome: Record<string, unknown>;
+	served_selector?: string | null;
+	served_model?: string | null;
+};
+export type CancelStageLaunchPayload = { launch_id: UUID; reason: string };
+export type ReconcileStageLaunchPayload = { launch_id: UUID; reason: string };
+export type CandidateSourceVersion = {
+	candidate_id: UUID;
+	workspace_id: UUID;
+	work_id: UUID;
+	revision_id: UUID;
+	repository_id: UUID;
+	source_version_id: string;
+	snapshot_id: string;
+	base_commit: string;
+	analyzed_commit: string | null;
+	tree_sha: string | null;
+	source_manifest_sha256: string;
+	snapshot_manifest_sha256: string;
+	content_sha256: string;
+	association_sha256: string;
+	producer: string;
+	producer_receipt_sha256: string;
+	created_at: string;
+};
+export type AssociateCandidateSourcePayload = {
+	candidate_id: UUID;
+	work_id: UUID;
+	revision_id: UUID;
+	repository_id: UUID;
+	source_version_id: string;
+	snapshot_id: string;
+	base_commit: string;
+	analyzed_commit?: string | null;
+	tree_sha?: string | null;
+	source_manifest_sha256: string;
+	snapshot_manifest_sha256: string;
+	content_sha256: string;
+	association_sha256: string;
+	producer: string;
+	producer_receipt_sha256: string;
+};
 export type AttestCheckpointDeliveryPayload = {
 	event_id: UUID;
 	owner_session_id: string;
@@ -486,7 +596,7 @@ export type ExecutionGrantItemClaim = {
 	active_blocker_ids?: UUID[];
 };
 
-export type ExecutionJudgeManifest = {
+export type ExecutionJudgeManifestV1 = {
 	auditor_agent_sha256: string;
 	host_sha256: string;
 	adapter_sha256: string;
@@ -499,6 +609,14 @@ export type ExecutionJudgeManifest = {
 	service_migration_sha256: string;
 };
 
+export type ExecutionJudgeManifestV2 = ExecutionJudgeManifestV1 & {
+	manifest_version: 2;
+	audit_policy_sha256: string;
+	native_stage_sha256: string;
+};
+
+export type ExecutionJudgeManifest = ExecutionJudgeManifestV1 | ExecutionJudgeManifestV2;
+
 export type BeginExecutionPayload = {
 	grant_id: UUID;
 	provenance: ExecutionProvenanceEnvelope;
@@ -507,7 +625,7 @@ export type BeginExecutionPayload = {
 	items: ExecutionGrantItemClaim[];
 	expected_focus_version: number;
 	judge_sha256: string;
-	judge_manifest: ExecutionJudgeManifest;
+	judge_manifest: ExecutionJudgeManifestV2;
 };
 
 export type ActivateExecutionItemPayload = {
@@ -582,6 +700,12 @@ export type Command =
 	| { type: "reserve_auditor_launch"; payload: ReserveAuditorLaunchPayload }
 	| { type: "cancel_auditor_launch"; payload: CancelAuditorLaunchPayload }
 	| { type: "settle_auditor_launch"; payload: SettleAuditorLaunchPayload }
+	| { type: "reserve_stage_launch"; payload: ReserveStageLaunchPayload }
+	| { type: "handoff_stage_launch"; payload: HandoffStageLaunchPayload }
+	| { type: "settle_stage_launch"; payload: SettleStageLaunchPayload }
+	| { type: "cancel_stage_launch"; payload: CancelStageLaunchPayload }
+	| { type: "reconcile_stage_launch"; payload: ReconcileStageLaunchPayload }
+	| { type: "associate_candidate_source"; payload: AssociateCandidateSourcePayload }
 	| { type: "attest_checkpoint_delivery"; payload: AttestCheckpointDeliveryPayload }
 	| { type: "record_closeout_review"; payload: RecordCloseoutReviewPayload }
 	| { type: "complete_work"; payload: CompleteWorkPayload }
@@ -645,6 +769,22 @@ export type CommandResult =
 			delivery?: CheckpointDelivery | null;
 			verdict?: Verdict | null;
 			event: CloseAttemptEvent;
+	  }
+	| {
+			type:
+				| "reserve_stage_launch"
+				| "handoff_stage_launch"
+				| "settle_stage_launch"
+				| "cancel_stage_launch"
+				| "reconcile_stage_launch";
+			status: "applied" | "replayed" | "refused";
+			launch?: StageLaunch | null;
+			reason?: string | null;
+	  }
+	| {
+			type: "associate_candidate_source";
+			status: "applied" | "replayed" | "refused";
+			association?: CandidateSourceVersion | null;
 	  }
 	| {
 			type: "record_closeout_review";
@@ -765,6 +905,7 @@ export type WorkItemView = {
 	revision: WorkRevision;
 	candidate: Candidate | null;
 	project_id: UUID | null;
+	repository_id?: UUID | null;
 	archived: boolean;
 };
 export type ProjectView = {
@@ -782,6 +923,8 @@ export type WorkflowView = {
 	close_attempts: CloseAttempt[];
 	audit_manifest: AuditManifest | null;
 	auditor_launches: AuditorLaunch[];
+	stage_launches: StageLaunch[];
+	candidate_source_versions: CandidateSourceVersion[];
 	close_attempt_events: CloseAttemptEvent[];
 	checkpoint_deliveries: CheckpointDelivery[];
 	project: ProjectView | null;
@@ -793,6 +936,67 @@ export type WorkspaceTree = {
 	items: WorkItemView[];
 	relations: RelationEdge[];
 	projects: ProjectView[];
+};
+export type WorkRevisionListView = {
+	work_id: UUID;
+	key: string;
+	revisions: WorkRevision[];
+};
+export type WorkItemsPage = {
+	items: WorkItemView[];
+	next_cursor: string | null;
+	workspace_id: UUID;
+	limit: number;
+	exhausted: boolean;
+};
+export type DomainEventView = {
+	event_id: UUID;
+	sequence: number;
+	workspace_id: UUID;
+	aggregate_type: string;
+	aggregate_id: UUID;
+	aggregate_version: number;
+	actor_id: UUID;
+	actor_kind: string;
+	capability_id: UUID;
+	request_id: UUID;
+	correlation_id: UUID;
+	operation_id: UUID;
+	causation_id: UUID;
+	event_type: string;
+	outcome: string;
+	payload: Record<string, unknown>;
+	payload_sha256: string;
+	previous_event_sha256: string | null;
+	event_sha256: string;
+	occurred_at: string;
+};
+export type DomainEventsPage = {
+	items: DomainEventView[];
+	workspace_id: UUID;
+	after_sequence: number;
+	through_sequence: number;
+	next_sequence: number;
+	next_cursor: string | null;
+	limit: number;
+	exhausted: boolean;
+};
+export type RepositoryView = {
+	repository_id: UUID;
+	workspace_id: UUID;
+	key: string;
+	name: string;
+	url: string;
+	archived: boolean;
+	provenance: Record<string, unknown>;
+	created_at: string;
+};
+export type RepositoryListView = {
+	workspace_id: UUID;
+	repositories: RepositoryView[];
+	next_cursor: string | null;
+	limit: number;
+	exhausted: boolean;
 };
 export type ProjectHealthView = { project_id: UUID; workspace_id: UUID; health: ProjectHealth; updated_at: string };
 export type StoredOperation = {
@@ -869,7 +1073,7 @@ export class WorkClient {
 		private readonly fetchImpl: Fetch = fetch,
 	) {}
 
-	private headers(): Record<string, string> {
+	#headers(): Record<string, string> {
 		const token = this.token();
 		if (!token) throw new WorkError("unauthenticated", 401, ["no bearer token configured"]);
 		return {
@@ -883,7 +1087,7 @@ export class WorkClient {
 	}
 
 	private async request(method: "GET" | "POST", path: string, body?: unknown, auth = true): Promise<unknown> {
-		const headers = auth ? this.headers() : {};
+		const headers = auth ? this.#headers() : {};
 		let response: Response;
 		try {
 			response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -963,5 +1167,54 @@ export class WorkClient {
 	execution(grantIdOrKey?: string): Promise<ExecutionView> {
 		const suffix = grantIdOrKey ? `/${encodeURIComponent(grantIdOrKey)}` : "";
 		return this.request("GET", `/v1/workspaces/${this.workspaceId}/execution${suffix}`) as Promise<ExecutionView>;
+	}
+
+	revision(key: string, selector: string | number): Promise<WorkRevision> {
+		return this.request(
+			"GET",
+			`/v1/work-items/${encodeURIComponent(key)}/revisions/${encodeURIComponent(String(selector))}`,
+		) as Promise<WorkRevision>;
+	}
+
+	revisions(key: string): Promise<WorkRevisionListView> {
+		return this.request(
+			"GET",
+			`/v1/work-items/${encodeURIComponent(key)}/revisions`,
+		) as Promise<WorkRevisionListView>;
+	}
+
+	receipt(receiptId: UUID): Promise<EvidenceReceiptView> {
+		return this.request("GET", `/v1/receipts/${encodeURIComponent(receiptId)}`) as Promise<EvidenceReceiptView>;
+	}
+
+	workItems(options: { cursor?: string; limit?: number } = {}): Promise<WorkItemsPage> {
+		const params = new URLSearchParams();
+		if (options.cursor !== undefined) params.set("cursor", options.cursor);
+		if (options.limit !== undefined) params.set("limit", String(options.limit));
+		const query = params.size > 0 ? `?${params}` : "";
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/work-items${query}`) as Promise<WorkItemsPage>;
+	}
+
+	events(
+		options: { cursor?: string; afterSequence?: number; throughSequence?: number; limit?: number } = {},
+	): Promise<DomainEventsPage> {
+		const params = new URLSearchParams();
+		if (options.cursor !== undefined) params.set("cursor", options.cursor);
+		if (options.afterSequence !== undefined) params.set("after_sequence", String(options.afterSequence));
+		if (options.throughSequence !== undefined) params.set("through_sequence", String(options.throughSequence));
+		if (options.limit !== undefined) params.set("limit", String(options.limit));
+		const query = params.size > 0 ? `?${params}` : "";
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/events${query}`) as Promise<DomainEventsPage>;
+	}
+
+	repositories(options: { cursor?: string; limit?: number } = {}): Promise<RepositoryListView> {
+		const params = new URLSearchParams();
+		if (options.cursor !== undefined) params.set("cursor", options.cursor);
+		if (options.limit !== undefined) params.set("limit", String(options.limit));
+		const query = params.size > 0 ? `?${params}` : "";
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/repositories${query}`,
+		) as Promise<RepositoryListView>;
 	}
 }

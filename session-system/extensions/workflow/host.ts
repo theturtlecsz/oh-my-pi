@@ -21,6 +21,7 @@ import {
 	Markdown,
 	Spacer,
 	Text,
+	type BeforeAgentStartEventResult,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
@@ -33,12 +34,15 @@ import { Ellipsis, matchesKey, truncateToWidth, type TUI, visibleWidth, wrapText
 import { isRecord, prompt, setProjectDir } from "@oh-my-pi/pi-utils";
 import digestPromptTemplate from "./digest-prompt.md" with { type: "text" };
 import executePromptTemplate from "./execute-prompt.md" with { type: "text" };
+import nativePlanTaskTemplate from "./native-plan-task.md" with { type: "text" };
+import nativeImplementTaskTemplate from "./native-implement-task.md" with { type: "text" };
+import nativeFrontierTaskTemplate from "./native-frontier-task.md" with { type: "text" };
 import kindDescriptionText from "./kind-description.md" with { type: "text" };
 import lockRefusalText from "./lock-refusal.md" with { type: "text" };
 import { checkProspectiveContract } from "./config";
 import sequenceText from "./sequence.md" with { type: "text" };
 import toolDescriptionTemplate from "./tool-description.md" with { type: "text" };
-import { buildCompletionEvidence } from "./work";
+import { acceptanceFromDescription, buildCompletionEvidence } from "./work";
 import {
 	type BackendIssue,
 	BatchPartialError,
@@ -69,7 +73,7 @@ import {
 	type ExecutionChildren,
 	renderCenterReadout,
 } from "./backend";
-import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
+import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queueCheckpointDeliverySettlement, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
 import { confirmWrite, resetConfirmations } from "./confirm";
 import {
 	currentSymbolicRef,
@@ -89,6 +93,7 @@ import {
 	requiredStatusCheckCount,
 	resolveDefaultBranch,
 	runGit,
+	treeSha,
 	validateExecutionPaths,
 	verifyMergeConfirmation,
 } from "./git";
@@ -103,8 +108,13 @@ import {
 	type StagedRiderBatch,
 } from "./rider-batch";
 import { registerSessionLedger } from "./session-ledger";
+import { registerKnowledgeBridge, type KnowledgeBridge } from "./knowledge-bridge";
+import { loadKnowledgeConfig, type KnowledgeClientConfig, type WorkClientConfig } from "./config";
 import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
+import { dispatchNativeStage } from "./native-stage-dispatch";
+import { nativeStageRouteCandidates } from "./native-stage-profile";
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
+import { resolveAuditPolicy } from "./audit-policy";
 import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Candidate, type CloseAttempt, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView, type WorkflowView } from "@oh-my-pi/pi-work-client";
 
 type ReviewAttemptIdentity = Partial<Pick<CloseAttempt, "revision_id" | "candidate_id" | "candidate_sha256" | "candidate_commit">>;
@@ -190,6 +200,10 @@ export interface HostConfig {
 	allowCandidateServiceRefresh?: boolean;
 	/** Optional managed-worktree override for deterministic test isolation. */
 	executionWorkspaceManager?: ExecutionWorkspaceManager;
+	/** Optional Work client config. */
+	workConfig?: WorkClientConfig;
+	/** Optional Knowledge client config. */
+	knowledgeConfig?: KnowledgeClientConfig;
 }
 interface HostNowState {
 	issueId?: string;
@@ -607,6 +621,34 @@ async function defaultRestartWorkService(): Promise<void> {
 	}
 }
 
+/**
+ * Pure helper to merge a bridge before_agent_start result with a host notice/digest result without dropping either.
+ * When both contain messages, host's message is delivered via pi.sendMessage (nextTurn) and bridge's message is returned.
+ */
+export function mergeBeforeAgentStartResults(
+	bridgeResult: BeforeAgentStartEventResult | undefined,
+	hostResult: BeforeAgentStartEventResult | undefined,
+	pi?: Pick<ExtensionAPI, "sendMessage">,
+): BeforeAgentStartEventResult | undefined {
+	if (!bridgeResult?.message && !hostResult?.message) {
+		const systemPrompt = bridgeResult?.systemPrompt ?? hostResult?.systemPrompt;
+		return systemPrompt ? { systemPrompt } : undefined;
+	}
+	if (bridgeResult?.message && !hostResult?.message) {
+		return bridgeResult;
+	}
+	if (!bridgeResult?.message && hostResult?.message) {
+		return hostResult;
+	}
+	// Both exist: deliver host notice/digest via sendMessage without dropping it, and return bridge bundle
+	pi?.sendMessage(hostResult!.message!, { deliverAs: "nextTurn" });
+	const systemPrompt = bridgeResult?.systemPrompt ?? hostResult?.systemPrompt;
+	return {
+		message: bridgeResult!.message,
+		...(systemPrompt ? { systemPrompt } : {}),
+	};
+}
+
 export function createWorkflowHost(cfg: HostConfig) {
 	const backend = cfg.backend;
 	const executionWorkspaceManager = cfg.executionWorkspaceManager ?? defaultExecutionWorkspaceManager;
@@ -633,6 +675,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 	let state: HostNowState = {};
 	const resumedExecutionVersions = new Set<string>();
+	const pendingCheckpointContinuations = new Map<string, Promise<void>>();
 	let digestPending = false;
 	let executionRelocationInProgress = false;
 	let digestInjectedThisSession = false;
@@ -651,6 +694,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 	let sessionStartedAt: string = new Date().toISOString();
 	let summaryAuthorizationRef: string | undefined;
 	let models: ExtensionModelQuery | undefined;
+	let knowledgeBridge: KnowledgeBridge | undefined;
 
 	// HOME-114 mechanical lock: flips ONLY on host-observed owner entry of /summary
 	// or /done. FAIL CLOSED on unknown depth: subagent sessions never unlock.
@@ -1760,6 +1804,30 @@ export function createWorkflowHost(cfg: HostConfig) {
 		// shared backend and the same credential path the digest engine uses.
 		registerSessionLedger(pi, { backend, getApiKey: digestApiKey });
 
+		let hostKnowledgeConfig: KnowledgeClientConfig | null = null;
+		if (cfg.knowledgeConfig !== undefined) {
+			hostKnowledgeConfig = cfg.knowledgeConfig;
+		} else {
+			try {
+				hostKnowledgeConfig = loadKnowledgeConfig();
+			} catch (err) {
+				hostKnowledgeConfig = null;
+				pendingNotices.push(`[knowledge] client config invalid (${(err as Error).message ?? String(err)})`);
+			}
+		}
+
+		// Core TypeScript knowledge bridge to staged knowledge APIs
+		knowledgeBridge = registerKnowledgeBridge(pi, {
+			backend,
+			workConfig: cfg.workConfig,
+			knowledgeConfig: hostKnowledgeConfig,
+			getExecutionWitness: ctx => ownExecutionWitness(ctx),
+			getCarrier: () => carrier(),
+			getPlanTarget: () => planTarget,
+			notices: pendingNotices,
+			registerBeforeAgentStart: false,
+		});
+
 		pi.registerMessageRenderer(CENTER_READOUT_TYPE, (message, _options, theme) => {
 			const container = new Container();
 			container.addChild(new Text(theme.fg("accent", "Centering Orientation"), 1, 0));
@@ -2031,6 +2099,247 @@ export function createWorkflowHost(cfg: HostConfig) {
 			return { ok: true, tcb, targetIssue, item };
 		}
 
+		type QueueAdvance =
+			| { status: "advanced"; snapshot: ExecutionSnapshot; nextKey: string }
+			| { status: "stopped"; reason: "execution_worktree_not_clean" | "no_head_commit"; fullNotice: string }
+			| { status: "baseline_moved" }
+			| { status: "no_pending" };
+
+		/** ONE queue-advance path (OMP-246): after a committed completion — observed
+		 *  in-process or reconciled at session start — activate exactly the next
+		 *  pending item under the existing grant-version CAS and pending-operation
+		 *  journal. A dirty worktree or missing HEAD stops the grant as before. */
+		async function advanceExecutionQueue(
+			ctx: ExtensionContext,
+			cwd: string,
+			completed: ExecutionSnapshot,
+			judgeSha256: string,
+			anchorKey: string,
+		): Promise<QueueAdvance> {
+			const nextPending = completed.items.find(i => i.phase === "pending");
+			if (!nextPending) return { status: "no_pending" };
+			const stopGrant = async (reason: "execution_worktree_not_clean" | "no_head_commit"): Promise<QueueAdvance> => {
+				const updated = await backend.setExecutionState({
+					grantId: completed.grant.grant_id,
+					expectedGrantVersion: completed.grant.grant_version,
+					targetState: "stopped",
+					reason,
+					judgeSha256,
+				});
+				const postExec: ExecutionSnapshot = { grant: updated.grant, items: completed.items, activeItem: null };
+				const resolvedKey = (await resolveAnchorKey(backend, postExec, anchorKey)) ?? anchorKey;
+				const notice = await resolveExecutionNoticeDetails(backend, postExec, reason, resolvedKey);
+				state.terminalExecution = {
+					grantId: postExec.grant.grant_id,
+					state: "stopped",
+					reason,
+					tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+					nextCommand: notice.nextCommandLine,
+					at: Date.now(),
+				};
+				await saveCache();
+				footer(ctx);
+				return { status: "stopped", reason, fullNotice: notice.fullNotice };
+			};
+			if (dirtyPaths(cwd).length > 0) return stopGrant("execution_worktree_not_clean");
+			const head = headCommit(cwd);
+			if (!head) return stopGrant("no_head_commit");
+			const focusVersion = await backend.getFocusVersion();
+			const activated = await backend.activateExecutionItem({
+				grantId: completed.grant.grant_id,
+				expectedGrantVersion: completed.grant.grant_version,
+				position: nextPending.position,
+				workId: nextPending.work_id,
+				expectedRevisionId: nextPending.claimed_revision_id,
+				gitBaseline: head,
+				judgeSha256,
+				expectedFocusVersion: focusVersion,
+				expectedProjectId: nextPending.project_id ?? undefined,
+				expectedBlockerIds: nextPending.active_blocker_ids ?? [],
+			});
+			if (headCommit(cwd) !== head) return { status: "baseline_moved" };
+			const nextIssue = await backend.findIssue(nextPending.work_id);
+			if (nextIssue) {
+				state.identifier = nextIssue.key;
+				state.issueId = nextIssue.id;
+				state.title = nextIssue.title;
+				state.project = nextIssue.project;
+				state.setAt = Date.now();
+				await saveCache();
+				footer(ctx);
+			}
+			return { status: "advanced", snapshot: activated, nextKey: nextIssue?.key ?? nextPending.work_id };
+		}
+
+		function parseNativeStagePayload(payload: string | undefined, role: string): Record<string, unknown> {
+			if (!payload?.trim()) throw new Error(`native ${role} stage returned no structured payload`);
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(payload);
+			} catch {
+				throw new Error(`native ${role} stage returned malformed structured payload`);
+			}
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+				throw new Error(`native ${role} stage returned a non-object payload`);
+			}
+			return parsed as Record<string, unknown>;
+		}
+
+		function requiresFrontierReview(paths: readonly string[], attemptLaunchCount: number, verdict: string | undefined): boolean {
+			if (attemptLaunchCount >= 2 && verdict === "NEEDS_FIX") return true;
+			if (verdict !== "NEEDS_FIX" && verdict !== "BLOCKED") return false;
+			return paths.some(path => /(?:^|\/)(?:auth|migrations?|concurrency|recovery)(?:\/|\.|$)/i.test(path));
+		}
+
+		/**
+		 * Run the native plan and implementation workers when their exact routes
+		 * are installed. The legacy owner continuation remains available only for
+		 * sessions that have no qualified native route at all; a partially
+		 * qualified native setup fails closed so it cannot silently mix authorities.
+		 */
+		async function runNativeExecutionStages(
+			stageCtx: ExtensionContext,
+			execution: ExecutionSnapshot,
+			issue: NowRef,
+		): Promise<boolean> {
+			if (!backend.workClient || !execution.activeItem) return false;
+			const planRoute = nativeStageRouteCandidates(stageCtx.models, "plan")[0];
+			const implementRoute = nativeStageRouteCandidates(stageCtx.models, "implement")[0];
+			if (!planRoute && !implementRoute) return false;
+			if (!planRoute || !implementRoute) {
+				throw new Error("native execution requires both qualified plan and implement routes");
+			}
+			const item = await backend.workClient.workItem(issue.key);
+			let current = execution;
+			if (current.activeItem.phase === "criteria_pending") {
+				const criteria = item.revision.acceptance_criteria.length > 0
+					? [...item.revision.acceptance_criteria]
+					: acceptanceFromDescription(item.revision.description);
+				if (criteria.length === 0) throw new Error("native execution requires sealed acceptance criteria");
+				current = await backend.sealExecutionCriteria({
+					grantId: current.grant.grant_id,
+					expectedGrantVersion: current.grant.grant_version,
+					workId: item.work_id,
+					expectedRevisionId: item.revision.revision_id,
+					criteria,
+					descriptionSha256: item.revision.content_sha256,
+					judgeSha256: current.grant.judge_sha256,
+				});
+			}
+			if (!current.activeItem || current.activeItem.phase !== "planning") {
+				throw new Error(`native plan stage requires planning phase, got ${current.activeItem?.phase ?? "none"}`);
+			}
+			const criteria = item.revision.acceptance_criteria.length > 0
+				? item.revision.acceptance_criteria
+				: acceptanceFromDescription(item.revision.description);
+			const planTask = prompt.render(nativePlanTaskTemplate, {
+				request: item.revision.description,
+				criteria: criteria.join("\n"),
+			});
+			const planRun = await dispatchNativeStage(stageCtx, backend, knowledgeBridge, {
+				workKey: issue.key,
+				role: "plan",
+				taskBody: planTask,
+				toolCallId: `native-plan-${current.grant.grant_id}-${item.work_id}`,
+				grantId: current.grant.grant_id,
+				sourceRevision: current.activeItem.initial_git_baseline,
+			});
+			if (!planRun.run.started || planRun.run.error) throw new Error(`native plan stage failed: ${planRun.run.error ?? "no dispatch"}`);
+			const planPayload = parseNativeStagePayload(planRun.run.payload, "plan");
+			const planBody = typeof planPayload.plan_markdown === "string" ? planPayload.plan_markdown.trim() : "";
+			const paths = Array.isArray(planPayload.paths) ? planPayload.paths.filter((path): path is string => typeof path === "string") : [];
+			if (!planBody || paths.length === 0) throw new Error("native plan stage omitted plan_markdown or paths");
+			const approach = sectionItems(planBody, "Approach");
+			const verification = sectionItems(planBody, "Verification");
+			if (approach.length === 0 || verification.length === 0) throw new Error("native plan stage omitted ## Approach or ## Verification");
+			const pathCheck = validateExecutionPaths(expandExecutionPlanClosure(paths, stageCtx.cwd), stageCtx.cwd);
+			if (!pathCheck.valid) throw new Error(`native plan paths refused: ${pathCheck.error}`);
+			const planSha = sha256Hex(planBody);
+			const plannedCandidateId = randomUUID();
+			const planFile = join(homedir(), ".omp", "agent", "native-plans", `${current.grant.grant_id}-${item.work_id}.md`);
+			await Bun.write(planFile, planBody);
+			current = await backend.stampExecutionPlan({
+				grantId: current.grant.grant_id,
+				expectedGrantVersion: current.grant.grant_version,
+				workId: item.work_id,
+				revisionId: current.activeItem.criteria_revision_id ?? current.activeItem.claimed_revision_id,
+				candidateId: plannedCandidateId,
+				planFile,
+				planBody,
+				planSha256: planSha,
+				approach,
+				verification,
+				paths: pathCheck.normalized,
+				candidateSha256: sha256Hex(canonicalJson({ planSha, candidateId: plannedCandidateId })),
+				judgeSha256: current.grant.judge_sha256,
+			});
+			if (!current.activeItem || current.activeItem.phase !== "executing") throw new Error("native plan stage did not advance to executing");
+			const implementTask = prompt.render(nativeImplementTaskTemplate, { request: item.revision.description, plan: planBody });
+			const implementRun = await dispatchNativeStage(stageCtx, backend, knowledgeBridge, {
+				workKey: issue.key,
+				role: "implement",
+				taskBody: implementTask,
+				toolCallId: `native-implement-${current.grant.grant_id}-${item.work_id}-${current.grant.grant_version}`,
+				grantId: current.grant.grant_id,
+				candidateId: plannedCandidateId,
+				sourceRevision: current.activeItem.initial_git_baseline,
+				writeRoots: pathCheck.normalized.map(path => join(stageCtx.cwd, path)),
+			});
+			if (!implementRun.run.started || implementRun.run.error) throw new Error(`native implement stage failed: ${implementRun.run.error ?? "no dispatch"}`);
+			const implementPayload = parseNativeStagePayload(implementRun.run.payload, "implement");
+			if (typeof implementPayload.verification_body !== "string" || !implementPayload.verification_body.trim()) {
+				throw new Error("native implement stage omitted verification_body");
+			}
+			return true;
+		}
+
+		/** OMP-246: an owned session start finds the grant active with no active
+		 *  item and a pending queue item — the signature of a committed
+		 *  complete_execution_item whose response was lost. Reconcile the journal
+		 *  first (the committed completion resolves by operation identity, zero
+		 *  POST), then advance through the same path in-process completion uses.
+		 *  Returns the post-activation snapshot, or undefined after a notice with
+		 *  the binding left intact for a later retry. Only the execution
+		 *  workspace the binding names is consulted for dirt and baseline. */
+		async function recoverStrandedQueue(
+			ctx: ExtensionContext,
+			exec: ExecutionSnapshot,
+			witness: OwnExecutionWitness,
+		): Promise<ExecutionSnapshot | undefined> {
+			const owns = () => ownsExecutionSession(ctx, witness);
+			const skip = (reason: string): undefined => {
+				if (owns()) ctx.ui.notify(`Execution recovery skipped: ${reason}`, "warning");
+				return undefined;
+			};
+			try {
+				await backend.getPendingExecutionClaims?.(exec.grant.grant_id);
+			} catch (error) {
+				if (owns()) ctx.ui.notify(`Recovery blocked by unreadable claim: ${String(error)}`, "error");
+				return undefined;
+			}
+			if (!owns()) return undefined;
+			if (!isAbsolute(exec.grant.repository)) return skip(LEGACY_EXECUTION_REPOSITORY_REFUSAL);
+			const cwd = witness.workspace.path;
+			if (inProgressGitOp(cwd)) return skip("git operation in progress");
+			const dirt = dirtyPaths(cwd);
+			if (dirt.length > 0) return skip(`dirty worktree: ${dirt.join(", ")}`);
+			if (!headCommit(cwd)) return skip("no head commit in the execution workspace");
+			let judgeSha256: string;
+			try {
+				judgeSha256 = (await computeAuditTcb(withRelocatedCwd(ctx, cwd), backend.workClient!, cfg.sourceResolver)).judgeSha256;
+			} catch (error) {
+				return skip(`judge TCB computation failed: ${String(error)}`);
+			}
+			if (judgeSha256 !== exec.grant.judge_sha256) return skip("judge TCB drift");
+			if (!owns()) return undefined;
+			const advance = await advanceExecutionQueue(ctx, cwd, exec, judgeSha256, witness.workspace.key);
+			if (!owns()) return undefined;
+			if (advance.status === "stopped") return skip(advance.fullNotice);
+			if (advance.status === "baseline_moved") return skip("git baseline moved during queue activation handshake");
+			if (advance.status === "no_pending") return skip("no pending queue item");
+			return witnessMatchesGrant(witness, advance.snapshot) ? advance.snapshot : undefined;
+		}
+
 		pi.on("session_start", async (_e, ctx) => {
 			const startupWitness = ownExecutionWitness(ctx);
 			const startupManager = ctx.sessionManager;
@@ -2205,8 +2514,16 @@ export function createWorkflowHost(cfg: HostConfig) {
 			if (!executionRelocationInProgress && (ctx?.taskDepth === 0 || ctx?.taskDepth === undefined)) {
 				try {
 					if (backend.workClient) {
-						const exec = await backend.getExecution(startupWitness?.workspace.grantId);
+						let exec = await backend.getExecution(startupWitness?.workspace.grantId);
 						if (!startupCurrent() || (startupWitness && (!ownsExecutionSession(ctx, startupWitness) || (exec && !witnessMatchesGrant(startupWitness, exec))))) return;
+						if (startupWitness && exec && exec.grant.state === "active" && (!exec.activeItem || exec.activeItem.phase === "pending") && exec.items.some(item => item.phase === "pending")) {
+							// OMP-246: a committed completion whose response was lost must not
+							// strand the queue. Reconcile, then advance; the active-item
+							// recovery below reserves and delivers the continuation exactly
+							// as for any other restart.
+							exec = (await recoverStrandedQueue(ctx, exec, startupWitness)) ?? null;
+							if (!exec || !startupCurrent()) return;
+						}
 						if (startupWitness && (!exec || exec.grant.state !== "active" || !exec.activeItem)) {
 							state.executingIssue = undefined;
 							state.approvedPlan = undefined;
@@ -2528,32 +2845,41 @@ export function createWorkflowHost(cfg: HostConfig) {
 					};
 				}
 			}
-			if (event.toolName === "task" && event.taskResultOrigin) {
-				const origin = event.taskResultOrigin;
-				const entry = ctx.sessionManager.getBranch().find(candidate => candidate.id === origin.promptEntryId);
-				if (origin.sessionId !== ctx.sessionManager.getSessionId() || entry?.type !== "custom_message" ||
-					entry.customType !== `${TOOL_NAME}-execute` || entry.attribution !== "agent") return undefined;
-				const identity = (entry.details as {executionContinuation?: ExecutionOutboxEntry} | undefined)?.executionContinuation;
-				if (!identity?.grantId || !identity.messageId || identity.sessionId !== origin.sessionId) return undefined;
-				const intent = Object.freeze({...identity});
-				const expected = Object.freeze({...origin, toolCallId: event.toolCallId});
-				return {taskResultAuthority: async (actual: {sessionId: string; promptEntryId: string; assistantEntryId: string; toolCallId: string}) => {
-					if (actual.sessionId !== expected.sessionId || actual.promptEntryId !== expected.promptEntryId || actual.toolCallId !== expected.toolCallId)
-						return {ok: false as const, reason: "Task result authority belongs to another core invocation"};
-					const branch = ctx.sessionManager.getBranch();
-					const current = branch.find(candidate => candidate.id === expected.promptEntryId);
-					const assistant = branch.find(candidate => candidate.id === actual.assistantEntryId);
-					if (current?.type !== "custom_message" || current.customType !== `${TOOL_NAME}-execute` || current.attribution !== "agent" ||
-						JSON.stringify((current.details as {executionContinuation?: ExecutionOutboxEntry} | undefined)?.executionContinuation) !== JSON.stringify(intent) ||
-						assistant?.type !== "message" || assistant.message.role !== "assistant" ||
-						!assistant.message.content.some(part => part.type === "toolCall" && part.id === expected.toolCallId && part.name === "task"))
-						return {ok: false as const, reason: "Original execution prompt or task call changed"};
-					return validateBoundExecutionAuthority(ctx, intent);
-				}};
+			if (event.toolName === "task") {
+				const bridgeResult = await knowledgeBridge?.handleToolCall(event, ctx);
+				if (event.taskResultOrigin) {
+					const origin = event.taskResultOrigin;
+					const entry = ctx.sessionManager.getBranch().find(candidate => candidate.id === origin.promptEntryId);
+					if (origin.sessionId !== ctx.sessionManager.getSessionId() || entry?.type !== "custom_message" ||
+						entry.customType !== `${TOOL_NAME}-execute` || entry.attribution !== "agent") return bridgeResult;
+					const identity = (entry.details as {executionContinuation?: ExecutionOutboxEntry} | undefined)?.executionContinuation;
+					if (!identity?.grantId || !identity.messageId || identity.sessionId !== origin.sessionId) return bridgeResult;
+					const intent = Object.freeze({...identity});
+					const expected = Object.freeze({...origin, toolCallId: event.toolCallId});
+					return {
+						...(bridgeResult?.input ? { input: bridgeResult.input } : {}),
+						taskResultAuthority: async (actual: {sessionId: string; promptEntryId: string; assistantEntryId: string; toolCallId: string}) => {
+							if (actual.sessionId !== expected.sessionId || actual.promptEntryId !== expected.promptEntryId || actual.toolCallId !== expected.toolCallId)
+								return {ok: false as const, reason: "Task result authority belongs to another core invocation"};
+							const branch = ctx.sessionManager.getBranch();
+							const current = branch.find(candidate => candidate.id === expected.promptEntryId);
+							const assistant = branch.find(candidate => candidate.id === actual.assistantEntryId);
+							if (current?.type !== "custom_message" || current.customType !== `${TOOL_NAME}-execute` || current.attribution !== "agent" ||
+								JSON.stringify((current.details as {executionContinuation?: ExecutionOutboxEntry} | undefined)?.executionContinuation) !== JSON.stringify(intent) ||
+								assistant?.type !== "message" || assistant.message.role !== "assistant" ||
+								!assistant.message.content.some(part => part.type === "toolCall" && part.id === expected.toolCallId && part.name === "task"))
+								return {ok: false as const, reason: "Original execution prompt or task call changed"};
+							return validateBoundExecutionAuthority(ctx, intent);
+						},
+					};
+				}
+				return bridgeResult;
 			}
 			return undefined;
 		});
 		pi.on("before_agent_start", async (event, ctx) => {
+			const bridgeResult = await knowledgeBridge?.handleBeforeAgentStart(event, ctx);
+
 			const manager = ctx.sessionManager;
 			const sessionId = manager.getSessionId?.();
 			const generalNotices = pendingNotices.splice(0);
@@ -2563,21 +2889,25 @@ export function createWorkflowHost(cfg: HostConfig) {
 				if (current) pendingPauseNotices.delete(sessionId);
 				return [...generalNotices, ...pauseNotices].join("\n");
 			};
+			let hostResult: BeforeAgentStartEventResult | undefined;
 			if (!digestPending || digestInjectedThisSession) {
 				const notices = consumeNotices();
-				return notices ? { message: { customType: `${TOOL_NAME}-notice`, content: notices } } : undefined;
+				hostResult = notices ? { message: { customType: `${TOOL_NAME}-notice`, content: notices } } : undefined;
+			} else {
+				digestPending = false;
+				try {
+					const digest = await buildDigest(ctx.cwd);
+					digestInjectedThisSession = true;
+					const notices = consumeNotices();
+					hostResult = { message: { customType: `${TOOL_NAME}-digest`, content: notices ? `${digest}\n${notices}` : digest } };
+				} catch (e) {
+					pi.logger.warn(`${TOOL_NAME}-now: digest failed`, { error: String(e) });
+					const notices = consumeNotices();
+					hostResult = { message: { customType: `${TOOL_NAME}-digest`, content: `[${TOOL_NAME}] digest unavailable (${String(e)}) — session unblocked${notices ? `\n${notices}` : ""}` } };
+				}
 			}
-			digestPending = false;
-			try {
-				const digest = await buildDigest(ctx.cwd);
-				digestInjectedThisSession = true;
-				const notices = consumeNotices();
-				return { message: { customType: `${TOOL_NAME}-digest`, content: notices ? `${digest}\n${notices}` : digest } };
-			} catch (e) {
-				pi.logger.warn(`${TOOL_NAME}-now: digest failed`, { error: String(e) });
-				const notices = consumeNotices();
-				return { message: { customType: `${TOOL_NAME}-digest`, content: `[${TOOL_NAME}] digest unavailable (${String(e)}) — session unblocked${notices ? `\n${notices}` : ""}` } };
-			}
+
+			return mergeBeforeAgentStartResults(bridgeResult, hostResult, piRef);
 		});
 
 		pi.on("plan_approved", async (event, ctx) => {
@@ -3294,10 +3624,25 @@ export function createWorkflowHost(cfg: HostConfig) {
 				await saveCache();
 				footer(activeCtx);
 				activeCtx.ui.notify(`Execution grant started for ${issue.key} in ${workspace.path} (${isQueue ? `queue: ${claims.length} items` : "single"})`, "info");
+				let nativeStagesRan = false;
+				try {
+					nativeStagesRan = await runNativeExecutionStages(activeCtx, begun, issue);
+					if (nativeStagesRan) activeCtx.ui.notify("Native plan and implementation stages completed; preparing review", "info");
+				} catch (error) {
+					activeCtx.ui.notify(`Native execution stage blocked: ${String(error)}`, "error");
+					return;
+				}
+				const deliveryExecution = nativeStagesRan
+					? await backend.getExecution(begun.grant.grant_id)
+					: begun;
+				if (!deliveryExecution?.activeItem) {
+					activeCtx.ui.notify("Execution stage completed without an active item", "error");
+					return;
+				}
 				await deliverExecutionMessage(
 					begun.grant.grant_id,
-					0,
-					begun.grant.grant_version,
+					nativeStagesRan ? deliveryExecution.grant.grant_version : 0,
+					deliveryExecution.grant.grant_version,
 					issue.key,
 					activeCtx,
 				);
@@ -3349,6 +3694,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 				plan_file: z.string().optional().describe("Local plan file URI or path (stamp_execution_plan)"),
 				paths: z.array(z.string()).optional().describe("Literal repository-relative target file paths (stamp_execution_plan)"),
 			}),
+			// begin_execution_review is exclusive: the loop schedules every later
+			// call in the batch (including shared, non-PTY bash) behind it, so its
+			// `endTurn` result fences them before they start (OMP-246 contract 1).
+			// Every other action stays shared so reads and unrelated tools overlap.
+			concurrency: args => ((args as Partial<WorkflowToolParams>).action === "begin_execution_review" ? "exclusive" : "shared"),
 			// Signature contract is (toolCallId, params, signal, onUpdate, ctx) — the
 			// pre-2026-08-10 4-param version received onUpdate as `ctx` (HOME-30).
 			async execute(_id, params: WorkflowToolParams, _signal, _onUpdate, ctx) {
@@ -3574,6 +3924,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 									pendingNotices.push(`[${TOOL_NAME}] settle checkpoint delivery failed (${notice})`);
 								});
 							}
+							await knowledgeBridge?.onAuditorSettle(params.work, reservation.launchId, settleOutcome, ctx);
 
 							if (settleOutcome.status === "refused") {
 								return deny(`Audit launch settlement refused by ledger:\n${settleOutcome.event.renderedText}`);
@@ -4151,7 +4502,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 								return deny("Verification evidence body is required for begin_execution_review (pass body:\"<exact test commands and results>\").");
 							}
 							let exec = await backend.getExecution(params.work);
-							if (!exec || exec.grant.state !== "active") return deny("no active execution grant");
+							if (!exec) return deny("no active execution grant");
+							if (exec.grant.state === "stopped" || exec.grant.state === "canceled") {
+								return deny(computeExecutionNoticeDetails(exec).causeLine);
+							}
+							if (exec.grant.state !== "active") return deny("no active execution grant");
 							if (!isAbsolute(exec.grant.repository)) return deny(LEGACY_EXECUTION_REPOSITORY_REFUSAL);
 							if (!exec.activeItem || !["executing", "remediating", "reviewing"].includes(exec.activeItem.phase)) {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected executing, remediating, or reviewing`);
@@ -4267,27 +4622,49 @@ export function createWorkflowHost(cfg: HostConfig) {
 								return deny("judge TCB drift");
 							}
 							// OMP-97: checkpoint deliveries settle only after the turn yields,
-							// and this handler IS the turn. Every service gate that demands an
-							// attested delivery is therefore satisfied across turns: queue the
-							// delivery, schedule the execute continuation prompt, hand the
-							// turn back, and resume from service state on the next call.
+							// and this handler IS the turn. Schedule continuation only after
+							// delivery and attestation settle, with one continuation per grant.
 							const yieldForDeliveries = async (events: Awaited<ReturnType<typeof backend.pendingDeliveries>>, phase: string) => {
-								for (const ev of events) {
-									queueCheckpointDelivery(pi, backend, ev, notice => {
-										pendingNotices.push(`[${TOOL_NAME}] checkpoint delivery failed (${notice})`);
-									});
-								}
-								const sent = await deliverExecutionMessage(
-									exec.grant.grant_id,
-									exec.grant.grant_version,
-									exec.grant.grant_version,
-									targetIssue.key,
-									ctx,
+								const settlement = Promise.all(
+									events.map(ev =>
+										queueCheckpointDeliverySettlement(pi, backend, ev, notice => {
+											pendingNotices.push(`[${TOOL_NAME}] checkpoint delivery failed (${notice})`);
+										}),
+									),
 								);
+								const grantId = exec.grant.grant_id;
+								const grantVersion = exec.grant.grant_version;
+								const issueKey = targetIssue.key;
+								if (!pendingCheckpointContinuations.has(grantId)) {
+									const scheduled = settlement
+										.then(async () => {
+											let continued = false;
+											try {
+												continued = await deliverExecutionMessage(grantId, grantVersion, grantVersion, issueKey, ctx);
+											} catch (error) {
+												pendingNotices.push(`[${TOOL_NAME}] execution continuation failed after checkpoint attestation (${String(error)}) — review resumes from service state on the next owner turn`);
+											}
+											if (!continued) {
+												const notice = "no execution continuation prompt was sent after checkpoint attestation (this session no longer holds an active execution for the grant at its yielded version); review resumes from service state on the next owner turn.";
+												pendingNotices.push(`[${TOOL_NAME}] ${notice}`);
+												try {
+													ctx.ui.notify(notice, "warning");
+												} catch {
+													/* notice recorded above; UI unavailable after the turn */
+												}
+											}
+										})
+										.finally(() => {
+											if (pendingCheckpointContinuations.get(grantId) === scheduled) pendingCheckpointContinuations.delete(grantId);
+										});
+									pendingCheckpointContinuations.set(grantId, scheduled);
+								}
+								// `endTurn` makes the controller treat this result as terminal:
+								// any tool call the model emitted after it in the same response is
+								// refused, so the frozen candidate cannot be mutated post-submission.
 								return okText(
-									sent
-										? `${phase} — ${events.length} close-attempt checkpoint(s) queued for delivery. END YOUR TURN NOW with no further tool calls: the checkpoints inject when the turn yields, and the execution prompt returns automatically. Then call begin_execution_review again with the same verification body to continue.`
-										: `${phase} — ${events.length} close-attempt checkpoint(s) queued for delivery. Grant is no longer active; no execution continuation prompt was sent.`,
+									`${phase} — ${events.length} close-attempt checkpoint(s) queued for delivery. END YOUR TURN NOW with no further tool calls: the checkpoint injects and attests only after this turn yields, and only then is one execution continuation scheduled through the guarded helper.`,
+									{ endTurn: true },
 								);
 							};
 
@@ -4327,27 +4704,77 @@ export function createWorkflowHost(cfg: HostConfig) {
 							// A stale pre-grant attempt (left by an earlier /summary or an
 							// abandoned grant) fails this check; resuming it can only end in a
 							// candidate_drift refusal whose recovery is manual-lane ceremony.
-							const staleCheckAttempt = liveAttempt ? (wfView?.close_attempts ?? []).find(row => row.attempt_id === liveAttempt.attemptId) : undefined;
-							const staleCheckCandidate = wfView?.item?.candidate;
-							const staleCheckRevisionId = wfView?.item?.revision?.revision_id ?? wfView?.item?.current_revision_id;
-							const attemptMatchesItem = matchesReviewCandidate(staleCheckAttempt, staleCheckCandidate, staleCheckRevisionId);
+			const staleCheckAttempt = liveAttempt ? (wfView?.close_attempts ?? []).find(row => row.attempt_id === liveAttempt.attemptId) : undefined;
+			const staleCheckCandidate = wfView?.item?.candidate;
+			const staleCheckRevisionId = wfView?.item?.revision?.revision_id ?? wfView?.item?.current_revision_id;
+			const staleCandidateIdentity: ReviewCandidateIdentity | null | undefined =
+				staleCheckCandidate?.candidate_id && staleCheckCandidate.candidate_sha256 && staleCheckCandidate.commit_sha
+					? {
+						candidate_id: staleCheckCandidate.candidate_id,
+						candidate_sha256: staleCheckCandidate.candidate_sha256,
+						commit_sha: staleCheckCandidate.commit_sha,
+					}
+					: undefined;
+			const attemptMatchesItem = matchesReviewCandidate(
+				staleCheckAttempt
+					? {
+						...(staleCheckAttempt.revision_id !== undefined ? { revision_id: staleCheckAttempt.revision_id } : {}),
+						...(staleCheckAttempt.candidate_id != null ? { candidate_id: staleCheckAttempt.candidate_id } : {}),
+						...(staleCheckAttempt.candidate_sha256 != null ? { candidate_sha256: staleCheckAttempt.candidate_sha256 } : {}),
+						...(staleCheckAttempt.candidate_commit != null ? { candidate_commit: staleCheckAttempt.candidate_commit } : {}),
+					}
+					: undefined,
+				staleCandidateIdentity,
+				staleCheckRevisionId,
+			);
 
+							const boundAuditRoute = tcb.auditRoute;
+							const boundAuditPolicySha256 = tcb.judgeManifest.audit_policy_sha256;
 							const runAuditAndSettle = async (attemptId: string, pushReceiptId: string, hasManifest: boolean, candidateCommit?: string) => {
+								const currentPolicy = resolveAuditPolicy(ctx.models);
+								if (currentPolicy.policySha256 !== boundAuditPolicySha256) {
+									return deny("audit policy drifted during execution review");
+								}
+								const currentTcb = await computeAuditTcb(ctx, backend.workClient!, cfg.sourceResolver);
+								if (currentTcb.judgeSha256 !== exec.grant.judge_sha256) {
+									return deny("judge TCB drift");
+								}
 								if (!hasManifest) {
 									const sealOutcome = await backend.sealAuditManifest(targetIssue);
 									if (sealOutcome.status === "refused") {
 										return deny(`Seal audit manifest refused: ${sealOutcome.event.renderedText}`);
 									}
 								}
-								const runner = await prepareNativeAuditRunner(ctx, _signal);
 								const sealedTask = await backend.sealedAuditTask(targetIssue.key);
 								if (!sealedTask) return deny("sealed audit task missing");
+								let nativeAuditRun: NativeAuditRunResult | undefined;
+								if (nativeStageRouteCandidates(ctx.models, "audit").length > 0) {
+									const execution = await backend.getExecution(params.work);
+									try {
+										const nativeAudit = await dispatchNativeStage(ctx, backend, knowledgeBridge, {
+											workKey: targetIssue.key,
+											role: "audit",
+											taskBody: sealedTask.taskBody,
+											toolCallId: `native-audit-${attemptId}`,
+											grantId: execution?.grant.grant_id ?? null,
+											attemptId,
+											candidateId: wfView?.item?.candidate?.candidate_id ?? null,
+											candidateSha256: wfView?.item?.candidate?.candidate_sha256 ?? null,
+											sourceRevision: execution?.activeItem?.initial_git_baseline ?? null,
+											boundAuditRoute,
+										});
+										nativeAuditRun = nativeAudit.run;
+									} catch (error) {
+										return deny(`Native audit stage blocked: ${String(error)}`);
+									}
+								}
+								const runner = nativeAuditRun ? undefined : await prepareNativeAuditRunner(ctx, _signal, boundAuditRoute);
 								const resv = await backend.reserveAuditorLaunch(targetIssue.key, sealedTask.taskSha256, _id);
 								if (resv.status === "refused" || !resv.launchId) {
 									return deny(`Reserve launch refused: ${resv.event.renderedText}`);
 								}
 								const origin = captureAuditLaunchOrigin(ctx, true);
-								const auditRun = await runner(sealedTask.taskBody, attemptId, _signal);
+								const auditRun = nativeAuditRun ?? await runner!(sealedTask.taskBody, attemptId, _signal);
 								if (!auditRun.started) {
 									// OMP-251: the auditor never dispatched a model request —
 									// cancel the reservation (cancelled launches do not count
@@ -4371,6 +4798,33 @@ export function createWorkflowHost(cfg: HostConfig) {
 									resv.launchId,
 									auditRun.payload && auditRun.payload.trim().length > 0 ? { payload: auditRun.payload } : { failed: true },
 								);
+								await knowledgeBridge?.onAuditorSettle(targetIssue.key, resv.launchId, settle, ctx);
+								if (
+									nativeAuditRun
+									&& (settle.verdict === "NEEDS_FIX" || settle.verdict === "BLOCKED")
+					&& requiresFrontierReview(sealedPaths, (wfView?.auditor_launches ?? []).filter(launch => launch.attempt_id === attemptId).length + 1, settle.verdict)
+								) {
+									if (nativeStageRouteCandidates(ctx.models, "frontier").length === 0) {
+										return deny("Frontier review is required for this candidate, but no qualified Fable frontier route is installed");
+									}
+									const execution = await backend.getExecution(params.work);
+									const frontier = await dispatchNativeStage(ctx, backend, knowledgeBridge, {
+										workKey: targetIssue.key,
+										role: "frontier",
+										taskBody: prompt.render(nativeFrontierTaskTemplate, { task: sealedTask.taskBody, audit: auditRun.payload ?? "" }),
+										toolCallId: `native-frontier-${attemptId}`,
+										grantId: execution?.grant.grant_id ?? null,
+										attemptId,
+										candidateId: wfView?.item?.candidate?.candidate_id ?? null,
+										candidateSha256: wfView?.item?.candidate?.candidate_sha256 ?? null,
+										sourceRevision: execution?.activeItem?.initial_git_baseline ?? null,
+									});
+									const frontierPayload = parseNativeStagePayload(frontier.run.payload, "frontier");
+									const frontierVerdict = frontierPayload.verdict;
+									if (frontierVerdict !== "PASS") {
+										return deny(`Frontier verdict: ${String(frontierVerdict ?? "BLOCKED")} — ${JSON.stringify(frontierPayload.findings ?? [])}`);
+									}
+								}
 								if (settle.verdict === "NEEDS_FIX" || settle.verdict === "BLOCKED") {
 									// Remediation is not delivery-gated: queue the settlement
 									// checkpoint and hand findings back in the same response.
@@ -4450,90 +4904,17 @@ export function createWorkflowHost(cfg: HostConfig) {
 									evidence,
 									judgeSha256: tcb.judgeSha256,
 								});
-								const nextPending = completed.items.find(i => i.phase === "pending");
-								if (nextPending) {
-									const dirt = dirtyPaths(cwd);
-									if (dirt.length > 0) {
-										const updated = await backend.setExecutionState({
-											grantId: completed.grant.grant_id,
-											expectedGrantVersion: completed.grant.grant_version,
-											targetState: "stopped",
-											reason: "execution_worktree_not_clean",
-											judgeSha256: tcb.judgeSha256,
-										});
-										const postExec: ExecutionSnapshot = {
-											grant: updated.grant,
-											items: completed.items,
-											activeItem: null,
-										};
-										const anchorKey = (await resolveAnchorKey(backend, postExec, targetIssue.key)) ?? targetIssue.key;
-										const notice = await resolveExecutionNoticeDetails(backend, postExec, "execution_worktree_not_clean", anchorKey);
-										state.terminalExecution = {
-											grantId: postExec.grant.grant_id,
-											state: "stopped",
-											reason: "execution_worktree_not_clean",
-											tally: notice.tallyLine.replace(/^Items:\s*/, ""),
-											nextCommand: notice.nextCommandLine,
-											at: Date.now(),
-										};
-										await saveCache();
-										footer(ctx);
-										return deny(`execution_worktree_not_clean on queue advance: clean worktree required.\n${notice.fullNotice}`);
-									}
-									const head = headCommit(cwd);
-									if (!head) {
-										const updated = await backend.setExecutionState({
-											grantId: completed.grant.grant_id,
-											expectedGrantVersion: completed.grant.grant_version,
-											targetState: "stopped",
-											reason: "no_head_commit",
-											judgeSha256: tcb.judgeSha256,
-										});
-										const postExec: ExecutionSnapshot = {
-											grant: updated.grant,
-											items: completed.items,
-											activeItem: null,
-										};
-										const anchorKey = (await resolveAnchorKey(backend, postExec, targetIssue.key)) ?? targetIssue.key;
-										const notice = await resolveExecutionNoticeDetails(backend, postExec, "no_head_commit", anchorKey);
-										state.terminalExecution = {
-											grantId: postExec.grant.grant_id,
-											state: "stopped",
-											reason: "no_head_commit",
-											tally: notice.tallyLine.replace(/^Items:\s*/, ""),
-											nextCommand: notice.nextCommandLine,
-											at: Date.now(),
-										};
-										await saveCache();
-										footer(ctx);
-										return deny(`no head commit on queue advance.\n${notice.fullNotice}`);
-									}
-									const focusVersion = await backend.getFocusVersion();
-									await backend.activateExecutionItem({
-										grantId: completed.grant.grant_id,
-										expectedGrantVersion: completed.grant.grant_version,
-										position: nextPending.position,
-										workId: nextPending.work_id,
-										expectedRevisionId: nextPending.claimed_revision_id,
-										gitBaseline: head,
-										judgeSha256: tcb.judgeSha256,
-										expectedFocusVersion: focusVersion,
-										expectedProjectId: nextPending.project_id ?? undefined,
-										expectedBlockerIds: nextPending.active_blocker_ids ?? [],
-									});
-									const headAfter = headCommit(cwd);
-									if (headAfter !== head) return deny("Git baseline moved during queue activation handshake");
-									const nextIssue = await backend.findIssue(nextPending.work_id);
-									if (nextIssue) {
-										state.identifier = nextIssue.key;
-										state.issueId = nextIssue.id;
-										state.title = nextIssue.title;
-										state.project = nextIssue.project;
-										state.setAt = Date.now();
-										await saveCache();
-										footer(ctx);
-									}
-									return okText(`Item ${activeWorkId} completed and passed audit! Advanced to next queue item ${nextIssue?.key ?? nextPending.work_id} (phase: criteria_pending).`);
+								const advance = await advanceExecutionQueue(ctx, cwd, completed, tcb.judgeSha256, targetIssue.key);
+								if (advance.status === "stopped") {
+									return deny(
+										advance.reason === "execution_worktree_not_clean"
+											? `execution_worktree_not_clean on queue advance: clean worktree required.\n${advance.fullNotice}`
+											: `no head commit on queue advance.\n${advance.fullNotice}`,
+									);
+								}
+								if (advance.status === "baseline_moved") return deny("Git baseline moved during queue activation handshake");
+								if (advance.status === "advanced") {
+									return okText(`Item ${activeWorkId} completed and passed audit! Advanced to next queue item ${advance.nextKey} (phase: criteria_pending).`);
 								}
 								localClear(ctx, true);
 								settleClosedIssue(targetIssue, ctx);
@@ -4620,7 +5001,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 							);
 							if ("refused" in freeze) return deny(`Candidate freeze refused: ${freeze.reason}`);
 
-							const finalCandidate = await backend.finalizeExecutionCandidate(targetIssue.key, plannedCandidateId, freeze);
+			const finalCandidate = await backend.finalizeExecutionCandidate(targetIssue.key, plannedCandidateId, freeze);
+			const finalCommit = finalCandidate.commit_sha ?? freeze.commitSha;
+			const finalTreeSha = treeSha(cwd, finalCommit);
 
 							await backend.appendEvidence(targetIssue, "verification", params.body.trim(), {
 								candidateSha256: finalCandidate.candidate_sha256,
@@ -4693,7 +5076,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 								dirtyPaths: [],
 								authorization_kind: "execution",
 								execution_grant_id: exec.grant.grant_id,
-								candidate_tree_sha: finalCandidate.candidate_sha256,
+				...(finalTreeSha ? { candidate_tree_sha: finalTreeSha } : {}),
 								original_request_sha256: exec.activeItem.original_request_sha256,
 								criteria_sha256: exec.activeItem.criteria_sha256 ?? undefined,
 								plan_stamp_sha256: exec.activeItem.plan_stamp_sha256 ?? undefined,

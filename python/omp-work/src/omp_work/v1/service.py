@@ -42,6 +42,12 @@ class WorkService:
         "reserve_auditor_launch": "work.close",
         "cancel_auditor_launch": "work.close",
         "settle_auditor_launch": "work.close",
+        "reserve_stage_launch": "work.execute",
+        "handoff_stage_launch": "work.execute",
+        "settle_stage_launch": "work.execute",
+        "cancel_stage_launch": "work.execute",
+        "reconcile_stage_launch": "work.execute",
+        "associate_candidate_source": "work.execute",
         "attest_checkpoint_delivery": "work.close",
         "record_closeout_review": "work.close",
         "complete_work": "work.close",
@@ -55,6 +61,12 @@ class WorkService:
         "stamp_execution_plan": "work.execute",
         "set_execution_state": "work.execute",
         "complete_execution_item": "work.execute",
+        "create_budget_scope": "work.execute",
+        "reserve_budget": "work.execute",
+        "claim_budget": "work.execute",
+        "settle_budget": "work.execute",
+        "cancel_budget": "work.execute",
+        "issue_frontier_exception": "work.operate",
     }
 
     def __init__(self, store: WorkStore) -> None:
@@ -67,6 +79,8 @@ class WorkService:
             raise WorkError("forbidden", status=403)
         scope = self._scopes[envelope.command.type]
         if scope not in principal.scopes:
+            raise WorkError("forbidden", status=403)
+        if envelope.command.type == "issue_frontier_exception" and principal.actor_kind != "trusted_policy":
             raise WorkError("forbidden", status=403)
         if envelope.command.type in {"stage_import_batch", "promote_import_batch"}:
             raise WorkError("unavailable", status=503)
@@ -87,6 +101,9 @@ class WorkService:
                 "stale_evidence": 409,
                 "completion_blocked": 409,
                 "cutover_invariant": 409,
+                "execution_grant_inactive": 409,
+                "execution_caps_exceeded": 409,
+                "budget_exhausted": 409,
                 "unavailable": 503,
             }
             raise WorkError(
@@ -122,7 +139,17 @@ class WorkService:
             ) from error
 
     def read(
-        self, principal: Principal, workspace_id: UUID, kind: str, value: str
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        kind: str,
+        value: str = "",
+        *,
+        selector: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+        after_sequence: int | None = None,
+        through_sequence: int | None = None,
     ) -> dict[str, object]:
         if workspace_id not in principal.workspaces:
             raise WorkError("forbidden", status=403)
@@ -142,6 +169,11 @@ class WorkService:
                 kind,
                 value,
                 candidate_allowlist=allowlist,
+                selector=selector,
+                limit=limit,
+                cursor=cursor,
+                after_sequence=after_sequence,
+                through_sequence=through_sequence,
             )
         except WorkStoreError as error:
             statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}

@@ -4,7 +4,13 @@
   "reads": [
     "GET /v1/work-items/{key}",
     "GET /v1/work-items/{key}/workflow",
+    "GET /v1/work-items/{key}/revisions",
+    "GET /v1/work-items/{key}/revisions/{revision_selector}",
+    "GET /v1/receipts/{receipt_id}",
     "GET /v1/workspaces/{workspace_id}/tree",
+    "GET /v1/workspaces/{workspace_id}/work-items",
+    "GET /v1/workspaces/{workspace_id}/events",
+    "GET /v1/workspaces/{workspace_id}/repositories",
     "GET /v1/workspaces/{workspace_id}/focus/{owner_id}",
     "GET /v1/operations/{operation_id}",
     "GET /v1/workspaces/{workspace_id}/authority",
@@ -14,35 +20,160 @@
     "GET /v1/health/ready"
   ],
   "command_types": [
-    "create_work_batch", "create_same_session_child", "revise_work", "set_work_state", "put_relation", "remove_relation", "set_focus", "clear_focus", "append_evidence", "finalize_candidate", "begin_close_attempt", "seal_audit_manifest", "reserve_auditor_launch", "cancel_auditor_launch", "settle_auditor_launch", "attest_checkpoint_delivery", "record_closeout_review", "complete_work", "record_project_health", "stage_import_batch", "promote_import_batch", "activate_cutover", "attest_cutover_plan", "begin_execution", "activate_execution_item", "seal_execution_criteria", "stamp_execution_plan", "set_execution_state", "complete_execution_item"
+    "create_work_batch",
+    "create_same_session_child",
+    "revise_work",
+    "set_work_state",
+    "put_relation",
+    "remove_relation",
+    "set_focus",
+    "clear_focus",
+    "append_evidence",
+    "finalize_candidate",
+    "begin_close_attempt",
+    "seal_audit_manifest",
+    "reserve_auditor_launch",
+    "cancel_auditor_launch",
+    "settle_auditor_launch",
+    "reserve_stage_launch",
+    "handoff_stage_launch",
+    "settle_stage_launch",
+    "cancel_stage_launch",
+    "reconcile_stage_launch",
+    "attest_checkpoint_delivery",
+    "record_closeout_review",
+    "complete_work",
+    "record_project_health",
+    "stage_import_batch",
+    "promote_import_batch",
+    "activate_cutover",
+    "attest_cutover_plan",
+    "begin_execution",
+    "activate_execution_item",
+    "seal_execution_criteria",
+    "stamp_execution_plan",
+    "set_execution_state",
+    "complete_execution_item",
+    "create_budget_scope",
+    "reserve_budget",
+    "claim_budget",
+    "settle_budget",
+    "cancel_budget",
+    "issue_frontier_exception"
   ],
   "error_codes": [
-    "invalid_request", "unauthenticated", "forbidden", "approval_required", "revision_conflict", "idempotency_conflict", "relation_cycle", "focus_conflict", "stale_evidence", "completion_blocked", "contract_mismatch", "cutover_invariant", "unavailable", "execution_judge_drift", "execution_worktree_not_clean", "execution_grant_stale", "execution_grant_inactive", "execution_no_progress", "execution_caps_exceeded"
+    "invalid_request",
+    "unauthenticated",
+    "forbidden",
+    "approval_required",
+    "revision_conflict",
+    "idempotency_conflict",
+    "relation_cycle",
+    "focus_conflict",
+    "stale_evidence",
+    "completion_blocked",
+    "contract_mismatch",
+    "cutover_invariant",
+    "unavailable",
+    "execution_judge_drift",
+    "execution_worktree_not_clean",
+    "execution_grant_stale",
+    "execution_grant_inactive",
+    "execution_no_progress",
+    "execution_caps_exceeded",
+    "budget_exhausted"
   ],
-  "scopes": ["work.read", "work.candidate.read", "work.mutate", "work.approve", "work.close", "work.execute", "work.import", "work.operate"],
+  "scopes": [
+    "work.read",
+    "work.candidate.read",
+    "work.mutate",
+    "work.approve",
+    "work.close",
+    "work.execute",
+    "work.import",
+    "work.operate"
+  ],
   "workflow_mapping": {
-    "/intake": "create_work_batch", "/capture": "create_work_batch", "/plan": "candidate allocation plus plan evidence", "/now": "focus reads/set/clear", "/summary": "close attempt: finalize, seal manifest, bounded audit, closeout review", "/done": "complete_work", "/execute": "autonomous single or queue delivery cycle"
+    "/intake": "create_work_batch",
+    "/capture": "create_work_batch",
+    "/plan": "candidate allocation plus plan evidence",
+    "/now": "focus reads/set/clear",
+    "/summary": "close attempt: finalize, seal manifest, bounded audit, closeout review",
+    "/done": "complete_work",
+    "/execute": "autonomous single or queue delivery cycle"
   },
   "source_scope": {
-    "include": ["HOME team worlds/initiatives", "surfaces/projects and health updates", "promises/milestones", "work/issues across active completed canceled duplicate archived states", "states labels parents dependencies", "comments with OMP markers", "attachment metadata URLs", "referenced users"],
-    "exclude": ["other teams", "unrelated workspace documents", "attachment bytes unless explicit evidence"]
+    "include": [
+      "HOME team worlds/initiatives",
+      "surfaces/projects and health updates",
+      "promises/milestones",
+      "work/issues across active completed canceled duplicate archived states",
+      "states labels parents dependencies",
+      "comments with OMP markers",
+      "attachment metadata URLs",
+      "referenced users"
+    ],
+    "exclude": [
+      "other teams",
+      "unrelated workspace documents",
+      "attachment bytes unless explicit evidence"
+    ]
   },
   "dependency_graph": {
-    "HOME-142": ["HOME-143", "HOME-144", "HOME-145"],
-    "HOME-143": ["HOME-144", "HOME-146"],
-    "HOME-144": ["HOME-146", "HOME-147"],
-    "HOME-145": ["HOME-146"],
-    "HOME-146": ["HOME-148"],
-    "HOME-147": ["HOME-148"],
-    "HOME-148": ["HOME-149"]
+    "HOME-142": [
+      "HOME-143",
+      "HOME-144",
+      "HOME-145"
+    ],
+    "HOME-143": [
+      "HOME-144",
+      "HOME-146"
+    ],
+    "HOME-144": [
+      "HOME-146",
+      "HOME-147"
+    ],
+    "HOME-145": [
+      "HOME-146"
+    ],
+    "HOME-146": [
+      "HOME-148"
+    ],
+    "HOME-147": [
+      "HOME-148"
+    ],
+    "HOME-148": [
+      "HOME-149"
+    ]
   },
   "security_policy": {
-    "database_roles": ["omp_work_owner", "omp_work_migrator", "omp_work_app", "omp_work_importer", "omp_work_readonly", "omp_work_backup"],
-    "owner_host_scopes": ["work.read", "work.mutate", "work.approve", "work.close", "work.execute"],
-    "task_agent_scopes": ["work.candidate.read"],
-    "auditor_scopes": ["work.candidate.read"],
-    "importer_scopes": ["work.import"],
-    "operator_scopes": ["work.operate"],
+    "database_roles": [
+      "omp_work_owner",
+      "omp_work_migrator",
+      "omp_work_app",
+      "omp_work_importer",
+      "omp_work_readonly",
+      "omp_work_backup"
+    ],
+    "owner_host_scopes": [
+      "work.read",
+      "work.mutate",
+      "work.approve",
+      "work.close",
+      "work.execute"
+    ],
+    "task_agent_scopes": [
+      "work.candidate.read"
+    ],
+    "auditor_scopes": [
+      "work.candidate.read"
+    ],
+    "importer_scopes": [
+      "work.import"
+    ],
+    "operator_scopes": [
+      "work.operate"
+    ],
     "rls": "force_workspace_actor_claims_no_public_no_bypassrls",
     "credentials": "operator_managed_mode_0600_host_only_no_agent_or_postgres_dsn"
   }

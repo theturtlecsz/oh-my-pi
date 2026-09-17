@@ -6,9 +6,10 @@
  * Loopback only: any non-loopback base_url is refused — the backend never
  * crosses the network boundary.
  */
-import { readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 
 export interface WorkClientConfig {
 	baseUrl: string;
@@ -16,7 +17,6 @@ export interface WorkClientConfig {
 	ownerId: string;
 	bearerFile?: string;
 }
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost", "[::1]"]);
 
@@ -116,4 +116,137 @@ export function checkProspectiveContract(cwd: string): { prospectiveDigest: stri
 	} catch {
 		return { prospectiveDigest, approvedDigest: "", approved: false };
 	}
+}
+
+export const DEFAULT_KNOWLEDGE_BUDGET_BYTES = 32 * 1024;
+
+export interface KnowledgeClientConfig {
+	baseUrl: string;
+	configDir?: string;
+	capabilitiesDir?: string;
+	bearerFile?: string;
+	budgetLimit?: number;
+}
+
+/** Shared XDG-aware Knowledge config root. */
+export function ompKnowledgeConfigDir(): string {
+	return process.env.OMP_KNOWLEDGE_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "omp-knowledge");
+}
+
+function knowledgeConfigPath(): string {
+	return join(ompKnowledgeConfigDir(), "client.json");
+}
+
+/**
+ * Load Knowledge client config.
+ * Priority:
+ * 1. OMP_KNOWLEDGE_BASE_URL or OMP_KNOWLEDGE_URL env var
+ * 2. ~/.config/omp-knowledge/client.json (or XDG)
+ * 3. OMP_KNOWLEDGE_HOST / OMP_KNOWLEDGE_PORT env vars
+ * null = not configured (bridge stays dormant); throws if configured with non-loopback baseUrl.
+ */
+export function loadKnowledgeConfig(): KnowledgeClientConfig | null {
+	let baseUrl = "";
+	let bearerFile: string | undefined;
+	let capabilitiesDir: string | undefined;
+	let configDir = ompKnowledgeConfigDir();
+	let budgetLimit = DEFAULT_KNOWLEDGE_BUDGET_BYTES;
+
+	try {
+		const raw = readFileSync(knowledgeConfigPath(), "utf8");
+		try {
+			const parsed = JSON.parse(raw) as Record<string, unknown>;
+			if (typeof parsed.base_url === "string") baseUrl = parsed.base_url.replace(/\/+$/, "");
+			if (typeof parsed.bearer_file === "string") bearerFile = parsed.bearer_file;
+			if (typeof parsed.capabilities_dir === "string") capabilitiesDir = parsed.capabilities_dir;
+			if (typeof parsed.config_dir === "string") configDir = parsed.config_dir;
+			if (typeof parsed.budget_limit === "number" && parsed.budget_limit > 0) budgetLimit = parsed.budget_limit;
+		} catch (parseErr) {
+			throw new Error(`${knowledgeConfigPath()}: malformed JSON (${(parseErr as Error).message})`);
+		}
+	} catch (err) {
+		if (isEnoent(err)) {
+			// client.json not present; fallback to env
+		} else {
+			throw err;
+		}
+	}
+
+	const envUrl = process.env.OMP_KNOWLEDGE_BASE_URL || process.env.OMP_KNOWLEDGE_URL;
+	if (envUrl) {
+		baseUrl = envUrl.replace(/\/+$/, "");
+	} else if (!baseUrl && (process.env.OMP_KNOWLEDGE_PORT || process.env.OMP_KNOWLEDGE_HOST)) {
+		const host = process.env.OMP_KNOWLEDGE_HOST || "127.0.0.1";
+		const port = process.env.OMP_KNOWLEDGE_PORT || "18090";
+		baseUrl = `http://${host}:${port}`;
+	}
+
+	if (!baseUrl) return null;
+
+	if (!isLoopback(baseUrl)) {
+		throw new Error(`${knowledgeConfigPath()}: base_url ${baseUrl} is not loopback — the Knowledge client refuses non-loopback endpoints`);
+	}
+
+	if (process.env.OMP_KNOWLEDGE_CAPABILITIES_DIR) {
+		capabilitiesDir = process.env.OMP_KNOWLEDGE_CAPABILITIES_DIR;
+	}
+	if (process.env.OMP_KNOWLEDGE_BUDGET_LIMIT) {
+		const parsedLimit = parseInt(process.env.OMP_KNOWLEDGE_BUDGET_LIMIT, 10);
+		if (!Number.isNaN(parsedLimit) && parsedLimit > 0) budgetLimit = parsedLimit;
+	}
+
+	return {
+		baseUrl,
+		configDir,
+		capabilitiesDir: capabilitiesDir ?? join(configDir, "capabilities"),
+		bearerFile,
+		budgetLimit,
+	};
+}
+
+/**
+ * Load Knowledge bearer token.
+ * Priority:
+ * 1. OMP_KNOWLEDGE_BEARER env var
+ * 2. bearerFile (mode 0600)
+ * 3. capabilitiesDir JSON files (mode 0600), optionally matched by requiredScope
+ */
+export function loadKnowledgeBearer(config: KnowledgeClientConfig, requiredScope?: string): string | null {
+	const env = process.env.OMP_KNOWLEDGE_BEARER?.trim();
+	if (env) return env;
+
+	if (config.bearerFile) {
+		try {
+			if ((statSync(config.bearerFile).mode & 0o777) === 0o600) {
+				const parsed = JSON.parse(readFileSync(config.bearerFile, "utf8")) as Record<string, unknown>;
+				if (typeof parsed.token === "string" && parsed.token) return parsed.token;
+			}
+		} catch {}
+	}
+
+	const capDir = config.capabilitiesDir ?? join(config.configDir ?? ompKnowledgeConfigDir(), "capabilities");
+	try {
+		const capStat = statSync(capDir);
+		if ((capStat.mode & 0o777) !== 0o700) {
+			return null;
+		}
+		const entries = readdirSync(capDir);
+		for (const name of entries) {
+			if (!name.endsWith(".json")) continue;
+			const filePath = join(capDir, name);
+			try {
+				if ((statSync(filePath).mode & 0o777) !== 0o600) continue;
+				const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
+				if (typeof parsed.token === "string" && parsed.token) {
+					if (requiredScope) {
+						const scopes = Array.isArray(parsed.scopes) ? parsed.scopes : [];
+						if (!scopes.includes(requiredScope)) continue;
+					}
+					return parsed.token;
+				}
+			} catch {}
+		}
+	} catch {}
+
+	return null;
 }

@@ -4,7 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { enforcePlanModeWrite, resolvePlanPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
+import {
+	enforceNativeStageWrite,
+	enforcePlanModeWrite,
+	resolvePlanPath,
+} from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const ARTIFACTS_DIR = path.join(os.tmpdir(), "agent-artifacts");
@@ -16,11 +20,13 @@ interface SessionOverrides {
 	sessionId?: string | null;
 	cwd?: string;
 	planMode?: PlanModeState;
+	nativeStageWriteRoots?: readonly string[];
 }
 
 function makeSession(overrides: SessionOverrides): ToolSession {
 	return {
 		cwd: overrides.cwd ?? REPO_ROOT,
+		nativeStageWriteRoots: overrides.nativeStageWriteRoots,
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
@@ -32,6 +38,23 @@ function makeSession(overrides: SessionOverrides): ToolSession {
 		getPlanModeState: () => overrides.planMode,
 	} as unknown as ToolSession;
 }
+
+describe("enforceNativeStageWrite", () => {
+	it("allows sealed root and rejects traversal or symlink escapes", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "native-write-root-"));
+		const outside = await fs.mkdtemp(path.join(os.tmpdir(), "native-write-outside-"));
+		try {
+			const session = makeSession({ cwd: root, nativeStageWriteRoots: [root] });
+			expect(() => enforceNativeStageWrite(session, "src/file.ts")).not.toThrow();
+			expect(() => enforceNativeStageWrite(session, path.join(outside, "blocked.ts"))).toThrow(/outside sealed/);
+			await fs.symlink(outside, path.join(root, "escape"));
+			expect(() => enforceNativeStageWrite(session, "escape/blocked.ts")).toThrow(/outside sealed/);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+			await fs.rm(outside, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("resolvePlanPath local:// support", () => {
 	it("resolves local:// paths under session artifacts local root", () => {

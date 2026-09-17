@@ -11,12 +11,17 @@ from omp_work import contract_sha256
 
 from .api_models import (
     CommandResponse,
+    DomainEventsPage,
+    EvidenceReceiptView,
+    RepositoryListView,
     StoredOperationView,
     WorkflowView,
+    WorkItemsPage,
     WorkItemView,
+    WorkRevisionListView,
     WorkspaceTree,
 )
-from .models import CommandEnvelope, FocusSlot
+from .models import CommandEnvelope, FocusSlot, WorkRevision
 from .service import WorkError
 
 
@@ -28,6 +33,7 @@ class WorkClient:
         bearer_file: Path,
         *,
         timeout: float = 10,
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
         if stat.S_IMODE(bearer_file.stat().st_mode) != 0o600:
             raise ValueError("unsafe bearer file permissions")
@@ -36,7 +42,9 @@ class WorkClient:
         # OMP-143: the digest this process loaded, captured once — a stale
         # process keeps its stale digest and gets the typed restart refusal.
         self._contract_sha256 = contract_sha256()
-        self._client = httpx.Client(base_url=base_url, timeout=timeout)
+        self._client = httpx.Client(
+            base_url=base_url, timeout=timeout, transport=transport
+        )
 
     def execute(self, envelope: CommandEnvelope) -> CommandResponse:
         response = self._client.post(
@@ -69,8 +77,73 @@ class WorkClient:
             self._get(f"/v1/operations/{operation_id}")
         )
 
-    def _get(self, path: str) -> dict[str, object]:
-        response = self._client.get(path, headers=self._headers())
+    def revision(self, key: str, selector: int | str | UUID) -> WorkRevision:
+        return WorkRevision.model_validate(
+            self._get(f"/v1/work-items/{key}/revisions/{selector}")
+        )
+
+    def revisions(self, key: str) -> WorkRevisionListView:
+        return WorkRevisionListView.model_validate(
+            self._get(f"/v1/work-items/{key}/revisions")
+        )
+
+    def receipt(self, receipt_id: UUID | str) -> EvidenceReceiptView:
+        return EvidenceReceiptView.model_validate(
+            self._get(f"/v1/receipts/{receipt_id}")
+        )
+
+    def work_items(
+        self,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> WorkItemsPage:
+        params: dict[str, object] = {"limit": limit}
+        if cursor is not None:
+            params["cursor"] = cursor
+        return WorkItemsPage.model_validate(
+            self._get(f"/v1/workspaces/{self._workspace_id}/work-items", params=params)
+        )
+
+    def events(
+        self,
+        *,
+        cursor: str | None = None,
+        after_sequence: int | None = None,
+        through_sequence: int | None = None,
+        limit: int = 100,
+    ) -> DomainEventsPage:
+        params: dict[str, object] = {"limit": limit}
+        if cursor is not None:
+            params["cursor"] = cursor
+        if after_sequence is not None:
+            params["after_sequence"] = after_sequence
+        if through_sequence is not None:
+            params["through_sequence"] = through_sequence
+        return DomainEventsPage.model_validate(
+            self._get(f"/v1/workspaces/{self._workspace_id}/events", params=params)
+        )
+
+    def repositories(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> RepositoryListView:
+        params: dict[str, object] = {"limit": limit}
+        if cursor is not None:
+            params["cursor"] = cursor
+        return RepositoryListView.model_validate(
+            self._get(
+                f"/v1/workspaces/{self._workspace_id}/repositories",
+                params=params,
+            )
+        )
+
+    def _get(
+        self, path: str, *, params: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        response = self._client.get(path, headers=self._headers(), params=params)
         if response.is_error:
             self._raise(response)
         return dict(response.json())

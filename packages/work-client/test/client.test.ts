@@ -355,3 +355,286 @@ test("complete_work and complete_execution_item send CompletionEvidence and omit
 		expect("push_receipt_id" in payload).toBe(false);
 	}
 });
+
+test("revision encodes selector URL and decodes exact WorkRevision", async () => {
+	let requestedUrl: string | undefined;
+	const requests: Request[] = [];
+	const dummyRev = {
+		revision_id: "00000000-0000-7000-8000-000000000002",
+		work_id: "00000000-0000-7000-8000-000000000001",
+		revision_number: 1,
+		title: "Initial work",
+		description: "desc",
+		scope: "scope",
+		acceptance_criteria: ["AC-1"],
+		content_sha256: "0".repeat(64),
+		created_by: "owner",
+		created_at: "2026-09-12T12:00:00+00:00",
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			requestedUrl = String(input);
+			requests.push(new Request(String(input), init));
+			return Response.json(dummyRev);
+		},
+	);
+
+	await client.revision("OMP-1", 1);
+	expect(requestedUrl).toBe("http://127.0.0.1:54322/v1/work-items/OMP-1/revisions/1");
+	expect(requests[0].headers.get("authorization")).toBe("Bearer token");
+
+	const revUuid = "00000000-0000-7000-8000-000000000002";
+	await client.revision("OMP-1", revUuid);
+	expect(requestedUrl).toBe(`http://127.0.0.1:54322/v1/work-items/OMP-1/revisions/${revUuid}`);
+});
+
+test("revisions fetches complete revision list for a work item", async () => {
+	let requestedUrl: string | undefined;
+	const dummyList = {
+		work_id: "00000000-0000-7000-8000-000000000001",
+		key: "OMP-1",
+		revisions: [
+			{
+				revision_id: "00000000-0000-7000-8000-000000000002",
+				work_id: "00000000-0000-7000-8000-000000000001",
+				revision_number: 1,
+				title: "Rev 1",
+				description: "d1",
+				scope: "s1",
+				acceptance_criteria: ["AC-1"],
+				content_sha256: "0".repeat(64),
+				created_by: "owner",
+				created_at: "2026-09-12T12:00:00+00:00",
+			},
+		],
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async input => {
+			requestedUrl = String(input);
+			return Response.json(dummyList);
+		},
+	);
+
+	await client.revisions("OMP-1");
+	expect(requestedUrl).toBe("http://127.0.0.1:54322/v1/work-items/OMP-1/revisions");
+});
+
+test("receipt fetches immutable EvidenceReceipt by ID", async () => {
+	const requests: Request[] = [];
+	const dummyReceipt = {
+		receipt_id: "00000000-0000-7000-8000-000000000010",
+		work_id: "00000000-0000-7000-8000-000000000001",
+		revision_id: "00000000-0000-7000-8000-000000000002",
+		candidate_id: "00000000-0000-7000-8000-000000000003",
+		kind: "plan",
+		payload: { note: "plan-payload" },
+		payload_sha256: "a".repeat(64),
+		issuer: "owner",
+		issued_at: "2026-09-12T12:00:00+00:00",
+		independent: false,
+	};
+	const responses = [
+		{ ...dummyReceipt, issuer: null, independent: null },
+		{ ...dummyReceipt, issuer: "owner", independent: false },
+	];
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async input => {
+			requests.push(new Request(String(input)));
+			return Response.json(responses[requests.length - 1]);
+		},
+	);
+
+	const legacy = await client.receipt("00000000-0000-7000-8000-000000000010");
+	const modern = await client.receipt("00000000-0000-7000-8000-000000000010");
+
+	expect(requests[0].url).toBe("http://127.0.0.1:54322/v1/receipts/00000000-0000-7000-8000-000000000010");
+	expect(legacy.issuer).toBeNull();
+	expect(legacy.independent).toBeNull();
+	expect(modern.issuer).toBe("owner");
+	expect(modern.independent).toBe(false);
+});
+
+test("workItems paginates keyset with cursor and limit", async () => {
+	let requestedUrl: string | undefined;
+	const dummyPage = {
+		workspace_id: ENV.workspace_id,
+		items: [
+			{
+				work_id: "00000000-0000-7000-8000-000000000001",
+				workspace_id: ENV.workspace_id,
+				alias: {
+					work_id: "00000000-0000-7000-8000-000000000001",
+					key: "OMP-1",
+					primary: true as const,
+					origin: "local" as const,
+				},
+				state: "TODO",
+				revision: {
+					revision_id: "00000000-0000-7000-8000-000000000002",
+					work_id: "00000000-0000-7000-8000-000000000001",
+					revision_number: 1,
+					title: "Item 1",
+					description: "d",
+					scope: "s",
+					acceptance_criteria: [],
+					content_sha256: "0".repeat(64),
+					created_by: "owner",
+					created_at: "2026-09-12T12:00:00+00:00",
+				},
+				candidate: null,
+				project_id: null,
+				archived: false,
+			},
+		],
+		next_cursor: "cursor-token-123",
+		limit: 10,
+		exhausted: false,
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async input => {
+			requestedUrl = String(input);
+			return Response.json(dummyPage);
+		},
+	);
+
+	await client.workItems({ limit: 10 });
+	expect(requestedUrl).toBe(`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/work-items?limit=10`);
+});
+
+test("events queries domain events with after_sequence and through_sequence", async () => {
+	let requestedUrl: string | undefined;
+	const dummyEventsPage = {
+		items: [
+			{
+				event_id: "00000000-0000-7000-8000-000000000001",
+				sequence: 1,
+				workspace_id: ENV.workspace_id,
+				aggregate_type: "work_item",
+				aggregate_id: "00000000-0000-7000-8000-000000000002",
+				aggregate_version: 1,
+				actor_id: "00000000-0000-7000-8000-000000000003",
+				actor_kind: "owner",
+				capability_id: "00000000-0000-7000-8000-000000000004",
+				request_id: "00000000-0000-7000-8000-000000000005",
+				correlation_id: "00000000-0000-7000-8000-000000000006",
+				operation_id: "00000000-0000-7000-8000-000000000007",
+				causation_id: "00000000-0000-7000-8000-000000000007",
+				event_type: "create_work_batch",
+				outcome: "applied",
+				payload: { ok: true },
+				payload_sha256: "a".repeat(64),
+				previous_event_sha256: null,
+				event_sha256: "b".repeat(64),
+				occurred_at: "2026-09-12T12:00:00+00:00",
+			},
+		],
+		workspace_id: ENV.workspace_id,
+		after_sequence: 0,
+		through_sequence: 1,
+		next_sequence: 1,
+		next_cursor: null,
+		limit: 100,
+		exhausted: true,
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async input => {
+			requestedUrl = String(input);
+			return Response.json(dummyEventsPage);
+		},
+	);
+
+	await client.events({ afterSequence: 0, throughSequence: 1, limit: 100 });
+	expect(requestedUrl).toBe(
+		`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/events?after_sequence=0&through_sequence=1&limit=100`,
+	);
+});
+
+test("repositories fetches workspace repositories", async () => {
+	let requestedUrl: string | undefined;
+	const dummyRepos = {
+		workspace_id: ENV.workspace_id,
+		repositories: [
+			{
+				repository_id: "00000000-0000-7000-8000-000000000010",
+				workspace_id: ENV.workspace_id,
+				key: "repo-1",
+				name: "primary-repo",
+				url: "https://github.com/example/repo",
+				archived: false,
+				provenance: {},
+				created_at: "2026-09-12T12:00:00+00:00",
+			},
+		],
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async input => {
+			requestedUrl = String(input);
+			return Response.json(dummyRepos);
+		},
+	);
+
+	await client.repositories({ limit: 50 });
+	expect(requestedUrl).toBe(`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/repositories?limit=50`);
+});
+
+test("native collection cursors preserve encoded tokens and zero event bounds", async () => {
+	const requests: Request[] = [];
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			const req = new Request(String(input), init);
+			requests.push(req);
+			return Response.json({});
+		},
+	);
+
+	await client.workItems({ cursor: "a+/=", limit: 7 });
+	await client.events({ afterSequence: 0, throughSequence: 0 });
+	await client.events({ cursor: "a+/=", limit: 7 });
+	await client.repositories({ cursor: "a+/=", limit: 7 });
+	await client.repositories();
+
+	expect(requests.length).toBe(5);
+	for (const req of requests) {
+		expect(req.method).toBe("GET");
+	}
+
+	const u0 = new URL(requests[0].url);
+	expect(u0.searchParams.get("cursor")).toBe("a+/=");
+	expect(u0.searchParams.get("limit")).toBe("7");
+
+	const u1 = new URL(requests[1].url);
+	expect(u1.searchParams.get("after_sequence")).toBe("0");
+	expect(u1.searchParams.get("through_sequence")).toBe("0");
+
+	const u2 = new URL(requests[2].url);
+	expect(u2.searchParams.get("cursor")).toBe("a+/=");
+	expect(u2.searchParams.get("limit")).toBe("7");
+
+	const u3 = new URL(requests[3].url);
+	expect(u3.searchParams.get("cursor")).toBe("a+/=");
+	expect(u3.searchParams.get("limit")).toBe("7");
+
+	const u4 = new URL(requests[4].url);
+	expect(u4.search).toBe("");
+});

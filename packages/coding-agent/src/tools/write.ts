@@ -57,7 +57,12 @@ import {
 	resolveFileWriteApprovalTier,
 	splitPathAndSel,
 } from "./path-utils";
-import { enforcePlanModeWrite, resolvePlanPath, unwrapHashlineHeaderPath } from "./plan-mode-guard";
+import {
+	enforceNativeStageWrite,
+	enforcePlanModeWrite,
+	resolvePlanPath,
+	unwrapHashlineHeaderPath,
+} from "./plan-mode-guard";
 import {
 	cachedRenderedString,
 	createRenderedStringCache,
@@ -1112,6 +1117,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		// what `read` resolves for the same URL; line-range/malformed selectors throw.
 		const path = peelWriteUrlSelector(unwrapHashlineHeaderPath(rawPath));
 		return untilAborted(signal, async () => {
+			enforceNativeStageWrite(this.session, path);
 			// Strip hashline display prefixes ([PATH#HASH] + LINE:) if the model copied them from read output
 			const { text: cleanContent, stripped } = stripWriteContent(this.session, content);
 			const internalRouter = InternalUrlRouter.instance();

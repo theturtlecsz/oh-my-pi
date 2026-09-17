@@ -9,6 +9,8 @@ from pydantic import Field
 from .models import (
     AuditManifest,
     AuditorLaunch,
+    CandidateSourceVersion,
+    StageLaunch,
     Candidate,
     CheckpointDelivery,
     CloseAttempt,
@@ -35,6 +37,7 @@ class WorkItemView(StrictModel):
     revision: WorkRevision
     candidate: Candidate | None = None
     project_id: UUID | None = None
+    repository_id: UUID | None = None
     archived: bool = False
 
 
@@ -60,6 +63,25 @@ class CloseAttemptResult(StrictModel):
     event: CloseAttemptEvent
 
 
+class StageLaunchResult(StrictModel):
+    type: Literal[
+        "reserve_stage_launch",
+        "handoff_stage_launch",
+        "settle_stage_launch",
+        "cancel_stage_launch",
+        "reconcile_stage_launch",
+    ]
+    status: Literal["applied", "replayed", "refused"]
+    launch: StageLaunch | None = None
+    reason: str | None = None
+
+
+class CandidateSourceAssociationResult(StrictModel):
+    type: Literal["associate_candidate_source"]
+    status: Literal["applied", "replayed", "refused"]
+    association: CandidateSourceVersion | None = None
+
+
 class ProjectView(StrictModel):
     project_id: UUID
     workspace_id: UUID
@@ -76,6 +98,8 @@ class WorkflowView(StrictModel):
     close_attempts: tuple[CloseAttempt, ...] = ()
     audit_manifest: AuditManifest | None = None
     auditor_launches: tuple[AuditorLaunch, ...] = ()
+    stage_launches: tuple[StageLaunch, ...] = ()
+    candidate_source_versions: tuple[CandidateSourceVersion, ...] = ()
     close_attempt_events: tuple[CloseAttemptEvent, ...] = ()
     checkpoint_deliveries: tuple[CheckpointDelivery, ...] = ()
     project: ProjectView | None = None
@@ -305,6 +329,21 @@ class AttestCutoverPlanResult(StrictModel):
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class BudgetResult(StrictModel):
+    type: Literal["create_budget_scope", "reserve_budget", "claim_budget", "settle_budget", "cancel_budget", "issue_frontier_exception"]
+    scope_id: UUID | None = None
+    parent_scope_id: UUID | None = None
+    reservation_id: UUID | None = None
+    transport_attempt_id: UUID | None = None
+    exception_id: UUID | None = None
+    fence: int | None = None
+    state: str | None = None
+    remaining_attempts: int | None = None
+    actual_drawdown: str | None = None
+    overrun: bool | None = None
+    replayed: bool | None = None
+
+
 class AuthorityView(StrictModel):
     authority: Literal["linear", "work"]
     epoch_id: UUID | None = None
@@ -324,10 +363,13 @@ CommandResult = Annotated[
     | EvidenceResult
     | FinalizeCandidateResult
     | CloseAttemptResult
+    | StageLaunchResult
+    | CandidateSourceAssociationResult
     | RecordCloseoutReviewResult
     | ProjectHealthResult
     | ActivateCutoverResult
     | AttestCutoverPlanResult
+    | BudgetResult
     | BeginExecutionResult
     | ActivateExecutionItemResult
     | SealExecutionCriteriaResult
@@ -356,3 +398,85 @@ class ApiError(StrictModel):
 class CommandResponse(StrictModel):
     receipt: OperationReceipt
     result: CommandResult
+
+
+class WorkRevisionListView(StrictModel):
+    work_id: UUID
+    key: str
+    revisions: tuple[WorkRevision, ...]
+
+
+class EvidenceReceiptView(EvidenceReceipt):
+    issuer: str | None = None
+    independent: bool | None = None
+
+
+class WorkItemsPage(StrictModel):
+    """Current row views of work items paginated by (created_at, work_id).
+
+    NOTE: This enumerates current row views at query time, NOT an immutable
+    point-in-time historical export while concurrent state changes occur.
+    Returned exact revision IDs permit independent later resolution;
+    event-based complete export integration remains a later approved slice.
+    """
+
+    items: tuple[WorkItemView, ...]
+    next_cursor: str | None = None
+    workspace_id: UUID
+    limit: int
+    exhausted: bool
+
+
+class DomainEventView(StrictModel):
+    event_id: UUID
+    sequence: int = Field(ge=1)
+    workspace_id: UUID
+    aggregate_type: str
+    aggregate_id: UUID
+    aggregate_version: int
+    actor_id: UUID
+    actor_kind: str
+    capability_id: UUID
+    request_id: UUID
+    correlation_id: UUID
+    operation_id: UUID
+    causation_id: UUID
+    event_type: str
+    outcome: str
+    payload: dict[str, Any]
+    payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    previous_event_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    event_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    occurred_at: datetime
+
+
+class DomainEventsPage(StrictModel):
+    items: tuple[DomainEventView, ...]
+    workspace_id: UUID
+    after_sequence: int
+    through_sequence: int
+    next_sequence: int = Field(
+        description="resume exclusively with after_sequence=next_sequence (do not increment), empty page retains supplied after",
+    )
+    next_cursor: str | None = None
+    limit: int
+    exhausted: bool
+
+
+class RepositoryView(StrictModel):
+    repository_id: UUID
+    workspace_id: UUID
+    key: str
+    name: str
+    url: str
+    archived: bool = False
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class RepositoryListView(StrictModel):
+    workspace_id: UUID
+    repositories: tuple[RepositoryView, ...]
+    next_cursor: str | None = None
+    limit: int
+    exhausted: bool

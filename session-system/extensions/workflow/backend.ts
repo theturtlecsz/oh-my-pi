@@ -16,6 +16,9 @@ import type {
 	ExecutionJudgeManifest,
 	ExecutionMode,
 	ExecutionProvenanceEnvelope,
+	StageLaunch,
+	StageLaunchRole,
+	CandidateSourceVersion,
 	UUID,
 	WorkClient,
 } from "@oh-my-pi/pi-work-client";
@@ -30,6 +33,30 @@ export interface ExecutionSnapshot {
 	grant: ExecutionGrantView;
 	items: ExecutionGrantItemView[];
 	activeItem: ExecutionGrantItemView | null;
+}
+
+export interface NativeStageLaunchInput {
+	workId: string;
+	revisionId?: string | null;
+	candidateId?: string | null;
+	attemptId?: string | null;
+	grantId?: string | null;
+	role: StageLaunchRole;
+	requestSha256: string;
+	toolCallId: string;
+	taskSha256: string;
+	preparedContextSha256: string;
+	requestedSelector: string;
+	requestedProvider: string;
+	requestedModel: string;
+	requestedApi: string;
+	requestedEffort: string;
+	requestedWireModel: string;
+	resolvedSelector?: string | null;
+	resolvedProvider?: string | null;
+	resolvedModel?: string | null;
+	isFallback?: boolean;
+	fallbackReason?: string | null;
 }
 
 
@@ -613,6 +640,29 @@ export interface WorkflowBackend {
 	cancelAuditorLaunch(key: string, launchId: string): Promise<CloseAttemptOutcome>;
 	/** Settle the reserved launch with the UNTOUCHED transport payload. */
 	settleAuditorLaunch(key: string, launchId: string, transport: { payload?: unknown; failed?: boolean }): Promise<CloseAttemptOutcome>;
+	/** WorkService-owned native stage lifecycle. Session journal is telemetry only. */
+	reserveStageLaunch(input: NativeStageLaunchInput): Promise<StageLaunch>;
+	handoffStageLaunch(launchId: string, taskSha256: string): Promise<StageLaunch>;
+	settleStageLaunch(input: { launchId: string; outcomeSha256: string; outcome: Record<string, unknown>; servedSelector?: string | null; servedModel?: string | null }): Promise<StageLaunch>;
+	cancelStageLaunch(launchId: string, reason: string): Promise<StageLaunch>;
+	reconcileStageLaunch(launchId: string, reason: string): Promise<StageLaunch>;
+	associateCandidateSource(input: {
+		candidateId: string;
+		workId: string;
+		revisionId: string;
+		repositoryId: string;
+		sourceVersionId: string;
+		snapshotId: string;
+		baseCommit: string;
+		analyzedCommit?: string | null;
+		treeSha?: string | null;
+		sourceManifestSha256: string;
+		snapshotManifestSha256: string;
+		contentSha256: string;
+		associationSha256: string;
+		producer: string;
+		producerReceiptSha256: string;
+	}): Promise<CandidateSourceVersion>;
 	/** Unresolved requires_delivery events for this work item (any attempt). */
 	pendingDeliveries(key: string): Promise<CloseEventView[]>;
 	snapshotQueue(projectFilter?: string, currentKey?: string, cwd?: string): Promise<ExecutionGrantItemClaim[]>;

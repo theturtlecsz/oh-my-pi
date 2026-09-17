@@ -155,6 +155,7 @@ class AuthorityResponseProxy:
             "seal_execution_criteria",
             "stamp_execution_plan",
             "set_execution_state",
+            "complete_execution_item",
         }
         with self.lock:
             assert self.committed_command is None

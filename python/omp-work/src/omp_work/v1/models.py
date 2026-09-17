@@ -5,7 +5,14 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class StrictModel(BaseModel):
@@ -218,6 +225,172 @@ class AuditorLaunch(StrictModel):
     task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     tool_call_id: str = Field(min_length=1)
     reserved_at: datetime
+
+
+class StageLaunchRole(StrEnum):
+    PLAN = "plan"
+    IMPLEMENT = "implement"
+    FRONTIER = "frontier"
+    AUDIT = "audit"
+
+
+class StageLaunchStatus(StrEnum):
+    RESERVED = "reserved"
+    HANDED_OFF = "handed_off"
+    SETTLED = "settled"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+    SUPERSEDED = "superseded"
+
+
+class BudgetScopeKind(StrEnum):
+    ACCOUNT = "account"
+    SESSION = "session"
+    WORK = "work"
+    TOURNAMENT = "tournament"
+    ROLE = "role"
+
+
+class BudgetReservationState(StrEnum):
+    RESERVED_UNSENT = "reserved_unsent"
+    POTENTIALLY_SENT = "potentially_sent"
+    SETTLED = "settled"
+    CANCELLED_UNSENT = "cancelled_unsent"
+    UNRESOLVED = "unresolved"
+
+
+class BudgetResource(StrEnum):
+    CASH = "cash"
+    INCLUDED_CREDIT = "included_credit"
+    NATIVE_QUOTA = "native_quota"
+    LOCAL_COMPUTE = "local_compute"
+
+
+class ProviderAccount(StrictModel):
+    account_id: UUID
+    workspace_id: UUID
+    provider: str = Field(min_length=1)
+    account_identity: str = Field(min_length=1)
+    entitlement_evidence: str = Field(min_length=1)
+    evidence_observed_at: datetime
+    billing_mode: Literal["subscription", "metered", "purchased_credit", "local"]
+    rate_card_version: str | None = None
+    observed_balance: str | None = None
+    balance_provenance: Literal["provider_observed", "locally_estimated", "unknown"]
+    reset_at: datetime | None = None
+    concurrency_limit: int = Field(ge=1)
+
+
+class BudgetScope(StrictModel):
+    scope_id: UUID
+    workspace_id: UUID
+    parent_scope_id: UUID | None = None
+    kind: BudgetScopeKind
+    policy_version: str = Field(min_length=1)
+    work_id: UUID | None = None
+    session_id: str | None = None
+    limits: dict[str, str]
+    held: dict[str, str]
+    spent: dict[str, str]
+    unresolved: dict[str, str]
+
+
+class DispatchReservation(StrictModel):
+    reservation_id: UUID
+    scope_id: UUID
+    account_id: UUID
+    logical_call_id: UUID
+    transport_attempt_id: UUID
+    fence: int = Field(ge=1)
+    state: BudgetReservationState
+    resource: BudgetResource
+    worst_case_drawdown: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    effort: str = Field(min_length=1)
+    context_limit: int = Field(gt=0)
+    output_limit: int = Field(gt=0)
+    expires_at: datetime
+
+
+class UsageSettlement(StrictModel):
+    reservation_id: UUID
+    transport_attempt_id: UUID
+    state: Literal["settled", "unresolved"]
+    actual_drawdown: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    usage: dict[str, int] = Field(default_factory=dict)
+    provenance: Literal["provider_observed", "locally_estimated", "unknown"]
+    provider_request_id: str | None = None
+    outcome: Literal["success", "error", "timeout", "cancelled", "unknown"]
+
+
+class FrontierException(StrictModel):
+    exception_id: UUID
+    scope_id: UUID
+    question: str = Field(min_length=1)
+    route: str = Field(min_length=1)
+    effort: str = Field(min_length=1)
+    context_limit: int = Field(gt=0)
+    output_limit: int = Field(gt=0)
+    max_attempts: int = Field(gt=0)
+    remaining_attempts: int = Field(ge=0)
+    resource: BudgetResource
+    resource_limit: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    expires_at: datetime
+
+
+class StageLaunch(StrictModel):
+    launch_id: UUID
+    workspace_id: UUID
+    work_id: UUID
+    revision_id: UUID | None = None
+    candidate_id: UUID | None = None
+    attempt_id: UUID | None = None
+    grant_id: UUID | None = None
+    role: StageLaunchRole
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool_call_id: str = Field(min_length=1)
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prepared_context_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requested_selector: str = Field(min_length=1)
+    requested_provider: str = Field(min_length=1)
+    requested_model: str = Field(min_length=1)
+    requested_api: str = Field(min_length=1)
+    requested_effort: str = Field(min_length=1)
+    requested_wire_model: str = Field(min_length=1)
+    resolved_selector: str | None = None
+    resolved_provider: str | None = None
+    resolved_model: str | None = None
+    served_selector: str | None = None
+    served_model: str | None = None
+    is_fallback: bool = False
+    fallback_reason: str | None = None
+    status: StageLaunchStatus
+    outcome_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    outcome: dict[str, Any] | None = None
+    reserved_at: datetime
+    handed_off_at: datetime | None = None
+    settled_at: datetime | None = None
+
+
+class CandidateSourceVersion(StrictModel):
+    candidate_id: UUID
+    workspace_id: UUID
+    work_id: UUID
+    revision_id: UUID
+    repository_id: UUID
+    source_version_id: str = Field(min_length=1)
+    snapshot_id: str = Field(pattern=r"^(?:sha256:)?[0-9a-f]{64}$")
+    base_commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    analyzed_commit: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    tree_sha: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    source_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    snapshot_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    association_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    producer: str = Field(min_length=1)
+    producer_receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: datetime
 
 
 class CloseAttemptEvent(StrictModel):
@@ -708,6 +881,132 @@ class SettleAuditorLaunchPayload(StrictModel):
         return self
 
 
+class ReserveStageLaunchPayload(StrictModel):
+    work_id: UUID
+    revision_id: UUID | None = None
+    candidate_id: UUID | None = None
+    attempt_id: UUID | None = None
+    grant_id: UUID | None = None
+    role: StageLaunchRole
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool_call_id: str = Field(min_length=1)
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prepared_context_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requested_selector: str = Field(min_length=1)
+    requested_provider: str = Field(min_length=1)
+    requested_model: str = Field(min_length=1)
+    requested_api: str = Field(min_length=1)
+    requested_effort: str = Field(min_length=1)
+    requested_wire_model: str = Field(min_length=1)
+    resolved_selector: str | None = None
+    resolved_provider: str | None = None
+    resolved_model: str | None = None
+    is_fallback: bool = False
+    fallback_reason: str | None = None
+
+
+class HandoffStageLaunchPayload(StrictModel):
+    launch_id: UUID
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class SettleStageLaunchPayload(StrictModel):
+    launch_id: UUID
+    outcome_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    outcome: dict[str, Any] = Field(default_factory=dict)
+    served_selector: str | None = None
+    served_model: str | None = None
+
+
+class CancelStageLaunchPayload(StrictModel):
+    launch_id: UUID
+    reason: str = Field(min_length=1)
+
+
+class ReconcileStageLaunchPayload(StrictModel):
+    launch_id: UUID
+    reason: str = Field(min_length=1)
+
+
+class CreateBudgetScopePayload(StrictModel):
+    scope_id: UUID
+    parent_scope_id: UUID | None = None
+    kind: BudgetScopeKind
+    policy_version: str = Field(min_length=1)
+    work_id: UUID | None = None
+    session_id: str | None = None
+    limits: dict[str, str]
+
+
+class ReserveBudgetPayload(StrictModel):
+    scope_id: UUID
+    account_id: UUID
+    logical_call_id: UUID
+    transport_attempt_id: UUID
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    effort: str = Field(min_length=1)
+    resource: BudgetResource
+    worst_case_drawdown: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    context_limit: int = Field(gt=0)
+    output_limit: int = Field(gt=0)
+    expires_at: datetime
+
+
+class ClaimBudgetPayload(StrictModel):
+    reservation_id: UUID
+    fence: int = Field(ge=1)
+
+
+class SettleBudgetPayload(StrictModel):
+    reservation_id: UUID
+    transport_attempt_id: UUID
+    fence: int = Field(ge=1)
+    state: Literal["settled", "unresolved"]
+    actual_drawdown: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    usage: dict[str, int] = Field(default_factory=dict)
+    provenance: Literal["provider_observed", "locally_estimated", "unknown"]
+    provider_request_id: str | None = None
+    outcome: Literal["success", "error", "timeout", "cancelled", "unknown"]
+
+
+class CancelBudgetPayload(StrictModel):
+    reservation_id: UUID
+    fence: int = Field(ge=1)
+    verified_unsent: bool = False
+
+
+class IssueFrontierExceptionPayload(StrictModel):
+    scope_id: UUID
+    question: str = Field(min_length=1)
+    route: str = Field(min_length=1)
+    effort: str = Field(min_length=1)
+    context_limit: int = Field(gt=0)
+    output_limit: int = Field(gt=0)
+    max_attempts: int = Field(gt=0)
+    resource: BudgetResource
+    resource_limit: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")
+    expires_at: datetime
+
+
+class AssociateCandidateSourcePayload(StrictModel):
+    candidate_id: UUID
+    work_id: UUID
+    revision_id: UUID
+    repository_id: UUID
+    source_version_id: str = Field(min_length=1)
+    snapshot_id: str = Field(pattern=r"^(?:sha256:)?[0-9a-f]{64}$")
+    base_commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    analyzed_commit: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    tree_sha: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    source_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    snapshot_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    association_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    producer: str = Field(min_length=1)
+    producer_receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class AttestCheckpointDeliveryPayload(StrictModel):
     event_id: UUID
     owner_session_id: str = Field(min_length=1)
@@ -775,7 +1074,7 @@ class ExecutionGrantItemClaim(StrictModel):
     active_blocker_ids: tuple[UUID, ...] = ()
 
 
-class ExecutionJudgeManifest(StrictModel):
+class ExecutionJudgeManifestV1(StrictModel):
     auditor_agent_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     host_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     adapter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -788,6 +1087,15 @@ class ExecutionJudgeManifest(StrictModel):
     service_migration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class ExecutionJudgeManifestV2(ExecutionJudgeManifestV1):
+    manifest_version: Literal[2]
+    audit_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    native_stage_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+ExecutionJudgeManifest = ExecutionJudgeManifestV2 | ExecutionJudgeManifestV1
+
+
 class BeginExecutionPayload(StrictModel):
     grant_id: UUID
     provenance: ExecutionProvenanceEnvelope
@@ -796,7 +1104,7 @@ class BeginExecutionPayload(StrictModel):
     items: tuple[ExecutionGrantItemClaim, ...] = Field(min_length=1)
     expected_focus_version: int = Field(ge=0)
     judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    judge_manifest: ExecutionJudgeManifest
+    judge_manifest: ExecutionJudgeManifestV2
 
     @field_validator("remote_ref")
     @classmethod
@@ -999,6 +1307,66 @@ class SettleAuditorLaunchCommand(StrictModel):
     payload: SettleAuditorLaunchPayload
 
 
+class ReserveStageLaunchCommand(StrictModel):
+    type: Literal["reserve_stage_launch"]
+    payload: ReserveStageLaunchPayload
+
+
+class HandoffStageLaunchCommand(StrictModel):
+    type: Literal["handoff_stage_launch"]
+    payload: HandoffStageLaunchPayload
+
+
+class SettleStageLaunchCommand(StrictModel):
+    type: Literal["settle_stage_launch"]
+    payload: SettleStageLaunchPayload
+
+
+class CancelStageLaunchCommand(StrictModel):
+    type: Literal["cancel_stage_launch"]
+    payload: CancelStageLaunchPayload
+
+
+class ReconcileStageLaunchCommand(StrictModel):
+    type: Literal["reconcile_stage_launch"]
+    payload: ReconcileStageLaunchPayload
+
+
+class CreateBudgetScopeCommand(StrictModel):
+    type: Literal["create_budget_scope"]
+    payload: CreateBudgetScopePayload
+
+
+class ReserveBudgetCommand(StrictModel):
+    type: Literal["reserve_budget"]
+    payload: ReserveBudgetPayload
+
+
+class ClaimBudgetCommand(StrictModel):
+    type: Literal["claim_budget"]
+    payload: ClaimBudgetPayload
+
+
+class SettleBudgetCommand(StrictModel):
+    type: Literal["settle_budget"]
+    payload: SettleBudgetPayload
+
+
+class CancelBudgetCommand(StrictModel):
+    type: Literal["cancel_budget"]
+    payload: CancelBudgetPayload
+
+
+class IssueFrontierExceptionCommand(StrictModel):
+    type: Literal["issue_frontier_exception"]
+    payload: IssueFrontierExceptionPayload
+
+
+class AssociateCandidateSourceCommand(StrictModel):
+    type: Literal["associate_candidate_source"]
+    payload: AssociateCandidateSourcePayload
+
+
 class AttestCheckpointDeliveryCommand(StrictModel):
     type: Literal["attest_checkpoint_delivery"]
     payload: AttestCheckpointDeliveryPayload
@@ -1045,6 +1413,18 @@ Command = Annotated[
     | ReserveAuditorLaunchCommand
     | CancelAuditorLaunchCommand
     | SettleAuditorLaunchCommand
+    | ReserveStageLaunchCommand
+    | HandoffStageLaunchCommand
+    | SettleStageLaunchCommand
+    | CancelStageLaunchCommand
+    | ReconcileStageLaunchCommand
+    | CreateBudgetScopeCommand
+    | ReserveBudgetCommand
+    | ClaimBudgetCommand
+    | SettleBudgetCommand
+    | CancelBudgetCommand
+    | IssueFrontierExceptionCommand
+    | AssociateCandidateSourceCommand
     | AttestCheckpointDeliveryCommand
     | RecordCloseoutReviewCommand
     | CompleteWorkCommand
@@ -1285,4 +1665,26 @@ class Approval(StrictModel):
         "OMP-194",
         "OMP-222",
         "OMP-247",
+        "OMP-279",
     ]
+
+
+class EventsCursorPayload(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    workspace_id: UUID
+    after_sequence: int
+    through_sequence: int
+
+
+class RepositoryCursorPayload(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    workspace_id: UUID
+    created_at: AwareDatetime
+    repository_id: UUID
+
+
+class WorkItemsCursorPayload(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    workspace_id: UUID
+    work_id: UUID
+    created_at: AwareDatetime

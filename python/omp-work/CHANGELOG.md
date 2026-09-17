@@ -4,6 +4,11 @@
 
 ### Added
 
+- Exact historical `WorkRevision` resolution by work item key + revision selector (revision number or UUID) via `GET /v1/work-items/{key}/revisions/{revision_selector}`, and full revision list via `GET /v1/work-items/{key}/revisions`.
+- Exact immutable `EvidenceReceiptView` resolution by UUID via `GET /v1/receipts/{receipt_id}` enforcing `work.read` scope and workspace RLS.
+- Keyset enumeration for work items via `GET /v1/workspaces/{workspace_id}/work-items` beyond 1000 items, ordered deterministically by `(created_at, work_id)` with bound base64url cursor, limit validated 1..500, and explicit exhaustion flag.
+- Bounded domain events read via `GET /v1/workspaces/{workspace_id}/events` supporting cursor-based pagination with exclusive `next_sequence` resume value, bounded sequence windows (`after_sequence`, `through_sequence`), visible workspace head capture, and transaction-scoped advisory locks on event recording (`pg_advisory_xact_lock(hashtextextended('omp_audit:events:' || workspace_id, 0))`) guaranteeing no out-of-order native same-workspace commits (integer gaps from rollbacks or other workspaces remain legitimate).
+- Keyset enumeration for repositories via `GET /v1/workspaces/{workspace_id}/repositories` ordered by `(created_at, repository_id)` with opaque workspace-bound cursor, limit validated 1..500, and explicit `next_cursor`/`exhausted` metadata, plus optional `repository_id` on `WorkItemView`.
 - PostgreSQL operational bootstrap, migrations, health checks, and encrypted backup commands for the Work Ledger.
 - Authenticated loopback WorkService, typed clients, immutable work history, idempotent command handling, and closeout projections.
 - Idempotent Linear importer with hash-verified staging, restartable relation/focus validation, dry-run reconciliation with encrypted parity artifacts, and atomic promotion that preserves local edits, retires import-owned label joins, and fails closed on conflicts or canonical drift (`ops linear-import stage|reconcile|promote`).

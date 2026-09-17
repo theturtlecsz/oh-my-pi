@@ -21,7 +21,13 @@ _READS = frozenset(
     {
         "GET /v1/work-items/{key}",
         "GET /v1/work-items/{key}/workflow",
+        "GET /v1/work-items/{key}/revisions",
+        "GET /v1/work-items/{key}/revisions/{revision_selector}",
+        "GET /v1/receipts/{receipt_id}",
         "GET /v1/workspaces/{workspace_id}/tree",
+        "GET /v1/workspaces/{workspace_id}/work-items",
+        "GET /v1/workspaces/{workspace_id}/events",
+        "GET /v1/workspaces/{workspace_id}/repositories",
         "GET /v1/workspaces/{workspace_id}/focus/{owner_id}",
         "GET /v1/operations/{operation_id}",
         "GET /v1/workspaces/{workspace_id}/authority",
@@ -52,6 +58,7 @@ _ERROR_CODES = frozenset(
         "execution_grant_inactive",
         "execution_no_progress",
         "execution_caps_exceeded",
+        "budget_exhausted",
     }
 )
 _SCOPES = frozenset(
@@ -83,6 +90,11 @@ _COMMAND_TYPES = frozenset(
         "reserve_auditor_launch",
         "cancel_auditor_launch",
         "settle_auditor_launch",
+        "reserve_stage_launch",
+        "handoff_stage_launch",
+        "settle_stage_launch",
+        "cancel_stage_launch",
+        "reconcile_stage_launch",
         "attest_checkpoint_delivery",
         "record_closeout_review",
         "complete_work",
@@ -97,6 +109,12 @@ _COMMAND_TYPES = frozenset(
         "stamp_execution_plan",
         "set_execution_state",
         "complete_execution_item",
+        "create_budget_scope",
+        "reserve_budget",
+        "claim_budget",
+        "settle_budget",
+        "cancel_budget",
+        "issue_frontier_exception",
     }
 )
 

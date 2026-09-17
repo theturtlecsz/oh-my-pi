@@ -40,6 +40,7 @@ import {
 	postmortem,
 	prompt,
 	Snowflake,
+	untilAborted,
 } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import {
@@ -367,6 +368,8 @@ export interface CreateAgentSessionOptions {
 	cwd?: string;
 	/** Additional workspace directories beyond cwd (multi-root), absolute or cwd-relative. */
 	additionalDirectories?: string[];
+	/** Host-authorized roots for native implementer file mutations. */
+	nativeStageWriteRoots?: readonly string[];
 	/** Global config directory. Default: ~/.omp/agent */
 	agentDir?: string;
 	/** Spawns to allow. Default: "*" */
@@ -611,7 +614,14 @@ export interface CreateAgentSessionOptions {
 	 * actual provider HTTP call (per-request prep, identical across all
 	 * requests, follows it), which is the right granularity for launch timing.
 	 */
-	onFirstChatDispatch?: () => void;
+	onFirstChatDispatch?: () => void | Promise<void>;
+
+	/**
+	 * Enforcing admission gate evaluated before the session's first provider
+	 * stream dispatch. Rejection or failure permanently denies provider stream
+	 * transport for the session.
+	 */
+	admitFirstChatDispatch?: () => void | Promise<void>;
 
 	/** Whether to auto-approve all tool calls (--auto-approve CLI flag). Default: false */
 	autoApprove?: boolean;
@@ -1733,6 +1743,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			get cwd() {
 				return sessionManager.getCwd();
 			},
+			nativeStageWriteRoots: options.nativeStageWriteRoots,
 			isToolActive: name => activeToolNames.has(name),
 			setActiveToolNames,
 			toolRegistry,
@@ -3349,6 +3360,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// One-shot launch-latency marker: fired the first time the loop dispatches
 		// a chat request to the provider transport. See onFirstChatDispatch.
 		let notifyFirstChatDispatch = options.onFirstChatDispatch;
+		let admitFirstChatDispatch = options.admitFirstChatDispatch;
+		let firstChatAdmissionPromise: Promise<void> | undefined;
 		// Shared, settings-aware stream wrapper used by the main agent, advisor,
 		// and side-channel requests (`/btw`, `/omfg`, IRC auto-replies, handoff).
 		// Keeps OpenRouter sticky-routing variants, antigravity endpoint routing,
@@ -3411,17 +3424,36 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: options.getApiKey ?? (requestModel => modelRegistry.resolver(requestModel, agent.sessionId)),
-			streamFn: (streamModel, context, streamOptions) => {
+			streamFn: async (streamModel, context, streamOptions) => {
+				if (streamOptions?.signal?.aborted) {
+					throw streamOptions.signal.reason ?? new Error("Aborted");
+				}
+				if (admitFirstChatDispatch) {
+					const cb = admitFirstChatDispatch;
+					admitFirstChatDispatch = undefined;
+					firstChatAdmissionPromise = Promise.resolve().then(cb);
+				}
+				if (firstChatAdmissionPromise) {
+					await (streamOptions?.signal
+						? untilAborted(streamOptions.signal, firstChatAdmissionPromise)
+						: firstChatAdmissionPromise);
+					if (streamOptions?.signal?.aborted) {
+						throw streamOptions.signal.reason ?? new Error("Aborted");
+					}
+				}
 				if (notifyFirstChatDispatch) {
 					const cb = notifyFirstChatDispatch;
 					notifyFirstChatDispatch = undefined;
 					try {
-						cb();
+						await cb();
 					} catch (err) {
 						logger.warn("onFirstChatDispatch hook threw", {
 							error: err instanceof Error ? err.message : String(err),
 						});
 					}
+				}
+				if (streamOptions?.signal?.aborted) {
+					throw streamOptions.signal.reason ?? new Error("Aborted");
 				}
 				const externalThinking =
 					settings.get("externalThinking") &&

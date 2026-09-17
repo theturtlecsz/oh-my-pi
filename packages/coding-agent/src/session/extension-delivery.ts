@@ -12,6 +12,7 @@ export interface ExtensionDeliveryEntry {
 	/** Session id stamped at enqueue — a flush into any other session is stale. */
 	owner?: string;
 	triggerTurn?: boolean;
+	deferUntilNextTurn?: boolean;
 }
 export function buildExtensionDeliveryBatchMessage(entries: ExtensionDeliveryEntry[]): CustomMessage {
 	return {

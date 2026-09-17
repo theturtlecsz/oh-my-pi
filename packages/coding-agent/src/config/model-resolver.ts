@@ -1278,6 +1278,8 @@ export function resolveAgentAdvisorSelection(
 export interface ResolvedModelRoleValue {
 	model: Model<Api> | undefined;
 	thinkingLevel?: ConfiguredThinkingLevel;
+	requestedThinkingLevel?: ConfiguredThinkingLevel;
+	matchedPattern?: string;
 	/** matchedPatternIndex identifies the first configured pattern that matched an available model. */
 	matchedPatternIndex?: number;
 	explicitThinkingLevel: boolean;
@@ -1315,6 +1317,8 @@ export function resolveModelRoleValue(
 			return {
 				model: resolved.model,
 				matchedPatternIndex: patternIndex,
+				matchedPattern: effectivePattern,
+				requestedThinkingLevel: resolved.thinkingLevel,
 				thinkingLevel: resolved.explicitThinkingLevel
 					? resolved.thinkingLevel === AUTO_THINKING
 						? AUTO_THINKING

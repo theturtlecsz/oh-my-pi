@@ -5,6 +5,7 @@ import {
 	deliverCheckpoint,
 	deliverPendingCheckpoints,
 	queueCheckpointDelivery,
+	queueCheckpointDeliverySettlement,
 	queuePendingCheckpointDeliveries,
 } from "../extensions/workflow/checkpoint-delivery";
 
@@ -233,5 +234,123 @@ describe("checkpoint-delivery queued and awaited paths", () => {
 		// 4. After delivery attestation settles, closeout request succeeds
 		await mockBackend.proposeClose({ id: "1", key: "OMP-1", title: "T" });
 		expect(closeoutRequested).toBe(true);
+	});
+
+	test("queueCheckpointDeliverySettlement settles only after injection and attestation, and dedupes to the in-flight delivery", async () => {
+		const { promise: injection, resolve: releaseInjection } = Promise.withResolvers<void>();
+		const { promise: attestation, resolve: releaseAttestation } = Promise.withResolvers<void>();
+		const seam: string[] = [];
+		const mockPi: ExtensionAPI = {
+			getSessionId: () => "session-1",
+			deliverMessage: async (message: { customType?: string; content?: string }) => {
+				seam.push(`deliverMessage:${message.customType}`);
+				await injection;
+				seam.push("injected");
+			},
+		} as unknown as ExtensionAPI;
+		const event = mockEvent({ eventId: "00000000-0000-7000-8000-000000000009" });
+		const mockBackend: WorkflowBackend = {
+			attestDelivery: async (eventId, sessionId, renderedSha256, status) => {
+				seam.push(`attestDelivery:${eventId}:${sessionId}:${renderedSha256 === event.renderedSha256 ? "digest-ok" : "digest-bad"}:${status}`);
+				await attestation;
+				seam.push("attested");
+				return { status: "applied", event };
+			},
+		} as unknown as WorkflowBackend;
+
+		let settledFirst: string | undefined;
+		let settledSecond: string | undefined;
+		const first = queueCheckpointDeliverySettlement(mockPi, mockBackend, event);
+		void first.then(status => {
+			settledFirst = status;
+		});
+		// A second queue of the same event while the first is in flight is the
+		// SAME settlement: no second deliverMessage, no second attestation.
+		const second = queueCheckpointDeliverySettlement(mockPi, mockBackend, event);
+		void second.then(status => {
+			settledSecond = status;
+		});
+		expect(second).toBe(first);
+		await Promise.resolve();
+		expect(seam).toEqual(["deliverMessage:close-attempt-checkpoint"]);
+
+		// Injection alone does not settle it: attestation has not returned.
+		releaseInjection();
+		await new Promise<void>(resolve => setTimeout(resolve, 0));
+		expect(seam).toEqual([
+			"deliverMessage:close-attempt-checkpoint",
+			"injected",
+			"attestDelivery:00000000-0000-7000-8000-000000000009:session-1:digest-ok:delivered",
+		]);
+		expect(settledFirst).toBeUndefined();
+		expect(settledSecond).toBeUndefined();
+
+		releaseAttestation();
+		expect(await first).toBe("delivered");
+		await new Promise<void>(resolve => setTimeout(resolve, 0));
+		expect(seam.at(-1)).toBe("attested");
+		expect(settledFirst).toBe("delivered");
+		expect(settledSecond).toBe("delivered");
+		expect(seam.filter(step => step.startsWith("deliverMessage:"))).toHaveLength(1);
+		expect(seam.filter(step => step.startsWith("attestDelivery:"))).toHaveLength(1);
+
+		// Once settled the event is no longer in flight: a later queue is a fresh delivery.
+		const third = queueCheckpointDeliverySettlement(mockPi, mockBackend, event);
+		expect(third).not.toBe(first);
+		expect(await third).toBe("delivered");
+		expect(seam.filter(step => step.startsWith("deliverMessage:"))).toHaveLength(2);
+		expect(seam.filter(step => step.startsWith("attestDelivery:"))).toHaveLength(2);
+	});
+
+	test("queueCheckpointDeliverySettlement never rejects: a failed injection settles as failed after its failed attestation, a refused attestation settles after its notice", async () => {
+		const seam: string[] = [];
+		const failingPi: ExtensionAPI = {
+			getSessionId: () => "session-1",
+			deliverMessage: async () => {
+				seam.push("deliverMessage");
+				throw new Error("injection rejected");
+			},
+		} as unknown as ExtensionAPI;
+		const failedEvent = mockEvent({ eventId: "00000000-0000-7000-8000-00000000000a" });
+		const failedBackend: WorkflowBackend = {
+			attestDelivery: async (_id, _session, _hash, status) => {
+				seam.push(`attestDelivery:${status}`);
+				return { status: "applied", event: failedEvent };
+			},
+		} as unknown as WorkflowBackend;
+		const notices: string[] = [];
+		expect(await queueCheckpointDeliverySettlement(failingPi, failedBackend, failedEvent, notice => notices.push(notice))).toBe("failed");
+		expect(seam).toEqual(["deliverMessage", "attestDelivery:failed"]);
+		expect(notices).toEqual([]);
+
+		const refusedEvent = mockEvent({
+			eventId: "00000000-0000-7000-8000-00000000000b",
+			reasonCode: "attestation_window_expired",
+			renderedText: "CLOSE ATTEMPT — checkpoint_delivery_attested\nattestation_window_expired: window closed",
+		});
+		const refusingPi: ExtensionAPI = {
+			getSessionId: () => "session-1",
+			deliverMessage: async () => {},
+		} as unknown as ExtensionAPI;
+		const refusingBackend: WorkflowBackend = {
+			attestDelivery: async () => ({ status: "refused", event: refusedEvent }),
+		} as unknown as WorkflowBackend;
+		const refusedNotices: string[] = [];
+		expect(await queueCheckpointDeliverySettlement(refusingPi, refusingBackend, refusedEvent, notice => refusedNotices.push(notice))).toBe("delivered");
+		expect(refusedNotices).toEqual([
+			'checkpoint "close_review_checkpoint" attestation refused (attestation_window_expired: CLOSE ATTEMPT — checkpoint_delivery_attested\nattestation_window_expired: window closed)',
+		]);
+
+		const throwingBackend: WorkflowBackend = {
+			attestDelivery: async () => {
+				throw new Error("service unreachable");
+			},
+		} as unknown as WorkflowBackend;
+		const thrownNotices: string[] = [];
+		const thrownEvent = mockEvent({ eventId: "00000000-0000-7000-8000-00000000000c" });
+		expect(await queueCheckpointDeliverySettlement(refusingPi, throwingBackend, thrownEvent, notice => thrownNotices.push(notice))).toBe("delivered");
+		expect(thrownNotices).toEqual([
+			'checkpoint "close_review_checkpoint" attestation failed (Error: service unreachable) — it stays pending and closeout stays blocked',
+		]);
 	});
 });

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
+from decimal import Decimal, InvalidOperation
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -36,19 +38,27 @@ from .models import (
     MAX_AUDITOR_LAUNCHES,
     AuditManifest,
     AuditorLaunch,
+    CandidateSourceVersion,
+    BudgetReservationState,
+    BudgetResource,
+    StageLaunch,
     Candidate,
     CloseAttempt,
     CommandEnvelope,
     CompletionEvidence,
     CompletionInput,
     CreateWorkBatchPayload,
+    EventsCursorPayload,
     EvidenceKind,
     EvidenceReceipt,
     OperationReceipt,
     OperationState,
     RelationEdge,
+    RepositoryCursorPayload,
     RiderProof,
+    StageLaunchStatus,
     SameSessionFoundFixedPayload,
+    WorkItemsCursorPayload,
 )
 from .semantics import (
     completion_blockers,
@@ -66,6 +76,8 @@ _MANIFEST_FIELDS = "manifest_id,work_id,attempt_id,manifest_version,plan_receipt
 _LAUNCH_FIELDS = "launch_id,attempt_id,manifest_id,launch_number,task_sha256,tool_call_id,reserved_at"
 _EVENT_FIELDS = "event_id,sequence,work_id,attempt_id,launch_id,event_type,reason_code,reason,legal_next_actions,remaining_launches,remaining_reports,requires_fresh_authorization,rendered_text,rendered_sha256,requires_delivery,created_at"
 _DELIVERY_FIELDS = "delivery_id,event_id,delivery_sequence,owner_session_id,rendered_sha256,status,authorization_ref,created_at"
+_STAGE_LAUNCH_FIELDS = "launch_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,request_sha256,tool_call_id,task_sha256,prepared_context_sha256,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,resolved_selector,resolved_provider,resolved_model,served_selector,served_model,is_fallback,fallback_reason,status,outcome_sha256,outcome,reserved_at,handed_off_at,settled_at"
+_SOURCE_VERSION_FIELDS = "candidate_id,workspace_id,work_id,revision_id,repository_id,source_version_id,snapshot_id,base_commit,analyzed_commit,tree_sha,source_manifest_sha256,snapshot_manifest_sha256,content_sha256,association_sha256,producer,producer_receipt_sha256,created_at"
 _LIVE_STATES = tuple(sorted(state.value for state in LIVE_CLOSE_ATTEMPT_STATES))
 _CLOSE_COMMANDS = {
     "begin_close_attempt",
@@ -236,9 +248,14 @@ class WorkStore(Protocol):
         workspace_id: UUID,
         actor_id: UUID,
         kind: str,
-        value: str,
+        value: str = "",
         *,
         candidate_allowlist: frozenset[UUID] | None = None,
+        selector: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+        after_sequence: int | None = None,
+        through_sequence: int | None = None,
     ) -> dict[str, object]: ...
     def activity(
         self,
@@ -330,7 +347,18 @@ class PostgresWorkStore:
             "stamp_execution_plan",
             "set_execution_state",
             "complete_execution_item",
+            "reserve_stage_launch",
+            "handoff_stage_launch",
+            "settle_stage_launch",
+            "cancel_stage_launch",
+            "reconcile_stage_launch",
             "complete_work",
+            "create_budget_scope",
+            "reserve_budget",
+            "claim_budget",
+            "settle_budget",
+            "cancel_budget",
+            "issue_frontier_exception",
         }
         conflict = False
         with self._transaction(
@@ -419,6 +447,30 @@ class PostgresWorkStore:
                     result = self._cancel_auditor_launch(cur, envelope)
                 elif command.type == "settle_auditor_launch":
                     result = self._settle_auditor_launch(cur, envelope)
+                elif command.type == "reserve_stage_launch":
+                    result = self._reserve_stage_launch(cur, envelope)
+                elif command.type == "handoff_stage_launch":
+                    result = self._handoff_stage_launch(cur, envelope)
+                elif command.type == "settle_stage_launch":
+                    result = self._settle_stage_launch(cur, envelope)
+                elif command.type == "cancel_stage_launch":
+                    result = self._cancel_stage_launch(cur, envelope)
+                elif command.type == "reconcile_stage_launch":
+                    result = self._reconcile_stage_launch(cur, envelope)
+                elif command.type == "create_budget_scope":
+                    result = self._create_budget_scope(cur, envelope)
+                elif command.type == "reserve_budget":
+                    result = self._reserve_budget(cur, envelope)
+                elif command.type == "claim_budget":
+                    result = self._claim_budget(cur, envelope)
+                elif command.type == "settle_budget":
+                    result = self._settle_budget(cur, envelope)
+                elif command.type == "cancel_budget":
+                    result = self._cancel_budget(cur, envelope)
+                elif command.type == "issue_frontier_exception":
+                    result = self._issue_frontier_exception(cur, envelope)
+                elif command.type == "associate_candidate_source":
+                    result = self._associate_candidate_source(cur, envelope)
                 elif command.type == "attest_checkpoint_delivery":
                     result = self._attest_checkpoint_delivery(cur, envelope)
                 elif command.type == "record_closeout_review":
@@ -486,7 +538,7 @@ class PostgresWorkStore:
         event_type: str | None = None,
     ) -> None:
         payload = envelope.command.payload
-        aggregate_id = getattr(payload, "work_id", envelope.workspace_id)
+        aggregate_id = getattr(payload, "work_id", None) or envelope.workspace_id
         if hasattr(payload, "relation"):
             aggregate_id = payload.relation.source_work_id
         elif hasattr(payload, "receipt"):
@@ -506,6 +558,16 @@ class PostgresWorkStore:
             # Close-ritual commands aggregate under the work item their typed
             # event names — never accidentally under the workspace (OMP-47).
             aggregate_id = UUID(close_event["work_id"])
+        # OMP-279: Acquire transaction-scoped per-workspace advisory lock to serialize
+        # sequence allocation and hash-chain extension within this workspace.
+        # Held through commit; guarantees that no later native event for the same
+        # workspace becomes visible before an earlier allocated native event transaction settles.
+        # Note: Rollback or other-workspace allocations may leave integer sequence gaps,
+        # which event readers handle cleanly; this lock prevents out-of-order commits.
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"omp_audit:events:{envelope.workspace_id}",),
+        )
         cur.execute(
             "SELECT event_sha256 FROM omp_audit.domain_events WHERE workspace_id=%s AND aggregate_id=%s ORDER BY sequence DESC LIMIT 1",
             (envelope.workspace_id, aggregate_id),
@@ -1836,7 +1898,6 @@ class PostgresWorkStore:
                 )
             if (
                 not payload.candidate_tree_sha
-                or payload.candidate_tree_sha != candidate["candidate_sha256"]
                 or not payload.original_request_sha256
                 or payload.original_request_sha256 != grant_item["original_request_sha256"]
                 or not payload.criteria_sha256
@@ -2726,6 +2787,350 @@ class PostgresWorkStore:
             "verdict": verdict,
             "event": event,
         }
+
+    @staticmethod
+    def _money(value: str) -> Decimal:
+        try:
+            parsed = Decimal(value)
+        except InvalidOperation as error:
+            raise WorkStoreError("invalid_request", ("invalid_decimal",)) from error
+        if not parsed.is_finite() or parsed < 0:
+            raise WorkStoreError("invalid_request", ("invalid_decimal",))
+        return parsed
+
+    @staticmethod
+    def _budget_json(value: object) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        return {str(k): str(v) for k, v in value.items()}
+
+    def _create_budget_scope(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute("SELECT 1 FROM omp_work.budget_scopes WHERE scope_id=%s", (payload.scope_id,))
+        if cur.fetchone() is not None:
+            raise WorkStoreError("idempotency_conflict", ("scope_id_exists",))
+        if payload.parent_scope_id is not None:
+            cur.execute("SELECT workspace_id FROM omp_work.budget_scopes WHERE scope_id=%s FOR UPDATE", (payload.parent_scope_id,))
+            parent = cur.fetchone()
+            if parent is None or parent["workspace_id"] != envelope.workspace_id:
+                raise WorkStoreError("invalid_request", ("parent_scope_not_found",))
+        cur.execute("INSERT INTO omp_work.budget_scopes(scope_id,workspace_id,parent_scope_id,kind,policy_version,work_id,session_id,limits) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (payload.scope_id, envelope.workspace_id, payload.parent_scope_id, payload.kind.value, payload.policy_version, payload.work_id, payload.session_id, json.dumps(payload.limits)))
+        return {"type": "create_budget_scope", "scope_id": str(payload.scope_id), "parent_scope_id": str(payload.parent_scope_id) if payload.parent_scope_id else None}
+
+    def _reserve_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
+        payload = envelope.command.payload
+        amount = self._money(payload.worst_case_drawdown)
+        cur.execute("SELECT * FROM omp_work.budget_scopes WHERE workspace_id=%s AND scope_id=%s FOR UPDATE", (envelope.workspace_id, payload.scope_id))
+        scope = cur.fetchone()
+        if scope is None:
+            raise WorkStoreError("invalid_request", ("scope_not_found",))
+        cur.execute("SELECT * FROM omp_work.provider_accounts WHERE workspace_id=%s AND account_id=%s", (envelope.workspace_id, payload.account_id))
+        account = cur.fetchone()
+        if account is None or account["balance_provenance"] == "unknown":
+            raise WorkStoreError("invalid_request", ("unknown_account_evidence",))
+        cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (str(payload.account_id),))
+        cur.execute("SELECT count(*) AS active FROM omp_work.budget_reservations WHERE account_id=%s AND state IN ('reserved_unsent','potentially_sent','unresolved')", (payload.account_id,))
+        if int(cur.fetchone()["active"]) >= int(account["concurrency_limit"]):
+            raise WorkStoreError("budget_exhausted", ("account_slots_exhausted",))
+        limits = self._budget_json(scope["limits"]); held = self._budget_json(scope["held"]); spent = self._budget_json(scope["spent"]); unresolved = self._budget_json(scope["unresolved"])
+        key = payload.resource.value
+        used = self._money(held.get(key, "0")) + self._money(spent.get(key, "0")) + self._money(unresolved.get(key, "0"))
+        if key not in limits or used + amount > self._money(limits[key]):
+            raise WorkStoreError("budget_exhausted", ("budget_limit_exceeded",))
+        cur.execute("SELECT COALESCE(MAX(fence),0)+1 AS fence FROM omp_work.budget_reservations WHERE workspace_id=%s AND account_id=%s", (envelope.workspace_id, payload.account_id))
+        fence = int(cur.fetchone()["fence"])
+        held[key] = str(used + amount - self._money(spent.get(key, "0")) - self._money(unresolved.get(key, "0")))
+        cur.execute("UPDATE omp_work.budget_scopes SET held=%s WHERE scope_id=%s", (json.dumps(held), payload.scope_id))
+        reservation_id = UUID(str(envelope.operation_id))
+        cur.execute("INSERT INTO omp_work.budget_reservations(reservation_id,workspace_id,scope_id,account_id,logical_call_id,transport_attempt_id,fence,state,resource,worst_case_drawdown,provider,model,effort,context_limit,output_limit,expires_at) VALUES(%s,%s,%s,%s,%s,%s,%s,'reserved_unsent',%s,%s,%s,%s,%s,%s,%s,%s)", (reservation_id, envelope.workspace_id, payload.scope_id, payload.account_id, payload.logical_call_id, payload.transport_attempt_id, fence, payload.resource.value, payload.worst_case_drawdown, payload.provider, payload.model, payload.effort, payload.context_limit, payload.output_limit, payload.expires_at))
+        return {"type": "reserve_budget", "reservation_id": str(reservation_id), "transport_attempt_id": str(payload.transport_attempt_id), "fence": fence, "state": "reserved_unsent"}
+
+    def _claim_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute("SELECT state,fence FROM omp_work.budget_reservations WHERE workspace_id=%s AND reservation_id=%s FOR UPDATE", (envelope.workspace_id, payload.reservation_id))
+        row = cur.fetchone()
+        if row is None or row["fence"] != payload.fence or row["state"] != "reserved_unsent":
+            raise WorkStoreError("invalid_request", ("reservation_fence_or_state_invalid",))
+        cur.execute("UPDATE omp_work.budget_reservations SET state='potentially_sent',claimed_at=clock_timestamp() WHERE reservation_id=%s", (payload.reservation_id,))
+        return {"type": "claim_budget", "reservation_id": str(payload.reservation_id), "fence": payload.fence, "state": "potentially_sent"}
+
+    def _settle_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
+        payload = envelope.command.payload; actual = self._money(payload.actual_drawdown)
+        cur.execute("SELECT * FROM omp_work.budget_reservations WHERE workspace_id=%s AND reservation_id=%s FOR UPDATE", (envelope.workspace_id, payload.reservation_id)); row = cur.fetchone()
+        if row is None or row["fence"] != payload.fence or row["transport_attempt_id"] != payload.transport_attempt_id:
+            raise WorkStoreError("invalid_request", ("reservation_identity_invalid",))
+        if row["state"] == "settled":
+            return {"type": "settle_budget", "reservation_id": str(payload.reservation_id), "state": "settled", "replayed": True}
+        if row["state"] not in {"potentially_sent", "reserved_unsent"}:
+            raise WorkStoreError("invalid_request", ("reservation_not_settleable",))
+        cur.execute("SELECT * FROM omp_work.budget_scopes WHERE scope_id=%s FOR UPDATE", (row["scope_id"],)); scope = cur.fetchone()
+        held = self._budget_json(scope["held"]); spent = self._budget_json(scope["spent"]); unresolved = self._budget_json(scope["unresolved"]); key = row["resource"]
+        held[key] = str(max(Decimal("0"), self._money(held.get(key, "0")) - self._money(str(row["worst_case_drawdown"]))))
+        destination = unresolved if payload.state == "unresolved" else spent; destination[key] = str(self._money(destination.get(key, "0")) + actual)
+        cur.execute("UPDATE omp_work.budget_scopes SET held=%s,spent=%s,unresolved=%s WHERE scope_id=%s", (json.dumps(held), json.dumps(spent), json.dumps(unresolved), row["scope_id"]))
+        cur.execute("UPDATE omp_work.budget_reservations SET state=%s,actual_drawdown=%s,usage=%s,provenance=%s,provider_request_id=%s,outcome=%s,settled_at=clock_timestamp() WHERE reservation_id=%s", (payload.state, payload.actual_drawdown, json.dumps(payload.usage), payload.provenance, payload.provider_request_id, payload.outcome, payload.reservation_id))
+        return {"type": "settle_budget", "reservation_id": str(payload.reservation_id), "state": payload.state, "actual_drawdown": payload.actual_drawdown, "overrun": actual > self._money(str(row["worst_case_drawdown"]))}
+
+    def _cancel_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
+        payload = envelope.command.payload
+        if not payload.verified_unsent: raise WorkStoreError("invalid_request", ("unsent_cancellation_requires_verification",))
+        cur.execute("SELECT * FROM omp_work.budget_reservations WHERE workspace_id=%s AND reservation_id=%s FOR UPDATE", (envelope.workspace_id, payload.reservation_id)); row = cur.fetchone()
+        if row is None or row["state"] != "reserved_unsent" or row["fence"] != payload.fence: raise WorkStoreError("invalid_request", ("reservation_not_verified_unsent",))
+        cur.execute("SELECT * FROM omp_work.budget_scopes WHERE scope_id=%s FOR UPDATE", (row["scope_id"],)); scope = cur.fetchone(); held = self._budget_json(scope["held"]); key = row["resource"]; held[key] = str(max(Decimal("0"), self._money(held.get(key,"0"))-self._money(str(row["worst_case_drawdown"]))))
+        cur.execute("UPDATE omp_work.budget_scopes SET held=%s WHERE scope_id=%s", (json.dumps(held), row["scope_id"])); cur.execute("UPDATE omp_work.budget_reservations SET state='cancelled_unsent',settled_at=clock_timestamp() WHERE reservation_id=%s", (payload.reservation_id,))
+        return {"type":"cancel_budget","reservation_id":str(payload.reservation_id),"state":"cancelled_unsent"}
+
+    def _issue_frontier_exception(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
+        payload = envelope.command.payload; exception_id = UUID(str(envelope.operation_id))
+        cur.execute("SELECT 1 FROM omp_work.budget_scopes WHERE workspace_id=%s AND scope_id=%s", (envelope.workspace_id,payload.scope_id))
+        if cur.fetchone() is None: raise WorkStoreError("invalid_request", ("scope_not_found",))
+        cur.execute("INSERT INTO omp_work.frontier_exceptions(exception_id,workspace_id,scope_id,question,route,effort,context_limit,output_limit,max_attempts,remaining_attempts,resource,resource_limit,expires_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (exception_id,envelope.workspace_id,payload.scope_id,payload.question,payload.route,payload.effort,payload.context_limit,payload.output_limit,payload.max_attempts,payload.max_attempts,payload.resource.value,payload.resource_limit,payload.expires_at))
+        return {"type":"issue_frontier_exception","exception_id":str(exception_id),"remaining_attempts":payload.max_attempts}
+
+    def _reserve_stage_launch(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        self._lock_work_chain(cur, envelope.workspace_id, payload.work_id)
+        cur.execute(
+            f"SELECT {_STAGE_LAUNCH_FIELDS} FROM omp_work.stage_launches WHERE workspace_id=%s AND request_sha256=%s AND tool_call_id=%s",
+            (envelope.workspace_id, payload.request_sha256, payload.tool_call_id),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            return {"type": "reserve_stage_launch", "status": "replayed", "launch": _row_json(existing)}
+
+        # Bind every optional identity before minting a launch. A valid UUID is
+        # insufficient: the revision, candidate, attempt, and grant must all
+        # describe this exact work item and the role's current phase.
+        if payload.revision_id is not None:
+            cur.execute(
+                "SELECT work_id FROM omp_work.work_revisions WHERE workspace_id=%s AND revision_id=%s",
+                (envelope.workspace_id, payload.revision_id),
+            )
+            revision = cur.fetchone()
+            if revision is None or revision["work_id"] != payload.work_id:
+                raise WorkStoreError("stale_evidence", ("stage revision is not bound to the work item",))
+        if payload.candidate_id is not None:
+            cur.execute(
+                "SELECT work_id,revision_id FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s",
+                (envelope.workspace_id, payload.candidate_id),
+            )
+            candidate = cur.fetchone()
+            if candidate is None or candidate["work_id"] != payload.work_id or (
+                payload.revision_id is not None and candidate["revision_id"] != payload.revision_id
+            ):
+                raise WorkStoreError("stale_evidence", ("stage candidate is not bound to the work revision",))
+        if payload.attempt_id is not None:
+            cur.execute(
+                "SELECT work_id,execution_grant_id,state FROM omp_work.close_attempts WHERE workspace_id=%s AND attempt_id=%s",
+                (envelope.workspace_id, payload.attempt_id),
+            )
+            attempt = cur.fetchone()
+            if attempt is None or attempt["work_id"] != payload.work_id or (
+                payload.grant_id is not None and attempt["execution_grant_id"] != payload.grant_id
+            ):
+                raise WorkStoreError("stale_evidence", ("stage attempt is not bound to the work or grant",))
+        if payload.grant_id is not None:
+            cur.execute(
+                "SELECT state FROM omp_work.execution_grants WHERE workspace_id=%s AND grant_id=%s FOR UPDATE",
+                (envelope.workspace_id, payload.grant_id),
+            )
+            grant = cur.fetchone()
+            if grant is None:
+                raise WorkStoreError("invalid_request", ("unknown execution grant",))
+            if grant["state"] != "active":
+                raise WorkStoreError("execution_grant_inactive", ("stage launch requires an active execution grant",))
+            cur.execute(
+                "SELECT phase,claimed_revision_id,criteria_revision_id,plan_stamp_sha256 FROM omp_work.execution_grant_items WHERE workspace_id=%s AND grant_id=%s AND work_id=%s FOR UPDATE",
+                (envelope.workspace_id, payload.grant_id, payload.work_id),
+            )
+            grant_item = cur.fetchone()
+            if grant_item is None:
+                raise WorkStoreError("stale_evidence", ("stage work item is not part of the execution grant",))
+            expected_phases = {
+                "plan": {"planning"},
+                "implement": {"executing", "remediating"},
+                "audit": {"reviewing", "remediating", "executing"},
+                "frontier": {"reviewing", "remediating"},
+            }[payload.role.value]
+            if grant_item["phase"] not in expected_phases:
+                raise WorkStoreError(
+                    "stale_evidence",
+                    (f"native {payload.role.value} stage requires phase {sorted(expected_phases)}, got {grant_item['phase']}",),
+                )
+            expected_revision = grant_item["criteria_revision_id"] or grant_item["claimed_revision_id"]
+            if payload.revision_id is not None and payload.revision_id != expected_revision:
+                raise WorkStoreError("stale_evidence", ("stage revision differs from the execution seal",))
+            if payload.role.value == "implement" and not grant_item["plan_stamp_sha256"]:
+                raise WorkStoreError("stale_evidence", ("implement stage requires a stamped plan",))
+            cur.execute(
+                "SELECT count(*) AS count FROM omp_work.stage_launches WHERE workspace_id=%s AND grant_id=%s AND status IN ('reserved','handed_off','settled')",
+                (envelope.workspace_id, payload.grant_id),
+            )
+            if int(cur.fetchone()["count"]) >= 16:
+                raise WorkStoreError("execution_caps_exceeded", ("native stage launch budget exhausted",))
+        # _lock_work_chain above serializes competing stage reservations for the
+        # same work item. Refuse a second distinct request for the same active
+        # stage identity instead of allowing two providers to edit one item.
+        cur.execute(
+            "SELECT launch_id FROM omp_work.stage_launches WHERE workspace_id=%s AND work_id=%s AND role=%s AND grant_id IS NOT DISTINCT FROM %s AND attempt_id IS NOT DISTINCT FROM %s AND status IN ('reserved','handed_off') FOR UPDATE",
+            (envelope.workspace_id, payload.work_id, payload.role.value, payload.grant_id, payload.attempt_id),
+        )
+        active_stage = cur.fetchone()
+        if active_stage is not None:
+            raise WorkStoreError("stage_launch_conflict", ("an active native stage launch already owns this work/stage identity",))
+        launch_id = uuid4()
+        cur.execute(
+            f"INSERT INTO omp_work.stage_launches(launch_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,request_sha256,tool_call_id,task_sha256,prepared_context_sha256,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,resolved_selector,resolved_provider,resolved_model,is_fallback,fallback_reason,status) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'reserved') RETURNING {_STAGE_LAUNCH_FIELDS}",
+            (
+                launch_id, envelope.workspace_id, payload.work_id, payload.revision_id, payload.candidate_id,
+                payload.attempt_id, payload.grant_id, payload.role.value, payload.request_sha256, payload.tool_call_id,
+                payload.task_sha256, payload.prepared_context_sha256, payload.requested_selector, payload.requested_provider,
+                payload.requested_model, payload.requested_api, payload.requested_effort, payload.requested_wire_model,
+                payload.resolved_selector, payload.resolved_provider, payload.resolved_model, payload.is_fallback,
+                payload.fallback_reason,
+            ),
+        )
+        launch = cur.fetchone()
+        return {"type": "reserve_stage_launch", "status": "applied", "launch": _row_json(launch)}
+
+    def _associate_candidate_source(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        self._lock_work_chain(cur, envelope.workspace_id, payload.work_id)
+        cur.execute(
+            "SELECT work_id,revision_id,kind FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s",
+            (envelope.workspace_id, payload.candidate_id),
+        )
+        candidate = cur.fetchone()
+        if candidate is None or candidate["work_id"] != payload.work_id or candidate["revision_id"] != payload.revision_id:
+            raise WorkStoreError("stale_evidence", ("source association candidate identity does not match the work revision",))
+        if candidate["kind"] != "final":
+            raise WorkStoreError("stale_evidence", ("source association requires a finalized candidate",))
+        cur.execute(
+            "SELECT current_candidate_id,repository_id FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s",
+            (envelope.workspace_id, payload.work_id),
+        )
+        item = cur.fetchone()
+        if item is None or item["current_candidate_id"] != payload.candidate_id or item["repository_id"] != payload.repository_id:
+            raise WorkStoreError("stale_evidence", ("source association is not the current repository-bound candidate",))
+        identity = {
+            "candidate_id": str(payload.candidate_id),
+            "workspace_id": str(envelope.workspace_id),
+            "work_id": str(payload.work_id),
+            "revision_id": str(payload.revision_id),
+            "repository_id": str(payload.repository_id),
+            "source_version_id": payload.source_version_id,
+            "snapshot_id": payload.snapshot_id,
+            "base_commit": payload.base_commit,
+            "analyzed_commit": payload.analyzed_commit,
+            "tree_sha": payload.tree_sha,
+            "source_manifest_sha256": payload.source_manifest_sha256,
+            "snapshot_manifest_sha256": payload.snapshot_manifest_sha256,
+            "content_sha256": payload.content_sha256,
+            "producer": payload.producer,
+            "producer_receipt_sha256": payload.producer_receipt_sha256,
+        }
+        if sha256(identity) != payload.association_sha256:
+            raise WorkStoreError("stale_evidence", ("source association digest does not match its identity fields",))
+        cur.execute(
+            f"SELECT {_SOURCE_VERSION_FIELDS} FROM omp_work.candidate_source_versions WHERE workspace_id=%s AND candidate_id=%s",
+            (envelope.workspace_id, payload.candidate_id),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            if existing["association_sha256"] != payload.association_sha256:
+                raise WorkStoreError("idempotency_conflict", ("candidate source association differs from existing identity",))
+            return {"type": "associate_candidate_source", "status": "replayed", "association": _row_json(existing)}
+        cur.execute(
+            f"INSERT INTO omp_work.candidate_source_versions(candidate_id,workspace_id,work_id,revision_id,repository_id,source_version_id,snapshot_id,base_commit,analyzed_commit,tree_sha,source_manifest_sha256,snapshot_manifest_sha256,content_sha256,association_sha256,producer,producer_receipt_sha256) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING {_SOURCE_VERSION_FIELDS}",
+            (
+                payload.candidate_id, envelope.workspace_id, payload.work_id, payload.revision_id, payload.repository_id,
+                payload.source_version_id, payload.snapshot_id, payload.base_commit, payload.analyzed_commit, payload.tree_sha,
+                payload.source_manifest_sha256, payload.snapshot_manifest_sha256, payload.content_sha256, payload.association_sha256,
+                payload.producer, payload.producer_receipt_sha256,
+            ),
+        )
+        return {"type": "associate_candidate_source", "status": "applied", "association": _row_json(cur.fetchone())}
+
+    def _handoff_stage_launch(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute(
+            f"SELECT {_STAGE_LAUNCH_FIELDS} FROM omp_work.stage_launches WHERE workspace_id=%s AND launch_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.launch_id),
+        )
+        launch = cur.fetchone()
+        if launch is None:
+            raise WorkStoreError("invalid_request", ("unknown native stage launch",))
+        if launch["task_sha256"] != payload.task_sha256:
+            raise WorkStoreError("stale_evidence", ("stage task bytes differ from prepared launch",))
+        if launch["status"] == StageLaunchStatus.HANDED_OFF.value:
+            return {"type": "handoff_stage_launch", "status": "replayed", "launch": _row_json(launch)}
+        if launch["status"] != StageLaunchStatus.RESERVED.value:
+            raise WorkStoreError("invalid_request", (f"stage launch is {launch['status']}",))
+        cur.execute(
+            f"UPDATE omp_work.stage_launches SET status='handed_off', handed_off_at=clock_timestamp() WHERE workspace_id=%s AND launch_id=%s RETURNING {_STAGE_LAUNCH_FIELDS}",
+            (envelope.workspace_id, payload.launch_id),
+        )
+        return {"type": "handoff_stage_launch", "status": "applied", "launch": _row_json(cur.fetchone())}
+
+    def _settle_stage_launch(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute(
+            f"SELECT {_STAGE_LAUNCH_FIELDS} FROM omp_work.stage_launches WHERE workspace_id=%s AND launch_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.launch_id),
+        )
+        launch = cur.fetchone()
+        if launch is None:
+            raise WorkStoreError("invalid_request", ("unknown native stage launch",))
+        if launch["status"] == StageLaunchStatus.SETTLED.value:
+            if launch["outcome_sha256"] == payload.outcome_sha256:
+                return {"type": "settle_stage_launch", "status": "replayed", "launch": _row_json(launch)}
+            raise WorkStoreError("idempotency_conflict", ("stage outcome differs from settled outcome",))
+        if launch["status"] != StageLaunchStatus.HANDED_OFF.value:
+            raise WorkStoreError("invalid_request", (f"stage launch is {launch['status']}; handoff is required",))
+        cur.execute(
+            f"UPDATE omp_work.stage_launches SET status='settled', outcome_sha256=%s, outcome=%s, served_selector=%s, served_model=%s, settled_at=clock_timestamp() WHERE workspace_id=%s AND launch_id=%s RETURNING {_STAGE_LAUNCH_FIELDS}",
+            (payload.outcome_sha256, json.dumps(payload.outcome), payload.served_selector, payload.served_model, envelope.workspace_id, payload.launch_id),
+        )
+        return {"type": "settle_stage_launch", "status": "applied", "launch": _row_json(cur.fetchone())}
+
+    def _cancel_stage_launch(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        return self._finish_stage_launch(cur, envelope, "cancelled")
+
+    def _reconcile_stage_launch(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        return self._finish_stage_launch(cur, envelope, "interrupted")
+
+    def _finish_stage_launch(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope, status: str
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute(
+            f"SELECT {_STAGE_LAUNCH_FIELDS} FROM omp_work.stage_launches WHERE workspace_id=%s AND launch_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.launch_id),
+        )
+        launch = cur.fetchone()
+        if launch is None:
+            raise WorkStoreError("invalid_request", ("unknown native stage launch",))
+        if launch["status"] == status:
+            return {"type": envelope.command.type, "status": "replayed", "launch": _row_json(launch), "reason": payload.reason}
+        if launch["status"] not in {StageLaunchStatus.RESERVED.value, StageLaunchStatus.HANDED_OFF.value}:
+            raise WorkStoreError("invalid_request", (f"stage launch is {launch['status']}",))
+        cur.execute(
+            f"UPDATE omp_work.stage_launches SET status=%s, settled_at=clock_timestamp() WHERE workspace_id=%s AND launch_id=%s RETURNING {_STAGE_LAUNCH_FIELDS}",
+            (status, envelope.workspace_id, payload.launch_id),
+        )
+        return {"type": envelope.command.type, "status": "applied", "launch": _row_json(cur.fetchone()), "reason": payload.reason}
 
     def _attest_checkpoint_delivery(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
@@ -3926,6 +4331,12 @@ class PostgresWorkStore:
             raise WorkStoreError(
                 "execution_judge_drift", ("service_fingerprint mismatch",)
             )
+        if payload.judge_sha256 != sha256(
+            payload.judge_manifest.model_dump(mode="json")
+        ):
+            raise WorkStoreError(
+                "execution_judge_drift", ("judge_manifest hash mismatch",)
+            )
         # Check focus slot
         cur.execute(
             "SELECT version, work_id FROM omp_work.focus_slots WHERE workspace_id=%s AND owner_id=%s FOR UPDATE",
@@ -4862,8 +5273,8 @@ class PostgresWorkStore:
             (envelope.workspace_id, attempt["candidate_id"]),
         )
         cand_row = cur.fetchone()
-        if cand_row is None or attempt.get("candidate_tree_sha") != cand_row["candidate_sha256"]:
-            raise WorkStoreError("completion_blocked", ("attempt candidate tree sha mismatch",))
+        if cand_row is None or not attempt.get("candidate_tree_sha"):
+            raise WorkStoreError("completion_blocked", ("attempt candidate tree identity missing",))
 
         # Check sealed riders
         sealed_riders = list(attempt.get("riders") or [])
@@ -5081,6 +5492,53 @@ class PostgresWorkStore:
             "closeout_receipt": closeout_receipt_json,
         }
 
+    @staticmethod
+    def _row_to_revision(
+        row: dict[str, object], criteria: list[str]
+    ) -> dict[str, object]:
+        return {
+            "revision_id": row["revision_id"],
+            "work_id": row["work_id"],
+            "revision_number": row["revision_number"],
+            "title": row["title"],
+            "description": row["description"],
+            "scope": row["scope"],
+            "acceptance_criteria": criteria,
+            "content_sha256": row["content_sha256"],
+            "created_by": row["created_by"],
+            "created_at": row["supplied_at"],
+        }
+
+    def _resolve_work_id(
+        self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, key: str
+    ) -> tuple[UUID, str]:
+        try:
+            work_uuid = UUID(key)
+            cur.execute(
+                "SELECT i.work_id, a.key FROM omp_work.work_items i "
+                "LEFT JOIN omp_work.work_aliases a ON a.work_id = i.work_id AND a.primary_alias "
+                "WHERE i.workspace_id = %s AND i.work_id = %s",
+                (workspace_id, work_uuid),
+            )
+            row = cur.fetchone()
+            if row:
+                return row["work_id"], row["key"] or str(row["work_id"])
+        except ValueError:
+            pass
+
+        cur.execute(
+            "SELECT a.work_id, a.key FROM omp_work.work_aliases a "
+            "WHERE a.workspace_id = %s AND a.key = %s",
+            (workspace_id, key),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise WorkStoreError(
+                "invalid_request",
+                diagnostics=("not_found", f"work item '{key}' not found in workspace"),
+            )
+        return row["work_id"], row["key"]
+
     def _item_view(
         self,
         cur: psycopg.Cursor[dict[str, object]],
@@ -5090,7 +5548,7 @@ class PostgresWorkStore:
         candidate_allowlist: frozenset[UUID] | None = None,
     ) -> dict[str, object]:
         cur.execute(
-            "SELECT i.work_id,i.workspace_id,i.state,i.project_id,i.archived,i.current_candidate_id,a.key,a.origin,r.revision_id,r.revision_number,r.title,r.description,r.scope,r.content_sha256,r.created_by,r.supplied_at FROM omp_work.work_items i JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias JOIN omp_work.work_revisions r ON r.revision_id=i.current_revision_id WHERE i.workspace_id=%s AND a.key=%s",
+            "SELECT i.work_id,i.workspace_id,i.state,i.project_id,i.repository_id,i.archived,i.current_candidate_id,a.key,a.origin,r.revision_id,r.revision_number,r.title,r.description,r.scope,r.content_sha256,r.created_by,r.supplied_at FROM omp_work.work_items i JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias JOIN omp_work.work_revisions r ON r.revision_id=i.current_revision_id WHERE i.workspace_id=%s AND a.key=%s",
             (workspace_id, key),
         )
         row = cur.fetchone()
@@ -5124,20 +5582,10 @@ class PostgresWorkStore:
                 "origin": row["origin"],
             },
             "state": row["state"],
-            "revision": {
-                "revision_id": row["revision_id"],
-                "work_id": row["work_id"],
-                "revision_number": row["revision_number"],
-                "title": row["title"],
-                "description": row["description"],
-                "scope": row["scope"],
-                "acceptance_criteria": criteria,
-                "content_sha256": row["content_sha256"],
-                "created_by": row["created_by"],
-                "created_at": row["supplied_at"],
-            },
+            "revision": self._row_to_revision(row, criteria),
             "candidate": candidate,
             "project_id": row["project_id"],
+            "repository_id": row["repository_id"],
             "archived": row["archived"],
         }
 
@@ -5146,9 +5594,14 @@ class PostgresWorkStore:
         workspace_id: UUID,
         actor_id: UUID,
         kind: str,
-        value: str,
+        value: str = "",
         *,
         candidate_allowlist: frozenset[UUID] | None = None,
+        selector: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+        after_sequence: int | None = None,
+        through_sequence: int | None = None,
     ) -> dict[str, object]:
         with self._transaction(workspace_id, actor_id) as cur:
             if kind == "item":
@@ -5192,6 +5645,16 @@ class PostgresWorkStore:
                     (workspace_id, work_id),
                 )
                 auditor_launches = [dict(row) for row in cur.fetchall()]
+                cur.execute(
+                    f"SELECT {_STAGE_LAUNCH_FIELDS} FROM omp_work.stage_launches WHERE workspace_id=%s AND work_id=%s ORDER BY reserved_at,launch_id LIMIT 100",
+                    (workspace_id, work_id),
+                )
+                stage_launches = [dict(row) for row in cur.fetchall()]
+                cur.execute(
+                    f"SELECT {_SOURCE_VERSION_FIELDS} FROM omp_work.candidate_source_versions WHERE workspace_id=%s AND work_id=%s ORDER BY created_at,candidate_id LIMIT 20",
+                    (workspace_id, work_id),
+                )
+                source_versions = [dict(row) for row in cur.fetchall()]
                 # Every unresolved requires_delivery event surfaces regardless of
                 # age (recovery must always see the debt); recent history is a
                 # separate bounded slice. Merge, dedupe, render chronological.
@@ -5234,6 +5697,8 @@ class PostgresWorkStore:
                     "close_attempts": close_attempts,
                     "audit_manifest": audit_manifest,
                     "auditor_launches": auditor_launches,
+                    "stage_launches": stage_launches,
+                    "candidate_source_versions": source_versions,
                     "close_attempt_events": close_attempt_events,
                     "checkpoint_deliveries": checkpoint_deliveries,
                     "project": project,
@@ -5390,6 +5855,471 @@ class PostgresWorkStore:
                     None,
                 )
                 return {"grant": grant, "items": items, "active_item": active_item}
+            if kind == "revision":
+                work_id, _ = self._resolve_work_id(cur, workspace_id, value)
+                if not selector:
+                    raise WorkStoreError(
+                        "invalid_request",
+                        diagnostics=(
+                            "invalid_revision_selector",
+                            "missing revision selector",
+                        ),
+                    )
+                if selector.isdigit():
+                    try:
+                        rev_num = int(selector)
+                        if not (1 <= rev_num <= 2147483647):
+                            raise ValueError
+                    except ValueError:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=(
+                                "invalid_revision_selector",
+                                "revision number out of bounds",
+                            ),
+                        )
+                    cur.execute(
+                        "SELECT revision_id, work_id, revision_number, title, description, scope, "
+                        "content_sha256, created_by, supplied_at "
+                        "FROM omp_work.work_revisions "
+                        "WHERE workspace_id = %s AND work_id = %s AND revision_number = %s",
+                        (workspace_id, work_id, rev_num),
+                    )
+                else:
+                    try:
+                        rev_id = UUID(selector)
+                    except ValueError:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=(
+                                "invalid_revision_selector",
+                                "revision selector must be a positive integer or UUID",
+                            ),
+                        )
+                    cur.execute(
+                        "SELECT revision_id, work_id, revision_number, title, description, scope, "
+                        "content_sha256, created_by, supplied_at "
+                        "FROM omp_work.work_revisions "
+                        "WHERE workspace_id = %s AND work_id = %s AND revision_id = %s",
+                        (workspace_id, work_id, rev_id),
+                    )
+                row = cur.fetchone()
+                if not row:
+                    raise WorkStoreError(
+                        "invalid_request",
+                        diagnostics=(
+                            "not_found",
+                            f"revision '{selector}' not found for work item '{value}'",
+                        ),
+                    )
+                cur.execute(
+                    "SELECT criterion FROM omp_work.acceptance_criteria WHERE revision_id = %s ORDER BY position",
+                    (row["revision_id"],),
+                )
+                criteria = [entry["criterion"] for entry in cur.fetchall()]
+                return self._row_to_revision(row, criteria)
+
+            if kind == "revisions":
+                work_id, resolved_key = self._resolve_work_id(cur, workspace_id, value)
+                cur.execute(
+                    "SELECT revision_id, work_id, revision_number, title, description, scope, "
+                    "content_sha256, created_by, supplied_at "
+                    "FROM omp_work.work_revisions "
+                    "WHERE workspace_id = %s AND work_id = %s "
+                    "ORDER BY revision_number ASC",
+                    (workspace_id, work_id),
+                )
+                rows = cur.fetchall()
+                rev_ids = [r["revision_id"] for r in rows]
+                criteria_by_rev: dict[UUID, list[str]] = {r: [] for r in rev_ids}
+                if rev_ids:
+                    cur.execute(
+                        "SELECT revision_id, criterion FROM omp_work.acceptance_criteria "
+                        "WHERE revision_id = ANY(%s) ORDER BY revision_id, position",
+                        (rev_ids,),
+                    )
+                    for entry in cur.fetchall():
+                        criteria_by_rev[entry["revision_id"]].append(entry["criterion"])
+                revisions_list = [
+                    self._row_to_revision(r, criteria_by_rev.get(r["revision_id"], []))
+                    for r in rows
+                ]
+                return {
+                    "work_id": work_id,
+                    "key": resolved_key,
+                    "revisions": revisions_list,
+                }
+
+            if kind == "receipt":
+                try:
+                    receipt_id = UUID(value)
+                except ValueError:
+                    raise WorkStoreError(
+                        "invalid_request",
+                        diagnostics=("invalid_receipt_id", f"invalid receipt UUID: '{value}'"),
+                    )
+                cur.execute(
+                    f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts "
+                    "WHERE workspace_id = %s AND receipt_id = %s",
+                    (workspace_id, receipt_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise WorkStoreError(
+                        "invalid_request",
+                        diagnostics=(
+                            "not_found",
+                            f"receipt '{receipt_id}' not found in workspace",
+                        ),
+                    )
+                return dict(row)
+
+            if kind == "work_items":
+                if not 1 <= limit <= 500:
+                    raise WorkStoreError(
+                        "invalid_request",
+                        diagnostics=("limit_out_of_bounds", "limit must be between 1 and 500"),
+                    )
+                cursor_created_at: datetime | None = None
+                cursor_work_id: UUID | None = None
+                if cursor:
+                    try:
+                        padded = cursor + "=" * (-len(cursor) % 4)
+                        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+                        payload = WorkItemsCursorPayload.model_validate_json(raw)
+                        if payload.workspace_id != workspace_id:
+                            raise WorkStoreError(
+                                "invalid_request",
+                                diagnostics=(
+                                    "cursor_workspace_mismatch",
+                                    "cursor bound to a different workspace",
+                                ),
+                            )
+                        cursor_created_at = payload.created_at
+                        cursor_work_id = payload.work_id
+                    except WorkStoreError:
+                        raise
+                    except Exception as ex:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("malformed_cursor", f"invalid cursor: {ex}"),
+                        ) from ex
+
+                if cursor_created_at is not None and cursor_work_id is not None:
+                    cur.execute(
+                        "SELECT i.work_id, i.workspace_id, i.state, i.project_id, i.repository_id, i.archived, "
+                        "i.current_candidate_id, i.created_at, "
+                        "a.key, a.origin, "
+                        "r.revision_id, r.revision_number, r.title, r.description, r.scope, "
+                        "r.content_sha256, r.created_by, r.supplied_at "
+                        "FROM omp_work.work_items i "
+                        "JOIN omp_work.work_aliases a ON a.work_id = i.work_id AND a.primary_alias "
+                        "JOIN omp_work.work_revisions r ON r.revision_id = i.current_revision_id "
+                        "WHERE i.workspace_id = %s "
+                        "AND (i.created_at > %s OR (i.created_at = %s AND i.work_id > %s)) "
+                        "ORDER BY i.created_at ASC, i.work_id ASC "
+                        "LIMIT %s",
+                        (
+                            workspace_id,
+                            cursor_created_at,
+                            cursor_created_at,
+                            cursor_work_id,
+                            limit + 1,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT i.work_id, i.workspace_id, i.state, i.project_id, i.repository_id, i.archived, "
+                        "i.current_candidate_id, i.created_at, "
+                        "a.key, a.origin, "
+                        "r.revision_id, r.revision_number, r.title, r.description, r.scope, "
+                        "r.content_sha256, r.created_by, r.supplied_at "
+                        "FROM omp_work.work_items i "
+                        "JOIN omp_work.work_aliases a ON a.work_id = i.work_id AND a.primary_alias "
+                        "JOIN omp_work.work_revisions r ON r.revision_id = i.current_revision_id "
+                        "WHERE i.workspace_id = %s "
+                        "ORDER BY i.created_at ASC, i.work_id ASC "
+                        "LIMIT %s",
+                        (workspace_id, limit + 1),
+                    )
+                rows = cur.fetchall()
+                has_more = len(rows) > limit
+                page_rows = rows[:limit] if has_more else rows
+
+                next_cursor: str | None = None
+                if has_more:
+                    last_item = page_rows[-1]
+                    cursor_payload = {
+                        "workspace_id": str(workspace_id),
+                        "created_at": last_item["created_at"].isoformat(),
+                        "work_id": str(last_item["work_id"]),
+                    }
+                    next_cursor = (
+                        base64.urlsafe_b64encode(
+                            json.dumps(cursor_payload, separators=(",", ":")).encode(
+                                "utf-8"
+                            )
+                        )
+                        .decode("ascii")
+                        .rstrip("=")
+                    )
+
+                rev_ids = [r["revision_id"] for r in page_rows]
+                criteria_by_rev = {r: [] for r in rev_ids}
+                if rev_ids:
+                    cur.execute(
+                        "SELECT revision_id, criterion FROM omp_work.acceptance_criteria "
+                        "WHERE revision_id = ANY(%s) ORDER BY revision_id, position",
+                        (rev_ids,),
+                    )
+                    for crit_row in cur.fetchall():
+                        criteria_by_rev[crit_row["revision_id"]].append(
+                            crit_row["criterion"]
+                        )
+
+                cand_ids = [
+                    r["current_candidate_id"]
+                    for r in page_rows
+                    if r["current_candidate_id"] is not None
+                ]
+                candidate_by_id: dict[UUID, dict[str, object]] = {}
+                if cand_ids:
+                    cur.execute(
+                        "SELECT candidate_id, work_id, revision_id, candidate_sha256, commit_sha, kind, allocated_at "
+                        "FROM omp_work.candidates WHERE candidate_id = ANY(%s)",
+                        (cand_ids,),
+                    )
+                    for cand_row in cur.fetchall():
+                        candidate_by_id[cand_row["candidate_id"]] = dict(cand_row)
+
+                items_list = [
+                    {
+                        "work_id": row["work_id"],
+                        "workspace_id": row["workspace_id"],
+                        "alias": {
+                            "work_id": row["work_id"],
+                            "key": row["key"],
+                            "primary": True,
+                            "origin": row["origin"],
+                        },
+                        "state": row["state"],
+                        "revision": self._row_to_revision(
+                            row, criteria_by_rev.get(row["revision_id"], [])
+                        ),
+                        "candidate": candidate_by_id.get(row["current_candidate_id"])
+                        if row["current_candidate_id"] is not None
+                        else None,
+                        "project_id": row["project_id"],
+                        "repository_id": row["repository_id"],
+                        "archived": row["archived"],
+                    }
+                    for row in page_rows
+                ]
+                return {
+                    "workspace_id": workspace_id,
+                    "items": items_list,
+                    "next_cursor": next_cursor,
+                    "limit": limit,
+                    "exhausted": not has_more,
+                }
+
+            if kind == "events":
+                if not 1 <= limit <= 500:
+                    raise WorkStoreError(
+                        "invalid_request",
+                        diagnostics=("limit_out_of_bounds", "limit must be between 1 and 500"),
+                    )
+                cur.execute(
+                    "SELECT COALESCE(MAX(sequence), 0) AS head FROM omp_audit.domain_events WHERE workspace_id = %s",
+                    (workspace_id,),
+                )
+                head = int(cur.fetchone()["head"])
+                after_seq: int = 0
+                through_seq: int = head
+                if cursor:
+                    try:
+                        padded = cursor + "=" * (-len(cursor) % 4)
+                        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+                        c_payload = EventsCursorPayload.model_validate_json(raw)
+                        if c_payload.workspace_id != workspace_id:
+                            raise WorkStoreError(
+                                "invalid_request",
+                                diagnostics=(
+                                    "cursor_workspace_mismatch",
+                                    "cursor bound to a different workspace",
+                                ),
+                            )
+                        after_seq = c_payload.after_sequence
+                        through_seq = c_payload.through_sequence
+                    except WorkStoreError:
+                        raise
+                    except Exception as ex:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("malformed_cursor", f"invalid cursor: {ex}"),
+                        ) from ex
+                    if after_seq < 0 or through_seq < 0:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("negative_sequence_bound", "sequence bounds must be non-negative"),
+                        )
+                    if after_seq > through_seq:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("invalid_sequence_window", "after_sequence cannot exceed through_sequence"),
+                        )
+                    if after_seq > head or through_seq > head:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("future_bound", f"cursor sequence bounds exceed workspace head {head}"),
+                        )
+                else:
+                    if after_sequence is not None:
+                        if after_sequence < 0:
+                            raise WorkStoreError(
+                                "invalid_request",
+                                diagnostics=("negative_sequence_bound", "after_sequence must be non-negative"),
+                            )
+                        if after_sequence > head:
+                            raise WorkStoreError(
+                                "invalid_request",
+                                diagnostics=("future_bound", f"after_sequence {after_sequence} exceeds workspace head {head}"),
+                            )
+                        after_seq = after_sequence
+                    if through_sequence is not None:
+                        if through_sequence < 0:
+                            raise WorkStoreError(
+                                "invalid_request",
+                                diagnostics=("negative_sequence_bound", "through_sequence must be non-negative"),
+                            )
+                        if through_sequence < after_seq:
+                            raise WorkStoreError(
+                                "invalid_request",
+                                diagnostics=("invalid_sequence_window", "through_sequence cannot be less than after_sequence"),
+                            )
+                        if through_sequence > head:
+                            raise WorkStoreError(
+                                "invalid_request",
+                                diagnostics=("future_bound", f"through_sequence {through_sequence} exceeds workspace head {head}"),
+                            )
+                        through_seq = through_sequence
+                    else:
+                        through_seq = head
+
+                cur.execute(
+                    "SELECT event_id, sequence, workspace_id, aggregate_type, aggregate_id, aggregate_version, "
+                    "actor_id, actor_kind, capability_id, request_id, correlation_id, operation_id, "
+                    "causation_id, event_type, outcome, payload, payload_sha256, previous_event_sha256, "
+                    "event_sha256, occurred_at "
+                    "FROM omp_audit.domain_events "
+                    "WHERE workspace_id = %s AND sequence > %s AND sequence <= %s "
+                    "ORDER BY sequence ASC "
+                    "LIMIT %s",
+                    (workspace_id, after_seq, through_seq, limit + 1),
+                )
+                rows = cur.fetchall()
+                has_more = len(rows) > limit
+                page_rows = rows[:limit] if has_more else rows
+                exhausted = not has_more
+                last_seq = page_rows[-1]["sequence"] if page_rows else after_seq
+                next_seq = last_seq
+                next_cursor: str | None = None
+                if not exhausted:
+                    cursor_payload = {
+                        "workspace_id": str(workspace_id),
+                        "after_sequence": last_seq,
+                        "through_sequence": through_seq,
+                    }
+                    next_cursor = (
+                        base64.urlsafe_b64encode(
+                            json.dumps(cursor_payload, separators=(",", ":")).encode("utf-8")
+                        )
+                        .decode("ascii")
+                        .rstrip("=")
+                    )
+
+                items_list = [dict(r) for r in page_rows]
+                return {
+                    "workspace_id": workspace_id,
+                    "items": items_list,
+                    "after_sequence": after_seq,
+                    "through_sequence": through_seq,
+                    "next_sequence": next_seq,
+                    "next_cursor": next_cursor,
+                    "limit": limit,
+                    "exhausted": exhausted,
+                }
+
+            if kind == "repositories":
+                if not 1 <= limit <= 500:
+                    raise WorkStoreError(
+                        "invalid_request",
+                        diagnostics=("limit_out_of_bounds", "limit must be between 1 and 500"),
+                    )
+                cursor_payload: RepositoryCursorPayload | None = None
+                if cursor is not None:
+                    try:
+                        padded = cursor + "=" * (-len(cursor) % 4)
+                        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+                        cursor_payload = RepositoryCursorPayload.model_validate_json(raw)
+                    except Exception as err:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("malformed_cursor", "cursor is malformed"),
+                        ) from err
+                    if cursor_payload.workspace_id != workspace_id:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=(
+                                "cursor_workspace_mismatch",
+                                "cursor workspace does not match request workspace",
+                            ),
+                        )
+                if cursor_payload is not None:
+                    cur.execute(
+                        "SELECT repository_id, workspace_id, key, name, url, archived, provenance, created_at "
+                        "FROM omp_work.repositories "
+                        "WHERE workspace_id = %s AND (created_at, repository_id) > (%s, %s) "
+                        "ORDER BY created_at ASC, repository_id ASC "
+                        "LIMIT %s",
+                        (
+                            workspace_id,
+                            cursor_payload.created_at,
+                            cursor_payload.repository_id,
+                            limit + 1,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT repository_id, workspace_id, key, name, url, archived, provenance, created_at "
+                        "FROM omp_work.repositories "
+                        "WHERE workspace_id = %s "
+                        "ORDER BY created_at ASC, repository_id ASC "
+                        "LIMIT %s",
+                        (workspace_id, limit + 1),
+                    )
+                rows = cur.fetchall()
+                exhausted = len(rows) <= limit
+                page_rows = rows[:limit]
+                next_cursor: str | None = None
+                if not exhausted:
+                    last_row = page_rows[-1]
+                    next_payload = RepositoryCursorPayload(
+                        workspace_id=workspace_id,
+                        created_at=last_row["created_at"],
+                        repository_id=last_row["repository_id"],
+                    )
+                    next_cursor = base64.urlsafe_b64encode(
+                        next_payload.model_dump_json().encode("utf-8")
+                    ).decode("ascii").rstrip("=")
+                return {
+                    "workspace_id": workspace_id,
+                    "repositories": [dict(r) for r in page_rows],
+                    "next_cursor": next_cursor,
+                    "limit": limit,
+                    "exhausted": exhausted,
+                }
+
             raise WorkStoreError("invalid_request")
 
     def activity(
