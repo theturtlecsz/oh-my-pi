@@ -18,6 +18,8 @@
     "GET /v1/workspaces/{workspace_id}/execution/{grant_id}",
     "GET /v1/workspaces/{workspace_id}/provider-accounts",
     "GET /v1/workspaces/{workspace_id}/provider-accounts/{account_id}",
+    "GET /v1/workspaces/{workspace_id}/budget-scopes",
+    "GET /v1/workspaces/{workspace_id}/budget-scopes/{scope_id}",
     "GET /v1/health/live",
     "GET /v1/health/ready"
   ],

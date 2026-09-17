@@ -3300,6 +3300,33 @@
       "title": "BudgetScope",
       "type": "object"
     },
+    "BudgetScopeCursorPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "scope_id": {
+          "format": "uuid",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "created_at",
+        "scope_id"
+      ],
+      "title": "BudgetScopeCursorPayload",
+      "type": "object"
+    },
     "CancelAuditorLaunchCommand": {
       "$defs": {
         "CancelAuditorLaunchPayload": {

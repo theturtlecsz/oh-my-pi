@@ -742,6 +742,118 @@ test("providerAccount surfaces typed service error on not found", async () => {
 	expect(String(err)).toContain("not_found");
 });
 
+test("budgetScopes fetches workspace budget-scope list view with contract headers", async () => {
+	let request: Request | undefined;
+	const dummyListView = {
+		workspace_id: ENV.workspace_id,
+		scopes: [
+			{
+				scope_id: "00000000-0000-7000-8000-000000000011",
+				workspace_id: ENV.workspace_id,
+				parent_scope_id: null,
+				kind: "session" as const,
+				policy_version: "economy-v1",
+				work_id: "00000000-0000-7000-8000-000000000012",
+				session_id: "session-xyz",
+				limits: { included_credit: "10.00" },
+				held: { included_credit: "2.50" },
+				spent: { included_credit: "1.00" },
+				unresolved: {},
+			},
+		],
+		next_cursor: "cur-abc",
+		limit: 50,
+		exhausted: false,
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			request = new Request(String(input), init);
+			return Response.json(dummyListView);
+		},
+	);
+
+	const view = await client.budgetScopes({
+		workId: "00000000-0000-7000-8000-000000000012",
+		sessionId: "session-xyz",
+		kind: "session",
+		cursor: "cur-start",
+		limit: 50,
+	});
+	expect(request?.url).toBe(
+		`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/budget-scopes?work_id=00000000-0000-7000-8000-000000000012&session_id=session-xyz&kind=session&cursor=cur-start&limit=50`,
+	);
+	expect(request?.method).toBe("GET");
+	expect(request?.headers.get("authorization")).toBe("Bearer token");
+	expect(request?.headers.get("x-omp-workspace-id")).toBe(ENV.workspace_id);
+	expect(request?.headers.get("x-omp-contract-sha256")).toBe(WORK_CONTRACT_SHA256);
+	expect(view).toEqual(dummyListView);
+});
+
+test("budgetScope encodes scopeId URL and returns single BudgetScope", async () => {
+	let request: Request | undefined;
+	const scopeId = "test/scope id 01";
+	const dummyScope = {
+		scope_id: scopeId,
+		workspace_id: ENV.workspace_id,
+		parent_scope_id: null,
+		kind: "account" as const,
+		policy_version: "economy-v1",
+		work_id: null,
+		session_id: null,
+		limits: { cash: "100.00" },
+		held: {},
+		spent: {},
+		unresolved: {},
+	};
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			request = new Request(String(input), init);
+			return Response.json(dummyScope);
+		},
+	);
+
+	const scope = await client.budgetScope(scopeId);
+	expect(request?.url).toBe(
+		`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/budget-scopes/test%2Fscope%20id%2001`,
+	);
+	expect(request?.method).toBe("GET");
+	expect(request?.headers.get("authorization")).toBe("Bearer token");
+	expect(request?.headers.get("x-omp-contract-sha256")).toBe(WORK_CONTRACT_SHA256);
+	expect(scope).toEqual(dummyScope);
+});
+
+test("budgetScope surfaces typed service error on not found", async () => {
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async () =>
+			Response.json(
+				{
+					error: {
+						code: "invalid_request",
+						request_id: null,
+						correlation_id: null,
+						diagnostics: ["not_found", "budget scope not found in workspace"],
+					},
+				},
+				{ status: 400 },
+			),
+	);
+
+	const err = await client.budgetScope("00000000-0000-7000-8000-000000000099").catch(e => e);
+	expect(err).toBeInstanceOf(WorkError);
+	expect((err as WorkError).code).toBe("invalid_request");
+	expect((err as WorkError).status).toBe(400);
+	expect(String(err)).toContain("not_found");
+});
+
 test("executes budget and provider-account commands with typed results", async () => {
 	const reservationId = "00000000-0000-7000-8000-000000000010";
 	const accountId = "00000000-0000-7000-8000-000000000020";

@@ -9,6 +9,7 @@ from pydantic import Field
 from .models import (
     AuditManifest,
     AuditorLaunch,
+    BudgetScope,
     CandidateSourceVersion,
     StageLaunch,
     Candidate,
@@ -494,3 +495,11 @@ class RepositoryListView(StrictModel):
 class ProviderAccountListView(StrictModel):
     workspace_id: UUID
     accounts: tuple[ProviderAccount, ...]
+
+
+class BudgetScopeListView(StrictModel):
+    workspace_id: UUID
+    scopes: tuple[BudgetScope, ...]
+    next_cursor: str | None = None
+    limit: int
+    exhausted: bool

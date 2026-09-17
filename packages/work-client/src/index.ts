@@ -546,6 +546,28 @@ export type ProviderAccountListView = {
 	accounts: ProviderAccount[];
 };
 
+export type BudgetScope = {
+	scope_id: UUID;
+	workspace_id: UUID;
+	parent_scope_id: UUID | null;
+	kind: BudgetScopeKind;
+	policy_version: string;
+	work_id: UUID | null;
+	session_id: string | null;
+	limits: Record<string, string>;
+	held: Record<string, string>;
+	spent: Record<string, string>;
+	unresolved: Record<string, string>;
+};
+
+export type BudgetScopeListView = {
+	workspace_id: UUID;
+	scopes: BudgetScope[];
+	next_cursor: string | null;
+	limit: number;
+	exhausted: boolean;
+};
+
 export type CreateBudgetScopePayload = {
 	scope_id: UUID;
 	parent_scope_id?: UUID | null;
@@ -1376,5 +1398,28 @@ export class WorkClient {
 			"GET",
 			`/v1/workspaces/${this.workspaceId}/provider-accounts/${encodeURIComponent(accountId)}`,
 		) as Promise<ProviderAccount>;
+	}
+
+	budgetScopes(
+		options: { workId?: UUID; sessionId?: string; kind?: BudgetScopeKind; cursor?: string; limit?: number } = {},
+	): Promise<BudgetScopeListView> {
+		const params = new URLSearchParams();
+		if (options.workId !== undefined) params.set("work_id", options.workId);
+		if (options.sessionId !== undefined) params.set("session_id", options.sessionId);
+		if (options.kind !== undefined) params.set("kind", options.kind);
+		if (options.cursor !== undefined) params.set("cursor", options.cursor);
+		if (options.limit !== undefined) params.set("limit", String(options.limit));
+		const query = params.size > 0 ? `?${params}` : "";
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/budget-scopes${query}`,
+		) as Promise<BudgetScopeListView>;
+	}
+
+	budgetScope(scopeId: UUID): Promise<BudgetScope> {
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/budget-scopes/${encodeURIComponent(scopeId)}`,
+		) as Promise<BudgetScope>;
 	}
 }

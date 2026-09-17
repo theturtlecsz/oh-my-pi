@@ -54,6 +54,7 @@ from .models import (
     OperationReceipt,
     OperationState,
     PutProviderAccountPayload,
+    BudgetScopeCursorPayload,
     RelationEdge,
     RepositoryCursorPayload,
     RiderProof,
@@ -258,6 +259,9 @@ class WorkStore(Protocol):
         cursor: str | None = None,
         after_sequence: int | None = None,
         through_sequence: int | None = None,
+        work_id: UUID | None = None,
+        session_id: str | None = None,
+        scope_kind: str | None = None,
     ) -> dict[str, object]: ...
     def activity(
         self,
@@ -6008,6 +6012,9 @@ class PostgresWorkStore:
         cursor: str | None = None,
         after_sequence: int | None = None,
         through_sequence: int | None = None,
+        work_id: UUID | None = None,
+        session_id: str | None = None,
+        scope_kind: str | None = None,
     ) -> dict[str, object]:
         with self._transaction(workspace_id, actor_id) as cur:
             if kind == "item":
@@ -6788,6 +6795,158 @@ class PostgresWorkStore:
                     return {
                         "workspace_id": str(workspace_id),
                         "accounts": accounts,
+                    }
+
+            if kind == "budget_scopes":
+                if value:
+                    try:
+                        scope_uuid = UUID(value)
+                    except ValueError:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("invalid_scope_id", f"invalid scope UUID: '{value}'"),
+                        )
+                    cur.execute(
+                        "SELECT scope_id, workspace_id, parent_scope_id, kind, policy_version, work_id, session_id, limits, held, spent, unresolved "
+                        "FROM omp_work.budget_scopes WHERE workspace_id = %s AND scope_id = %s",
+                        (workspace_id, scope_uuid),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=(
+                                "not_found",
+                                f"budget scope '{value}' not found in workspace",
+                            ),
+                        )
+                    limits_val = row["limits"] if isinstance(row["limits"], dict) else json.loads(row["limits"])
+                    held_val = row["held"] if isinstance(row["held"], dict) else json.loads(row["held"])
+                    spent_val = row["spent"] if isinstance(row["spent"], dict) else json.loads(row["spent"])
+                    unresolved_val = row["unresolved"] if isinstance(row["unresolved"], dict) else json.loads(row["unresolved"])
+                    return {
+                        "scope_id": str(row["scope_id"]),
+                        "workspace_id": str(row["workspace_id"]),
+                        "parent_scope_id": str(row["parent_scope_id"]) if row.get("parent_scope_id") else None,
+                        "kind": row["kind"],
+                        "policy_version": row["policy_version"],
+                        "work_id": str(row["work_id"]) if row.get("work_id") else None,
+                        "session_id": row.get("session_id"),
+                        "limits": {str(k): str(v) for k, v in limits_val.items()},
+                        "held": {str(k): str(v) for k, v in held_val.items()},
+                        "spent": {str(k): str(v) for k, v in spent_val.items()},
+                        "unresolved": {str(k): str(v) for k, v in unresolved_val.items()},
+                    }
+                else:
+                    if not 1 <= limit <= 500:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("limit_out_of_bounds", "limit must be between 1 and 500"),
+                        )
+                    if session_id is not None and len(session_id) == 0:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=("invalid_session_id", "session_id cannot be empty"),
+                        )
+                    if scope_kind is not None and scope_kind not in {
+                        "account",
+                        "session",
+                        "work",
+                        "tournament",
+                        "role",
+                    }:
+                        raise WorkStoreError(
+                            "invalid_request",
+                            diagnostics=(
+                                "invalid_budget_scope_kind",
+                                f"invalid budget scope kind: '{scope_kind}'",
+                            ),
+                        )
+                    cursor_payload: BudgetScopeCursorPayload | None = None
+                    if cursor is not None:
+                        try:
+                            padded = cursor + "=" * (-len(cursor) % 4)
+                            raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+                            cursor_payload = BudgetScopeCursorPayload.model_validate_json(raw)
+                        except Exception as err:
+                            raise WorkStoreError(
+                                "invalid_request",
+                                diagnostics=("malformed_cursor", "cursor is malformed"),
+                            ) from err
+                        if cursor_payload.workspace_id != workspace_id:
+                            raise WorkStoreError(
+                                "invalid_request",
+                                diagnostics=(
+                                    "cursor_workspace_mismatch",
+                                    "cursor workspace does not match request workspace",
+                                ),
+                            )
+
+                    clauses = ["workspace_id = %s"]
+                    params: list[object] = [workspace_id]
+                    if work_id is not None:
+                        clauses.append("work_id = %s")
+                        params.append(work_id)
+                    if session_id is not None:
+                        clauses.append("session_id = %s")
+                        params.append(session_id)
+                    if scope_kind is not None:
+                        clauses.append("kind = %s")
+                        params.append(scope_kind)
+                    if cursor_payload is not None:
+                        clauses.append("(created_at, scope_id) > (%s, %s)")
+                        params.extend([cursor_payload.created_at, cursor_payload.scope_id])
+
+                    params.append(limit + 1)
+                    sql = (
+                        "SELECT scope_id, workspace_id, parent_scope_id, kind, policy_version, work_id, session_id, limits, held, spent, unresolved, created_at "
+                        "FROM omp_work.budget_scopes "
+                        f"WHERE {' AND '.join(clauses)} "
+                        "ORDER BY created_at ASC, scope_id ASC "
+                        "LIMIT %s"
+                    )
+                    cur.execute(sql, tuple(params))
+                    rows = cur.fetchall()
+                    exhausted = len(rows) <= limit
+                    page_rows = rows[:limit]
+                    next_cursor: str | None = None
+                    if not exhausted:
+                        last_row = page_rows[-1]
+                        next_payload = BudgetScopeCursorPayload(
+                            workspace_id=workspace_id,
+                            created_at=last_row["created_at"],
+                            scope_id=last_row["scope_id"],
+                        )
+                        next_cursor = base64.urlsafe_b64encode(
+                            next_payload.model_dump_json().encode("utf-8")
+                        ).decode("ascii").rstrip("=")
+                    scopes = []
+                    for r in page_rows:
+                        limits_val = r["limits"] if isinstance(r["limits"], dict) else json.loads(r["limits"])
+                        held_val = r["held"] if isinstance(r["held"], dict) else json.loads(r["held"])
+                        spent_val = r["spent"] if isinstance(r["spent"], dict) else json.loads(r["spent"])
+                        unresolved_val = r["unresolved"] if isinstance(r["unresolved"], dict) else json.loads(r["unresolved"])
+                        scopes.append(
+                            {
+                                "scope_id": str(r["scope_id"]),
+                                "workspace_id": str(r["workspace_id"]),
+                                "parent_scope_id": str(r["parent_scope_id"]) if r.get("parent_scope_id") else None,
+                                "kind": r["kind"],
+                                "policy_version": r["policy_version"],
+                                "work_id": str(r["work_id"]) if r.get("work_id") else None,
+                                "session_id": r.get("session_id"),
+                                "limits": {str(k): str(v) for k, v in limits_val.items()},
+                                "held": {str(k): str(v) for k, v in held_val.items()},
+                                "spent": {str(k): str(v) for k, v in spent_val.items()},
+                                "unresolved": {str(k): str(v) for k, v in unresolved_val.items()},
+                            }
+                        )
+                    return {
+                        "workspace_id": str(workspace_id),
+                        "scopes": scopes,
+                        "next_cursor": next_cursor,
+                        "limit": limit,
+                        "exhausted": exhausted,
                     }
 
             raise WorkStoreError("invalid_request")

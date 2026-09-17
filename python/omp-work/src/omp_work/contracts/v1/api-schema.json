@@ -1433,6 +1433,279 @@
       "title": "BudgetResult",
       "type": "object"
     },
+    "BudgetScope": {
+      "$defs": {
+        "BudgetScopeKind": {
+          "enum": [
+            "account",
+            "session",
+            "work",
+            "tournament",
+            "role"
+          ],
+          "title": "BudgetScopeKind",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "held": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Held",
+          "type": "object"
+        },
+        "kind": {
+          "$ref": "#/$defs/BudgetScopeKind"
+        },
+        "limits": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Limits",
+          "type": "object"
+        },
+        "parent_scope_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Scope Id"
+        },
+        "policy_version": {
+          "minLength": 1,
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "scope_id": {
+          "format": "uuid",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
+        },
+        "spent": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Spent",
+          "type": "object"
+        },
+        "unresolved": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Unresolved",
+          "type": "object"
+        },
+        "work_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Id"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope_id",
+        "workspace_id",
+        "kind",
+        "policy_version",
+        "limits",
+        "held",
+        "spent",
+        "unresolved"
+      ],
+      "title": "BudgetScope",
+      "type": "object"
+    },
+    "BudgetScopeListView": {
+      "$defs": {
+        "BudgetScope": {
+          "additionalProperties": false,
+          "properties": {
+            "held": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Held",
+              "type": "object"
+            },
+            "kind": {
+              "$ref": "#/$defs/BudgetScopeKind"
+            },
+            "limits": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Limits",
+              "type": "object"
+            },
+            "parent_scope_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Scope Id"
+            },
+            "policy_version": {
+              "minLength": 1,
+              "title": "Policy Version",
+              "type": "string"
+            },
+            "scope_id": {
+              "format": "uuid",
+              "title": "Scope Id",
+              "type": "string"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Session Id"
+            },
+            "spent": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Spent",
+              "type": "object"
+            },
+            "unresolved": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Unresolved",
+              "type": "object"
+            },
+            "work_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Work Id"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope_id",
+            "workspace_id",
+            "kind",
+            "policy_version",
+            "limits",
+            "held",
+            "spent",
+            "unresolved"
+          ],
+          "title": "BudgetScope",
+          "type": "object"
+        },
+        "BudgetScopeKind": {
+          "enum": [
+            "account",
+            "session",
+            "work",
+            "tournament",
+            "role"
+          ],
+          "title": "BudgetScopeKind",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "exhausted": {
+          "title": "Exhausted",
+          "type": "boolean"
+        },
+        "limit": {
+          "title": "Limit",
+          "type": "integer"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Cursor"
+        },
+        "scopes": {
+          "items": {
+            "$ref": "#/$defs/BudgetScope"
+          },
+          "title": "Scopes",
+          "type": "array"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "scopes",
+        "limit",
+        "exhausted"
+      ],
+      "title": "BudgetScopeListView",
+      "type": "object"
+    },
     "Candidate": {
       "additionalProperties": false,
       "properties": {

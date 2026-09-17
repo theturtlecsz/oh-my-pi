@@ -156,6 +156,9 @@ def create_app(
         cursor: str | None = None,
         after_sequence: int | None = None,
         through_sequence: int | None = None,
+        work_id: UUID | None = None,
+        session_id: str | None = None,
+        scope_kind: str | None = None,
     ) -> JSONResponse:
         try:
             _require_contract(request, service_digest)
@@ -172,6 +175,9 @@ def create_app(
                         cursor=cursor,
                         after_sequence=after_sequence,
                         through_sequence=through_sequence,
+                        work_id=work_id,
+                        session_id=session_id,
+                        scope_kind=scope_kind,
                     )
                 )
             )
@@ -311,6 +317,37 @@ def create_app(
         request: Request, workspace_id: UUID, account_id: str = ""
     ) -> JSONResponse:
         return read_route(request, workspace_id, "provider_accounts", account_id)
+
+    @app.get("/v1/workspaces/{workspace_id}/budget-scopes")
+    def budget_scopes(
+        request: Request,
+        workspace_id: UUID,
+        work_id: UUID | None = None,
+        session_id: str | None = None,
+        kind: str | None = None,
+        cursor: str | None = Query(None),
+        limit: int = Query(100, ge=1, le=500),
+    ) -> JSONResponse:
+        return read_route(
+            request,
+            workspace_id,
+            "budget_scopes",
+            "",
+            work_id=work_id,
+            session_id=session_id,
+            scope_kind=kind,
+            cursor=cursor,
+            limit=limit,
+        )
+
+    @app.get("/v1/workspaces/{workspace_id}/budget-scopes/{scope_id}")
+    def budget_scope(
+        request: Request,
+        workspace_id: UUID,
+        scope_id: str,
+    ) -> JSONResponse:
+        return read_route(request, workspace_id, "budget_scopes", scope_id)
+
 
     @app.get("/v1/workspaces/{workspace_id}/activity")
     def activity(

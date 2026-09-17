@@ -152,6 +152,9 @@ class WorkService:
         cursor: str | None = None,
         after_sequence: int | None = None,
         through_sequence: int | None = None,
+        work_id: UUID | None = None,
+        session_id: str | None = None,
+        scope_kind: str | None = None,
     ) -> dict[str, object]:
         if workspace_id not in principal.workspaces:
             raise WorkError("forbidden", status=403)
@@ -176,6 +179,9 @@ class WorkService:
                 cursor=cursor,
                 after_sequence=after_sequence,
                 through_sequence=through_sequence,
+                work_id=work_id,
+                session_id=session_id,
+                scope_kind=scope_kind,
             )
         except WorkStoreError as error:
             statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}

@@ -1728,6 +1728,13 @@ class RepositoryCursorPayload(StrictModel):
     repository_id: UUID
 
 
+class BudgetScopeCursorPayload(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    workspace_id: UUID
+    created_at: AwareDatetime
+    scope_id: UUID
+
+
 class WorkItemsCursorPayload(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     workspace_id: UUID
