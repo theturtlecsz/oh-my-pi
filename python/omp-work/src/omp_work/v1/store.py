@@ -2804,6 +2804,92 @@ class PostgresWorkStore:
             return {}
         return {str(k): str(v) for k, v in value.items()}
 
+    def _lock_budget_chain(
+        self, cur: psycopg.Cursor[Any], workspace_id: UUID, scope_id: UUID
+    ) -> list[dict[str, Any]]:
+        ws_id = UUID(str(workspace_id))
+        s_id = UUID(str(scope_id))
+        cur.execute(
+            """
+            WITH RECURSIVE chain AS (
+                SELECT scope_id, parent_scope_id, ARRAY[scope_id]::uuid[] AS path
+                FROM omp_work.budget_scopes
+                WHERE workspace_id = %s AND scope_id = %s
+                UNION ALL
+                SELECT p.scope_id, p.parent_scope_id, c.path || p.scope_id
+                FROM omp_work.budget_scopes p
+                JOIN chain c ON p.workspace_id = %s AND p.scope_id = c.parent_scope_id
+                WHERE NOT (p.scope_id = ANY(c.path))
+            )
+            SELECT b.*
+            FROM omp_work.budget_scopes b
+            JOIN chain c ON b.workspace_id = %s AND b.scope_id = c.scope_id
+            ORDER BY b.scope_id
+            FOR UPDATE OF b
+            """,
+            (ws_id, s_id, ws_id, ws_id),
+        )
+        rows = cur.fetchall()
+        if not rows:
+            raise WorkStoreError("invalid_request", ("scope_not_found",))
+
+        scopes_by_id = {row["scope_id"]: row for row in rows}
+        if s_id not in scopes_by_id:
+            raise WorkStoreError("invalid_request", ("scope_not_found",))
+
+        curr = scopes_by_id[s_id]
+        visited: set[UUID] = set()
+        while curr is not None:
+            cid = curr["scope_id"]
+            if cid in visited:
+                raise WorkStoreError("cutover_invariant", ("budget_scope_chain_corrupt",))
+            visited.add(cid)
+            parent_id = curr["parent_scope_id"]
+            if parent_id is None:
+                break
+            if parent_id not in scopes_by_id:
+                raise WorkStoreError("cutover_invariant", ("budget_scope_chain_corrupt",))
+            curr = scopes_by_id[parent_id]
+
+        if len(visited) != len(rows):
+            raise WorkStoreError("cutover_invariant", ("budget_scope_chain_corrupt",))
+
+        return rows
+
+    def _apply_budget_transition(
+        self,
+        cur: psycopg.Cursor[Any],
+        scopes: list[dict[str, Any]],
+        resource: str,
+        *,
+        held_delta: Decimal = Decimal("0"),
+        spent_delta: Decimal = Decimal("0"),
+        unresolved_delta: Decimal = Decimal("0"),
+    ) -> None:
+        updates: list[tuple[UUID, dict[str, str], dict[str, str], dict[str, str]]] = []
+        for scope in scopes:
+            held = self._budget_json(scope["held"])
+            spent = self._budget_json(scope["spent"])
+            unresolved = self._budget_json(scope["unresolved"])
+
+            new_held = self._money(held.get(resource, "0")) + held_delta
+            new_spent = self._money(spent.get(resource, "0")) + spent_delta
+            new_unresolved = self._money(unresolved.get(resource, "0")) + unresolved_delta
+
+            if new_held < 0 or new_spent < 0 or new_unresolved < 0:
+                raise WorkStoreError("cutover_invariant", ("budget_negative_counter",))
+
+            held[resource] = "0" if new_held == 0 else str(new_held)
+            spent[resource] = "0" if new_spent == 0 else str(new_spent)
+            unresolved[resource] = "0" if new_unresolved == 0 else str(new_unresolved)
+            updates.append((scope["scope_id"], held, spent, unresolved))
+
+        for scope_id, held, spent, unresolved in updates:
+            cur.execute(
+                "UPDATE omp_work.budget_scopes SET held=%s, spent=%s, unresolved=%s WHERE scope_id=%s",
+                (json.dumps(held), json.dumps(spent), json.dumps(unresolved), scope_id),
+            )
+
     def _create_budget_scope(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
         cur.execute("SELECT 1 FROM omp_work.budget_scopes WHERE scope_id=%s", (payload.scope_id,))
@@ -2820,10 +2906,7 @@ class PostgresWorkStore:
     def _reserve_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
         amount = self._money(payload.worst_case_drawdown)
-        cur.execute("SELECT * FROM omp_work.budget_scopes WHERE workspace_id=%s AND scope_id=%s FOR UPDATE", (envelope.workspace_id, payload.scope_id))
-        scope = cur.fetchone()
-        if scope is None:
-            raise WorkStoreError("invalid_request", ("scope_not_found",))
+        chain = self._lock_budget_chain(cur, envelope.workspace_id, payload.scope_id)
         cur.execute("SELECT * FROM omp_work.provider_accounts WHERE workspace_id=%s AND account_id=%s", (envelope.workspace_id, payload.account_id))
         account = cur.fetchone()
         if account is None or account["balance_provenance"] == "unknown":
@@ -2832,15 +2915,18 @@ class PostgresWorkStore:
         cur.execute("SELECT count(*) AS active FROM omp_work.budget_reservations WHERE account_id=%s AND state IN ('reserved_unsent','potentially_sent','unresolved')", (payload.account_id,))
         if int(cur.fetchone()["active"]) >= int(account["concurrency_limit"]):
             raise WorkStoreError("budget_exhausted", ("account_slots_exhausted",))
-        limits = self._budget_json(scope["limits"]); held = self._budget_json(scope["held"]); spent = self._budget_json(scope["spent"]); unresolved = self._budget_json(scope["unresolved"])
         key = payload.resource.value
-        used = self._money(held.get(key, "0")) + self._money(spent.get(key, "0")) + self._money(unresolved.get(key, "0"))
-        if key not in limits or used + amount > self._money(limits[key]):
-            raise WorkStoreError("budget_exhausted", ("budget_limit_exceeded",))
+        for scope in chain:
+            limits = self._budget_json(scope["limits"])
+            held = self._budget_json(scope["held"])
+            spent = self._budget_json(scope["spent"])
+            unresolved = self._budget_json(scope["unresolved"])
+            used = self._money(held.get(key, "0")) + self._money(spent.get(key, "0")) + self._money(unresolved.get(key, "0"))
+            if key not in limits or used + amount > self._money(limits[key]):
+                raise WorkStoreError("budget_exhausted", ("budget_limit_exceeded",))
         cur.execute("SELECT COALESCE(MAX(fence),0)+1 AS fence FROM omp_work.budget_reservations WHERE workspace_id=%s AND account_id=%s", (envelope.workspace_id, payload.account_id))
         fence = int(cur.fetchone()["fence"])
-        held[key] = str(used + amount - self._money(spent.get(key, "0")) - self._money(unresolved.get(key, "0")))
-        cur.execute("UPDATE omp_work.budget_scopes SET held=%s WHERE scope_id=%s", (json.dumps(held), payload.scope_id))
+        self._apply_budget_transition(cur, chain, key, held_delta=amount)
         reservation_id = UUID(str(envelope.operation_id))
         cur.execute("INSERT INTO omp_work.budget_reservations(reservation_id,workspace_id,scope_id,account_id,logical_call_id,transport_attempt_id,fence,state,resource,worst_case_drawdown,provider,model,effort,context_limit,output_limit,expires_at) VALUES(%s,%s,%s,%s,%s,%s,%s,'reserved_unsent',%s,%s,%s,%s,%s,%s,%s,%s)", (reservation_id, envelope.workspace_id, payload.scope_id, payload.account_id, payload.logical_call_id, payload.transport_attempt_id, fence, payload.resource.value, payload.worst_case_drawdown, payload.provider, payload.model, payload.effort, payload.context_limit, payload.output_limit, payload.expires_at))
         return {"type": "reserve_budget", "reservation_id": str(reservation_id), "transport_attempt_id": str(payload.transport_attempt_id), "fence": fence, "state": "reserved_unsent"}
@@ -2855,8 +2941,10 @@ class PostgresWorkStore:
         return {"type": "claim_budget", "reservation_id": str(payload.reservation_id), "fence": payload.fence, "state": "potentially_sent"}
 
     def _settle_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
-        payload = envelope.command.payload; actual = self._money(payload.actual_drawdown)
-        cur.execute("SELECT * FROM omp_work.budget_reservations WHERE workspace_id=%s AND reservation_id=%s FOR UPDATE", (envelope.workspace_id, payload.reservation_id)); row = cur.fetchone()
+        payload = envelope.command.payload
+        actual = self._money(payload.actual_drawdown)
+        cur.execute("SELECT * FROM omp_work.budget_reservations WHERE workspace_id=%s AND reservation_id=%s FOR UPDATE", (envelope.workspace_id, payload.reservation_id))
+        row = cur.fetchone()
         if row is None or row["fence"] != payload.fence or row["transport_attempt_id"] != payload.transport_attempt_id:
             raise WorkStoreError("invalid_request", ("reservation_identity_invalid",))
         if row["state"] == "settled":
@@ -2875,27 +2963,51 @@ class PostgresWorkStore:
             raise WorkStoreError("invalid_request", ("reservation_not_settleable",))
         if row["state"] == "unresolved" and payload.state != "settled":
             raise WorkStoreError("invalid_request", ("reservation_not_settleable",))
-        cur.execute("SELECT * FROM omp_work.budget_scopes WHERE scope_id=%s FOR UPDATE", (row["scope_id"],)); scope = cur.fetchone()
-        held = self._budget_json(scope["held"]); spent = self._budget_json(scope["spent"]); unresolved = self._budget_json(scope["unresolved"]); key = row["resource"]
+        chain = self._lock_budget_chain(cur, envelope.workspace_id, row["scope_id"])
+        key = row["resource"]
+        worst_case = self._money(str(row["worst_case_drawdown"]))
         if row["state"] == "unresolved":
             prior = self._money(str(row["actual_drawdown"])) if row["actual_drawdown"] is not None else Decimal("0")
-            unresolved[key] = str(max(Decimal("0"), self._money(unresolved.get(key, "0")) - prior))
-            spent[key] = str(self._money(spent.get(key, "0")) + actual)
+            self._apply_budget_transition(
+                cur,
+                chain,
+                key,
+                spent_delta=actual,
+                unresolved_delta=-prior,
+            )
         else:
-            held[key] = str(max(Decimal("0"), self._money(held.get(key, "0")) - self._money(str(row["worst_case_drawdown"]))))
-            destination = unresolved if payload.state == "unresolved" else spent; destination[key] = str(self._money(destination.get(key, "0")) + actual)
-        cur.execute("UPDATE omp_work.budget_scopes SET held=%s,spent=%s,unresolved=%s WHERE scope_id=%s", (json.dumps(held), json.dumps(spent), json.dumps(unresolved), row["scope_id"]))
+            if payload.state == "unresolved":
+                self._apply_budget_transition(
+                    cur,
+                    chain,
+                    key,
+                    held_delta=-worst_case,
+                    unresolved_delta=actual,
+                )
+            else:
+                self._apply_budget_transition(
+                    cur,
+                    chain,
+                    key,
+                    held_delta=-worst_case,
+                    spent_delta=actual,
+                )
         cur.execute("UPDATE omp_work.budget_reservations SET state=%s,actual_drawdown=%s,usage=%s,provenance=%s,provider_request_id=%s,outcome=%s,settled_at=clock_timestamp() WHERE reservation_id=%s", (payload.state, payload.actual_drawdown, json.dumps(payload.usage), payload.provenance, payload.provider_request_id, payload.outcome, payload.reservation_id))
-        return {"type": "settle_budget", "reservation_id": str(payload.reservation_id), "state": payload.state, "actual_drawdown": payload.actual_drawdown, "overrun": actual > self._money(str(row["worst_case_drawdown"]))}
+        return {"type": "settle_budget", "reservation_id": str(payload.reservation_id), "state": payload.state, "actual_drawdown": payload.actual_drawdown, "overrun": actual > worst_case}
 
     def _cancel_budget(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload
-        if not payload.verified_unsent: raise WorkStoreError("invalid_request", ("unsent_cancellation_requires_verification",))
-        cur.execute("SELECT * FROM omp_work.budget_reservations WHERE workspace_id=%s AND reservation_id=%s FOR UPDATE", (envelope.workspace_id, payload.reservation_id)); row = cur.fetchone()
-        if row is None or row["state"] != "reserved_unsent" or row["fence"] != payload.fence: raise WorkStoreError("invalid_request", ("reservation_not_verified_unsent",))
-        cur.execute("SELECT * FROM omp_work.budget_scopes WHERE scope_id=%s FOR UPDATE", (row["scope_id"],)); scope = cur.fetchone(); held = self._budget_json(scope["held"]); key = row["resource"]; held[key] = str(max(Decimal("0"), self._money(held.get(key,"0"))-self._money(str(row["worst_case_drawdown"]))))
-        cur.execute("UPDATE omp_work.budget_scopes SET held=%s WHERE scope_id=%s", (json.dumps(held), row["scope_id"])); cur.execute("UPDATE omp_work.budget_reservations SET state='cancelled_unsent',settled_at=clock_timestamp() WHERE reservation_id=%s", (payload.reservation_id,))
-        return {"type":"cancel_budget","reservation_id":str(payload.reservation_id),"state":"cancelled_unsent"}
+        if not payload.verified_unsent:
+            raise WorkStoreError("invalid_request", ("unsent_cancellation_requires_verification",))
+        cur.execute("SELECT * FROM omp_work.budget_reservations WHERE workspace_id=%s AND reservation_id=%s FOR UPDATE", (envelope.workspace_id, payload.reservation_id))
+        row = cur.fetchone()
+        if row is None or row["state"] != "reserved_unsent" or row["fence"] != payload.fence:
+            raise WorkStoreError("invalid_request", ("reservation_not_verified_unsent",))
+        chain = self._lock_budget_chain(cur, envelope.workspace_id, row["scope_id"])
+        worst_case = self._money(str(row["worst_case_drawdown"]))
+        self._apply_budget_transition(cur, chain, row["resource"], held_delta=-worst_case)
+        cur.execute("UPDATE omp_work.budget_reservations SET state='cancelled_unsent',settled_at=clock_timestamp() WHERE reservation_id=%s", (payload.reservation_id,))
+        return {"type": "cancel_budget", "reservation_id": str(payload.reservation_id), "state": "cancelled_unsent"}
 
     def _issue_frontier_exception(self, cur: psycopg.Cursor[Any], envelope: CommandEnvelope) -> dict[str, object]:
         payload = envelope.command.payload; exception_id = UUID(str(envelope.operation_id))
