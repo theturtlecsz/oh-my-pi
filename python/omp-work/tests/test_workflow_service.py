@@ -3976,9 +3976,29 @@ def test_duplicate_title_rejection(service) -> None:
     )
 
 
+def _tcb_manifest_v1():
+    fp = service_runtime_fingerprint()
+    manifest = {
+        "auditor_agent_sha256": "a" * 64,
+        "host_sha256": "b" * 64,
+        "adapter_sha256": "c" * 64,
+        "freeze_sha256": "d" * 64,
+        "runner_sha256": "e" * 64,
+        "executor_sha256": "f" * 64,
+        "contract_sha256": contract_sha256(),
+        "service_fingerprint": fp,
+        "service_code_fingerprint": fp,
+        "service_migration_sha256": fp,
+    }
+    return sha256(manifest), manifest
+
+
 def _tcb_manifest():
     fp = service_runtime_fingerprint()
     manifest = {
+        "manifest_version": 2,
+        "audit_policy_sha256": "1" * 64,
+        "native_stage_sha256": "2" * 64,
         "auditor_agent_sha256": "a" * 64,
         "host_sha256": "b" * 64,
         "adapter_sha256": "c" * 64,
@@ -4071,6 +4091,158 @@ def test_execution_lookup_accepts_grant_id_work_id_and_key(
     assert [view["active_item"]["work_id"] for view in views] == [
         item["work_id"]
     ] * 3
+
+
+def test_begin_execution_rejects_v1_manifest(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(
+        service,
+        workspace_id,
+        "V1 manifest refusal",
+        description="Must reject V1 manifest at admission",
+    )
+    grant_id = str(uuid4())
+    judge_sha, v1_manifest = _tcb_manifest_v1()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": {
+                    "owner_input_id": str(uuid4()),
+                    "owner_session_id": "session-v1-refusal",
+                    "normalized_command": f"/execute {item['key']}",
+                    "workspace_id": str(workspace_id),
+                    "repository": "oh-my-pi",
+                    "nonce": str(uuid4()),
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": item["work_id"],
+                        "revision_id": item["revision_id"],
+                        "position": 0,
+                        "original_request": "Must reject V1 manifest at admission",
+                        "original_request_sha256": text_sha256(
+                            "Must reject V1 manifest at admission"
+                        ),
+                        "initial_git_baseline": "0" * 40,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": v1_manifest,
+            },
+        },
+    )
+    assert status == 400, body
+    with psycopg.connect(
+        **service.config.connection_kwargs("postgres")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM omp_work.execution_grants WHERE workspace_id = %s",
+                (str(workspace_id),),
+            )
+            assert cur.fetchone()[0] == 0
+
+
+def test_persisted_v1_grant_lookup_preserves_v1_manifest(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(
+        service,
+        workspace_id,
+        "Legacy V1 grant lookup",
+        description="Verify legacy V1 grant remains readable without auto-upgrade",
+    )
+    grant_id = str(uuid4())
+    judge_sha, judge_manifest = _tcb_manifest()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "begin_execution",
+            "payload": {
+                "grant_id": grant_id,
+                "provenance": {
+                    "owner_input_id": str(uuid4()),
+                    "owner_session_id": "session-v1-lookup",
+                    "normalized_command": f"/execute {item['key']}",
+                    "workspace_id": str(workspace_id),
+                    "repository": "oh-my-pi",
+                    "nonce": str(uuid4()),
+                    "issued_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "remote_ref": "refs/heads/main",
+                "mode": "single",
+                "items": [
+                    {
+                        "work_id": item["work_id"],
+                        "revision_id": item["revision_id"],
+                        "position": 0,
+                        "original_request": (
+                            "Verify legacy V1 grant remains readable without auto-upgrade"
+                        ),
+                        "original_request_sha256": text_sha256(
+                            "Verify legacy V1 grant remains readable without auto-upgrade"
+                        ),
+                        "initial_git_baseline": "0" * 40,
+                    }
+                ],
+                "expected_focus_version": 0,
+                "judge_sha256": judge_sha,
+                "judge_manifest": judge_manifest,
+            },
+        },
+    )
+    assert status == 200, body
+
+    v1_judge_sha, v1_manifest = _tcb_manifest_v1()
+    with psycopg.connect(
+        **service.config.connection_kwargs("postgres")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET session_replication_role = 'replica'")
+            cur.execute(
+                "UPDATE omp_work.execution_grants SET judge_manifest = %s, judge_sha256 = %s WHERE grant_id = %s",
+                (json.dumps(v1_manifest), v1_judge_sha, grant_id),
+            )
+        conn.commit()
+
+    response = service.client.get(
+        f"/v1/workspaces/{workspace_id}/execution/{grant_id}",
+        headers=_owner_headers(workspace_id),
+    )
+    assert response.status_code == 200, response.text
+    view = response.json()
+    assert view["grant"]["grant_id"] == grant_id
+    assert view["grant"]["judge_sha256"] == v1_judge_sha
+
+    with psycopg.connect(
+        **service.config.connection_kwargs("postgres")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT judge_manifest, judge_sha256 FROM omp_work.execution_grants WHERE grant_id = %s",
+                (grant_id,),
+            )
+            raw_row = cur.fetchone()
+            stored_manifest = (
+                raw_row[0] if isinstance(raw_row[0], dict) else json.loads(raw_row[0])
+            )
+            stored_sha = raw_row[1]
+
+    assert stored_sha == v1_judge_sha
+    assert "manifest_version" not in stored_manifest
+    assert "audit_policy_sha256" not in stored_manifest
+    assert "native_stage_sha256" not in stored_manifest
+    assert stored_manifest == v1_manifest
 
 
 def test_execution_grant_lifecycle_pass(service) -> None:
@@ -6672,6 +6844,10 @@ def test_execution_grant_service_refresh_stale_source_and_drift_matrix(
 
     service_keys = {"service_fingerprint", "service_code_fingerprint", "service_migration_sha256"}
     assert {k: v for k, v in after_manifest.items() if k not in service_keys} == {k: v for k, v in before_manifest.items() if k not in service_keys}
+    assert before_manifest["manifest_version"] == 2
+    assert after_manifest["manifest_version"] == 2
+    assert after_manifest["audit_policy_sha256"] == before_manifest["audit_policy_sha256"]
+    assert after_manifest["native_stage_sha256"] == before_manifest["native_stage_sha256"]
     assert after_manifest["service_fingerprint"] == new_fp
     assert after_manifest["service_code_fingerprint"] == new_fp
     assert after_manifest["service_migration_sha256"] == new_fp
