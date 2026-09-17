@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { z } from "zod";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { type Model, AssistantMessageEventStream } from "@oh-my-pi/pi-ai";
+import { type Model, type Usage, AssistantMessageEventStream } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { AgentSession, SessionManager, Settings, type CustomEntry, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type PersistedTurnContinuationRequest } from "@oh-my-pi/pi-coding-agent";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -848,6 +848,125 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(runSubprocessSpy).toHaveBeenCalledTimes(1);
 		expect(result.error).toMatch(/served disallowed model/);
 		expect(result.payload).toBeUndefined();
+	});
+
+	test("runner returns all measured usage buckets and request count while omitting cost", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const gemini = nativeStageModel({ id: "gemini-3.8-flash", provider: "google-antigravity", api: "google-gemini-cli", thinking: { mode: "google-level", efforts: ["high"], effortRouting: { high: "gemini-3.8-flash-high" } } });
+		const measuredUsage: Usage = {
+			input: 120,
+			output: 45,
+			cacheRead: 10,
+			cacheWrite: 5,
+			totalTokens: 180,
+			contextTokens: 250,
+			orchestration: { input: 15, cacheRead: 5, output: 10 },
+			premiumRequests: 1,
+			reasoningTokens: 20,
+			cttl: { ephemeral5m: 5 },
+			server: { webSearch: 2, webFetch: 1 },
+			cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0002, total: 0.0033 },
+		};
+		const runSubprocessSpy = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0, id: "native-usage", agent: "implementer", agentSource: "bundled", task: "edit", exitCode: 0,
+			output: JSON.stringify({ verification_body: "done" }), stderr: "", truncated: false, durationMs: 10, tokens: 180, requests: 3,
+			resolvedModel: "google-antigravity/gemini-3.8-flash:high",
+			usage: measuredUsage,
+		} as executorModule.SingleResult);
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: (selector: string) => selector.startsWith("google-antigravity/") ? gemini : undefined },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("gemini-token") },
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+		const runner = await prepareNativeStageRunner(fakeCtx, { role: "implement" });
+		const result = await runner("edit", "native-usage");
+		expect(runSubprocessSpy).toHaveBeenCalledTimes(1);
+		expect(result.started).toBe(true);
+		expect(result.requests).toBe(3);
+		expect(result.usage).toEqual({
+			input: 120,
+			output: 45,
+			cacheRead: 10,
+			cacheWrite: 5,
+			totalTokens: 180,
+			contextTokens: 250,
+			orchestration: { input: 15, cacheRead: 5, output: 10 },
+			premiumRequests: 1,
+			reasoningTokens: 20,
+			cttl: { ephemeral5m: 5 },
+			server: { webSearch: 2, webFetch: 1 },
+		});
+		expect("cost" in (result.usage as Record<string, unknown>)).toBe(false);
+		expect(measuredUsage.cost.total).toBe(0.0033);
+	});
+
+	test("disallowed served-model return retains measured usage and request count while omitting cost", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const luna = nativeStageModel({ id: "gpt-5.6-luna", provider: "openai-codex", api: "openai-codex-responses" });
+		const measuredUsage: Usage = {
+			input: 80,
+			output: 30,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 110,
+			cost: { input: 0.0008, output: 0.0012, cacheRead: 0, cacheWrite: 0, total: 0.002 },
+		};
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+			index: 0, id: "native-disallowed-usage", agent: "implementer", agentSource: "bundled", task: "edit", exitCode: 0,
+			output: "{}", stderr: "", truncated: false, durationMs: 1, tokens: 110, requests: 2,
+			resolvedModel: "openai-codex/gpt-5.6-sol:high",
+			usage: measuredUsage,
+		} as executorModule.SingleResult);
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: (selector: string) => selector.startsWith("openai-codex/") ? luna : undefined },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("luna-token") },
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+		const runner = await prepareNativeStageRunner(fakeCtx, { role: "implement" });
+		const result = await runner("edit", "native-disallowed-usage");
+		expect(result.error).toMatch(/served disallowed model/);
+		expect(result.payload).toBeUndefined();
+		expect(result.requests).toBe(2);
+		expect(result.usage).toEqual({
+			input: 80,
+			output: 30,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 110,
+		});
+		expect("cost" in (result.usage as Record<string, unknown>)).toBe(false);
+	});
+
+	test("runner catch-before-result keeps usage and requests absent", async () => {
+		const implementer: AgentDefinition = {
+			name: "implementer", description: "Implementer", systemPrompt: "Implement", model: ["@implement"],
+			output: { properties: { verification_body: { type: "string" } } }, source: "bundled",
+		};
+		mockDiscovery(implementer);
+		const luna = nativeStageModel({ id: "gpt-5.6-luna", provider: "openai-codex", api: "openai-codex-responses" });
+		vi.spyOn(executorModule, "runSubprocess").mockRejectedValue(new Error("process spawn error"));
+		const fakeCtx = {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			models: { resolve: (selector: string) => selector.startsWith("openai-codex/") ? luna : undefined },
+			modelRegistry: { getApiKey: vi.fn().mockResolvedValue("luna-token") },
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+		const runner = await prepareNativeStageRunner(fakeCtx, { role: "implement" });
+		const result = await runner("edit", "native-catch");
+		expect(result.started).toBe(false);
+		expect(result.error).toBe("process spawn error");
+		expect(result.usage).toBeUndefined();
+		expect(result.requests).toBeUndefined();
 	});
 
 	test("prepareNativeAuditRunner returns a runner when preconditions exist", async () => {

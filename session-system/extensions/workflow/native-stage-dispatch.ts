@@ -2,7 +2,13 @@ import { canonicalJson, payloadHash, sha256Hex, type StageLaunch } from "@oh-my-
 import { withFileLock } from "@oh-my-pi/pi-utils";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { join } from "node:path";
-import { nativeStageTaskInput, prepareNativeStageRunner, type NativeAuditRunResult } from "./auditor-runner";
+import {
+	nativeStageTaskInput,
+	prepareNativeStageRunner,
+	stripUsageCost,
+	type NativeAuditRunResult,
+	type NativeAuditUsage,
+} from "./auditor-runner";
 import type { KnowledgeBridge, KnowledgeExecutionIdentity } from "./knowledge-bridge";
 import { nativeStageRouteCandidates, resolveNativeStageRoute, type NativeStageRole, type NativeStageRoute } from "./native-stage-profile";
 import type { NativeStageLaunchInput, WorkflowBackend } from "./backend";
@@ -28,14 +34,131 @@ export interface NativeStageDispatchResult {
 	contextBundleSha256?: string;
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function parsePersistedUsage(value: unknown): NativeAuditUsage | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const candidate = value as Record<string, unknown>;
+	if (
+		!isNonNegativeInteger(candidate.input) ||
+		!isNonNegativeInteger(candidate.output) ||
+		!isNonNegativeInteger(candidate.cacheRead) ||
+		!isNonNegativeInteger(candidate.cacheWrite) ||
+		!isNonNegativeInteger(candidate.totalTokens)
+	) {
+		return undefined;
+	}
+
+	let contextTokens: number | undefined;
+	if (candidate.contextTokens !== undefined) {
+		if (!isNonNegativeInteger(candidate.contextTokens)) return undefined;
+		contextTokens = candidate.contextTokens;
+	}
+
+	let premiumRequests: number | undefined;
+	if (candidate.premiumRequests !== undefined) {
+		if (!isNonNegativeInteger(candidate.premiumRequests)) return undefined;
+		premiumRequests = candidate.premiumRequests;
+	}
+
+	let reasoningTokens: number | undefined;
+	if (candidate.reasoningTokens !== undefined) {
+		if (!isNonNegativeInteger(candidate.reasoningTokens)) return undefined;
+		reasoningTokens = candidate.reasoningTokens;
+	}
+
+	let orchestration: NativeAuditUsage["orchestration"];
+	if (candidate.orchestration !== undefined) {
+		if (typeof candidate.orchestration !== "object" || candidate.orchestration === null || Array.isArray(candidate.orchestration)) {
+			return undefined;
+		}
+		const raw = candidate.orchestration as Record<string, unknown>;
+		const parsed: NonNullable<NativeAuditUsage["orchestration"]> = {};
+		if (raw.input !== undefined) {
+			if (!isNonNegativeInteger(raw.input)) return undefined;
+			parsed.input = raw.input;
+		}
+		if (raw.cacheRead !== undefined) {
+			if (!isNonNegativeInteger(raw.cacheRead)) return undefined;
+			parsed.cacheRead = raw.cacheRead;
+		}
+		if (raw.output !== undefined) {
+			if (!isNonNegativeInteger(raw.output)) return undefined;
+			parsed.output = raw.output;
+		}
+		orchestration = parsed;
+	}
+
+	let cttl: NativeAuditUsage["cttl"];
+	if (candidate.cttl !== undefined) {
+		if (typeof candidate.cttl !== "object" || candidate.cttl === null || Array.isArray(candidate.cttl)) {
+			return undefined;
+		}
+		const raw = candidate.cttl as Record<string, unknown>;
+		const parsed: NonNullable<NativeAuditUsage["cttl"]> = {};
+		if (raw.ephemeral5m !== undefined) {
+			if (!isNonNegativeInteger(raw.ephemeral5m)) return undefined;
+			parsed.ephemeral5m = raw.ephemeral5m;
+		}
+		if (raw.ephemeral1h !== undefined) {
+			if (!isNonNegativeInteger(raw.ephemeral1h)) return undefined;
+			parsed.ephemeral1h = raw.ephemeral1h;
+		}
+		cttl = parsed;
+	}
+
+	let server: NativeAuditUsage["server"];
+	if (candidate.server !== undefined) {
+		if (typeof candidate.server !== "object" || candidate.server === null || Array.isArray(candidate.server)) {
+			return undefined;
+		}
+		const raw = candidate.server as Record<string, unknown>;
+		const parsed: NonNullable<NativeAuditUsage["server"]> = {};
+		if (raw.webSearch !== undefined) {
+			if (!isNonNegativeInteger(raw.webSearch)) return undefined;
+			parsed.webSearch = raw.webSearch;
+		}
+		if (raw.webFetch !== undefined) {
+			if (!isNonNegativeInteger(raw.webFetch)) return undefined;
+			parsed.webFetch = raw.webFetch;
+		}
+		server = parsed;
+	}
+
+	return {
+		input: candidate.input,
+		output: candidate.output,
+		cacheRead: candidate.cacheRead,
+		cacheWrite: candidate.cacheWrite,
+		totalTokens: candidate.totalTokens,
+		...(contextTokens !== undefined ? { contextTokens } : {}),
+		...(premiumRequests !== undefined ? { premiumRequests } : {}),
+		...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+		...(orchestration !== undefined ? { orchestration } : {}),
+		...(cttl !== undefined ? { cttl } : {}),
+		...(server !== undefined ? { server } : {}),
+	};
+}
+
+function parsePersistedRequests(value: unknown): number | undefined {
+	if (!isNonNegativeInteger(value)) return undefined;
+	return value;
+}
+
 function runFromSettledLaunch(launch: StageLaunch): NativeAuditRunResult {
 	const outcome = launch.outcome;
+	const usage = parsePersistedUsage(outcome?.usage);
+	const requests = parsePersistedRequests(outcome?.requests);
 	return {
 		started: outcome?.started === true,
 		...(typeof outcome?.payload === "string" ? { payload: outcome.payload } : {}),
 		...(typeof outcome?.error === "string" ? { error: outcome.error } : {}),
 		...(typeof outcome?.resolved_model === "string" ? { resolvedModel: outcome.resolved_model } : {}),
 		...(typeof outcome?.resolved_model_is_fallback === "boolean" ? { resolvedModelIsFallback: outcome.resolved_model_is_fallback } : {}),
+		...(usage !== undefined ? { usage } : {}),
+		...(requests !== undefined ? { requests } : {}),
 	};
 }
 
@@ -222,6 +345,8 @@ async function dispatchNativeStageLocked(
 		error: run.error ?? null,
 		resolved_model: run.resolvedModel ?? null,
 		resolved_model_is_fallback: run.resolvedModelIsFallback ?? false,
+		usage: run.usage ? stripUsageCost(run.usage) : null,
+		requests: typeof run.requests === "number" && Number.isFinite(run.requests) && run.requests >= 0 ? run.requests : null,
 	};
 	// A response loss after handoff is reconciled as interrupted. `run.started`
 	// may still be true because the provider request left the host, but that

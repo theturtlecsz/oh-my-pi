@@ -5,7 +5,7 @@
  * with no model-transport copy/paste, no agent loop recreation, and no
  * prompt-enforced budget prose.
  */
-import { completeSimple } from "@oh-my-pi/pi-ai";
+import { completeSimple, type Usage } from "@oh-my-pi/pi-ai";
 import { getAgentDir, Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { formatModelSelectorValue, formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { resolveAuditPolicy } from "./audit-policy";
@@ -13,12 +13,21 @@ import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { nativeStageRouteCandidates, type NativeStageRole, type NativeStageRoute } from "./native-stage-profile";
 
+export type NativeAuditUsage = Omit<Usage, "cost">;
+
+export function stripUsageCost(usage: Usage | NativeAuditUsage): NativeAuditUsage {
+	const { cost: _cost, ...measured } = usage as unknown as { cost?: unknown } & NativeAuditUsage;
+	return measured;
+}
+
 export interface NativeAuditRunResult {
 	started: boolean;
 	payload?: string;
 	error?: string;
 	resolvedModel?: string;
 	resolvedModelIsFallback?: boolean;
+	usage?: NativeAuditUsage;
+	requests?: number;
 }
 
 export type NativeAuditRunner = (
@@ -224,12 +233,16 @@ export async function prepareNativeStageRunner(
 			});
 
 			started = Boolean(result.requests && result.requests > 0);
+			const usage = result.usage ? stripUsageCost(result.usage) : undefined;
+			const requests = typeof result.requests === "number" ? result.requests : undefined;
 			if (result.resolvedModel && !nativeResolvedModelMatchesRoute(result.resolvedModel, route)) {
 				return {
 					started,
 					error: `native ${options.role} execution served disallowed model ${result.resolvedModel}; expected ${route.requestedSelector}`,
 					resolvedModel: result.resolvedModel,
 					resolvedModelIsFallback: result.resolvedModelIsFallback,
+					...(usage ? { usage } : {}),
+					...(requests !== undefined ? { requests } : {}),
 				};
 			}
 			const payload =
@@ -243,6 +256,8 @@ export async function prepareNativeStageRunner(
 				error: result.error || result.stderr || undefined,
 				resolvedModel: result.resolvedModel,
 				resolvedModelIsFallback: result.resolvedModelIsFallback,
+				...(usage ? { usage } : {}),
+				...(requests !== undefined ? { requests } : {}),
 			};
 		} catch (error) {
 			return {

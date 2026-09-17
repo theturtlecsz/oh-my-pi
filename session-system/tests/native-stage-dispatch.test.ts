@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Model } from "@oh-my-pi/pi-ai";
-import type { StageLaunch, WorkItemView } from "@oh-my-pi/pi-work-client";
+import { canonicalJson, sha256Hex, type StageLaunch, type WorkItemView } from "@oh-my-pi/pi-work-client";
 import * as auditorRunner from "../extensions/workflow/auditor-runner";
 import { dispatchNativeStage } from "../extensions/workflow/native-stage-dispatch";
 import type { KnowledgeBridge } from "../extensions/workflow/knowledge-bridge";
@@ -271,5 +271,359 @@ describe("native stage dispatch", () => {
 
 		expect(events).toEqual(["reserve", "provider", "handoff", "settle"]);
 		expect(result.launch.status).toBe("settled");
+	});
+
+	test("settlement persists measured usage without cost and request count, and hashes outcome", async () => {
+		const events: string[] = [];
+		let settledInput: { launchId: string; outcomeSha256: string; outcome: Record<string, unknown> } | undefined;
+		const prepared = launch();
+		const settled = launch("settled");
+		const measuredUsage: auditorRunner.NativeAuditUsage = {
+			input: 120,
+			output: 45,
+			cacheRead: 10,
+			cacheWrite: 5,
+			totalTokens: 180,
+			reasoningTokens: 20,
+		};
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => async () => {
+			events.push("runner");
+			await options.onHandoff?.();
+			events.push("provider");
+			return {
+				started: true,
+				payload: "{\"ok\":true}",
+				resolvedModel: "openai-codex/gpt-5.6-luna:high",
+				usage: measuredUsage,
+				requests: 2,
+			};
+		});
+		prepareRestore = () => prepare.mockRestore();
+		const fakeWorkClient = {
+			workItem: async () => item(),
+			workflow: async () => ({ stage_launches: [settled] }),
+		};
+		const backend = {
+			workspaceId,
+			workClient: fakeWorkClient,
+			reserveStageLaunch: async () => { events.push("reserve"); return prepared; },
+			handoffStageLaunch: async () => { events.push("handoff"); return { ...prepared, status: "handed_off" as const }; },
+			settleStageLaunch: async input => { events.push("settle"); settledInput = input; return settled; },
+		} as unknown as WorkflowBackend;
+		const ctx = {
+			models: { resolve: () => model(), list: () => [model()], current: () => model(), family: () => "openai-codex/gpt-5.6-luna" },
+		} as unknown as ExtensionContext;
+
+		const result = await dispatchNativeStage(ctx, backend, undefined, {
+			workKey: "OMP-1",
+			role: "implement",
+			taskBody: "edit sealed file",
+			toolCallId: "call-measured-1",
+			grantId,
+		});
+
+		expect(events).toEqual(["reserve", "runner", "handoff", "provider", "settle"]);
+		expect(result.launch.status).toBe("settled");
+		expect(settledInput).toBeDefined();
+		expect(settledInput!.outcome).toMatchObject({
+			started: true,
+			payload: "{\"ok\":true}",
+			usage: {
+				input: 120,
+				output: 45,
+				cacheRead: 10,
+				cacheWrite: 5,
+				totalTokens: 180,
+				reasoningTokens: 20,
+			},
+			requests: 2,
+		});
+		expect("cost" in (settledInput!.outcome.usage as Record<string, unknown>)).toBe(false);
+		expect(settledInput!.outcomeSha256).toBe(sha256Hex(canonicalJson(settledInput!.outcome)));
+		expect(result.run.usage).toEqual(measuredUsage);
+		expect(result.run.requests).toBe(2);
+	});
+
+	test("settlement persists explicit null for absent usage and requests, never zero", async () => {
+		let settledInput: { launchId: string; outcomeSha256: string; outcome: Record<string, unknown> } | undefined;
+		const prepared = launch();
+		const settled = launch("settled");
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async (_ctx, options) => async () => {
+			await options.onHandoff?.();
+			return { started: true, payload: "{\"ok\":true}", resolvedModel: "openai-codex/gpt-5.6-luna:high" };
+		});
+		prepareRestore = () => prepare.mockRestore();
+		const fakeWorkClient = {
+			workItem: async () => item(),
+			workflow: async () => ({ stage_launches: [settled] }),
+		};
+		const backend = {
+			workspaceId,
+			workClient: fakeWorkClient,
+			reserveStageLaunch: async () => prepared,
+			handoffStageLaunch: async () => ({ ...prepared, status: "handed_off" as const }),
+			settleStageLaunch: async input => { settledInput = input; return settled; },
+		} as unknown as WorkflowBackend;
+		const ctx = {
+			models: { resolve: () => model(), list: () => [model()], current: () => model(), family: () => "openai-codex/gpt-5.6-luna" },
+		} as unknown as ExtensionContext;
+
+		await dispatchNativeStage(ctx, backend, undefined, {
+			workKey: "OMP-1",
+			role: "implement",
+			taskBody: "edit sealed file",
+			toolCallId: "call-absent-1",
+			grantId,
+		});
+
+		expect(settledInput).toBeDefined();
+		expect(settledInput!.outcome.usage).toBeNull();
+		expect(settledInput!.outcome.requests).toBeNull();
+		expect(settledInput!.outcome.usage).not.toBe(0);
+		expect(settledInput!.outcome.requests).not.toBe(0);
+		expect(settledInput!.outcomeSha256).toBe(sha256Hex(canonicalJson(settledInput!.outcome)));
+	});
+
+	test("replays settled launch outcome returning persisted usage and requests without invoking provider", async () => {
+		const events: string[] = [];
+		const persistedUsage = { input: 150, output: 60, cacheRead: 20, cacheWrite: 0, totalTokens: 230 };
+		const settled = {
+			...launch("settled"),
+			outcome: {
+				started: true,
+				payload: "{\"replayed\":true}",
+				resolved_model: "openai-codex/gpt-5.6-luna:high",
+				usage: persistedUsage,
+				requests: 4,
+			},
+		};
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async () => async () => {
+			events.push("provider");
+			return { started: true, payload: "{\"unexpected\":true}" };
+		});
+		prepareRestore = () => prepare.mockRestore();
+		const backend = {
+			workspaceId,
+			workClient: { workItem: async () => item() },
+			reserveStageLaunch: async () => { events.push("reserve"); return settled; },
+		} as unknown as WorkflowBackend;
+		const ctx = { models: { resolve: () => model(), list: () => [model()], current: () => model(), family: () => "openai-codex/gpt-5.6-luna" } } as unknown as ExtensionContext;
+
+		const result = await dispatchNativeStage(ctx, backend, undefined, {
+			workKey: "OMP-1", role: "implement", taskBody: "edit sealed file", toolCallId: "call-replay-usage", grantId,
+		});
+
+		expect(events).toEqual(["reserve"]);
+		expect(result.launch.status).toBe("settled");
+		expect(result.run.requests).toBe(4);
+		expect(result.run.usage).toEqual(persistedUsage);
+		expect("cost" in (result.run.usage as Record<string, unknown>)).toBe(false);
+	});
+
+	test("replays settled launch with absent or malformed measurement conservatively omitting fields", async () => {
+		const settledNull = {
+			...launch("settled"),
+			outcome: {
+				started: true,
+				payload: "{\"replayed\":true}",
+				usage: null,
+				requests: null,
+			},
+		};
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async () => async () => {
+			throw new Error("unexpected runner call");
+		});
+		prepareRestore = () => prepare.mockRestore();
+		const backendNull = {
+			workspaceId,
+			workClient: { workItem: async () => item() },
+			reserveStageLaunch: async () => settledNull,
+		} as unknown as WorkflowBackend;
+		const ctx = { models: { resolve: () => model(), list: () => [model()], current: () => model(), family: () => "openai-codex/gpt-5.6-luna" } } as unknown as ExtensionContext;
+
+		const resultNull = await dispatchNativeStage(ctx, backendNull, undefined, {
+			workKey: "OMP-1", role: "implement", taskBody: "edit", toolCallId: "call-replay-null", grantId,
+		});
+		expect(resultNull.run.usage).toBeUndefined();
+		expect(resultNull.run.requests).toBeUndefined();
+
+		const settledMalformed = {
+			...launch("settled"),
+			outcome: {
+				started: true,
+				payload: "{\"replayed\":true}",
+				usage: { input: "invalid", output: 10 },
+				requests: -5,
+			},
+		};
+		const backendMalformed = {
+			workspaceId,
+			workClient: { workItem: async () => item() },
+			reserveStageLaunch: async () => settledMalformed,
+		} as unknown as WorkflowBackend;
+
+		const resultMalformed = await dispatchNativeStage(ctx, backendMalformed, undefined, {
+			workKey: "OMP-1", role: "implement", taskBody: "edit", toolCallId: "call-replay-bad", grantId,
+		});
+		expect(resultMalformed.run.usage).toBeUndefined();
+		expect(resultMalformed.run.requests).toBeUndefined();
+	});
+
+	test("replays settled launch rejecting negative, fractional, and non-finite usage counters or requests", async () => {
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async () => async () => {
+			throw new Error("unexpected runner call");
+		});
+		prepareRestore = () => prepare.mockRestore();
+		const ctx = { models: { resolve: () => model(), list: () => [model()], current: () => model(), family: () => "openai-codex/gpt-5.6-luna" } } as unknown as ExtensionContext;
+
+		const invalidCases: Array<{ usage?: unknown; requests?: unknown }> = [
+			{ usage: { input: -1, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 10 }, requests: 1 },
+			{ usage: { input: 1.5, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 10 }, requests: 1 },
+			{ usage: { input: Number.NaN, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 10 }, requests: 1 },
+			{ usage: { input: Number.POSITIVE_INFINITY, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 10 }, requests: 1 },
+			{ usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20 }, requests: 2.5 },
+			{ usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20 }, requests: -1 },
+			{ usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20 }, requests: Number.NaN },
+			{ usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20 }, requests: Number.POSITIVE_INFINITY },
+		];
+
+		for (const [index, testCase] of invalidCases.entries()) {
+			const settled = {
+				...launch("settled"),
+				outcome: {
+					started: true,
+					payload: "{\"replayed\":true}",
+					usage: testCase.usage,
+					requests: testCase.requests,
+				},
+			};
+			const backend = {
+				workspaceId,
+				workClient: { workItem: async () => item() },
+				reserveStageLaunch: async () => settled,
+			} as unknown as WorkflowBackend;
+
+			const result = await dispatchNativeStage(ctx, backend, undefined, {
+				workKey: "OMP-1", role: "implement", taskBody: "edit", toolCallId: `call-replay-invalid-${index}`, grantId,
+			});
+
+			if (testCase.usage && (
+				(testCase.usage as Record<string, number>).input === -1 ||
+				(testCase.usage as Record<string, number>).input === 1.5 ||
+				Number.isNaN((testCase.usage as Record<string, number>).input) ||
+				!Number.isFinite((testCase.usage as Record<string, number>).input)
+			)) {
+				expect(result.run.usage).toBeUndefined();
+			}
+			if (typeof testCase.requests === "number" && (!Number.isInteger(testCase.requests) || testCase.requests < 0 || !Number.isFinite(testCase.requests))) {
+				expect(result.run.requests).toBeUndefined();
+			}
+		}
+	});
+
+	test("replays settled launch omitting complete usage when optional scalar or nested member is invalid", async () => {
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async () => async () => {
+			throw new Error("unexpected runner call");
+		});
+		prepareRestore = () => prepare.mockRestore();
+		const ctx = { models: { resolve: () => model(), list: () => [model()], current: () => model(), family: () => "openai-codex/gpt-5.6-luna" } } as unknown as ExtensionContext;
+
+		const corruptUsageCases: unknown[] = [
+			{ input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, reasoningTokens: -5 },
+			{ input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, premiumRequests: 1.5 },
+			{ input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, contextTokens: Number.NaN },
+			{ input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, orchestration: "not-an-object" },
+			{ input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, orchestration: { input: -2 } },
+			{ input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, orchestration: { cacheRead: 1.1 } },
+			{ input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cttl: { ephemeral5m: -1 } },
+			{ input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cttl: { ephemeral1h: "bad" } },
+			{ input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, server: { webSearch: -1 } },
+			{ input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, server: { webFetch: 2.7 } },
+		];
+
+		for (const [index, corruptUsage] of corruptUsageCases.entries()) {
+			const settled = {
+				...launch("settled"),
+				outcome: {
+					started: true,
+					payload: "{\"replayed\":true}",
+					usage: corruptUsage,
+					requests: 1,
+				},
+			};
+			const backend = {
+				workspaceId,
+				workClient: { workItem: async () => item() },
+				reserveStageLaunch: async () => settled,
+			} as unknown as WorkflowBackend;
+
+			const result = await dispatchNativeStage(ctx, backend, undefined, {
+				workKey: "OMP-1", role: "implement", taskBody: "edit", toolCallId: `call-replay-corrupt-${index}`, grantId,
+			});
+
+			expect(result.run.usage).toBeUndefined();
+			expect(result.run.requests).toBe(1);
+		}
+	});
+
+	test("replays settled launch preserving known nested fields and stripping unknown keys and cost", async () => {
+		const prepare = spyOn(auditorRunner, "prepareNativeStageRunner").mockImplementation(async () => async () => {
+			throw new Error("unexpected runner call");
+		});
+		prepareRestore = () => prepare.mockRestore();
+		const ctx = { models: { resolve: () => model(), list: () => [model()], current: () => model(), family: () => "openai-codex/gpt-5.6-luna" } } as unknown as ExtensionContext;
+
+		const persistedWithExtras = {
+			input: 100,
+			output: 50,
+			cacheRead: 10,
+			cacheWrite: 5,
+			totalTokens: 165,
+			contextTokens: 200,
+			premiumRequests: 1,
+			reasoningTokens: 25,
+			orchestration: { input: 12, cacheRead: 4, output: 8, extraOrchKey: "dropped" },
+			cttl: { ephemeral5m: 5, ephemeral1h: 0 },
+			server: { webSearch: 2, webFetch: 1 },
+			cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+			unknownTopLevelKey: "dropped-too",
+		};
+
+		const settled = {
+			...launch("settled"),
+			outcome: {
+				started: true,
+				payload: "{\"replayed\":true}",
+				usage: persistedWithExtras,
+				requests: 3,
+			},
+		};
+		const backend = {
+			workspaceId,
+			workClient: { workItem: async () => item() },
+			reserveStageLaunch: async () => settled,
+		} as unknown as WorkflowBackend;
+
+		const result = await dispatchNativeStage(ctx, backend, undefined, {
+			workKey: "OMP-1", role: "implement", taskBody: "edit", toolCallId: "call-replay-valid-nested", grantId,
+		});
+
+		expect(result.run.requests).toBe(3);
+		expect(result.run.usage).toEqual({
+			input: 100,
+			output: 50,
+			cacheRead: 10,
+			cacheWrite: 5,
+			totalTokens: 165,
+			contextTokens: 200,
+			premiumRequests: 1,
+			reasoningTokens: 25,
+			orchestration: { input: 12, cacheRead: 4, output: 8 },
+			cttl: { ephemeral5m: 5, ephemeral1h: 0 },
+			server: { webSearch: 2, webFetch: 1 },
+		});
+		expect("cost" in (result.run.usage as Record<string, unknown>)).toBe(false);
+		expect("unknownTopLevelKey" in (result.run.usage as Record<string, unknown>)).toBe(false);
+		expect("extraOrchKey" in ((result.run.usage as Record<string, unknown>).orchestration as Record<string, unknown>)).toBe(false);
 	});
 });
