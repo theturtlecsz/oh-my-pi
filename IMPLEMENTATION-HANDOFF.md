@@ -7,7 +7,7 @@ Astra correction after Fable amendment: no invented fallback-grant prerequisite.
 Implemented:
 
 - `session-system/extensions/workflow/native-stage-profile.ts`: versioned exact route tuple profiles for plan, implement, frontier, audit. Implement primary is `google-antigravity/gemini-3.8-flash:high`; only fallback is `openai-codex/gpt-5.6-luna:high`. Plan/frontier require exact `anthropic/claude-fable-5-1:high`; audit requires exact `kimi-code/k3:high`. Matching checks provider, id, API, thinking mode, supported effort and wire id. Gemini 3.7 and aliases cannot satisfy primary.
-- `session-system/extensions/workflow/auditor-runner.ts`: generalized `prepareNativeStageRunner` uses the profile route while legacy `prepareNativeAuditRunner` remains compatibility-preserving until qualified config/WorkService migration lands.
+- `session-system/extensions/workflow/auditor-runner.ts`: generalized `prepareNativeStageRunner` uses the profile route and requires immutable audit route/policy binding. Production construction is owned by `native-stage-dispatch.ts`; the legacy direct audit wrapper was removed after host migration.
 - `session-system/agents/{planner,implementer,frontier}.md`: planner/frontier expose read/grep/glob/lsp only; implementer exposes read/grep/glob/lsp/edit/write and no shell/task/grader access. Host owns deterministic checks.
 - `session-system/tests/native-stage-profile.test.ts`: exact Gemini3.8, Luna fallback, Gemini3.7 rejection-as-primary, missing Fable, and exact Kimi routes.
 
