@@ -402,4 +402,70 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		expect(result.exitCode).toBe(0);
 		expect(initSpy).toHaveBeenCalledWith(expect.objectContaining({ modelRole: "reviewer" }));
 	});
+
+	it("binds resolvedModel directly to createAgentSession despite registry and settings drift", async () => {
+		const modelA = getBundledModel("openai-codex", "gpt-5.6-sol");
+		if (!modelA) throw new Error("Expected gpt-5.6-sol model to exist");
+		const modelB = getBundledModel("openai-codex", "gpt-5.6-luna") ?? {
+			...modelA,
+			id: "gpt-5.6-luna",
+		};
+
+		// After route binding to modelA, mutable settings and registry drift to modelB.
+		const settings = Settings.isolated();
+		settings.setModelRole("task", `${modelB.provider}/${modelB.id}`);
+
+		const registry = {
+			authStorage: {},
+			refresh: async () => {},
+			getAvailable: () => [modelB],
+			getApiKey: async () => "test-key",
+		} as unknown as ModelRegistry;
+
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			agent: { ...baseAgent, model: ["@task"] },
+			id: "subagent-frozen-model-dispatch",
+			modelOverride: `${modelB.provider}/${modelB.id}:high`,
+			resolvedModel: modelA,
+			thinkingLevel: ThinkingLevel.Medium,
+			settings,
+			modelRegistry: registry,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy).toHaveBeenCalledTimes(1);
+		const forwarded = spy.mock.calls[0]?.[0];
+		expect(forwarded?.model).toBe(modelA);
+		expect(forwarded?.modelPattern).toBeUndefined();
+		expect(forwarded?.modelPatternAuthFallback).toBeUndefined();
+		expect(forwarded?.modelPatternFallbackRole).toBeUndefined();
+		expect(forwarded?.modelPatternDefaultFallbackChain).toBeUndefined();
+		expect(forwarded?.thinkingLevel).toBe(ThinkingLevel.Medium);
+		expect(result.resolvedModel).toBe("openai-codex/gpt-5.6-sol:medium");
+	});
+
+	it("resolves model via registry and settings when resolvedModel is absent", async () => {
+		const model = getBundledModel("openai-codex", "gpt-5.6-sol");
+		if (!model) throw new Error("Expected gpt-5.6-sol model to exist");
+		const settings = Settings.isolated();
+		settings.setModelRole("task", `${model.provider}/${model.id}`);
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions,
+			agent: { ...baseAgent, model: ["@task"] },
+			id: "subagent-ordinary-resolution",
+			settings,
+			modelRegistry: createModelRegistry(model),
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(spy).toHaveBeenCalledTimes(1);
+		expect(spy.mock.calls[0]?.[0]?.model?.id).toBe("gpt-5.6-sol");
+	});
 });

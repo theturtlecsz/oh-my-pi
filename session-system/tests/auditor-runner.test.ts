@@ -747,6 +747,8 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(options.agent.name).toBe("implementer");
 		expect(options.modelOverride).toBe("google-antigravity/gemini-3.8-flash:high");
 		expect(options.modelRole).toBe("implement");
+		expect(options.resolvedModel).toBeUndefined();
+		expect(options.thinkingLevel).toBeUndefined();
 		expect(options.context).toBeUndefined();
 		expect(options.task).toBe("edit\n\n<stage_context_data>\nsealed-context\n</stage_context_data>");
 		expect(options.nativeStageWriteRoots).toEqual([repoRoot]);
@@ -992,6 +994,10 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(capturedOptions).toBeDefined();
 		expect(capturedOptions?.settings).toBe(sentinelSettings);
 		expect(capturedOptions?.modelOverride).toBe("openai-codex/gpt-5.6-sol:medium");
+		expect(capturedOptions?.resolvedModel).toBeDefined();
+		expect(capturedOptions?.resolvedModel?.provider).toBe("openai-codex");
+		expect(capturedOptions?.resolvedModel?.id).toBe("gpt-5.6-sol");
+		expect(capturedOptions?.thinkingLevel).toBe("medium");
 		expect(capturedOptions?.modelRole).toBe("audit");
 		expect(capturedOptions?.modelRegistry).toBe(sentinelRegistry);
 		expect(capturedOptions?.outputSchema).toBe(sentinelOutputSchema);
@@ -999,6 +1005,52 @@ describe("native auditor runner (OMP-168)", () => {
 		expect(capturedOptions?.outputSchemaMode).toBe("strict");
 		expect(result.started).toBe(true);
 		expect(result.payload).toBe(wrappedPayload);
+	});
+
+	test("forwards exact bound route model reference and effort to runSubprocess for audit stage", async () => {
+		const sentinelSettings = Settings.isolated({ modelRoles: { audit: "openai-codex/gpt-5.6-sol:medium" } });
+		vi.spyOn(Settings, "loadReadOnly").mockResolvedValue(sentinelSettings);
+		mockDiscovery();
+
+		let capturedOptions: executorModule.ExecutorOptions | undefined;
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async (options) => {
+			capturedOptions = options;
+			return {
+				index: options.index,
+				id: options.id,
+				agent: options.agent.name,
+				agentSource: options.agent.source,
+				task: options.task,
+				exitCode: 0,
+				output: JSON.stringify({ report: "PASS" }),
+				stderr: "",
+				truncated: false,
+				durationMs: 50,
+				tokens: 100,
+				requests: 1,
+				resolvedModel: options.modelOverride as string,
+			} as executorModule.SingleResult;
+		});
+
+		const repoRoot = path.resolve(import.meta.dir, "../..");
+		const modelQuery = createAuditorTestModelQuery(sentinelSettings);
+		const { route: boundRoute } = resolveAuditPolicy(modelQuery);
+		const fakeCtx = {
+			cwd: repoRoot,
+			models: modelQuery,
+			modelRegistry: { getApiKey: () => Promise.resolve("key") },
+			taskDepth: 0,
+		} as unknown as ExtensionContext;
+
+		const runner = await prepareNativeAuditRunner(fakeCtx, undefined, boundRoute);
+		const result = await runner("Audit contract check", "attempt-bound-model-1");
+
+		expect(result.started).toBe(true);
+		expect(capturedOptions).toBeDefined();
+		// Exact reference identity from the frozen bound route
+		expect(capturedOptions?.resolvedModel).toBe(boundRoute.model);
+		expect(capturedOptions?.thinkingLevel).toBe(boundRoute.effort);
+		expect(capturedOptions?.modelOverride).toBe(boundRoute.requestedSelector);
 	});
 
 	test("forwards authStorage and getApiKey resolver for OAuth-backed @audit models (OMP-176)", async () => {

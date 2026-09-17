@@ -192,6 +192,7 @@ export async function prepareNativeStageRunner(
 				}
 			}
 			const taskInput = nativeStageTaskInput(taskBody, options.context);
+			const isAudit = options.role === "audit";
 			const result = await runSubprocess({
 				index: 0,
 				cwd: ctx.cwd,
@@ -200,6 +201,8 @@ export async function prepareNativeStageRunner(
 				agent,
 				task: taskInput,
 				modelOverride: route.requestedSelector,
+				resolvedModel: isAudit ? route.model : undefined,
+				thinkingLevel: isAudit ? route.effort : undefined,
 				modelRegistry: ctx.modelRegistry,
 				authStorage: ctx.modelRegistry?.authStorage,
 				getApiKey: ctx.modelRegistry?.resolver

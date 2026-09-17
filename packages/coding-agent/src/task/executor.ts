@@ -7,7 +7,7 @@
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
 import { EventLoopKeepalive, recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
+import type { Api, Effort, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
 import { logger, popLoopPhase, prompt, pushLoopPhase, stringProperty, untilAborted } from "@oh-my-pi/pi-utils";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobManager } from "../async";
 import type { Rule } from "../capability/rule";
@@ -419,6 +419,12 @@ export interface ExecutorOptions {
 	 */
 	detached?: boolean;
 	modelOverride?: string | string[];
+	/**
+	 * Already-resolved, immutable model. When set, executor skips selector
+	 * resolution, auth fallback, and retry fallback; passes this exact object
+	 * to createAgentSession. Caller owns identity/policy checks.
+	 */
+	resolvedModel?: Readonly<Model>;
 	/** Explicit pre-expansion model role alias selected for this run. */
 	modelRole?: string;
 	/**
@@ -426,7 +432,7 @@ export interface ExecutorOptions {
 	 * if the resolved subagent model has no working credentials. See #985.
 	 */
 	parentActiveModelPattern?: string;
-	thinkingLevel?: ConfiguredThinkingLevel;
+	thinkingLevel?: ConfiguredThinkingLevel | Effort;
 	/** Caller-requested coarse effort (`lo`/`med`/`hi`); maps onto the resolved model's supported thinking range and wins over {@link thinkingLevel}. */
 	effort?: TaskEffort;
 	/** Schema used to validate the final structured completion. */
@@ -2859,6 +2865,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		id,
 		worktree,
 		modelOverride,
+		resolvedModel,
 		modelRole,
 		thinkingLevel,
 		outputSchema,
@@ -3106,57 +3113,67 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 			checkAbort();
 
-			const configuredModelPatterns = resolveConfiguredModelPatterns(modelPatterns, settings);
-			const inheritedRetryFallbackChain =
-				configuredModelPatterns.length === 1
-					? resolveSubagentInheritedRetryFallbackChain(
-							subagentSettings,
-							modelRegistry,
-							modelRole ?? resolveExplicitModelRole(modelPatterns, subagentSettings),
-						)
-					: undefined;
-			const {
-				model,
-				thinkingLevel: resolvedThinkingLevel,
-				explicitThinkingLevel,
-				authFallbackUsed,
-				warning: modelResolutionWarning,
-			} = await awaitAbortable(
-				resolveModelOverrideWithAuthFallback(
-					modelPatterns,
-					options.parentActiveModelPattern,
-					modelRegistry,
-					settings,
+			let model: Model | undefined;
+			let resolvedThinkingLevel: ConfiguredThinkingLevel | Effort | undefined;
+			let explicitThinkingLevel = false;
+			let authFallbackUsed = false;
+			let inheritedRetryFallbackChain: string[] | undefined;
+
+			if (resolvedModel) {
+				model = resolvedModel;
+				resolvedThinkingLevel = thinkingLevel;
+				explicitThinkingLevel = thinkingLevel !== undefined;
+			} else {
+				const configuredModelPatterns = resolveConfiguredModelPatterns(modelPatterns, settings);
+				inheritedRetryFallbackChain =
+					configuredModelPatterns.length === 1
+						? resolveSubagentInheritedRetryFallbackChain(
+								subagentSettings,
+								modelRegistry,
+								modelRole ?? resolveExplicitModelRole(modelPatterns, subagentSettings),
+							)
+						: undefined;
+				const resolvedOverride = await awaitAbortable(
+					resolveModelOverrideWithAuthFallback(
+						modelPatterns,
+						options.parentActiveModelPattern,
+						modelRegistry,
+						settings,
+						id,
+					),
+				);
+				model = resolvedOverride.model;
+				resolvedThinkingLevel = resolvedOverride.thinkingLevel;
+				explicitThinkingLevel = resolvedOverride.explicitThinkingLevel;
+				authFallbackUsed = resolvedOverride.authFallbackUsed;
+				if (resolvedOverride.warning) {
+					logger.warn("Subagent model resolution warning", {
+						warning: resolvedOverride.warning,
+						requested: modelPatterns,
+					});
+				}
+				if (authFallbackUsed && model) {
+					logger.warn("Subagent model has no working credentials; falling back to parent session model", {
+						requested: modelPatterns,
+						parentModel: options.parentActiveModelPattern,
+						resolvedProvider: model.provider,
+						resolvedModel: model.id,
+					});
+				}
+				const retryFallbackRole = installSubagentRetryFallbackChain({
+					settings: subagentSettings,
 					id,
-				),
-			);
-			if (modelResolutionWarning) {
-				logger.warn("Subagent model resolution warning", {
-					warning: modelResolutionWarning,
-					requested: modelPatterns,
+					candidates: resolveSubagentRetryFallbackCandidates(modelPatterns, modelRegistry, subagentSettings),
+					inheritedFallbackChain: inheritedRetryFallbackChain,
+					model,
+					authFallbackUsed,
 				});
-			}
-			if (authFallbackUsed && model) {
-				logger.warn("Subagent model has no working credentials; falling back to parent session model", {
-					requested: modelPatterns,
-					parentModel: options.parentActiveModelPattern,
-					resolvedProvider: model.provider,
-					resolvedModel: model.id,
-				});
-			}
-			const retryFallbackRole = installSubagentRetryFallbackChain({
-				settings: subagentSettings,
-				id,
-				candidates: resolveSubagentRetryFallbackCandidates(modelPatterns, modelRegistry, subagentSettings),
-				inheritedFallbackChain: inheritedRetryFallbackChain,
-				model,
-				authFallbackUsed,
-			});
-			if (retryFallbackRole) {
-				logger.debug("Configured subagent runtime model fallback chain", {
-					role: retryFallbackRole,
-					requested: modelPatterns,
-				});
+				if (retryFallbackRole) {
+					logger.debug("Configured subagent runtime model fallback chain", {
+						role: retryFallbackRole,
+						requested: modelPatterns,
+					});
+				}
 			}
 			if (model?.contextWindow && model.contextWindow > 0) {
 				progress.contextWindow = model.contextWindow;
