@@ -47,6 +47,7 @@ class WorkService:
         "settle_stage_launch": "work.execute",
         "cancel_stage_launch": "work.execute",
         "reconcile_stage_launch": "work.execute",
+        "record_stage_preflight": "work.execute",
         "associate_candidate_source": "work.execute",
         "attest_checkpoint_delivery": "work.close",
         "record_closeout_review": "work.close",

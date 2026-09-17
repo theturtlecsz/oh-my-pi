@@ -243,6 +243,12 @@ class StageLaunchStatus(StrEnum):
     SUPERSEDED = "superseded"
 
 
+class StagePreflightOutcome(StrEnum):
+    SELECTED = "selected"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 class BudgetScopeKind(StrEnum):
     ACCOUNT = "account"
     SESSION = "session"
@@ -371,6 +377,95 @@ class StageLaunch(StrictModel):
     reserved_at: datetime
     handed_off_at: datetime | None = None
     settled_at: datetime | None = None
+
+
+class StagePreflightOrchestrationUsage(StrictModel):
+    input: int | None = Field(default=None, ge=0, strict=True)
+    cacheRead: int | None = Field(default=None, ge=0, strict=True)
+    output: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_not_empty(self) -> StagePreflightOrchestrationUsage:
+        if self.input is None and self.cacheRead is None and self.output is None:
+            raise ValueError("orchestration cannot be empty")
+        return self
+
+
+class StagePreflightCttlUsage(StrictModel):
+    ephemeral5m: int | None = Field(default=None, ge=0, strict=True)
+    ephemeral1h: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_not_empty(self) -> StagePreflightCttlUsage:
+        if self.ephemeral5m is None and self.ephemeral1h is None:
+            raise ValueError("cttl cannot be empty")
+        return self
+
+
+class StagePreflightServerUsage(StrictModel):
+    webSearch: int | None = Field(default=None, ge=0, strict=True)
+    webFetch: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_not_empty(self) -> StagePreflightServerUsage:
+        if self.webSearch is None and self.webFetch is None:
+            raise ValueError("server cannot be empty")
+        return self
+
+
+class StagePreflightUsage(StrictModel):
+    input: int = Field(ge=0, strict=True)
+    output: int = Field(ge=0, strict=True)
+    cacheRead: int = Field(ge=0, strict=True)
+    cacheWrite: int = Field(ge=0, strict=True)
+    totalTokens: int = Field(ge=0, strict=True)
+    contextTokens: int | None = Field(default=None, ge=0, strict=True)
+    premiumRequests: int | None = Field(default=None, ge=0, strict=True)
+    reasoningTokens: int | None = Field(default=None, ge=0, strict=True)
+    orchestration: StagePreflightOrchestrationUsage | None = None
+    cttl: StagePreflightCttlUsage | None = None
+    server: StagePreflightServerUsage | None = None
+
+
+class StagePreflight(StrictModel):
+    preflight_id: UUID
+    workspace_id: UUID
+    work_id: UUID
+    revision_id: UUID | None = None
+    candidate_id: UUID | None = None
+    attempt_id: UUID | None = None
+    grant_id: UUID | None = None
+    session_id: str | None = None
+    role: StageLaunchRole
+    tool_call_id: str = Field(min_length=1)
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    probe_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    transport_attempt_id: UUID
+    ordinal: int = Field(ge=0, strict=True)
+    requested_selector: str = Field(min_length=1)
+    requested_provider: str = Field(min_length=1)
+    requested_model: str = Field(min_length=1)
+    requested_api: str = Field(min_length=1)
+    requested_effort: str = Field(min_length=1)
+    requested_wire_model: str = Field(min_length=1)
+    is_fallback: bool = False
+    outcome: StagePreflightOutcome
+    stop_reason: str | None = None
+    error: str | None = None
+    requests: int | None = Field(default=None, ge=0, strict=True)
+    usage: StagePreflightUsage | None = None
+    provider_request_id: str | None = None
+    observed_at: datetime
+
+    @model_validator(mode="after")
+    def validate_outcome_and_error(self) -> StagePreflight:
+        if self.outcome == StagePreflightOutcome.SELECTED:
+            if self.error is not None:
+                raise ValueError("selected preflight cannot have error")
+        else:
+            if self.error is None or not self.error.strip():
+                raise ValueError(f"{self.outcome.value} preflight requires error")
+        return self
 
 
 class CandidateSourceVersion(StrictModel):
@@ -928,6 +1023,44 @@ class ReconcileStageLaunchPayload(StrictModel):
     reason: str = Field(min_length=1)
 
 
+class RecordStagePreflightPayload(StrictModel):
+    work_id: UUID
+    revision_id: UUID | None = None
+    candidate_id: UUID | None = None
+    attempt_id: UUID | None = None
+    grant_id: UUID | None = None
+    session_id: str | None = None
+    role: StageLaunchRole
+    tool_call_id: str = Field(min_length=1)
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    probe_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    transport_attempt_id: UUID
+    ordinal: int = Field(ge=0, strict=True)
+    requested_selector: str = Field(min_length=1)
+    requested_provider: str = Field(min_length=1)
+    requested_model: str = Field(min_length=1)
+    requested_api: str = Field(min_length=1)
+    requested_effort: str = Field(min_length=1)
+    requested_wire_model: str = Field(min_length=1)
+    is_fallback: bool = False
+    outcome: StagePreflightOutcome
+    stop_reason: str | None = None
+    error: str | None = None
+    requests: int | None = Field(default=None, ge=0, strict=True)
+    usage: StagePreflightUsage | None = None
+    provider_request_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_outcome_and_error(self) -> RecordStagePreflightPayload:
+        if self.outcome == StagePreflightOutcome.SELECTED:
+            if self.error is not None:
+                raise ValueError("selected preflight cannot have error")
+        else:
+            if self.error is None or not self.error.strip():
+                raise ValueError(f"{self.outcome.value} preflight requires error")
+        return self
+
+
 class CreateBudgetScopePayload(StrictModel):
     scope_id: UUID
     parent_scope_id: UUID | None = None
@@ -1365,6 +1498,11 @@ class ReconcileStageLaunchCommand(StrictModel):
     payload: ReconcileStageLaunchPayload
 
 
+class RecordStagePreflightCommand(StrictModel):
+    type: Literal["record_stage_preflight"]
+    payload: RecordStagePreflightPayload
+
+
 class CreateBudgetScopeCommand(StrictModel):
     type: Literal["create_budget_scope"]
     payload: CreateBudgetScopePayload
@@ -1461,6 +1599,7 @@ Command = Annotated[
     | SettleStageLaunchCommand
     | CancelStageLaunchCommand
     | ReconcileStageLaunchCommand
+    | RecordStagePreflightCommand
     | CreateBudgetScopeCommand
     | ReserveBudgetCommand
     | ClaimBudgetCommand

@@ -12,6 +12,7 @@ from .models import (
     BudgetScope,
     CandidateSourceVersion,
     StageLaunch,
+    StagePreflight,
     Candidate,
     CheckpointDelivery,
     CloseAttempt,
@@ -78,6 +79,12 @@ class StageLaunchResult(StrictModel):
     reason: str | None = None
 
 
+class StagePreflightResult(StrictModel):
+    type: Literal["record_stage_preflight"]
+    status: Literal["applied", "replayed", "refused"]
+    preflight: StagePreflight | None = None
+
+
 class CandidateSourceAssociationResult(StrictModel):
     type: Literal["associate_candidate_source"]
     status: Literal["applied", "replayed", "refused"]
@@ -101,6 +108,7 @@ class WorkflowView(StrictModel):
     audit_manifest: AuditManifest | None = None
     auditor_launches: tuple[AuditorLaunch, ...] = ()
     stage_launches: tuple[StageLaunch, ...] = ()
+    stage_preflights: tuple[StagePreflight, ...] = ()
     candidate_source_versions: tuple[CandidateSourceVersion, ...] = ()
     close_attempt_events: tuple[CloseAttemptEvent, ...] = ()
     checkpoint_deliveries: tuple[CheckpointDelivery, ...] = ()
@@ -373,6 +381,7 @@ CommandResult = Annotated[
     | FinalizeCandidateResult
     | CloseAttemptResult
     | StageLaunchResult
+    | StagePreflightResult
     | CandidateSourceAssociationResult
     | RecordCloseoutReviewResult
     | ProjectHealthResult

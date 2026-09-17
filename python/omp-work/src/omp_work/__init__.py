@@ -99,6 +99,7 @@ _COMMAND_TYPES = frozenset(
         "settle_stage_launch",
         "cancel_stage_launch",
         "reconcile_stage_launch",
+        "record_stage_preflight",
         "attest_checkpoint_delivery",
         "record_closeout_review",
         "complete_work",

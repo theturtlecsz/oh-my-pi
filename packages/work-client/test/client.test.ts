@@ -952,3 +952,157 @@ test("executes budget and provider-account commands with typed results", async (
 		expect(accountRes.result.account.provider).toBe("gemini");
 	}
 });
+
+test("executes record_stage_preflight and decodes typed result and workflow stage_preflights", async () => {
+	let commandRequest: Request | undefined;
+	let workflowRequest: Request | undefined;
+
+	const preflightId = "00000000-0000-7000-8000-000000000010";
+	const workId = "00000000-0000-7000-8000-000000000020";
+	const transportAttemptId = "00000000-0000-7000-8000-000000000050";
+	const taskSha256 = "a".repeat(64);
+	const probeSha256 = "b".repeat(64);
+
+	const mockPreflight = {
+		preflight_id: preflightId,
+		workspace_id: ENV.workspace_id,
+		work_id: workId,
+		revision_id: null,
+		candidate_id: null,
+		attempt_id: null,
+		grant_id: null,
+		session_id: null,
+		role: "implement" as const,
+		tool_call_id: "call-1",
+		task_sha256: taskSha256,
+		probe_sha256: probeSha256,
+		transport_attempt_id: transportAttemptId,
+		ordinal: 1,
+		requested_selector: "gemini:gemini-3.8-flash",
+		requested_provider: "gemini",
+		requested_model: "gemini-3.8-flash",
+		requested_api: "google-genai",
+		requested_effort: "medium",
+		requested_wire_model: "gemini-3.8-flash-preview",
+		is_fallback: false,
+		outcome: "selected" as const,
+		stop_reason: null,
+		error: null,
+		requests: null,
+		usage: {
+			input: 100,
+			output: 50,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 150,
+			orchestration: { input: 100, cacheRead: 0, output: 50 },
+			cttl: null,
+			server: null,
+		},
+		provider_request_id: null,
+		observed_at: "2026-09-17T01:00:00Z",
+	};
+
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		ENV.workspace_id,
+		() => "token",
+		async (input, init) => {
+			const req = new Request(String(input), init);
+			if (req.url.endsWith("/v1/commands")) {
+				commandRequest = req;
+				return Response.json({
+					receipt: RECEIPT,
+					result: {
+						type: "record_stage_preflight",
+						status: "applied",
+						preflight: mockPreflight,
+					},
+				});
+			}
+			if (req.url.includes("/workflow")) {
+				workflowRequest = req;
+				return Response.json({
+					item: {
+						work_id: workId,
+						key: "W-1",
+						workspace_id: ENV.workspace_id,
+						state: "IN_PROGRESS",
+						effort: "medium",
+						title: "Work Item 1",
+						labels: [],
+						parent_work_id: null,
+						created_by: "user-1",
+						created_at: "2026-09-17T00:00:00Z",
+						updated_at: "2026-09-17T00:00:00Z",
+						row_version: 1,
+					},
+					relations: [],
+					receipts: [],
+					close_attempts: [],
+					audit_manifest: null,
+					auditor_launches: [],
+					stage_launches: [],
+					stage_preflights: [mockPreflight],
+					candidate_source_versions: [],
+					close_attempt_events: [],
+					checkpoint_deliveries: [],
+					project: null,
+				});
+			}
+			return new Response(null, { status: 404 });
+		},
+	);
+
+	const preflightRes = await client.execute({
+		...ENV,
+		command: {
+			type: "record_stage_preflight",
+			payload: {
+				work_id: workId,
+				role: "implement",
+				tool_call_id: "call-1",
+				task_sha256: taskSha256,
+				probe_sha256: probeSha256,
+				transport_attempt_id: transportAttemptId,
+				ordinal: 1,
+				requested_selector: "gemini:gemini-3.8-flash",
+				requested_provider: "gemini",
+				requested_model: "gemini-3.8-flash",
+				requested_api: "google-genai",
+				requested_effort: "medium",
+				requested_wire_model: "gemini-3.8-flash-preview",
+				outcome: "selected",
+				usage: {
+					input: 100,
+					output: 50,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 150,
+					orchestration: { input: 100, cacheRead: 0, output: 50 },
+					cttl: null,
+					server: null,
+				},
+			},
+		},
+	});
+
+	expect(commandRequest?.url).toBe("http://127.0.0.1:54322/v1/commands");
+	expect(preflightRes.result.type).toBe("record_stage_preflight");
+	if (preflightRes.result.type === "record_stage_preflight") {
+		expect(preflightRes.result.status).toBe("applied");
+		expect(preflightRes.result.preflight?.tool_call_id).toBe("call-1");
+		expect(preflightRes.result.preflight?.probe_sha256).toBe(probeSha256);
+		expect(preflightRes.result.preflight?.role).toBe("implement");
+		expect(preflightRes.result.preflight?.outcome).toBe("selected");
+		expect(preflightRes.result.preflight?.usage?.orchestration?.input).toBe(100);
+	}
+
+	const wf = await client.workflow("W-1");
+	expect(workflowRequest?.url).toBe("http://127.0.0.1:54322/v1/work-items/W-1/workflow");
+	expect(wf.stage_preflights).toBeDefined();
+	expect(wf.stage_preflights.length).toBe(1);
+	expect(wf.stage_preflights[0].preflight_id).toBe(preflightId);
+	expect(wf.stage_preflights[0].outcome).toBe("selected");
+	expect(wf.stage_preflights[0].tool_call_id).toBe("call-1");
+});

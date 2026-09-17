@@ -474,6 +474,95 @@ export type SettleStageLaunchPayload = {
 };
 export type CancelStageLaunchPayload = { launch_id: UUID; reason: string };
 export type ReconcileStageLaunchPayload = { launch_id: UUID; reason: string };
+export type StagePreflightOutcome = "selected" | "failed" | "cancelled";
+export type StagePreflightOrchestrationUsage = {
+	input?: number | null;
+	cacheRead?: number | null;
+	output?: number | null;
+};
+export type StagePreflightCttlUsage = {
+	ephemeral5m?: number | null;
+	ephemeral1h?: number | null;
+};
+export type StagePreflightServerUsage = {
+	webSearch?: number | null;
+	webFetch?: number | null;
+};
+export type StagePreflightUsage = {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	contextTokens?: number | null;
+	premiumRequests?: number | null;
+	reasoningTokens?: number | null;
+	orchestration?: StagePreflightOrchestrationUsage | null;
+	cttl?: StagePreflightCttlUsage | null;
+	server?: StagePreflightServerUsage | null;
+};
+export type StagePreflight = {
+	preflight_id: UUID;
+	workspace_id: UUID;
+	work_id: UUID;
+	revision_id: UUID | null;
+	candidate_id: UUID | null;
+	attempt_id: UUID | null;
+	grant_id: UUID | null;
+	session_id: string | null;
+	role: StageLaunchRole;
+	tool_call_id: string;
+	task_sha256: string;
+	probe_sha256: string;
+	transport_attempt_id: UUID;
+	ordinal: number;
+	requested_selector: string;
+	requested_provider: string;
+	requested_model: string;
+	requested_api: string;
+	requested_effort: string;
+	requested_wire_model: string;
+	is_fallback: boolean;
+	outcome: StagePreflightOutcome;
+	stop_reason: string | null;
+	error: string | null;
+	requests: number | null;
+	usage: StagePreflightUsage | null;
+	provider_request_id: string | null;
+	observed_at: string;
+};
+export type RecordStagePreflightPayload = {
+	work_id: UUID;
+	revision_id?: UUID | null;
+	candidate_id?: UUID | null;
+	attempt_id?: UUID | null;
+	grant_id?: UUID | null;
+	session_id?: string | null;
+	role: StageLaunchRole;
+	tool_call_id: string;
+	task_sha256: string;
+	probe_sha256: string;
+	transport_attempt_id: UUID;
+	ordinal: number;
+	requested_selector: string;
+	requested_provider: string;
+	requested_model: string;
+	requested_api: string;
+	requested_effort: string;
+	requested_wire_model: string;
+	is_fallback?: boolean;
+	outcome: StagePreflightOutcome;
+	stop_reason?: string | null;
+	error?: string | null;
+	requests?: number | null;
+	usage?: StagePreflightUsage | null;
+	provider_request_id?: string | null;
+};
+export type StagePreflightResult = {
+	type: "record_stage_preflight";
+	status: "applied" | "replayed" | "refused";
+	preflight?: StagePreflight | null;
+};
 export type CandidateSourceVersion = {
 	candidate_id: UUID;
 	workspace_id: UUID;
@@ -831,6 +920,7 @@ export type Command =
 	| { type: "settle_stage_launch"; payload: SettleStageLaunchPayload }
 	| { type: "cancel_stage_launch"; payload: CancelStageLaunchPayload }
 	| { type: "reconcile_stage_launch"; payload: ReconcileStageLaunchPayload }
+	| { type: "record_stage_preflight"; payload: RecordStagePreflightPayload }
 	| { type: "create_budget_scope"; payload: CreateBudgetScopePayload }
 	| { type: "reserve_budget"; payload: ReserveBudgetPayload }
 	| { type: "claim_budget"; payload: ClaimBudgetPayload }
@@ -949,6 +1039,7 @@ export type CommandResult =
 			launch?: StageLaunch | null;
 			reason?: string | null;
 	  }
+	| StagePreflightResult
 	| {
 			type: "associate_candidate_source";
 			status: "applied" | "replayed" | "refused";
@@ -1092,6 +1183,7 @@ export type WorkflowView = {
 	audit_manifest: AuditManifest | null;
 	auditor_launches: AuditorLaunch[];
 	stage_launches: StageLaunch[];
+	stage_preflights: StagePreflight[];
 	candidate_source_versions: CandidateSourceVersion[];
 	close_attempt_events: CloseAttemptEvent[];
 	checkpoint_deliveries: CheckpointDelivery[];

@@ -42,6 +42,8 @@ from .models import (
     BudgetReservationState,
     BudgetResource,
     StageLaunch,
+    StagePreflight,
+    RecordStagePreflightPayload,
     Candidate,
     CloseAttempt,
     CommandEnvelope,
@@ -79,6 +81,7 @@ _LAUNCH_FIELDS = "launch_id,attempt_id,manifest_id,launch_number,task_sha256,too
 _EVENT_FIELDS = "event_id,sequence,work_id,attempt_id,launch_id,event_type,reason_code,reason,legal_next_actions,remaining_launches,remaining_reports,requires_fresh_authorization,rendered_text,rendered_sha256,requires_delivery,created_at"
 _DELIVERY_FIELDS = "delivery_id,event_id,delivery_sequence,owner_session_id,rendered_sha256,status,authorization_ref,created_at"
 _STAGE_LAUNCH_FIELDS = "launch_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,role,request_sha256,tool_call_id,task_sha256,prepared_context_sha256,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,resolved_selector,resolved_provider,resolved_model,served_selector,served_model,is_fallback,fallback_reason,status,outcome_sha256,outcome,reserved_at,handed_off_at,settled_at"
+_STAGE_PREFLIGHT_FIELDS = "preflight_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,session_id,role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,is_fallback,outcome,stop_reason,error,requests,usage,provider_request_id,observed_at"
 _SOURCE_VERSION_FIELDS = "candidate_id,workspace_id,work_id,revision_id,repository_id,source_version_id,snapshot_id,base_commit,analyzed_commit,tree_sha,source_manifest_sha256,snapshot_manifest_sha256,content_sha256,association_sha256,producer,producer_receipt_sha256,created_at"
 _PROVIDER_ACCOUNT_FIELDS = "account_id,workspace_id,provider,account_identity,entitlement_evidence,evidence_observed_at,billing_mode,rate_card_version,observed_balance,balance_provenance,reset_at,concurrency_limit"
 _LIVE_STATES = tuple(sorted(state.value for state in LIVE_CLOSE_ATTEMPT_STATES))
@@ -358,6 +361,7 @@ class PostgresWorkStore:
             "settle_stage_launch",
             "cancel_stage_launch",
             "reconcile_stage_launch",
+            "record_stage_preflight",
             "complete_work",
             "create_budget_scope",
             "reserve_budget",
@@ -465,6 +469,8 @@ class PostgresWorkStore:
                     result = self._cancel_stage_launch(cur, envelope)
                 elif command.type == "reconcile_stage_launch":
                     result = self._reconcile_stage_launch(cur, envelope)
+                elif command.type == "record_stage_preflight":
+                    result = self._record_stage_preflight(cur, envelope)
                 elif command.type == "create_budget_scope":
                     result = self._create_budget_scope(cur, envelope)
                 elif command.type == "reserve_budget":
@@ -3269,6 +3275,66 @@ class PostgresWorkStore:
             "account": account,
         }
 
+    def _bind_stage_identities(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        payload: Any,
+        *,
+        require_active: bool = False,
+    ) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+        # Bind every optional identity before minting a launch or recording preflight.
+        # A valid UUID is insufficient: the revision, candidate, attempt, and grant must all
+        # describe this exact work item.
+        if payload.revision_id is not None:
+            cur.execute(
+                "SELECT work_id FROM omp_work.work_revisions WHERE workspace_id=%s AND revision_id=%s",
+                (workspace_id, payload.revision_id),
+            )
+            revision = cur.fetchone()
+            if revision is None or revision["work_id"] != payload.work_id:
+                raise WorkStoreError("stale_evidence", ("stage revision is not bound to the work item",))
+        if payload.candidate_id is not None:
+            cur.execute(
+                "SELECT work_id,revision_id FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s",
+                (workspace_id, payload.candidate_id),
+            )
+            candidate = cur.fetchone()
+            if candidate is None or candidate["work_id"] != payload.work_id or (
+                payload.revision_id is not None and candidate["revision_id"] != payload.revision_id
+            ):
+                raise WorkStoreError("stale_evidence", ("stage candidate is not bound to the work revision",))
+        if payload.attempt_id is not None:
+            cur.execute(
+                "SELECT work_id,execution_grant_id,state FROM omp_work.close_attempts WHERE workspace_id=%s AND attempt_id=%s",
+                (workspace_id, payload.attempt_id),
+            )
+            attempt = cur.fetchone()
+            if attempt is None or attempt["work_id"] != payload.work_id or (
+                payload.grant_id is not None and attempt["execution_grant_id"] != payload.grant_id
+            ):
+                raise WorkStoreError("stale_evidence", ("stage attempt is not bound to the work or grant",))
+        grant = None
+        grant_item = None
+        if payload.grant_id is not None:
+            cur.execute(
+                "SELECT state FROM omp_work.execution_grants WHERE workspace_id=%s AND grant_id=%s FOR UPDATE",
+                (workspace_id, payload.grant_id),
+            )
+            grant = cur.fetchone()
+            if grant is None:
+                raise WorkStoreError("invalid_request", ("unknown execution grant",))
+            if require_active and grant["state"] != "active":
+                raise WorkStoreError("execution_grant_inactive", ("stage launch requires an active execution grant",))
+            cur.execute(
+                "SELECT phase,claimed_revision_id,criteria_revision_id,plan_stamp_sha256 FROM omp_work.execution_grant_items WHERE workspace_id=%s AND grant_id=%s AND work_id=%s FOR UPDATE",
+                (workspace_id, payload.grant_id, payload.work_id),
+            )
+            grant_item = cur.fetchone()
+            if grant_item is None:
+                raise WorkStoreError("stale_evidence", ("stage work item is not part of the execution grant",))
+        return grant, grant_item
+
     def _reserve_stage_launch(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -3282,54 +3348,11 @@ class PostgresWorkStore:
         if existing is not None:
             return {"type": "reserve_stage_launch", "status": "replayed", "launch": _row_json(existing)}
 
-        # Bind every optional identity before minting a launch. A valid UUID is
-        # insufficient: the revision, candidate, attempt, and grant must all
-        # describe this exact work item and the role's current phase.
-        if payload.revision_id is not None:
-            cur.execute(
-                "SELECT work_id FROM omp_work.work_revisions WHERE workspace_id=%s AND revision_id=%s",
-                (envelope.workspace_id, payload.revision_id),
-            )
-            revision = cur.fetchone()
-            if revision is None or revision["work_id"] != payload.work_id:
-                raise WorkStoreError("stale_evidence", ("stage revision is not bound to the work item",))
-        if payload.candidate_id is not None:
-            cur.execute(
-                "SELECT work_id,revision_id FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s",
-                (envelope.workspace_id, payload.candidate_id),
-            )
-            candidate = cur.fetchone()
-            if candidate is None or candidate["work_id"] != payload.work_id or (
-                payload.revision_id is not None and candidate["revision_id"] != payload.revision_id
-            ):
-                raise WorkStoreError("stale_evidence", ("stage candidate is not bound to the work revision",))
-        if payload.attempt_id is not None:
-            cur.execute(
-                "SELECT work_id,execution_grant_id,state FROM omp_work.close_attempts WHERE workspace_id=%s AND attempt_id=%s",
-                (envelope.workspace_id, payload.attempt_id),
-            )
-            attempt = cur.fetchone()
-            if attempt is None or attempt["work_id"] != payload.work_id or (
-                payload.grant_id is not None and attempt["execution_grant_id"] != payload.grant_id
-            ):
-                raise WorkStoreError("stale_evidence", ("stage attempt is not bound to the work or grant",))
-        if payload.grant_id is not None:
-            cur.execute(
-                "SELECT state FROM omp_work.execution_grants WHERE workspace_id=%s AND grant_id=%s FOR UPDATE",
-                (envelope.workspace_id, payload.grant_id),
-            )
-            grant = cur.fetchone()
-            if grant is None:
-                raise WorkStoreError("invalid_request", ("unknown execution grant",))
-            if grant["state"] != "active":
-                raise WorkStoreError("execution_grant_inactive", ("stage launch requires an active execution grant",))
-            cur.execute(
-                "SELECT phase,claimed_revision_id,criteria_revision_id,plan_stamp_sha256 FROM omp_work.execution_grant_items WHERE workspace_id=%s AND grant_id=%s AND work_id=%s FOR UPDATE",
-                (envelope.workspace_id, payload.grant_id, payload.work_id),
-            )
-            grant_item = cur.fetchone()
-            if grant_item is None:
-                raise WorkStoreError("stale_evidence", ("stage work item is not part of the execution grant",))
+        grant, grant_item = self._bind_stage_identities(
+            cur, envelope.workspace_id, payload, require_active=True
+        )
+        if grant is not None:
+            assert grant_item is not None
             expected_phases = {
                 "plan": {"planning"},
                 "implement": {"executing", "remediating"},
@@ -3541,6 +3564,114 @@ class PostgresWorkStore:
             (status, envelope.workspace_id, payload.launch_id),
         )
         return {"type": envelope.command.type, "status": "applied", "launch": _row_json(cur.fetchone()), "reason": payload.reason}
+
+    def _record_stage_preflight(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload: RecordStagePreflightPayload = envelope.command.payload
+        self._lock_work_chain(cur, envelope.workspace_id, payload.work_id)
+
+        cur.execute(
+            f"SELECT {_STAGE_PREFLIGHT_FIELDS} FROM omp_work.stage_preflights WHERE workspace_id=%s AND transport_attempt_id=%s",
+            (envelope.workspace_id, payload.transport_attempt_id),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            stored_usage = existing["usage"]
+            if isinstance(stored_usage, str):
+                stored_usage = json.loads(stored_usage)
+            payload_usage = (
+                payload.usage.model_dump(mode="json", exclude_none=True)
+                if payload.usage is not None
+                else None
+            )
+            matches = (
+                existing["work_id"] == payload.work_id
+                and existing["revision_id"] == payload.revision_id
+                and existing["candidate_id"] == payload.candidate_id
+                and existing["attempt_id"] == payload.attempt_id
+                and existing["grant_id"] == payload.grant_id
+                and existing["session_id"] == payload.session_id
+                and existing["role"] == payload.role.value
+                and existing["tool_call_id"] == payload.tool_call_id
+                and existing["task_sha256"] == payload.task_sha256
+                and existing["probe_sha256"] == payload.probe_sha256
+                and existing["ordinal"] == payload.ordinal
+                and existing["requested_selector"] == payload.requested_selector
+                and existing["requested_provider"] == payload.requested_provider
+                and existing["requested_model"] == payload.requested_model
+                and existing["requested_api"] == payload.requested_api
+                and existing["requested_effort"] == payload.requested_effort
+                and existing["requested_wire_model"] == payload.requested_wire_model
+                and existing["is_fallback"] == payload.is_fallback
+                and existing["outcome"] == payload.outcome.value
+                and existing["stop_reason"] == payload.stop_reason
+                and existing["error"] == payload.error
+                and existing["requests"] == payload.requests
+                and stored_usage == payload_usage
+                and existing["provider_request_id"] == payload.provider_request_id
+            )
+            if matches:
+                return {
+                    "type": "record_stage_preflight",
+                    "status": "replayed",
+                    "preflight": _row_json(existing),
+                }
+            raise WorkStoreError(
+                "idempotency_conflict", ("conflicting_stage_preflight_payload",)
+            )
+
+        self._bind_stage_identities(cur, envelope.workspace_id, payload)
+        preflight_id = uuid4()
+        usage_json = (
+            json.dumps(payload.usage.model_dump(mode="json", exclude_none=True))
+            if payload.usage is not None
+            else None
+        )
+        cur.execute(
+            f"INSERT INTO omp_work.stage_preflights("
+            f"preflight_id,workspace_id,work_id,revision_id,candidate_id,attempt_id,grant_id,session_id,"
+            f"role,tool_call_id,task_sha256,probe_sha256,transport_attempt_id,ordinal,"
+            f"requested_selector,requested_provider,requested_model,requested_api,requested_effort,requested_wire_model,"
+            f"is_fallback,outcome,stop_reason,error,requests,usage,provider_request_id"
+            f") VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            f"RETURNING {_STAGE_PREFLIGHT_FIELDS}",
+            (
+                preflight_id,
+                envelope.workspace_id,
+                payload.work_id,
+                payload.revision_id,
+                payload.candidate_id,
+                payload.attempt_id,
+                payload.grant_id,
+                payload.session_id,
+                payload.role.value,
+                payload.tool_call_id,
+                payload.task_sha256,
+                payload.probe_sha256,
+                payload.transport_attempt_id,
+                payload.ordinal,
+                payload.requested_selector,
+                payload.requested_provider,
+                payload.requested_model,
+                payload.requested_api,
+                payload.requested_effort,
+                payload.requested_wire_model,
+                payload.is_fallback,
+                payload.outcome.value,
+                payload.stop_reason,
+                payload.error,
+                payload.requests,
+                usage_json,
+                payload.provider_request_id,
+            ),
+        )
+        preflight = cur.fetchone()
+        return {
+            "type": "record_stage_preflight",
+            "status": "applied",
+            "preflight": _row_json(preflight),
+        }
 
     def _attest_checkpoint_delivery(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
@@ -6064,6 +6195,11 @@ class PostgresWorkStore:
                 )
                 stage_launches = [dict(row) for row in cur.fetchall()]
                 cur.execute(
+                    f"SELECT {_STAGE_PREFLIGHT_FIELDS} FROM omp_work.stage_preflights WHERE workspace_id=%s AND work_id=%s ORDER BY observed_at,preflight_id LIMIT 200",
+                    (workspace_id, work_id),
+                )
+                stage_preflights = [dict(row) for row in cur.fetchall()]
+                cur.execute(
                     f"SELECT {_SOURCE_VERSION_FIELDS} FROM omp_work.candidate_source_versions WHERE workspace_id=%s AND work_id=%s ORDER BY created_at,candidate_id LIMIT 20",
                     (workspace_id, work_id),
                 )
@@ -6111,6 +6247,7 @@ class PostgresWorkStore:
                     "audit_manifest": audit_manifest,
                     "auditor_launches": auditor_launches,
                     "stage_launches": stage_launches,
+                    "stage_preflights": stage_preflights,
                     "candidate_source_versions": source_versions,
                     "close_attempt_events": close_attempt_events,
                     "checkpoint_deliveries": checkpoint_deliveries,
