@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,7 +11,7 @@ const installSh = join(import.meta.dir, "..", "install.sh");
 const tempDirs: string[] = [];
 
 afterEach(() => {
-	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 interface RunResult {
@@ -30,7 +30,7 @@ function runInstall(home: string, ...args: string[]): RunResult {
 }
 
 function fakeHome(): string {
-	const home = mkdtempSync(join(tmpdir(), "omp-install-test-"));
+	const home = fs.mkdtempSync(join(tmpdir(), "omp-install-test-"));
 	tempDirs.push(home);
 	return home;
 }
@@ -63,15 +63,15 @@ describe("install.sh --print-manifest", () => {
 		const result = runInstall(home, "--print-manifest");
 		expect(result.exitCode, result.stderr).toBe(0);
 		const lines = result.stdout.split("\n").filter(Boolean);
-		// ext root + 6 singletons + 3 agent skills + 5 omp skills + 5 claude skills + 1 codex skill + 21 retired skill destinations, all absent
-		expect(lines).toHaveLength(42);
+		// ext root + 6 singletons + 1 control wrapper + 3 agent skills + 5 omp skills + 5 claude skills + 1 codex skill + 21 retired skill destinations, all absent
+		expect(lines).toHaveLength(43);
 		for (const line of lines) {
 			const cells = line.split("\t");
 			expect(cells).toHaveLength(4);
 			expect(cells[1]).toBe("absent");
 		}
 		// read-only: nothing was created under the fake home
-		expect(readdirSync(home)).toEqual([]);
+		expect(fs.readdirSync(home)).toEqual([]);
 	});
 
 	test("covers the extensions tree, singletons, and both skill sets after install", () => {
@@ -119,6 +119,17 @@ describe("install.sh --print-manifest", () => {
 			expect(byPath[`${home}/.claude/skills/${skill}`]?.[1], `retired claude skill ${skill}`).toBe("absent");
 			expect(byPath[`${home}/.codex/skills/${skill}`]?.[1], `retired codex skill ${skill}`).toBe("absent");
 		}
+		const wrapperPath = `${home}/.local/bin/omp-execution-control`;
+		const wrapperEntry = byPath[wrapperPath];
+		expect(wrapperEntry).toBeDefined();
+		expect(wrapperEntry[1]).toBe("file");
+		expect(wrapperEntry[2]).toBe("755");
+		const wrapperStat = fs.lstatSync(wrapperPath);
+		expect(wrapperStat.isFile()).toBe(true);
+		expect(wrapperStat.isSymbolicLink()).toBe(false);
+		expect(wrapperStat.mode & 0o777).toBe(0o755);
+		const wrapperContent = fs.readFileSync(wrapperPath, "utf8");
+		expect(wrapperContent).toContain("tools/execution-control.ts");
 		// every managed symlink resolves into this repository checkout
 		const repoRoot = join(import.meta.dir, "..", "..");
 		for (const cells of Object.values(byPath)) {
@@ -148,6 +159,33 @@ describe("install.sh --print-manifest", () => {
 		const verify = runInstall(home, "--expect-backend", "work");
 		expect(verify.exitCode, verify.stderr).toBe(0);
 		expect(verify.stdout).toContain("backend work");
-		expect(existsSync(join(home, ".omp/agent/extensions/work-now.ts"))).toBe(true);
+		expect(fs.existsSync(join(home, ".omp/agent/extensions/work-now.ts"))).toBe(true);
+	});
+
+	test("control wrapper atomically replaces an existing symlink without following or truncating it", () => {
+		const home = fakeHome();
+		const binDir = join(home, ".local", "bin");
+		const wrapperPath = join(binDir, "omp-execution-control");
+		const targetFile = join(home, "innocent-target.txt");
+
+		fs.mkdirSync(binDir, { recursive: true });
+		fs.writeFileSync(targetFile, "CRITICAL_SECRET_DATA\n");
+		fs.symlinkSync(targetFile, wrapperPath);
+
+		expect(fs.lstatSync(wrapperPath).isSymbolicLink()).toBe(true);
+
+		const install = runInstall(home);
+		expect(install.exitCode, install.stderr).toBe(0);
+
+		// Target file content must be completely untouched and untruncated
+		expect(fs.readFileSync(targetFile, "utf8")).toBe("CRITICAL_SECRET_DATA\n");
+
+		// wrapperPath must now be a regular 0755 file, not a symlink
+		const stat = fs.lstatSync(wrapperPath);
+		expect(stat.isSymbolicLink()).toBe(false);
+		expect(stat.isFile()).toBe(true);
+		expect(stat.mode & 0o777).toBe(0o755);
+		expect(fs.readFileSync(wrapperPath, "utf8")).toContain("tools/execution-control.ts");
+		expect(fs.readdirSync(binDir).filter(name => name.startsWith(".omp-execution-control.tmp."))).toEqual([]);
 	});
 });

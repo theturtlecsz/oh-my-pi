@@ -33,7 +33,8 @@ managed_destinations() { # every managed live path outside the extensions set
     "$HOME/.omp/agent/rules/linear-plan.md" \
     "$HOME/AGENTS.md" \
     "$HOME/.omp/agent/AGENTS.md" \
-    "$HOME/.omp/agent/hook/task-observer-first-tool.mjs"
+    "$HOME/.omp/agent/hook/task-observer-first-tool.mjs" \
+    "$HOME/.local/bin/omp-execution-control"
   local s
   for s in $AGENT_SKILLS; do printf '%s\n' "$HOME/.agents/skills/$s"; done
   for s in $OMP_SKILLS; do printf '%s\n' "$HOME/.omp/agent/skills/$s"; done
@@ -171,6 +172,22 @@ unplace "$HOME/.omp/agent/rules/linear-plan.md"
 place agents/AGENTS.md        "$HOME/AGENTS.md"
 place agents/omp-AGENTS.md    "$HOME/.omp/agent/AGENTS.md"
 place hooks/task-observer-first-tool.mjs "$HOME/.omp/agent/hook/task-observer-first-tool.mjs"
+CONTROL_BIN="$HOME/.local/bin/omp-execution-control"
+CONTROL_DIR="$(dirname "$CONTROL_BIN")"
+mkdir -p "$CONTROL_DIR"
+CONTROL_TMP="$(mktemp "$CONTROL_DIR/.omp-execution-control.tmp.XXXXXX")"
+trap 'rm -f -- "${CONTROL_TMP:-}"' EXIT
+(
+  cat > "$CONTROL_TMP" <<EOF
+#!/usr/bin/env bash
+exec bun "$REPO/tools/execution-control.ts" "\$@"
+EOF
+  chmod 0755 "$CONTROL_TMP"
+)
+mv -fT -- "$CONTROL_TMP" "$CONTROL_BIN"
+CONTROL_TMP=""
+trap - EXIT
+echo "wrote   $CONTROL_BIN"
 for s in $AGENT_SKILLS; do
   place "skills/$s" "$HOME/.agents/skills/$s"
 done
