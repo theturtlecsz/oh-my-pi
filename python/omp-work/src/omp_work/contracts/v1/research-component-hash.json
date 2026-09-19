@@ -1,0 +1,38 @@
+{
+  "algorithm": "research-component.v1",
+  "definition": "decisions/0011-research-component-identity-and-compatibility.md",
+  "vectors": [
+    {
+      "name": "policy-component",
+      "descriptor": {
+        "contract_version": "research-component.v1",
+        "kind": "policy",
+        "name": "baseline-research-policy",
+        "version": "1.0.0",
+        "artifact_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "roles": [],
+        "capabilities": []
+      },
+      "component_sha256": "e86095fd7285b2fb630e4bbcd8f51ff5a069aac55b688a61ce65e4139d9fa700"
+    },
+    {
+      "name": "worker-component",
+      "descriptor": {
+        "contract_version": "research-component.v1",
+        "kind": "worker",
+        "name": "standard-research-worker",
+        "version": "1.0.0",
+        "artifact_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "roles": [
+          "campaign_planner",
+          "research_worker"
+        ],
+        "capabilities": [
+          "compute.gpu",
+          "eval.fast"
+        ]
+      },
+      "component_sha256": "63ec3ea070813b262215bab3d1703c13a329936c2423a6d3083a129cd658d597"
+    }
+  ]
+}

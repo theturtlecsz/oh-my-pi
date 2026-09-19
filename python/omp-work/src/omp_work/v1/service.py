@@ -76,6 +76,7 @@ class WorkService:
         "put_provider_account": "work.operate",
         "register_rate_card": "work.operate",
         "quote_budget": "work.execute",
+        "register_research_component": "work.execute",
         "create_research_campaign": "work.execute",
         "admit_research_campaign": "work.approve",
         "cancel_research_campaign": "work.execute",

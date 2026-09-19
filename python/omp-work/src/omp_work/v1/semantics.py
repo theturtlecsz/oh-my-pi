@@ -12,19 +12,16 @@ from .models import (
     Candidate,
     CloseAttempt,
     CloseAttemptState,
-    CompletionArtifactReference,
     CompletionBlocker,
-    CompletionCheckDefinition,
-    CompletionDeliveryBinding,
     CompletionEvidence,
     CompletionInput,
-    CompletionRunnerIdentity,
-    CompletionSubject,
     ContractExamples,
     EvidenceKind,
     EvidenceReceipt,
     RelationEdge,
     RelationKind,
+    ResearchCompatibilityManifest,
+    ResearchComponentKind,
 )
 
 
@@ -649,3 +646,22 @@ def research_campaign_transition_error(current: str, target: str) -> str | None:
     if (current, target) in RESEARCH_CAMPAIGN_TRANSITIONS:
         return None
     return f"campaign in state {current} cannot transition to {target}"
+
+
+def research_compatibility_error(
+    manifest: ResearchCompatibilityManifest,
+    kind: ResearchComponentKind,
+    component_sha256: str,
+) -> str | None:
+    accepted = {
+        "worker": manifest.workers,
+        "evaluator": manifest.evaluators,
+        "audit": manifest.audits,
+        "release": manifest.releases,
+        "environment": manifest.environments,
+    }[kind]
+    return (
+        None
+        if component_sha256 in accepted
+        else f"{kind} fingerprint is not declared compatible with the campaign"
+    )

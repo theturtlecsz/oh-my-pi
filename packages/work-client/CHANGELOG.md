@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added research component descriptor, compatibility manifest types, register_research_component command, and updated WORK_CONTRACT_SHA256 digest (R02-S3b).
 - Added research campaign lifecycle and conclusion commands (`set_research_campaign_state`, `conclude_research_campaign`), typed campaign outcomes and blocked dependency models, canonical trial action vocabulary, and updated `WORK_CONTRACT_SHA256` digest (R02-S2).
 - Add research domain types, campaign/trial/observation/deliverable-binding models, command payloads, and `research(key)` query method on `WorkClient` (R02-S1).
 - Added `budget_resource` on `ProviderAccount`, `resource` and `scope_id` on `BudgetQuote` (legacy nullable compatible), and updated `WORK_CONTRACT_SHA256` digest (OMP-233).

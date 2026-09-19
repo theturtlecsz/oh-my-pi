@@ -8,17 +8,33 @@ from uuid import UUID
 import psycopg
 
 from omp_work.v1.canonical import canonical_json, sha256
-from omp_work.v1.models import CommandEnvelope, RecordResearchObservationPayload
+from omp_work.v1.models import (
+    CommandEnvelope,
+    RecordResearchObservationPayload,
+    ResearchCompatibilityManifest,
+    ResearchComponentKind,
+)
 from omp_work.v1.semantics import (
     RESEARCH_CAMPAIGN_TRIAL_ACCEPTING,
     research_campaign_transition_error,
+    research_compatibility_error,
 )
 from omp_work.v1.store_shared import WorkStoreError, row_json
 
-_CAMPAIGN_FIELDS = "campaign_id,workspace_id,work_id,revision_id,domain,spec,spec_sha256,policy_sha256,state,cancel_reason,created_at,admitted_at,cancelled_at,outcome,outcome_reason,concluded_at,blocked_dependency,blocked_from_state"
+_CAMPAIGN_FIELDS = "campaign_id,workspace_id,work_id,revision_id,domain,spec,spec_sha256,policy_sha256,state,cancel_reason,created_at,admitted_at,cancelled_at,outcome,outcome_reason,concluded_at,blocked_dependency,blocked_from_state,compatibility,compatibility_sha256"
 _TRIAL_FIELDS = "trial_id,workspace_id,campaign_id,work_id,decision_id,candidate_digest,experiment_spec_sha256,evaluator_sha256,environment_sha256,input_manifest_sha256,seed,hardware_class,resource_request,policy_sha256,state,archived_reason,proposed_at,archived_at,action,reason"
 _OBSERVATION_FIELDS = "observation_id,workspace_id,campaign_id,trial_id,issuer_kind,source_ref,execution_status,commit_sha,payload,payload_sha256,observed_at,recorded_at"
 _DELIVERABLE_BINDING_FIELDS = "trial_id,workspace_id,campaign_id,work_id,revision_id,candidate_digest,native_candidate_id,binding_sha256,bound_at"
+_COMPONENT_FIELDS = "workspace_id,component_sha256,descriptor,kind,registered_at"
+
+
+def _component_json(row: dict[str, object] | None) -> dict[str, object] | None:
+    if row is None:
+        return None
+    res = row_json(row)
+    if res is not None and isinstance(res.get("descriptor"), str):
+        res["descriptor"] = json.loads(res["descriptor"])
+    return res
 
 
 def _campaign_json(row: dict[str, object] | None) -> dict[str, object] | None:
@@ -30,6 +46,8 @@ def _campaign_json(row: dict[str, object] | None) -> dict[str, object] | None:
             res["spec"] = json.loads(res["spec"])
         if isinstance(res.get("blocked_dependency"), str):
             res["blocked_dependency"] = json.loads(res["blocked_dependency"])
+        if isinstance(res.get("compatibility"), str):
+            res["compatibility"] = json.loads(res["compatibility"])
     return res
 
 
@@ -269,6 +287,61 @@ class ResearchStoreMixin:
             "campaign": _campaign_json(cur.fetchone()),
         }
 
+    def _register_research_component(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        descriptor_data = payload.descriptor.model_dump(mode="json")
+        computed_sha256 = sha256(descriptor_data)
+        if computed_sha256 != payload.component_sha256:
+            raise WorkStoreError(
+                "stale_evidence", ("component digest mismatch",)
+            )
+
+        cur.execute(
+            f"SELECT {_COMPONENT_FIELDS} FROM omp_research.components WHERE workspace_id=%s AND component_sha256=%s",
+            (envelope.workspace_id, payload.component_sha256),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            return {
+                "type": "register_research_component",
+                "status": "replayed",
+                "component": _component_json(existing),
+            }
+
+        cur.execute(
+            f"""
+            INSERT INTO omp_research.components (
+                workspace_id, component_sha256, descriptor
+            ) VALUES (%s, %s, %s)
+            ON CONFLICT (workspace_id, component_sha256) DO NOTHING
+            RETURNING {_COMPONENT_FIELDS}
+            """,
+            (
+                envelope.workspace_id,
+                payload.component_sha256,
+                canonical_json(descriptor_data),
+            ),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                f"SELECT {_COMPONENT_FIELDS} FROM omp_research.components WHERE workspace_id=%s AND component_sha256=%s",
+                (envelope.workspace_id, payload.component_sha256),
+            )
+            row = cur.fetchone()
+            return {
+                "type": "register_research_component",
+                "status": "replayed",
+                "component": _component_json(row),
+            }
+        return {
+            "type": "register_research_component",
+            "status": "applied",
+            "component": _component_json(row),
+        }
+
     def _admit_research_campaign(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -297,6 +370,7 @@ class ResearchStoreMixin:
                 and campaign["revision_id"] == payload.revision_id
                 and campaign["spec_sha256"] == payload.spec_sha256
                 and campaign["policy_sha256"] == payload.policy_sha256
+                and campaign.get("compatibility_sha256") == payload.compatibility_sha256
             ):
                 return {
                     "type": "admit_research_campaign",
@@ -342,16 +416,75 @@ class ResearchStoreMixin:
                 ("work revision has drifted since campaign creation",),
             )
 
+        compat_data = payload.compatibility.model_dump(mode="json")
+        computed_compat_sha = sha256(compat_data)
+        if computed_compat_sha != payload.compatibility_sha256:
+            raise WorkStoreError(
+                "stale_evidence", ("compatibility manifest digest mismatch",)
+            )
+
+        cur.execute(
+            "SELECT kind FROM omp_research.components WHERE workspace_id=%s AND component_sha256=%s",
+            (envelope.workspace_id, payload.policy_sha256),
+        )
+        policy_row = cur.fetchone()
+        if policy_row is None:
+            raise WorkStoreError("invalid_request", ("unknown policy component",))
+        if policy_row["kind"] != "policy":
+            raise WorkStoreError(
+                "invalid_request", ("policy fingerprint is not a policy component",)
+            )
+
+        manifest_entries: list[tuple[str, str]] = []
+        for w in payload.compatibility.workers:
+            manifest_entries.append(("worker", w))
+        for e in payload.compatibility.evaluators:
+            manifest_entries.append(("evaluator", e))
+        for a in payload.compatibility.audits:
+            manifest_entries.append(("audit", a))
+        for r in payload.compatibility.releases:
+            manifest_entries.append(("release", r))
+        for env in payload.compatibility.environments:
+            manifest_entries.append(("environment", env))
+
+        if manifest_entries:
+            all_hashes = list({sha for _, sha in manifest_entries})
+            cur.execute(
+                "SELECT component_sha256, kind FROM omp_research.components WHERE workspace_id=%s AND component_sha256 = ANY(%s)",
+                (envelope.workspace_id, all_hashes),
+            )
+            found_components = {
+                row["component_sha256"]: row["kind"] for row in cur.fetchall()
+            }
+            for axis, sha in manifest_entries:
+                if sha not in found_components:
+                    raise WorkStoreError(
+                        "invalid_request", (f"unknown {axis} component",)
+                    )
+                if found_components[sha] != axis:
+                    raise WorkStoreError(
+                        "invalid_request",
+                        (f"{axis} fingerprint is not a {axis} component",),
+                    )
+
         cur.execute(
             f"""
             UPDATE omp_research.campaigns SET
                 state = 'admitted',
                 policy_sha256 = %s,
+                compatibility = %s,
+                compatibility_sha256 = %s,
                 admitted_at = clock_timestamp()
             WHERE workspace_id = %s AND campaign_id = %s
             RETURNING {_CAMPAIGN_FIELDS}
             """,
-            (payload.policy_sha256, envelope.workspace_id, payload.campaign_id),
+            (
+                payload.policy_sha256,
+                canonical_json(compat_data),
+                payload.compatibility_sha256,
+                envelope.workspace_id,
+                payload.campaign_id,
+            ),
         )
         return {
             "type": "admit_research_campaign",
@@ -539,6 +672,32 @@ class ResearchStoreMixin:
                 "stale_evidence",
                 ("trial policy digest does not match campaign policy",),
             )
+
+        if not campaign.get("compatibility_sha256") or not campaign.get("compatibility"):
+            raise WorkStoreError(
+                "stale_evidence",
+                ("legacy campaign has no compatibility manifest; new trials refused",),
+            )
+
+        compat_val = campaign["compatibility"]
+        if isinstance(compat_val, str):
+            compat_val = json.loads(compat_val)
+        manifest = (
+            ResearchCompatibilityManifest.model_validate(compat_val)
+            if not isinstance(compat_val, ResearchCompatibilityManifest)
+            else compat_val
+        )
+        eval_err = research_compatibility_error(
+            manifest, ResearchComponentKind.EVALUATOR, payload.evaluator_sha256
+        )
+        if eval_err:
+            raise WorkStoreError("stale_evidence", (eval_err,))
+
+        env_err = research_compatibility_error(
+            manifest, ResearchComponentKind.ENVIRONMENT, payload.environment_sha256
+        )
+        if env_err:
+            raise WorkStoreError("stale_evidence", (env_err,))
 
         resource_request_json = (
             canonical_json(payload.resource_request)
@@ -1055,10 +1214,29 @@ class ResearchStoreMixin:
         deliverable_bindings = [
             _deliverable_binding_json(dict(r)) for r in cur.fetchall()
         ]
+        comp_hashes: set[str] = set()
+        for c in campaigns:
+            if c.get("policy_sha256"):
+                comp_hashes.add(c["policy_sha256"])
+            compat = c.get("compatibility")
+            if isinstance(compat, dict):
+                for k in ("workers", "evaluators", "audits", "releases", "environments"):
+                    for h in compat.get(k, ()):
+                        comp_hashes.add(h)
+        if comp_hashes:
+            cur.execute(
+                f"SELECT {_COMPONENT_FIELDS} FROM omp_research.components WHERE workspace_id=%s AND component_sha256 = ANY(%s) ORDER BY component_sha256",
+                (workspace_id, list(comp_hashes)),
+            )
+            components = [_component_json(dict(r)) for r in cur.fetchall()]
+        else:
+            components = []
+
         return {
             "work_id": work_id,
             "campaigns": campaigns,
             "trials": trials,
             "observations": observations,
             "deliverable_bindings": deliverable_bindings,
+            "components": components,
         }

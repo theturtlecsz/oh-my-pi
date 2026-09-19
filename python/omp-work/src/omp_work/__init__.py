@@ -132,6 +132,7 @@ _COMMAND_TYPES = frozenset(
         "put_provider_account",
         "register_rate_card",
         "quote_budget",
+        "register_research_component",
         "create_research_campaign",
         "admit_research_campaign",
         "cancel_research_campaign",

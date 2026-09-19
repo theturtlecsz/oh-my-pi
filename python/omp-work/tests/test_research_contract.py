@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -54,6 +55,126 @@ def _sample_spec() -> tuple[dict[str, object], str]:
         "candidate_mapping_policy": "strict_hash_match",
     }
     return spec, sha256(spec)
+
+
+def _register_component(
+    service,
+    workspace_id: UUID,
+    kind: str,
+    *,
+    name: str = "test-comp",
+    version: str = "1",
+    roles: tuple[str, ...] = (),
+    capabilities: tuple[str, ...] = (),
+) -> str:
+    art = sha256({"component": f"{name}:{version}:{kind}"})
+    descriptor = {
+        "contract_version": "research-component.v1",
+        "kind": kind,
+        "name": name,
+        "version": version,
+        "artifact_sha256": art,
+        "roles": sorted(list(roles)),
+        "capabilities": sorted(list(capabilities)),
+    }
+    comp_sha = sha256(descriptor)
+    cmd = {
+        "type": "register_research_component",
+        "payload": {
+            "component_sha256": comp_sha,
+            "descriptor": descriptor,
+        },
+    }
+    status, body = _command(service, workspace_id, cmd)
+    assert status == 200, body
+    return comp_sha
+
+
+def _manifest(
+    *,
+    evaluators: tuple[str, ...] = (),
+    environments: tuple[str, ...] = (),
+    workers: tuple[str, ...] = (),
+    audits: tuple[str, ...] = (),
+    releases: tuple[str, ...] = (),
+) -> tuple[dict[str, object], str]:
+    manifest = {
+        "contract_version": "research-compatibility.v1",
+        "workers": sorted(list(set(workers))),
+        "evaluators": sorted(list(set(evaluators))),
+        "audits": sorted(list(set(audits))),
+        "releases": sorted(list(set(releases))),
+        "environments": sorted(list(set(environments))),
+    }
+    digest = sha256(manifest)
+    return manifest, digest
+
+
+def _setup_research_fixtures(
+    service, workspace_id: UUID
+) -> tuple[str, str, str, dict[str, object], str]:
+    policy_sha = _register_component(
+        service, workspace_id, "policy", name="std-policy"
+    )
+    evaluator_sha = _register_component(
+        service, workspace_id, "evaluator", name="std-evaluator"
+    )
+    environment_sha = _register_component(
+        service, workspace_id, "environment", name="std-environment"
+    )
+    manifest, manifest_sha = _manifest(
+        evaluators=(evaluator_sha,), environments=(environment_sha,)
+    )
+    return policy_sha, evaluator_sha, environment_sha, manifest, manifest_sha
+
+
+def _admit_payload(
+    campaign_id: UUID | str,
+    work_id: UUID | str,
+    revision_id: UUID | str,
+    spec_sha256: str,
+    policy_sha256: str,
+    compatibility: dict[str, object],
+    compatibility_sha256: str,
+) -> dict[str, object]:
+    return {
+        "campaign_id": str(campaign_id),
+        "work_id": str(work_id),
+        "revision_id": str(revision_id),
+        "spec_sha256": spec_sha256,
+        "policy_sha256": policy_sha256,
+        "compatibility": compatibility,
+        "compatibility_sha256": compatibility_sha256,
+    }
+
+
+def _trial_payload(
+    campaign_id: UUID | str,
+    work_id: UUID | str,
+    policy_sha256: str,
+    evaluator_sha256: str,
+    environment_sha256: str,
+    *,
+    trial_id: UUID | str | None = None,
+    decision_id: UUID | str | None = None,
+    candidate_digest: str = "c" * 64,
+    experiment_spec_sha256: str = "e" * 64,
+    input_manifest_sha256: str = "d" * 64,
+    action: str = "evaluate",
+) -> dict[str, object]:
+    return {
+        "trial_id": str(trial_id or uuid4()),
+        "campaign_id": str(campaign_id),
+        "work_id": str(work_id),
+        "decision_id": str(decision_id or uuid4()),
+        "action": action,
+        "candidate_digest": candidate_digest,
+        "experiment_spec_sha256": experiment_spec_sha256,
+        "evaluator_sha256": evaluator_sha256,
+        "environment_sha256": environment_sha256,
+        "input_manifest_sha256": input_manifest_sha256,
+        "policy_sha256": policy_sha256,
+    }
 
 
 def _associate_source(
@@ -190,7 +311,9 @@ def test_campaign_creation_and_admission_lifecycle(service) -> None:
 
     campaign_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, evaluator_sha, environment_sha, manifest, manifest_sha = (
+        _setup_research_fixtures(service, workspace_id)
+    )
 
     # 1. Create draft campaign
     create_cmd = {
@@ -238,13 +361,15 @@ def test_campaign_creation_and_admission_lifecycle(service) -> None:
     # 4. Admit campaign
     admit_cmd = {
         "type": "admit_research_campaign",
-        "payload": {
-            "campaign_id": str(campaign_id),
-            "work_id": str(work_id),
-            "revision_id": str(revision_id),
-            "spec_sha256": spec_sha,
-            "policy_sha256": policy_sha,
-        },
+        "payload": _admit_payload(
+            campaign_id,
+            work_id,
+            revision_id,
+            spec_sha,
+            policy_sha,
+            manifest,
+            manifest_sha,
+        ),
     }
     status, body = _command(service, workspace_id, admit_cmd)
     assert status == 200, body
@@ -252,6 +377,8 @@ def test_campaign_creation_and_admission_lifecycle(service) -> None:
     camp = body["result"]["campaign"]
     assert camp["state"] == "admitted"
     assert camp["policy_sha256"] == policy_sha
+    assert camp["compatibility_sha256"] == manifest_sha
+    assert camp["compatibility"] == manifest
     assert camp["admitted_at"] is not None
 
     # 5. Replay admit campaign
@@ -269,6 +396,8 @@ def test_campaign_creation_and_admission_lifecycle(service) -> None:
     assert len(data["campaigns"]) == 1
     assert data["campaigns"][0]["campaign_id"] == str(campaign_id)
     assert data["campaigns"][0]["state"] == "admitted"
+    assert data["campaigns"][0]["compatibility_sha256"] == manifest_sha
+    assert len(data["components"]) == 3
 
 
 def test_stale_campaign_revision_and_drift_refusal(service) -> None:
@@ -283,6 +412,9 @@ def test_stale_campaign_revision_and_drift_refusal(service) -> None:
     assert rev1 != rev2
 
     spec, spec_sha = _sample_spec()
+    policy_sha, _, _, manifest, manifest_sha = _setup_research_fixtures(
+        service, workspace_id
+    )
 
     # Attempt create on old rev1 -> stale_evidence
     status, body = _command(
@@ -332,13 +464,15 @@ def test_stale_campaign_revision_and_drift_refusal(service) -> None:
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev2),
-                "spec_sha256": spec_sha,
-                "policy_sha256": "a" * 64,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev2,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
     assert status == 409, body
@@ -384,6 +518,9 @@ def test_draft_or_cancelled_campaign_cannot_accept_trial(service) -> None:
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
+    policy_sha, evaluator_sha, environment_sha, manifest, manifest_sha = (
+        _setup_research_fixtures(service, workspace_id)
+    )
 
     # Create draft campaign
     status, body = _command(
@@ -404,19 +541,14 @@ def test_draft_or_cancelled_campaign_cannot_accept_trial(service) -> None:
     assert status == 200, body
 
     trial_id = uuid4()
-    trial_payload = {
-        "trial_id": str(trial_id),
-        "campaign_id": str(camp_id),
-        "work_id": str(work_id),
-        "decision_id": str(uuid4()),
-        "action": "evaluate",
-        "candidate_digest": "c" * 64,
-        "experiment_spec_sha256": "e" * 64,
-        "evaluator_sha256": "b" * 64,
-        "environment_sha256": "c" * 64,
-        "input_manifest_sha256": "d" * 64,
-        "policy_sha256": "a" * 64,
-    }
+    trial_payload = _trial_payload(
+        camp_id,
+        work_id,
+        policy_sha,
+        evaluator_sha,
+        environment_sha,
+        trial_id=trial_id,
+    )
 
     # Propose trial on draft campaign -> invalid_request
     status, body = _command(
@@ -477,13 +609,15 @@ def test_draft_or_cancelled_campaign_cannot_accept_trial(service) -> None:
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": "a" * 64,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
     assert status == 400, body
@@ -499,7 +633,9 @@ def test_cancellation_archives_proposed_trials_atomically(service) -> None:
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, evaluator_sha, environment_sha, manifest, manifest_sha = (
+        _setup_research_fixtures(service, workspace_id)
+    )
 
     # Create & admit campaign
     _command(
@@ -522,13 +658,15 @@ def test_cancellation_archives_proposed_trials_atomically(service) -> None:
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
 
@@ -540,19 +678,14 @@ def test_cancellation_archives_proposed_trials_atomically(service) -> None:
             workspace_id,
             {
                 "type": "propose_research_trial",
-                "payload": {
-                    "trial_id": str(tid),
-                    "campaign_id": str(camp_id),
-                    "work_id": str(work_id),
-                    "decision_id": str(uuid4()),
-                    "action": "evaluate",
-                    "candidate_digest": "c" * 64,
-                    "experiment_spec_sha256": "e" * 64,
-                    "evaluator_sha256": "b" * 64,
-                    "environment_sha256": "c" * 64,
-                    "input_manifest_sha256": "d" * 64,
-                    "policy_sha256": policy_sha,
-                },
+                "payload": _trial_payload(
+                    camp_id,
+                    work_id,
+                    policy_sha,
+                    evaluator_sha,
+                    environment_sha,
+                    trial_id=tid,
+                ),
             },
         )
         assert status == 200, body
@@ -612,7 +745,9 @@ def test_trial_policy_mismatch_and_decision_idempotency(service) -> None:
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, evaluator_sha, environment_sha, manifest, manifest_sha = (
+        _setup_research_fixtures(service, workspace_id)
+    )
 
     _command(
         service,
@@ -634,13 +769,15 @@ def test_trial_policy_mismatch_and_decision_idempotency(service) -> None:
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
 
@@ -653,38 +790,30 @@ def test_trial_policy_mismatch_and_decision_idempotency(service) -> None:
         workspace_id,
         {
             "type": "propose_research_trial",
-            "payload": {
-                "trial_id": str(trial_id),
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "decision_id": str(decision_id),
-                "action": "evaluate",
-                "candidate_digest": "c" * 64,
-                "experiment_spec_sha256": "e" * 64,
-                "evaluator_sha256": "b" * 64,
-                "environment_sha256": "c" * 64,
-                "input_manifest_sha256": "d" * 64,
-                "policy_sha256": "0" * 64,
-            },
+            "payload": _trial_payload(
+                camp_id,
+                work_id,
+                "0" * 64,
+                evaluator_sha,
+                environment_sha,
+                trial_id=trial_id,
+                decision_id=decision_id,
+            ),
         },
     )
     assert status == 409, body
     assert body["error"]["code"] == "stale_evidence"
 
     # Valid propose trial
-    valid_payload = {
-        "trial_id": str(trial_id),
-        "campaign_id": str(camp_id),
-        "work_id": str(work_id),
-        "decision_id": str(decision_id),
-        "action": "evaluate",
-        "candidate_digest": "c" * 64,
-        "experiment_spec_sha256": "e" * 64,
-        "evaluator_sha256": "b" * 64,
-        "environment_sha256": "c" * 64,
-        "input_manifest_sha256": "d" * 64,
-        "policy_sha256": policy_sha,
-    }
+    valid_payload = _trial_payload(
+        camp_id,
+        work_id,
+        policy_sha,
+        evaluator_sha,
+        environment_sha,
+        trial_id=trial_id,
+        decision_id=decision_id,
+    )
     status, body = _command(
         service,
         workspace_id,
@@ -728,7 +857,9 @@ def test_observation_recording_immutability_and_conflict(service) -> None:
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, _, _, manifest, manifest_sha = _setup_research_fixtures(
+        service, workspace_id
+    )
 
     _command(
         service,
@@ -750,13 +881,15 @@ def test_observation_recording_immutability_and_conflict(service) -> None:
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
 
@@ -861,7 +994,9 @@ def test_observation_issuer_kinds_and_execution_status(service) -> None:
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, _, _, manifest, manifest_sha = _setup_research_fixtures(
+        service, workspace_id
+    )
 
     _command(
         service,
@@ -883,13 +1018,15 @@ def test_observation_issuer_kinds_and_execution_status(service) -> None:
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
 
@@ -976,7 +1113,9 @@ def test_deliverable_binding_invariants(service) -> None:
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, evaluator_sha, environment_sha, manifest, manifest_sha = (
+        _setup_research_fixtures(service, workspace_id)
+    )
 
     _command(
         service,
@@ -998,13 +1137,15 @@ def test_deliverable_binding_invariants(service) -> None:
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
 
@@ -1015,19 +1156,15 @@ def test_deliverable_binding_invariants(service) -> None:
         workspace_id,
         {
             "type": "propose_research_trial",
-            "payload": {
-                "trial_id": str(trial_id),
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "decision_id": str(uuid4()),
-                "action": "evaluate",
-                "candidate_digest": candidate_digest,
-                "experiment_spec_sha256": "e" * 64,
-                "evaluator_sha256": "b" * 64,
-                "environment_sha256": "c" * 64,
-                "input_manifest_sha256": "d" * 64,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _trial_payload(
+                camp_id,
+                work_id,
+                policy_sha,
+                evaluator_sha,
+                environment_sha,
+                trial_id=trial_id,
+                candidate_digest=candidate_digest,
+            ),
         },
     )
 
@@ -1291,7 +1428,7 @@ def test_migration_0036_preserves_historical_bytes_and_behavior(
             )
 
         # Run migration 0036
-        original_migrate(config)
+        original_migrate(config, target=36)
 
         # Verify historical data is intact
         with psycopg.connect(**config.connection_kwargs("postgres")) as conn:
@@ -1641,7 +1778,9 @@ def test_cross_workspace_isolation_and_foreign_reference_rejection(service) -> N
 
     camp_a = uuid4()
     spec_a, spec_sha_a = _sample_spec()
-    policy_sha_a = "a" * 64
+    policy_sha_a, evaluator_sha_a, env_sha_a, manifest_a, manifest_sha_a = (
+        _setup_research_fixtures(service, ws_a)
+    )
 
     _command(
         service,
@@ -1663,13 +1802,15 @@ def test_cross_workspace_isolation_and_foreign_reference_rejection(service) -> N
         ws_a,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_a),
-                "work_id": str(work_a),
-                "revision_id": str(rev_a),
-                "spec_sha256": spec_sha_a,
-                "policy_sha256": policy_sha_a,
-            },
+            "payload": _admit_payload(
+                camp_a,
+                work_a,
+                rev_a,
+                spec_sha_a,
+                policy_sha_a,
+                manifest_a,
+                manifest_sha_a,
+            ),
         },
     )
 
@@ -1679,19 +1820,14 @@ def test_cross_workspace_isolation_and_foreign_reference_rejection(service) -> N
         ws_a,
         {
             "type": "propose_research_trial",
-            "payload": {
-                "trial_id": str(trial_a),
-                "campaign_id": str(camp_a),
-                "work_id": str(work_a),
-                "decision_id": str(uuid4()),
-                "action": "evaluate",
-                "candidate_digest": "c" * 64,
-                "experiment_spec_sha256": "e" * 64,
-                "evaluator_sha256": "b" * 64,
-                "environment_sha256": "c" * 64,
-                "input_manifest_sha256": "d" * 64,
-                "policy_sha256": policy_sha_a,
-            },
+            "payload": _trial_payload(
+                camp_a,
+                work_a,
+                policy_sha_a,
+                evaluator_sha_a,
+                env_sha_a,
+                trial_id=trial_a,
+            ),
         },
     )
 
@@ -1729,13 +1865,15 @@ def test_cross_workspace_isolation_and_foreign_reference_rejection(service) -> N
         ws_b,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_a),
-                "work_id": str(work_a),
-                "revision_id": str(rev_a),
-                "spec_sha256": spec_sha_a,
-                "policy_sha256": policy_sha_a,
-            },
+            "payload": _admit_payload(
+                camp_a,
+                work_a,
+                rev_a,
+                spec_sha_a,
+                policy_sha_a,
+                manifest_a,
+                manifest_sha_a,
+            ),
         },
     )
     assert status == 400, body
@@ -1763,19 +1901,13 @@ def test_cross_workspace_isolation_and_foreign_reference_rejection(service) -> N
         ws_b,
         {
             "type": "propose_research_trial",
-            "payload": {
-                "trial_id": str(uuid4()),
-                "campaign_id": str(camp_a),
-                "work_id": str(work_a),
-                "decision_id": str(uuid4()),
-                "action": "evaluate",
-                "candidate_digest": "c" * 64,
-                "experiment_spec_sha256": "e" * 64,
-                "evaluator_sha256": "b" * 64,
-                "environment_sha256": "c" * 64,
-                "input_manifest_sha256": "d" * 64,
-                "policy_sha256": policy_sha_a,
-            },
+            "payload": _trial_payload(
+                camp_a,
+                work_a,
+                policy_sha_a,
+                evaluator_sha_a,
+                env_sha_a,
+            ),
         },
     )
     assert status == 400, body
@@ -1883,27 +2015,44 @@ def test_direct_app_role_database_relational_integrity_constraints(service) -> N
         },
     )
 
-    t1 = uuid4()
+    policy_sha, evaluator_sha, env_sha, manifest, manifest_sha = (
+        _setup_research_fixtures(service, workspace_id)
+    )
+
     _command(
         service,
         workspace_id,
         {
-            "type": "propose_research_trial",
-            "payload": {
-                "trial_id": str(t1),
-                "campaign_id": str(c1),
-                "work_id": str(w1),
-                "decision_id": str(uuid4()),
-                "candidate_digest": "c" * 64,
-                "experiment_spec_sha256": "e" * 64,
-                "evaluator_sha256": "b" * 64,
-                "environment_sha256": "c" * 64,
-                "input_manifest_sha256": "d" * 64,
-                "policy_sha256": "a" * 64,
-                "action": "evaluate",
-            },
+            "type": "admit_research_campaign",
+            "payload": _admit_payload(
+                c1,
+                w1,
+                r1,
+                spec_sha1,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
+
+    t1 = uuid4()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "propose_research_trial",
+            "payload": _trial_payload(
+                c1,
+                w1,
+                policy_sha,
+                evaluator_sha,
+                env_sha,
+                trial_id=t1,
+            ),
+        },
+    )
+    assert status == 200, body
 
     # Connect directly as omp_work_app with RLS active
     with (
@@ -2017,7 +2166,9 @@ def test_exact_trial_and_observation_replay_after_cancellation(service) -> None:
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, evaluator_sha, environment_sha, manifest, manifest_sha = (
+        _setup_research_fixtures(service, workspace_id)
+    )
 
     # 1. Create and admit campaign
     status, body = _command(
@@ -2042,13 +2193,15 @@ def test_exact_trial_and_observation_replay_after_cancellation(service) -> None:
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
     assert status == 200, body
@@ -2057,21 +2210,20 @@ def test_exact_trial_and_observation_replay_after_cancellation(service) -> None:
     trial_id = uuid4()
     decision_id = uuid4()
     cand_digest = "c" * 64
-    trial_payload = {
-        "trial_id": str(trial_id),
-        "campaign_id": str(camp_id),
-        "work_id": str(work_id),
-        "decision_id": str(decision_id),
-        "candidate_digest": cand_digest,
-        "experiment_spec_sha256": "e" * 64,
-        "evaluator_sha256": "b" * 64,
-        "environment_sha256": "c" * 64,
-        "input_manifest_sha256": "d" * 64,
-        "seed": 42,
-        "hardware_class": "gpu_h100",
-        "policy_sha256": policy_sha,
-        "action": "evaluate",
-    }
+    trial_payload = dict(
+        _trial_payload(
+            camp_id,
+            work_id,
+            policy_sha,
+            evaluator_sha,
+            environment_sha,
+            trial_id=trial_id,
+            decision_id=decision_id,
+            candidate_digest=cand_digest,
+        ),
+        seed=42,
+        hardware_class="gpu_h100",
+    )
     status, body = _command(
         service,
         workspace_id,
@@ -2188,7 +2340,9 @@ def test_deliverable_binding_exact_replay_and_drift_conflicts(service) -> None:
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, evaluator_sha, environment_sha, manifest, manifest_sha = (
+        _setup_research_fixtures(service, workspace_id)
+    )
 
     _command(
         service,
@@ -2210,13 +2364,15 @@ def test_deliverable_binding_exact_replay_and_drift_conflicts(service) -> None:
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
 
@@ -2227,19 +2383,15 @@ def test_deliverable_binding_exact_replay_and_drift_conflicts(service) -> None:
         workspace_id,
         {
             "type": "propose_research_trial",
-            "payload": {
-                "trial_id": str(trial_id),
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "decision_id": str(uuid4()),
-                "candidate_digest": candidate_digest,
-                "experiment_spec_sha256": "e" * 64,
-                "evaluator_sha256": "b" * 64,
-                "environment_sha256": "c" * 64,
-                "input_manifest_sha256": "d" * 64,
-                "policy_sha256": policy_sha,
-                "action": "evaluate",
-            },
+            "payload": _trial_payload(
+                camp_id,
+                work_id,
+                policy_sha,
+                evaluator_sha,
+                environment_sha,
+                trial_id=trial_id,
+                candidate_digest=candidate_digest,
+            ),
         },
     )
 
@@ -2315,8 +2467,9 @@ def test_admit_campaign_exact_replay_and_conflict_lifecycle(service) -> None:
 
     camp_1_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha_1 = "a" * 64
-    policy_sha_2 = "b" * 64
+    policy_sha_1 = _register_component(service, workspace_id, "policy", name="p1")
+    policy_sha_2 = _register_component(service, workspace_id, "policy", name="p2")
+    manifest, manifest_sha = _manifest()
 
     # 1. Create draft campaign 1
     status, body = _command(
@@ -2336,13 +2489,15 @@ def test_admit_campaign_exact_replay_and_conflict_lifecycle(service) -> None:
     )
     assert status == 200, body
 
-    admit_payload_1 = {
-        "campaign_id": str(camp_1_id),
-        "work_id": str(work_id),
-        "revision_id": str(rev_id),
-        "spec_sha256": spec_sha,
-        "policy_sha256": policy_sha_1,
-    }
+    admit_payload_1 = _admit_payload(
+        camp_1_id,
+        work_id,
+        rev_id,
+        spec_sha,
+        policy_sha_1,
+        manifest,
+        manifest_sha,
+    )
     # 2. Admit campaign 1
     status, body = _command(
         service,
@@ -2464,7 +2619,9 @@ def test_campaign_lifecycle_transitions_replay_and_read(service) -> None:
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, _, _, manifest, manifest_sha = _setup_research_fixtures(
+        service, workspace_id
+    )
 
     # 1. Create campaign (draft)
     status, body = _command(
@@ -2490,13 +2647,15 @@ def test_campaign_lifecycle_transitions_replay_and_read(service) -> None:
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
     assert status == 200 and body["result"]["status"] == "applied", body
@@ -2697,7 +2856,9 @@ def test_campaign_illegal_transitions_and_expected_state_conflict(service) -> No
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, _, _, manifest, manifest_sha = _setup_research_fixtures(
+        service, workspace_id
+    )
 
     # Create campaign (draft)
     _command(
@@ -2740,13 +2901,15 @@ def test_campaign_illegal_transitions_and_expected_state_conflict(service) -> No
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
     _command(
@@ -2881,13 +3044,15 @@ def test_campaign_illegal_transitions_and_expected_state_conflict(service) -> No
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_2_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_2_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
     _command(
@@ -2991,8 +3156,12 @@ def test_campaign_transitions_refuse_incompatible_policy_fingerprint(service) ->
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
-    wrong_policy_sha = "b" * 64
+    policy_sha, _, _, manifest, manifest_sha = _setup_research_fixtures(
+        service, workspace_id
+    )
+    wrong_policy_sha = _register_component(
+        service, workspace_id, "policy", name="p-wrong"
+    )
 
     # Create and admit campaign
     _command(
@@ -3015,13 +3184,15 @@ def test_campaign_transitions_refuse_incompatible_policy_fingerprint(service) ->
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
     # Move to running, then paused
@@ -3144,7 +3315,9 @@ def test_blocked_campaign_records_dependency_and_resumes_only_to_prior_state(ser
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, evaluator_sha, environment_sha, manifest, manifest_sha = (
+        _setup_research_fixtures(service, workspace_id)
+    )
 
     # Create and admit campaign
     _command(
@@ -3167,13 +3340,15 @@ def test_blocked_campaign_records_dependency_and_resumes_only_to_prior_state(ser
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
     _command(
@@ -3290,19 +3465,14 @@ def test_blocked_campaign_records_dependency_and_resumes_only_to_prior_state(ser
         workspace_id,
         {
             "type": "propose_research_trial",
-            "payload": {
-                "trial_id": str(t_id),
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "decision_id": str(uuid4()),
-                "candidate_digest": "c" * 64,
-                "experiment_spec_sha256": "e" * 64,
-                "evaluator_sha256": "b" * 64,
-                "environment_sha256": "c" * 64,
-                "input_manifest_sha256": "d" * 64,
-                "policy_sha256": policy_sha,
-                "action": "evaluate",
-            },
+            "payload": _trial_payload(
+                camp_id,
+                work_id,
+                policy_sha,
+                evaluator_sha,
+                environment_sha,
+                trial_id=t_id,
+            ),
         },
     )
 
@@ -3364,7 +3534,9 @@ def test_conclusion_requires_approve_scope_evaluating_state_and_closed_outcome(s
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, evaluator_sha, env_sha, manifest, manifest_sha = (
+        _setup_research_fixtures(service, workspace_id)
+    )
 
     # 1. work.execute-only capability token
     cap_file = service.capabilities / "exec-only.json"
@@ -3403,13 +3575,15 @@ def test_conclusion_requires_approve_scope_evaluating_state_and_closed_outcome(s
             workspace_id,
             {
                 "type": "admit_research_campaign",
-                "payload": {
-                    "campaign_id": str(camp_id),
-                    "work_id": str(work_id),
-                    "revision_id": str(rev_id),
-                    "spec_sha256": spec_sha,
-                    "policy_sha256": policy_sha,
-                },
+                "payload": _admit_payload(
+                    camp_id,
+                    work_id,
+                    rev_id,
+                    spec_sha,
+                    policy_sha,
+                    manifest,
+                    manifest_sha,
+                ),
             },
         )
         _command(
@@ -3433,19 +3607,14 @@ def test_conclusion_requires_approve_scope_evaluating_state_and_closed_outcome(s
             workspace_id,
             {
                 "type": "propose_research_trial",
-                "payload": {
-                    "trial_id": str(t_id),
-                    "campaign_id": str(camp_id),
-                    "work_id": str(work_id),
-                    "decision_id": str(uuid4()),
-                    "candidate_digest": "c" * 64,
-                    "experiment_spec_sha256": "e" * 64,
-                    "evaluator_sha256": "b" * 64,
-                    "environment_sha256": "c" * 64,
-                    "input_manifest_sha256": "d" * 64,
-                    "policy_sha256": policy_sha,
-                    "action": "evaluate",
-                },
+                "payload": _trial_payload(
+                    camp_id,
+                    work_id,
+                    policy_sha,
+                    evaluator_sha,
+                    env_sha,
+                    trial_id=t_id,
+                ),
             },
         )
         _command(
@@ -3504,13 +3673,15 @@ def test_conclusion_requires_approve_scope_evaluating_state_and_closed_outcome(s
             workspace_id,
             {
                 "type": "admit_research_campaign",
-                "payload": {
-                    "campaign_id": str(camp_2_id),
-                    "work_id": str(work_id),
-                    "revision_id": str(rev_id),
-                    "spec_sha256": spec_sha,
-                    "policy_sha256": policy_sha,
-                },
+                "payload": _admit_payload(
+                    camp_2_id,
+                    work_id,
+                    rev_id,
+                    spec_sha,
+                    policy_sha,
+                    manifest,
+                    manifest_sha,
+                ),
             },
         )
         _command(
@@ -3701,7 +3872,7 @@ def test_trial_proposal_requires_closed_action_vocabulary_and_running_or_admitte
 
     camp_id = uuid4()
     spec, spec_sha = _sample_spec()
-    policy_sha = "a" * 64
+    policy_sha, evaluator_sha, env_sha, manifest, manifest_sha = _setup_research_fixtures(service, workspace_id)
 
     # Create and admit campaign
     _command(
@@ -3724,13 +3895,15 @@ def test_trial_proposal_requires_closed_action_vocabulary_and_running_or_admitte
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(camp_id),
-                "work_id": str(work_id),
-                "revision_id": str(rev_id),
-                "spec_sha256": spec_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                camp_id,
+                work_id,
+                rev_id,
+                spec_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
     _command(
@@ -3755,8 +3928,8 @@ def test_trial_proposal_requires_closed_action_vocabulary_and_running_or_admitte
         "decision_id": str(uuid4()),
         "candidate_digest": "c" * 64,
         "experiment_spec_sha256": "e" * 64,
-        "evaluator_sha256": "b" * 64,
-        "environment_sha256": "c" * 64,
+        "evaluator_sha256": evaluator_sha,
+        "environment_sha256": env_sha,
         "input_manifest_sha256": "d" * 64,
         "policy_sha256": policy_sha,
     }
@@ -4230,7 +4403,8 @@ def test_admitted_campaign_provenance_immutable_after_cancellation(service) -> N
     # 2. Admitted campaign cancelled after admission: retains provenance
     c_admitted_id = uuid4()
     spec_admitted, spec_admitted_sha = _sample_spec()
-    policy_sha = "d" * 64
+    policy_sha = _register_component(service, workspace_id, "policy", name="p-cancel")
+    manifest, manifest_sha = _manifest()
     status, body = _command(
         service,
         workspace_id,
@@ -4253,13 +4427,15 @@ def test_admitted_campaign_provenance_immutable_after_cancellation(service) -> N
         workspace_id,
         {
             "type": "admit_research_campaign",
-            "payload": {
-                "campaign_id": str(c_admitted_id),
-                "work_id": str(w),
-                "revision_id": str(r),
-                "spec_sha256": spec_admitted_sha,
-                "policy_sha256": policy_sha,
-            },
+            "payload": _admit_payload(
+                c_admitted_id,
+                w,
+                r,
+                spec_admitted_sha,
+                policy_sha,
+                manifest,
+                manifest_sha,
+            ),
         },
     )
     assert status == 200, body
@@ -4284,6 +4460,7 @@ def test_admitted_campaign_provenance_immutable_after_cancellation(service) -> N
     assert camp["state"] == "cancelled"
     assert camp["policy_sha256"] == policy_sha
     assert camp["admitted_at"] == admitted_at
+    assert camp["compatibility_sha256"] == manifest_sha
 
     # Read back over HTTP
     resp = service.client.get(
@@ -4293,6 +4470,8 @@ def test_admitted_campaign_provenance_immutable_after_cancellation(service) -> N
     read_c = next(c for c in resp.json()["campaigns"] if c["campaign_id"] == str(c_admitted_id))
     assert read_c["state"] == "cancelled"
     assert read_c["policy_sha256"] == policy_sha
+    assert read_c["compatibility_sha256"] == manifest_sha
+    assert read_c["compatibility"] == manifest
     assert datetime.fromisoformat(read_c["admitted_at"]) == datetime.fromisoformat(admitted_at)
 
     # 3. Direct app-role PostgreSQL negative tests: provenance cannot be cleared or altered after cancellation
@@ -4364,6 +4543,30 @@ def test_admitted_campaign_provenance_immutable_after_cancellation(service) -> N
             "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
             (str(workspace_id), str(OWNER)),
         )
+        # Cannot clear compatibility_sha256
+        with pytest.raises(psycopg.errors.RaiseException, match="campaign compatibility is immutable once set"):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET compatibility_sha256 = NULL, compatibility = NULL WHERE campaign_id = %s",
+                (c_admitted_id,),
+            )
+        conn.rollback()
+
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        # Cannot alter compatibility_sha256
+        with pytest.raises(psycopg.errors.RaiseException, match="campaign compatibility is immutable once set"):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET compatibility_sha256 = %s WHERE campaign_id = %s",
+                ("f" * 64, c_admitted_id),
+            )
+        conn.rollback()
+
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
         # Terminal state cannot transition to active states
         with pytest.raises(psycopg.errors.RaiseException, match="terminal campaign state is immutable"):
             cur.execute(
@@ -4371,3 +4574,712 @@ def test_admitted_campaign_provenance_immutable_after_cancellation(service) -> N
                 (c_admitted_id,),
             )
         conn.rollback()
+
+
+def test_component_registration_is_content_addressed_and_immutable(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    _create(service, workspace_id, "comp test item")
+
+    descriptor = {
+        "contract_version": "research-component.v1",
+        "kind": "worker",
+        "name": "worker-alpha",
+        "version": "1.0.0",
+        "artifact_sha256": "a" * 64,
+        "roles": ["analyst", "implementer"],
+        "capabilities": ["experiment.gpu", "retrieval.web"],
+    }
+    comp_sha = sha256(descriptor)
+
+    # 1. Successful registration -> applied
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "register_research_component",
+            "payload": {
+                "component_sha256": comp_sha,
+                "descriptor": descriptor,
+            },
+        },
+    )
+    assert status == 200, body
+    assert body["result"]["status"] == "applied"
+    comp = body["result"]["component"]
+    assert comp["component_sha256"] == comp_sha
+    assert comp["kind"] == "worker"
+    assert comp["descriptor"]["name"] == "worker-alpha"
+    assert comp["descriptor"]["roles"] == ["analyst", "implementer"]
+    assert comp["descriptor"]["capabilities"] == ["experiment.gpu", "retrieval.web"]
+
+    # 2. Second registration under new operation_id -> replayed, exactly one row
+    status2, body2 = _command(
+        service,
+        workspace_id,
+        {
+            "type": "register_research_component",
+            "payload": {
+                "component_sha256": comp_sha,
+                "descriptor": descriptor,
+            },
+        },
+        operation_id=uuid4(),
+    )
+    assert status2 == 200, body2
+    assert body2["result"]["status"] == "replayed"
+    assert body2["result"]["component"]["component_sha256"] == comp_sha
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres")) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT count(*) FROM omp_research.components WHERE workspace_id = %s AND component_sha256 = %s",
+            (workspace_id, comp_sha),
+        )
+        assert cur.fetchone()[0] == 1
+
+    # 2b. Concurrent identical registrations under distinct operation_ids:
+    # Under a real race, exactly one claims applied and the other claims replayed; exactly one row persisted.
+    conc_desc = {
+        "contract_version": "research-component.v1",
+        "kind": "worker",
+        "name": "worker-concurrent",
+        "version": "1.0.0",
+        "artifact_sha256": "b" * 64,
+        "roles": ["analyst"],
+        "capabilities": ["experiment.gpu"],
+    }
+    conc_sha = sha256(conc_desc)
+    conc_cmd = {
+        "type": "register_research_component",
+        "payload": {
+            "component_sha256": conc_sha,
+            "descriptor": conc_desc,
+        },
+    }
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(
+            _command,
+            service,
+            workspace_id,
+            conc_cmd,
+            operation_id=uuid4(),
+        )
+        f2 = executor.submit(
+            _command,
+            service,
+            workspace_id,
+            conc_cmd,
+            operation_id=uuid4(),
+        )
+        r1 = f1.result()
+        r2 = f2.result()
+
+    assert r1[0] == 200, r1
+    assert r2[0] == 200, r2
+    applied_count = sum(1 for (st, bd) in (r1, r2) if st == 200 and bd.get("result", {}).get("status") == "applied")
+    replayed_count = sum(1 for (st, bd) in (r1, r2) if st == 200 and bd.get("result", {}).get("status") == "replayed")
+    assert applied_count == 1, f"Expected exactly 1 applied, got {r1} and {r2}"
+    assert replayed_count == 1, f"Expected exactly 1 replayed, got {r1} and {r2}"
+
+    with psycopg.connect(**service.config.connection_kwargs("postgres")) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT count(*) FROM omp_research.components WHERE workspace_id = %s AND component_sha256 = %s",
+            (workspace_id, conc_sha),
+        )
+        assert cur.fetchone()[0] == 1
+
+    # 3. Caller digest mismatch -> 409 stale_evidence
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "register_research_component",
+            "payload": {
+                "component_sha256": "f" * 64,
+                "descriptor": descriptor,
+            },
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "stale_evidence"
+    assert any("component digest mismatch" in d for d in body["error"].get("diagnostics", []))
+
+    # 4. Validation errors: unknown kind, unknown role, unsorted capabilities, bad token -> 400
+    for bad_desc in (
+        dict(descriptor, kind="superworker"),
+        dict(descriptor, roles=["lead_architect"]),
+        dict(descriptor, capabilities=["retrieval.web", "experiment.gpu"]),
+        dict(descriptor, capabilities=["Experiment.Gpu"]),
+        dict(descriptor, capabilities=["singleword"]),
+    ):
+        status, body = _command(
+            service,
+            workspace_id,
+            {
+                "type": "register_research_component",
+                "payload": {
+                    "component_sha256": sha256(bad_desc),
+                    "descriptor": bad_desc,
+                },
+            },
+        )
+        assert status == 400, (bad_desc, body)
+
+    # 5. Immutability: direct app-role UPDATE/DELETE fails
+    with (
+        psycopg.connect(**service.config.connection_kwargs("omp_work_app")) as conn,
+        conn.cursor() as cur,
+    ):
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            cur.execute(
+                "UPDATE omp_research.components SET descriptor = %s WHERE component_sha256 = %s",
+                (json.dumps(descriptor), comp_sha),
+            )
+        conn.rollback()
+
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            cur.execute(
+                "DELETE FROM omp_research.components WHERE component_sha256 = %s",
+                (comp_sha,),
+            )
+        conn.rollback()
+
+    # Trigger test with postgres superuser role
+    with (
+        psycopg.connect(**service.config.connection_kwargs("postgres")) as conn,
+        conn.cursor() as cur,
+    ):
+        with pytest.raises(psycopg.errors.RaiseException, match="immutable"):
+            cur.execute(
+                "UPDATE omp_research.components SET descriptor = %s WHERE component_sha256 = %s",
+                (json.dumps(descriptor), comp_sha),
+            )
+        conn.rollback()
+        with pytest.raises(psycopg.errors.RaiseException, match="immutable"):
+            cur.execute(
+                "DELETE FROM omp_research.components WHERE component_sha256 = %s",
+                (comp_sha,),
+            )
+        conn.rollback()
+
+
+def test_admission_binds_compatibility_and_refuses_unknown_or_mismatched_components(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "compatibility admission target")
+    work_id = UUID(item["work_id"])
+    rev_id = UUID(item["revision_id"])
+
+    camp_id = uuid4()
+    spec, spec_sha = _sample_spec()
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "domain": "machine_learning",
+                "spec": spec,
+                "spec_sha256": spec_sha,
+            },
+        },
+    )
+
+    manifest, manifest_sha = _manifest()
+
+    # 1. Unregistered policy -> 400 invalid_request
+    unregistered_policy = "0" * 64
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": _admit_payload(
+                camp_id, work_id, rev_id, spec_sha, unregistered_policy, manifest, manifest_sha
+            ),
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+    assert any("unknown policy component" in d for d in body["error"].get("diagnostics", []))
+
+    # 2. Evaluator component used as policy -> 400 invalid_request
+    eval_sha = _register_component(service, workspace_id, "evaluator", name="eval-as-policy")
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": _admit_payload(
+                camp_id, work_id, rev_id, spec_sha, eval_sha, manifest, manifest_sha
+            ),
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+    assert any("policy fingerprint is not a policy component" in d for d in body["error"].get("diagnostics", []))
+
+    # Register real policy
+    policy_sha = _register_component(service, workspace_id, "policy", name="p-main")
+
+    # 3. Manifest naming unregistered component -> 400 invalid_request
+    unreg_worker = "1" * 64
+    unreg_manifest, unreg_manifest_sha = _manifest(workers=(unreg_worker,))
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": _admit_payload(
+                camp_id, work_id, rev_id, spec_sha, policy_sha, unreg_manifest, unreg_manifest_sha
+            ),
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+    assert any("unknown worker component" in d for d in body["error"].get("diagnostics", []))
+
+    # 4. Manifest naming component of wrong kind -> 400 invalid_request
+    wrong_axis_manifest, wrong_axis_manifest_sha = _manifest(workers=(eval_sha,))
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": _admit_payload(
+                camp_id, work_id, rev_id, spec_sha, policy_sha, wrong_axis_manifest, wrong_axis_manifest_sha
+            ),
+        },
+    )
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+    assert any("worker fingerprint is not a worker component" in d for d in body["error"].get("diagnostics", []))
+
+    # 5. Manifest digest mismatch -> 409 stale_evidence
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": _admit_payload(
+                camp_id, work_id, rev_id, spec_sha, policy_sha, manifest, "e" * 64
+            ),
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "stale_evidence"
+    assert any("compatibility manifest digest mismatch" in d for d in body["error"].get("diagnostics", []))
+
+    # 6. Valid admission -> applied, HTTP readback matches
+    worker_sha = _register_component(service, workspace_id, "worker", name="w-valid")
+    valid_manifest, valid_manifest_sha = _manifest(
+        workers=(worker_sha,), evaluators=(eval_sha,)
+    )
+    valid_admit = _admit_payload(
+        camp_id, work_id, rev_id, spec_sha, policy_sha, valid_manifest, valid_manifest_sha
+    )
+    status, body = _command(
+        service,
+        workspace_id,
+        {"type": "admit_research_campaign", "payload": valid_admit},
+    )
+    assert status == 200, body
+    assert body["result"]["status"] == "applied"
+    assert body["result"]["campaign"]["compatibility_sha256"] == valid_manifest_sha
+    assert body["result"]["campaign"]["compatibility"] == valid_manifest
+
+    # HTTP readback
+    resp = service.client.get(
+        f"/v1/work-items/{item['key']}/research", headers=_owner_headers(workspace_id)
+    )
+    assert resp.status_code == 200
+    camp_read = next(c for c in resp.json()["campaigns"] if c["campaign_id"] == str(camp_id))
+    assert camp_read["compatibility_sha256"] == valid_manifest_sha
+    assert camp_read["compatibility"] == valid_manifest
+
+    # 7. Identical replay -> replayed
+    status_rep, body_rep = _command(
+        service,
+        workspace_id,
+        {"type": "admit_research_campaign", "payload": valid_admit},
+        operation_id=uuid4(),
+    )
+    assert status_rep == 200, body_rep
+    assert body_rep["result"]["status"] == "replayed"
+
+    # 8. Different manifest replay -> idempotency_conflict
+    diff_manifest, diff_manifest_sha = _manifest(workers=(worker_sha,))
+    diff_admit = _admit_payload(
+        camp_id, work_id, rev_id, spec_sha, policy_sha, diff_manifest, diff_manifest_sha
+    )
+    status_diff, body_diff = _command(
+        service,
+        workspace_id,
+        {"type": "admit_research_campaign", "payload": diff_admit},
+    )
+    assert status_diff == 409, body_diff
+    assert body_diff["error"]["code"] == "idempotency_conflict"
+
+    # 9. Direct SQL alteration of compatibility raises
+    with (
+        psycopg.connect(**service.config.connection_kwargs("omp_work_app")) as conn,
+        conn.cursor() as cur,
+    ):
+        cur.execute(
+            "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+            (str(workspace_id), str(OWNER)),
+        )
+        with pytest.raises(psycopg.errors.RaiseException, match="campaign compatibility is immutable once set"):
+            cur.execute(
+                "UPDATE omp_research.campaigns SET compatibility_sha256 = %s WHERE campaign_id = %s",
+                ("7" * 64, camp_id),
+            )
+        conn.rollback()
+
+
+def test_trial_proposal_fails_closed_on_unlisted_identity(service) -> None:
+    workspace_id = uuid4()
+    _grant(service, workspace_id)
+    item = _create(service, workspace_id, "unlisted identity target")
+    work_id = UUID(item["work_id"])
+    rev_id = UUID(item["revision_id"])
+
+    camp_id = uuid4()
+    spec, spec_sha = _sample_spec()
+
+    policy_sha = _register_component(service, workspace_id, "policy", name="p-trial")
+    eval_listed = _register_component(service, workspace_id, "evaluator", name="eval-listed")
+    eval_unlisted = _register_component(service, workspace_id, "evaluator", name="eval-unlisted")
+    env_listed = _register_component(service, workspace_id, "environment", name="env-listed")
+    env_unlisted = _register_component(service, workspace_id, "environment", name="env-unlisted")
+
+    manifest, manifest_sha = _manifest(
+        evaluators=(eval_listed,), environments=(env_listed,)
+    )
+
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "create_research_campaign",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "revision_id": str(rev_id),
+                "domain": "machine_learning",
+                "spec": spec,
+                "spec_sha256": spec_sha,
+            },
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "admit_research_campaign",
+            "payload": _admit_payload(
+                camp_id, work_id, rev_id, spec_sha, policy_sha, manifest, manifest_sha
+            ),
+        },
+    )
+    _command(
+        service,
+        workspace_id,
+        {
+            "type": "set_research_campaign_state",
+            "payload": {
+                "campaign_id": str(camp_id),
+                "work_id": str(work_id),
+                "expected_state": "admitted",
+                "target_state": "running",
+                "policy_sha256": policy_sha,
+            },
+        },
+    )
+
+    # 1. Registered-but-unlisted evaluator -> 409 stale_evidence
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "propose_research_trial",
+            "payload": _trial_payload(
+                camp_id, work_id, policy_sha, eval_unlisted, env_listed
+            ),
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "stale_evidence"
+    assert any("evaluator fingerprint is not declared compatible" in d for d in body["error"].get("diagnostics", []))
+
+    # 2. Registered-but-unlisted environment -> 409 stale_evidence
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "propose_research_trial",
+            "payload": _trial_payload(
+                camp_id, work_id, policy_sha, eval_listed, env_unlisted
+            ),
+        },
+    )
+    assert status == 409, body
+    assert body["error"]["code"] == "stale_evidence"
+    assert any("environment fingerprint is not declared compatible" in d for d in body["error"].get("diagnostics", []))
+
+    # 3. Listed pair -> 200 applied
+    t_id = uuid4()
+    status, body = _command(
+        service,
+        workspace_id,
+        {
+            "type": "propose_research_trial",
+            "payload": _trial_payload(
+                camp_id, work_id, policy_sha, eval_listed, env_listed, trial_id=t_id
+            ),
+        },
+    )
+    assert status == 200 and body["result"]["status"] == "applied", body
+    assert body["result"]["trial"]["evaluator_sha256"] == eval_listed
+    assert body["result"]["trial"]["environment_sha256"] == env_listed
+
+    # 4. HTTP readback: ResearchView.components contains exactly policy + listed components ordered by digest
+    resp = service.client.get(
+        f"/v1/work-items/{item['key']}/research", headers=_owner_headers(workspace_id)
+    )
+    assert resp.status_code == 200
+    view = resp.json()
+    comp_shas = [c["component_sha256"] for c in view["components"]]
+    expected_shas = sorted([policy_sha, eval_listed, env_listed])
+    assert comp_shas == expected_shas
+    assert eval_unlisted not in comp_shas
+    assert env_unlisted not in comp_shas
+
+
+def test_migration_0038_preserves_legacy_campaigns_as_unmanaged(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OMP-R02-S3b migration 0038 rehearsal: pre-0038 campaigns remain readable and drivable, cannot gain manifest or run trials."""
+    from types import SimpleNamespace
+
+    import omp_work.operations.database as database_module
+    from omp_work.operations.database import bootstrap
+    from omp_work.v1.server import create_app
+    from pg_native import seed_authority
+    from starlette.testclient import TestClient
+    from test_workflow_service import _config
+
+    root = tmp_path_factory.mktemp("migration-0038-upgrade")
+    config = _config(root)
+    with native_postgres(root, config.port):
+        original_migrate = database_module.migrate
+        monkeypatch.setattr(database_module, "validate_bundle", lambda **kw: None)
+        monkeypatch.setattr(
+            database_module,
+            "migrate",
+            lambda cfg, **kw: original_migrate(cfg, target=37, **kw),
+        )
+        bootstrap(config)
+        monkeypatch.setattr(database_module, "migrate", original_migrate)
+
+        workspace_id = uuid4()
+        work_id = uuid4()
+        revision_id = uuid4()
+        camp_id = uuid4()
+        trial_id = uuid4()
+        now = datetime.now(UTC)
+        spec, spec_sha = _sample_spec()
+        policy_sha = "a" * 64
+
+        with psycopg.connect(
+            **config.connection_kwargs("postgres"), autocommit=True
+        ) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO omp_control.workspaces(workspace_id) VALUES (%s)",
+                (workspace_id,),
+            )
+            cur.execute(
+                "INSERT INTO omp_work.work_items(work_id, workspace_id, state) VALUES (%s, %s, 'NOW')",
+                (work_id, workspace_id),
+            )
+            cur.execute(
+                "INSERT INTO omp_work.work_revisions(revision_id, work_id, workspace_id, revision_number, title, description, scope, content_sha256, created_by, supplied_at) "
+                "VALUES (%s, %s, %s, 1, 'migration 0038 test item', '', '', %s, 'test', %s)",
+                (revision_id, work_id, workspace_id, "a" * 64, now),
+            )
+            cur.execute(
+                "UPDATE omp_work.work_items SET current_revision_id=%s WHERE work_id=%s",
+                (revision_id, work_id),
+            )
+            cur.execute(
+                "INSERT INTO omp_work.work_aliases(work_id, workspace_id, key, origin, primary_alias) VALUES (%s, %s, 'OMP-38', 'local', true)",
+                (work_id, workspace_id),
+            )
+            # Insert admitted campaign under migration 0037 schema (has outcome, etc., but no compatibility columns)
+            cur.execute(
+                """
+                INSERT INTO omp_research.campaigns(
+                    campaign_id, workspace_id, work_id, revision_id,
+                    domain, state, spec, spec_sha256, policy_sha256,
+                    created_at, admitted_at
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    'machine_learning', 'admitted', %s, %s, %s,
+                    %s, %s
+                )
+                """,
+                (
+                    camp_id, workspace_id, work_id, revision_id,
+                    json.dumps(spec), spec_sha, policy_sha,
+                    now, now,
+                ),
+            )
+            # Insert proposed trial under migration 0037 schema
+            cur.execute(
+                """
+                INSERT INTO omp_research.trials(
+                    trial_id, workspace_id, campaign_id, work_id, decision_id,
+                    candidate_digest, experiment_spec_sha256, evaluator_sha256,
+                    environment_sha256, input_manifest_sha256, policy_sha256,
+                    state, action, reason
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    'proposed', 'evaluate', 'initial trial'
+                )
+                """,
+                (
+                    trial_id, workspace_id, camp_id, work_id, uuid4(),
+                    "c" * 64, "e" * 64, "b" * 64,
+                    "c" * 64, "d" * 64, policy_sha,
+                ),
+            )
+
+        # Run migration 0038
+        original_migrate(config)
+
+        # Set up capabilities and authority for HTTP tests
+        capabilities = root / "capabilities"
+        capabilities.mkdir(mode=0o700, exist_ok=True)
+        owner = capabilities / "owner.json"
+        owner.write_text(
+            json.dumps(
+                {
+                    "token": "owner-token",
+                    "actor_id": str(OWNER),
+                    "actor_kind": "owner",
+                    "workspaces": [str(workspace_id)],
+                    "scopes": [
+                        "work.read",
+                        "work.mutate",
+                        "work.approve",
+                        "work.close",
+                        "work.execute",
+                    ],
+                }
+            )
+        )
+        owner.chmod(0o600)
+        seed_authority(config.connection_kwargs("postgres"), workspace_id, OWNER)
+
+        svc = SimpleNamespace(
+            client=TestClient(create_app(config, capabilities_dir=capabilities)),
+            capabilities=capabilities,
+            config=config,
+        )
+
+        item_key = "OMP-38"
+
+        # 1. Read back historical campaign over HTTP: compatibility is None
+        resp = svc.client.get(
+            f"/v1/work-items/{item_key}/research", headers=_owner_headers(workspace_id)
+        )
+        assert resp.status_code == 200, resp.json()
+        research_data = resp.json()
+        camp = research_data["campaigns"][0]
+        assert camp["state"] == "admitted"
+        assert camp["compatibility"] is None
+        assert camp["compatibility_sha256"] is None
+        assert camp["policy_sha256"] == policy_sha
+
+        trial = research_data["trials"][0]
+        assert trial["trial_id"] == str(trial_id)
+        assert trial["action"] == "evaluate"
+
+        # 2. Propose new trial on legacy campaign fails closed with 409 stale_evidence
+        new_trial_id = uuid4()
+        status, body = _command(
+            svc,
+            workspace_id,
+            {
+                "type": "propose_research_trial",
+                "payload": {
+                    "trial_id": str(new_trial_id),
+                    "campaign_id": str(camp_id),
+                    "work_id": str(work_id),
+                    "decision_id": str(uuid4()),
+                    "candidate_digest": "c" * 64,
+                    "experiment_spec_sha256": "e" * 64,
+                    "evaluator_sha256": "b" * 64,
+                    "environment_sha256": "c" * 64,
+                    "input_manifest_sha256": "d" * 64,
+                    "policy_sha256": policy_sha,
+                    "action": "replicate",
+                    "reason": "attempt trial on legacy campaign",
+                },
+            },
+        )
+        assert status == 409, body
+        assert body["error"]["code"] == "stale_evidence"
+        assert any("legacy campaign has no compatibility manifest; new trials refused" in d for d in body["error"].get("diagnostics", []))
+
+        # 3. set_research_campaign_state admitted -> running succeeds with original policy_sha
+        status, body = _command(
+            svc,
+            workspace_id,
+            {
+                "type": "set_research_campaign_state",
+                "payload": {
+                    "campaign_id": str(camp_id),
+                    "work_id": str(work_id),
+                    "expected_state": "admitted",
+                    "target_state": "running",
+                    "policy_sha256": policy_sha,
+                },
+            },
+        )
+        assert status == 200 and body["result"]["status"] == "applied", body
+        assert body["result"]["campaign"]["state"] == "running"
+
+        # 4. Direct app-role UPDATE trying to add compatibility to legacy row raises
+        dummy_manifest, dummy_manifest_sha = _manifest()
+        with (
+            psycopg.connect(**config.connection_kwargs("omp_work_app")) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(
+                "SELECT set_config('omp.workspace_id', %s, false), set_config('omp.actor_id', %s, false)",
+                (str(workspace_id), str(OWNER)),
+            )
+            with pytest.raises(psycopg.errors.RaiseException, match="legacy campaign cannot gain compatibility after admission"):
+                cur.execute(
+                    "UPDATE omp_research.campaigns SET compatibility_sha256 = %s, compatibility = %s WHERE campaign_id = %s",
+                    (dummy_manifest_sha, json.dumps(dummy_manifest), camp_id),
+                )
+            conn.rollback()

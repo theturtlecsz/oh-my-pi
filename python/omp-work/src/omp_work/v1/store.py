@@ -396,6 +396,7 @@ class PostgresWorkStore(ResearchStoreMixin):
             "put_provider_account",
             "register_rate_card",
             "quote_budget",
+            "register_research_component",
             "create_research_campaign",
             "admit_research_campaign",
             "cancel_research_campaign",
@@ -534,6 +535,8 @@ class PostgresWorkStore(ResearchStoreMixin):
                     result = self._quote_budget(cur, envelope)
                 elif command.type == "associate_candidate_source":
                     result = self._associate_candidate_source(cur, envelope)
+                elif command.type == "register_research_component":
+                    result = self._register_research_component(cur, envelope)
                 elif command.type == "create_research_campaign":
                     result = self._create_research_campaign(cur, envelope)
                 elif command.type == "admit_research_campaign":

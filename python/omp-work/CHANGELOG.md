@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add research component identity registration, campaign compatibility manifest binding, and decision record 0011 (R02-S3b, migration 0038).
 - Research campaign lifecycle, canonical trial action vocabulary, policy-fingerprint compatibility, and authority decision record (R02-S2, migration 0037). Added commands `set_research_campaign_state` and `conclude_research_campaign`, widened campaign state machine (`running`, `paused`, `evaluating`, `blocked`, `concluded`), added blocked dependency tracking with resumability to exact prior state, enforced closed trial proposal actions (`retrieve`, `draft`, `repair`, `refine`, `challenge`, `combine`, `evaluate`, `replicate`, `deepen`, `prune`, `synthesize`, `escalate`, `conclude`), and enforced policy-fingerprint compatibility on every lifecycle transition.
 - Add bounded R02-S1 record-only research contract core: durable campaigns, trials, untrusted observations, and deliverable bindings (migration 0036).
 - Stage budget resource classification and immutable quote binding (OMP-233): migration 0035 adds nullable resource and scope_id columns on budget_quotes preserving historical readability, fail-closed non-null resource and scope enforcement on reservation, deterministic byte-equivalent reservation replay identity, and structured constraint conflict detection.
