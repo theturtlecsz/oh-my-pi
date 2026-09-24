@@ -12510,6 +12510,50 @@
       "title": "IntakeAcceptanceCriterion",
       "type": "object"
     },
+    "IntakeBlockingQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Claim Ids",
+          "type": "array"
+        },
+        "deduplication_key": {
+          "title": "Deduplication Key",
+          "type": "string"
+        },
+        "priority": {
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "rule_class": {
+          "enum": [
+            "contradictory_constraints",
+            "missing_verification_oracle",
+            "missing_consequential_authority_or_dependency"
+          ],
+          "title": "Rule Class",
+          "type": "string"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_class",
+        "deduplication_key",
+        "statement",
+        "priority"
+      ],
+      "title": "IntakeBlockingQuestion",
+      "type": "object"
+    },
     "IntakeClaim": {
       "additionalProperties": false,
       "properties": {
