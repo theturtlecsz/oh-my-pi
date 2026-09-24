@@ -38,7 +38,7 @@ import lockRefusalText from "./lock-refusal.md" with { type: "text" };
 import { checkProspectiveContract } from "./config";
 import sequenceText from "./sequence.md" with { type: "text" };
 import toolDescriptionTemplate from "./tool-description.md" with { type: "text" };
-import { buildCompletionEvidence } from "./work";
+import { buildCompletionEvidence, plannedCandidateId } from "./work";
 import {
 	type BackendIssue,
 	BatchPartialError,
@@ -4125,8 +4125,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 							if (!pathCheck.valid) {
 								return deny(`Plan path validation failed: ${pathCheck.error}`);
 							}
-							const candidateId = randomUUID();
 							const planSha = Bun.SHA256.hash(planContent, "hex");
+							const candidateId = plannedCandidateId(
+								exec.activeItem.work_id,
+								exec.activeItem.criteria_revision_id ?? exec.activeItem.claimed_revision_id,
+								planSha,
+							);
 							const candSha = sha256Hex(canonicalJson({ planSha, candidateId }));
 							const tcb = await computeAuditTcb(ctx, backend.workClient!);
 							const updated = await backend.stampExecutionPlan({
