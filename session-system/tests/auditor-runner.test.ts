@@ -26,6 +26,7 @@ import {
 	RECEIPT_TTL_MS,
 	resetConfirmations,
 } from "../extensions/workflow/confirm";
+import { computeContractSha256FromDisk } from "../extensions/workflow/config";
 import * as gitModule from "../extensions/workflow/git";
 import type { ExecutionWorkspace } from "../extensions/workflow/git";
 import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
@@ -2339,6 +2340,18 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 		const contractDir = path.join(dir, "python/omp-work/src/omp_work/contracts/v1");
 		const realContractDir = path.resolve(import.meta.dir, "../../python/omp-work/src/omp_work/contracts/v1");
 		fs.cpSync(realContractDir, contractDir, { recursive: true });
+		// Self-approve the copied contract snapshot so this fixture never drifts from
+		// whatever contract_sha256 the live repo's approval.json happens to carry.
+		fs.writeFileSync(
+			path.join(contractDir, "approval.json"),
+			JSON.stringify({
+				contract_version: "work.omp.dev/v1",
+				contract_sha256: computeContractSha256FromDisk(contractDir),
+				approved_by: "test",
+				approved_at: new Date().toISOString(),
+				issue: "OMP-199",
+			}),
+		);
 		spawnSync("git", ["add", "."], { cwd: dir });
 		spawnSync("git", ["commit", "-m", "initial commit"], { cwd: dir });
 		const head = headCommit(dir) ?? "0".repeat(40);
