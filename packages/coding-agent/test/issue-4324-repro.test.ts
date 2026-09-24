@@ -84,14 +84,15 @@ describe("issue #4324 — worker subprocess stderr survives to the exit error", 
 		// the worker is idle.
 		const repoRoot = path.resolve(import.meta.dir, "..");
 		const workerScript =
-			"const p = process.ppid; const lock = new Int32Array(new SharedArrayBuffer(4)); while (process.ppid === p) Atomics.wait(lock, 0, 0, 100);";
+			"const wrapperPid = Number(process.argv.at(-1)); const lock = new Int32Array(new SharedArrayBuffer(4)); while (true) { try { process.kill(wrapperPid, 0); } catch { break; } Atomics.wait(lock, 0, 0, 100); }";
 		const wrapperScript = `
 			const { createWorkerSubprocess } = await import("@oh-my-pi/pi-coding-agent/subprocess/worker-client");
-			createWorkerSubprocess({
-				spawnCommand: { cmd: [process.execPath, "-e", ${JSON.stringify(workerScript)}] },
+			const sub = createWorkerSubprocess({
+				spawnCommand: { cmd: [process.execPath, "-e", ${JSON.stringify(workerScript)}, String(process.pid)] },
 				env: {},
 				exitLabel: "idle subprocess",
 			});
+			process.stdout.write(String(sub.proc.pid));
 		`;
 		const proc = Bun.spawn([process.execPath, "-e", wrapperScript], {
 			cwd: repoRoot,
@@ -107,9 +108,33 @@ describe("issue #4324 — worker subprocess stderr survives to the exit error", 
 			new Response(proc.stderr).text(),
 			proc.exited,
 		]);
-		expect(stdout).toBe("");
 		expect(stderr).toBe("");
 		expect(exitCode).toBe(0);
+		const workerPid = Number(stdout);
+		expect(Number.isSafeInteger(workerPid)).toBe(true);
+		expect(workerPid).toBeGreaterThan(0);
+
+		let workerAlive = true;
+		try {
+			const deadline = Date.now() + 2_000;
+			while (workerAlive && Date.now() < deadline) {
+				try {
+					process.kill(workerPid, 0);
+					await Bun.sleep(25);
+				} catch {
+					workerAlive = false;
+				}
+			}
+			expect(workerAlive).toBe(false);
+		} finally {
+			if (workerAlive) {
+				try {
+					process.kill(workerPid, "SIGKILL");
+				} catch {
+					// Worker exited between the final liveness check and cleanup.
+				}
+			}
+		}
 	}, 10_000);
 
 	it("does not surface intentional terminate() SIGKILLs as worker errors", async () => {
