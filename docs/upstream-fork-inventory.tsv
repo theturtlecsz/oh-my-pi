@@ -180,6 +180,7 @@ packages/coding-agent/src/tools/output-meta.ts	shared	modified	404d84b11927	OMP-
 packages/coding-agent/src/tools/read.ts	shared	modified	6a7ac13f1259	OMP-246: Retain native provenance for direct regular-file text reads	retained
 packages/coding-agent/src/utils/git.ts	shared	modified	2e99b7ffc39b	session candidate: OMP-127	retained
 packages/coding-agent/test/acp-agent.test.ts	shared	modified	54ff82363d68	feat(coding-agent): cancellable plan_approved extension event (HOME-122)	retained
+packages/coding-agent/test/acp-lazy-startup.test.ts	shared	modified	06e0f2b57a60	fix-acp-lazy-startup: widen the lazy-session API-key test's timeout so it survives a loaded box	retained
 packages/coding-agent/test/advisor-toggle.test.ts	shared	modified	462dc7e687cd	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/advisor/advisor.test.ts	shared	modified	2e906243011b	session candidate: OMP-47	retained
 packages/coding-agent/test/agent-session-advisor-suppression.test.ts	shared	modified	1b8da49d5fd4	style(omp-156): biome formatting for verifier and re-fitted tests; session candidate: OMP-127; OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
