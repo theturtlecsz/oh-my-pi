@@ -84,14 +84,12 @@ on:
             description: "Skip npm publish"
             type: boolean
             default: false
-# Release runs publish a `v*` tag pushed atomically with main HEAD; sharing
-# the cheap branch-wide `CI-refs/heads/main` group meant a later main push
-# silently cancelled the in-flight release and left the tag without a GitHub
-# Release or npm publish (#2564). Detect release runs at workflow-scheduling
-# time via the release-script commit subject (`chore: bump version to vX.Y.Z`),
-# via `v*` tag-ref dispatches, and via manual dispatches whose tag-on-HEAD
-# status is only known after checkout; scope them to a per-sha group with no
-# cancellation. Every other event keeps branch-wide cancellation for PR/main churn.
+# Release preparation reaches main through a PR; post-merge `release.ts publish`
+# pushes the `v*` tag that starts publication. Keep the version-bump main run,
+# tag-ref run, and manual dispatch in a per-sha group without cancellation so
+# adjacent release events cannot cancel each other (#2564). Manual dispatch
+# release metadata is resolved after checkout. Other events keep branch-wide
+# cancellation for PR/main churn.
 concurrency:
    group: "${{ github.workflow }}-${{ (startsWith(github.event.head_commit.message, 'chore: bump version to ') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && format('release-{0}', github.sha) || github.ref }}"
    cancel-in-progress: "${{ !(startsWith(github.event.head_commit.message, 'chore: bump version to ') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}"
@@ -103,16 +101,13 @@ permissions:
    contents: read
 
 jobs:
-   # scripts/release.ts pushes the version-bump commit and its `v*` tag
-   # atomically (`git push --atomic origin refs/heads/main:refs/heads/main
-   # <sha>:refs/tags/v<version>`), so a release now arrives as a single `push` to
-   # `refs/heads/main` — we no longer trigger on the tag ref at all (see
-   # `on.push`). This one branch-push run is therefore authoritative: it runs the
-   # full build AND, when HEAD carries a release tag, the release/publish jobs.
-   # `release_metadata` resolves that tag once so downstream jobs switch on
-   # `is-release` and address the tag by name — `github.ref` is
-   # `refs/heads/main` here, not the tag. A `workflow_dispatch` from a `v*` tag
-   # ref (or from a tagged main HEAD) is also treated as a release.
+   # After the release PR merges, `release.ts publish` pushes a `v*` tag at the
+   # merged main commit. That tag-ref push starts the authoritative publish run.
+   # `release_metadata` validates the tag and its reachability from origin/main,
+   # then exposes its name and channel to downstream jobs. Main and PR runs are
+   # non-release unless main HEAD is already tagged. A manual dispatch may name
+   # a tag at the checked-out commit, run from a `v*` tag ref, or detect a tag at
+   # main HEAD.
    release_metadata:
       name: Resolve release metadata
       # Hosted, not self-hosted: this ~20 s git-tag probe gates the whole release

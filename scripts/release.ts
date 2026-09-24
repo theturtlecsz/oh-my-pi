@@ -485,26 +485,10 @@ async function cmdRelease(versionOrBump: string): Promise<void> {
 	await git(["commit", "-m", `chore: bump version to ${version}`]);
 	console.log();
 
-	// 8. Tag, then push branch + tag atomically — pushing the tag by object id.
-	//
-	// This repo is in the global `[maintenance] repo = …` list, so a scheduled
-	// `git maintenance run` fetches origin with `fetch.pruneTags=true` (set
-	// globally) and deletes any local tag not yet on the remote — i.e. the
-	// brand-new release tag. The `-c fetch.pruneTags=false` on our git wrapper
-	// only governs our own git calls, not the concurrent maintenance process, so
-	// a local tag ref may vanish before or while the push resolves it.
-	//
-	// A bare push refspec (`refs/tags/v…` with no `:dst`) re-resolves the tag on
-	// disk during refspec matching (git's remote.c:match_explicit); if the prune
-	// lands in that window git dies with
-	// "refs/tags/v… cannot be resolved to branch", and if it lands before the
-	// push it dies with "src refspec … does not match any". We sidestep both by
-	// pushing the HEAD commit object id straight into the remote tag ref
-	// (`<sha>:refs/tags/v…`): the push has no dependency on a local tag, and the
-	// commit is reachable from main so maintenance cannot prune it. The local
-	// tag we still create is only for `git describe`; losing it is harmless. The
-	// default Git LFS pre-push hook uploads the branch's LFS objects as part of
-	// this same atomic push — no separate `git lfs push` is needed.
+	// 8. Push the version-bump commit to a release branch for PR review. This step
+	// does not update main or publish a tag. After the PR merges, `publish` verifies
+	// local HEAD matches origin/main, pushes that commit to the remote tag ref, and
+	// watches the tag-triggered release workflow.
 	console.log("Pushing release branch for pull request...");
 	const branchName = releaseBranchName(version);
 	const sha = (await git(["rev-parse", "HEAD"]).text()).trim();
