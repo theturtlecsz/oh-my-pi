@@ -4335,32 +4335,6 @@ class PostgresWorkStore:
             "revision": new_revision_dict,
         }
 
-    @staticmethod
-    def _extract_plan_sha(payload_obj: object) -> str | None:
-        if isinstance(payload_obj, str):
-            try:
-                payload_obj = json.loads(payload_obj)
-            except Exception:
-                return None
-        if not isinstance(payload_obj, dict):
-            return None
-        # Support manual receipt's top-level hash
-        val = payload_obj.get("plan_sha256")
-        if isinstance(val, str) and val:
-            return val
-        # Support execution receipt's nested stamp hash
-        plan_stamp = payload_obj.get("plan_stamp")
-        if isinstance(plan_stamp, str):
-            try:
-                plan_stamp = json.loads(plan_stamp)
-            except Exception:
-                plan_stamp = None
-        if isinstance(plan_stamp, dict):
-            nested_val = plan_stamp.get("plan_sha256")
-            if isinstance(nested_val, str) and nested_val:
-                return nested_val
-        return None
-
     def _stamp_execution_plan(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -4437,13 +4411,6 @@ class PostgresWorkStore:
         else:
             effective_initial_paths = list(validated_paths)
 
-        # Verify plan_sha256 matches exact plan_body bytes before mutation
-        exact_plan_sha = text_sha256(payload.plan_body)
-        if payload.plan_sha256 != exact_plan_sha:
-            raise WorkStoreError(
-                "invalid_request", ("plan_sha256 does not match plan_body",)
-            )
-
         cur.execute(
             "SELECT current_revision_id FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s FOR UPDATE",
             (envelope.workspace_id, payload.work_id),
@@ -4452,62 +4419,20 @@ class PostgresWorkStore:
         if work_row is None or work_row["current_revision_id"] != payload.revision_id:
             raise WorkStoreError("revision_conflict", ("work revision mismatch",))
 
+        # Insert planned candidate
+        now = datetime.now(UTC)
         cur.execute(
-            "SELECT candidate_id, workspace_id, work_id, revision_id, candidate_sha256, kind, allocated_at "
-            "FROM omp_work.candidates WHERE candidate_id=%s",
-            (payload.candidate_id,),
+            "INSERT INTO omp_work.candidates(candidate_id, workspace_id, work_id, revision_id, candidate_sha256, kind, allocated_at) "
+            "VALUES (%s, %s, %s, %s, %s, 'planned', %s)",
+            (
+                payload.candidate_id,
+                envelope.workspace_id,
+                payload.work_id,
+                payload.revision_id,
+                payload.candidate_sha256,
+                now,
+            ),
         )
-        candidate_row = cur.fetchone()
-        if candidate_row is not None:
-            if (
-                candidate_row["workspace_id"] != envelope.workspace_id
-                or candidate_row["work_id"] != payload.work_id
-                or candidate_row["revision_id"] != payload.revision_id
-            ):
-                raise WorkStoreError(
-                    "invalid_request",
-                    ("candidate coordinates do not match execution work item",),
-                )
-            if candidate_row["kind"] != "planned":
-                raise WorkStoreError(
-                    "invalid_request",
-                    (f"cannot reuse candidate with kind '{candidate_row['kind']}'",),
-                )
-            cur.execute(
-                f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND candidate_id=%s AND kind='plan' ORDER BY issued_at, receipt_id",
-                (envelope.workspace_id, payload.candidate_id),
-            )
-            receipt_rows = cur.fetchall()
-            matched_plan_sha = False
-            for r in receipt_rows:
-                receipt_plan_sha = self._extract_plan_sha(r.get("payload"))
-                if receipt_plan_sha == payload.plan_sha256:
-                    matched_plan_sha = True
-                    break
-            if not matched_plan_sha:
-                raise WorkStoreError(
-                    "invalid_request",
-                    ("candidate does not bind the requested plan sha",),
-                )
-            effective_candidate_sha256 = candidate_row["candidate_sha256"]
-            effective_allocated_at = candidate_row["allocated_at"]
-        else:
-            now = datetime.now(UTC)
-            effective_candidate_sha256 = payload.candidate_sha256
-            effective_allocated_at = now
-            cur.execute(
-                "INSERT INTO omp_work.candidates(candidate_id, workspace_id, work_id, revision_id, candidate_sha256, kind, allocated_at) "
-                "VALUES (%s, %s, %s, %s, %s, 'planned', %s)",
-                (
-                    payload.candidate_id,
-                    envelope.workspace_id,
-                    payload.work_id,
-                    payload.revision_id,
-                    effective_candidate_sha256,
-                    now,
-                ),
-            )
-
         cur.execute(
             "UPDATE omp_work.work_items SET current_candidate_id=%s, row_version=row_version+1 WHERE workspace_id=%s AND work_id=%s",
             (payload.candidate_id, envelope.workspace_id, payload.work_id),
@@ -4515,7 +4440,6 @@ class PostgresWorkStore:
 
         # Insert plan evidence receipt
         plan_receipt_id = uuid4()
-        now = datetime.now(UTC)
         plan_stamp_data = {
             "candidate_id": str(payload.candidate_id),
             "approach": list(payload.approach),
@@ -4523,7 +4447,7 @@ class PostgresWorkStore:
             "paths": list(validated_paths),
             "initial_paths": effective_initial_paths,
             "plan_file": payload.plan_file,
-            "plan_sha256": payload.plan_sha256,
+            "plan_sha256": payload.plan_sha256 or sha256(payload.plan_body),
             "plan_body": payload.plan_body,
             "original_request_sha256": grant_item.get("original_request_sha256"),
             "criteria_sha256": grant_item.get("criteria_sha256"),
@@ -4551,7 +4475,7 @@ class PostgresWorkStore:
                 receipt_payload_hash,
                 "execution/plan-stamp",
                 now,
-                effective_candidate_sha256,
+                payload.candidate_sha256,
             ),
         )
 
@@ -4577,14 +4501,10 @@ class PostgresWorkStore:
             "candidate_id": str(payload.candidate_id),
             "work_id": str(payload.work_id),
             "revision_id": str(payload.revision_id),
-            "candidate_sha256": effective_candidate_sha256,
+            "candidate_sha256": payload.candidate_sha256,
             "commit_sha": None,
             "kind": "planned",
-            "allocated_at": (
-                effective_allocated_at.isoformat()
-                if hasattr(effective_allocated_at, "isoformat")
-                else str(effective_allocated_at)
-            ),
+            "allocated_at": now.isoformat(),
         }
         receipt_json = {
             "receipt_id": str(plan_receipt_id),
@@ -4597,7 +4517,7 @@ class PostgresWorkStore:
             "artifact_sha256": None,
             "issuer": "execution/plan-stamp",
             "issued_at": now.isoformat(),
-            "candidate_sha256": effective_candidate_sha256,
+            "candidate_sha256": payload.candidate_sha256,
             "candidate_commit": None,
             "verdict": None,
             "independent": False,
