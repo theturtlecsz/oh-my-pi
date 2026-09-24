@@ -3,9 +3,9 @@
  *
  * The service is authoritative for every gate; this adapter only assembles
  * envelopes, mirrors read projections into the host's shapes, and runs the
- * git steps (freeze/push) the service cannot. Planned-candidate identity is
- * stable for exact work/revision/plan bytes, while candidate_sha256 remains a
- * separate content binding.
+ * git steps (freeze/push) the service cannot. The provisional planned-candidate
+ * sha mixes in the fresh candidate_id so a re-approved plan after a negative
+ * audit never collides on UNIQUE(work_id, revision_id, candidate_sha256).
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -259,11 +259,6 @@ function stableId(...parts: unknown[]): UUID {
 	const hex = payloadHash(parts);
 	const variant = ((parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
 	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
-
-/** Stable identity for one exact planned work revision and plan body. */
-export function plannedCandidateId(workId: string, revisionId: string, planSha256: string): UUID {
-	return stableId("planned-candidate", workId, revisionId, planSha256);
 }
 
 /** Intent fingerprints exclude volatile fields (timestamps) so a retry
@@ -1297,7 +1292,7 @@ export function createWorkBackend(
 			}
 			// Deterministic per (work, revision, plan hash): an identical retry
 			// replays; a revised plan or revision mints a fresh candidate.
-			const candidateId = plannedCandidateId(item.work_id, item.revision.revision_id, stamp.hash);
+			const candidateId = stableId("planned-candidate", item.work_id, item.revision.revision_id, stamp.hash);
 			const payload: Record<string, unknown> = {
 				title: stamp.title,
 				body: stamp.body,
