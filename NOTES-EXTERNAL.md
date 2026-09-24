@@ -1,19 +1,34 @@
-# Pending WorkService mutation: OMP-268 description correction
+# Completed WorkService mutation: OMP-268 description correction
 
-External mutation is pending; this worktree has no WorkService credentials.
+Status: **COMPLETED**. The description-only successor revision was applied and its readback verified by OMP-268-s02; this worktree still has no WorkService credentials, so the evidence below is transcribed from the s02 artifact rather than re-queried.
 
 - Work UUID: `4daad6ca-0213-4aff-b026-878c5793fb02`
-- Expected current revision: r2, UUID `af997771-8a69-5afe-bf82-cb56a79d2128`
-- Target field: `revision.description` only
-- Target description: 6,440 UTF-8 bytes (6,434 characters), SHA-256 `83632d9bc1ada168133bf04b301202c30fd2ecb2bccd346050fe5d23df72a3c5`
-- Structured acceptance criteria remain unchanged: the same five bullets reproduced verbatim under `## Acceptance criteria` in the target description.
+- Prior revision (history): r2, UUID `af997771-8a69-5afe-bf82-cb56a79d2128` — superseded, not deleted; retained as the previous revision of record.
+- Applied revision: **r3**, UUID `84cc75f8-6f9f-4bcc-9683-cf61b917073b`
+- Mutated field: `revision.description` only
+- Applied description: 6,440 UTF-8 bytes (6,434 characters), SHA-256 `83632d9bc1ada168133bf04b301202c30fd2ecb2bccd346050fe5d23df72a3c5` — exact-readback **PASS** against the target description below.
+- Structured acceptance criteria are unchanged: the same five bullets reproduced verbatim under `## Acceptance criteria` in the applied description. No acceptance criterion is claimed complete by this filing.
 
-## Mutation contract
+## Mutation contract (as executed)
 
-- Pass explicit `expected_revision_id="af997771-8a69-5afe-bf82-cb56a79d2128"`; refuse mutation if the current native revision has drifted from r2.
-- Create a description-only successor revision.
-- Preserve title, scope, criteria array, state (`BACKLOG`), relations, candidate (`null`), NOW, focus, grants, and effects.
-- Make no runtime implementation or qualification claim.
+- Passed explicit `expected_revision_id="af997771-8a69-5afe-bf82-cb56a79d2128"` (r2); the mutation would have refused had the current native revision drifted.
+- Created a description-only successor revision (r3, `84cc75f8-6f9f-4bcc-9683-cf61b917073b`).
+- Preserved title, scope, criteria array, state (`BACKLOG`), relations, candidate (`null`), NOW, focus, grants, and effects — see "Readback checklist" below for the substantiated per-field comparison.
+- Made no runtime implementation or qualification claim.
+
+## Readback evidence (from OMP-268-s02)
+
+Source: `flood-logs/OMP-268-s02-evidence.json`, `revise_work` result `revision_id=84cc75f8-6f9f-4bcc-9683-cf61b917073b`, `changed=true`; receipt `operation_id=22132273-a43b-403a-afd1-bf1cd2d173c1`, `request_id=56f843aa-27a7-4f7c-92bc-dbacfef5110e`, `state=applied`. Recorded verdict: **PASS**, with every individual check `true`:
+
+- `rev3` — the successor's `revision_number` is `3`.
+- `desc_sha` — the applied `revision.description` hashes to `83632d9bc1ada168133bf04b301202c30fd2ecb2bccd346050fe5d23df72a3c5`, matching the target byte-for-byte.
+- `title/scope/criteria` — unchanged from r2 (`before`) to r3 (`after`).
+- `state` — unchanged, `BACKLOG`.
+- `candidate` — unchanged, `null`.
+- `item_rest` — remaining work-item fields (workspace, alias, project) unchanged.
+- `tree_rest(relations/NOW/focus/grants/effects)` — unchanged.
+
+This substantiates that title, scope, criteria, state, candidate, relations, NOW, focus, grants, and effects were all preserved across the r2→r3 correction. No runtime, NSI-4, qualification, receipt-fabrication, or activation claim is made by this filing or by the applied description.
 
 ## Exact target `revision.description`
 
@@ -64,8 +79,10 @@ Acceptance:
 
 ## Readback checklist
 
-- [ ] Successor revision UUID recorded.
-- [ ] `revision_number` is `3` (r3).
-- [ ] Readback description SHA-256 is `83632d9bc1ada168133bf04b301202c30fd2ecb2bccd346050fe5d23df72a3c5`.
-- [ ] Criteria, title, scope, state (`BACKLOG`), candidate (`null`), and relations are unchanged.
-- [ ] NOW, focus, grants, and effects are unchanged.
+- [x] Successor revision UUID recorded: `84cc75f8-6f9f-4bcc-9683-cf61b917073b`.
+- [x] `revision_number` is `3` (r3).
+- [x] Readback description SHA-256 is `83632d9bc1ada168133bf04b301202c30fd2ecb2bccd346050fe5d23df72a3c5`.
+- [x] Criteria, title, scope, state (`BACKLOG`), candidate (`null`), and relations are unchanged.
+- [x] NOW, focus, grants, and effects are unchanged.
+
+All five checks are substantiated directly from the OMP-268-s02 evidence artifact's `checks` block (`rev3`, `desc_sha`, `title/scope/criteria`, `state`, `candidate`, `item_rest`, `tree_rest(relations/NOW/focus/grants/effects)`, all `true`) and its recorded `verdict: PASS`. r2 (`af997771-8a69-5afe-bf82-cb56a79d2128`) remains the preserved prior revision, superseded by r3.
