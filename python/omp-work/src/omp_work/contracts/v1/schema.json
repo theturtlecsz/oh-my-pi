@@ -1440,6 +1440,7 @@
             "OMP-147",
             "OMP-180",
             "OMP-194",
+            "OMP-219",
             "OMP-222",
             "OMP-247",
             "OMP-266"
@@ -6943,6 +6944,78 @@
           "title": "SettleAuditorLaunchPayload",
           "type": "object"
         },
+        "SkipActiveItemCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/SkipActiveItemPayload"
+            },
+            "type": {
+              "const": "skip_active_item",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "SkipActiveItemCommand",
+          "type": "object"
+        },
+        "SkipActiveItemPayload": {
+          "additionalProperties": false,
+          "description": "OMP-219: owner-only deferral of the grant's active item \u2014 it supersedes any\nopen close attempt, the work item stays open, and the grant advances or\ncompletes without spending a close-attempt budget slot.",
+          "properties": {
+            "expected_focus_version": {
+              "minimum": 0,
+              "title": "Expected Focus Version",
+              "type": "integer"
+            },
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "position": {
+              "minimum": 0,
+              "title": "Position",
+              "type": "integer"
+            },
+            "reason": {
+              "maxLength": 240,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "position",
+            "work_id",
+            "expected_focus_version",
+            "judge_sha256",
+            "reason"
+          ],
+          "title": "SkipActiveItemPayload",
+          "type": "object"
+        },
         "StageImportBatchCommand": {
           "additionalProperties": false,
           "properties": {
@@ -7202,6 +7275,7 @@
               "set_focus": "#/$defs/SetFocusCommand",
               "set_work_state": "#/$defs/SetWorkStateCommand",
               "settle_auditor_launch": "#/$defs/SettleAuditorLaunchCommand",
+              "skip_active_item": "#/$defs/SkipActiveItemCommand",
               "stage_import_batch": "#/$defs/StageImportBatchCommand",
               "stamp_execution_plan": "#/$defs/StampExecutionPlanCommand"
             },
@@ -7294,6 +7368,9 @@
             },
             {
               "$ref": "#/$defs/CompleteExecutionItemCommand"
+            },
+            {
+              "$ref": "#/$defs/SkipActiveItemCommand"
             }
           ],
           "title": "Command"
@@ -15152,6 +15229,133 @@
         "launch_id"
       ],
       "title": "SettleAuditorLaunchPayload",
+      "type": "object"
+    },
+    "SkipActiveItemCommand": {
+      "$defs": {
+        "SkipActiveItemPayload": {
+          "additionalProperties": false,
+          "description": "OMP-219: owner-only deferral of the grant's active item \u2014 it supersedes any\nopen close attempt, the work item stays open, and the grant advances or\ncompletes without spending a close-attempt budget slot.",
+          "properties": {
+            "expected_focus_version": {
+              "minimum": 0,
+              "title": "Expected Focus Version",
+              "type": "integer"
+            },
+            "expected_grant_version": {
+              "minimum": 1,
+              "title": "Expected Grant Version",
+              "type": "integer"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "judge_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "position": {
+              "minimum": 0,
+              "title": "Position",
+              "type": "integer"
+            },
+            "reason": {
+              "maxLength": 240,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "expected_grant_version",
+            "position",
+            "work_id",
+            "expected_focus_version",
+            "judge_sha256",
+            "reason"
+          ],
+          "title": "SkipActiveItemPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SkipActiveItemPayload"
+        },
+        "type": {
+          "const": "skip_active_item",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "SkipActiveItemCommand",
+      "type": "object"
+    },
+    "SkipActiveItemPayload": {
+      "additionalProperties": false,
+      "description": "OMP-219: owner-only deferral of the grant's active item \u2014 it supersedes any\nopen close attempt, the work item stays open, and the grant advances or\ncompletes without spending a close-attempt budget slot.",
+      "properties": {
+        "expected_focus_version": {
+          "minimum": 0,
+          "title": "Expected Focus Version",
+          "type": "integer"
+        },
+        "expected_grant_version": {
+          "minimum": 1,
+          "title": "Expected Grant Version",
+          "type": "integer"
+        },
+        "grant_id": {
+          "format": "uuid",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "judge_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Sha256",
+          "type": "string"
+        },
+        "position": {
+          "minimum": 0,
+          "title": "Position",
+          "type": "integer"
+        },
+        "reason": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "grant_id",
+        "expected_grant_version",
+        "position",
+        "work_id",
+        "expected_focus_version",
+        "judge_sha256",
+        "reason"
+      ],
+      "title": "SkipActiveItemPayload",
       "type": "object"
     },
     "SourceScope": {

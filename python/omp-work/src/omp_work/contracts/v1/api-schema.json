@@ -5157,6 +5157,34 @@
           "title": "SetExecutionStateResult",
           "type": "object"
         },
+        "SkipActiveItemResult": {
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "item": {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "type": {
+              "const": "skip_active_item",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "item",
+            "reason"
+          ],
+          "title": "SkipActiveItemResult",
+          "type": "object"
+        },
         "StampExecutionPlanResult": {
           "additionalProperties": false,
           "properties": {
@@ -5321,6 +5349,7 @@
               "set_focus": "#/$defs/FocusResult",
               "set_work_state": "#/$defs/WorkItemResult",
               "settle_auditor_launch": "#/$defs/CloseAttemptResult",
+              "skip_active_item": "#/$defs/SkipActiveItemResult",
               "stamp_execution_plan": "#/$defs/StampExecutionPlanResult"
             },
             "propertyName": "type"
@@ -5385,6 +5414,9 @@
             },
             {
               "$ref": "#/$defs/CompleteExecutionItemResult"
+            },
+            {
+              "$ref": "#/$defs/SkipActiveItemResult"
             }
           ],
           "title": "Result"
@@ -10189,6 +10221,466 @@
       "title": "SetExecutionStateResult",
       "type": "object"
     },
+    "SkipActiveItemResult": {
+      "$defs": {
+        "ExecutionGrantItemView": {
+          "additionalProperties": false,
+          "properties": {
+            "abandoned_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Abandoned At"
+            },
+            "activated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Activated At"
+            },
+            "active_blocker_ids": {
+              "default": [],
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "title": "Active Blocker Ids",
+              "type": "array"
+            },
+            "claimed_revision_id": {
+              "format": "uuid",
+              "title": "Claimed Revision Id",
+              "type": "string"
+            },
+            "close_attempts_started": {
+              "title": "Close Attempts Started",
+              "type": "integer"
+            },
+            "closeout_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closeout Receipt Id"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "consecutive_no_progress": {
+              "title": "Consecutive No Progress",
+              "type": "integer"
+            },
+            "criteria_revision_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Revision Id"
+            },
+            "criteria_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Criteria Sha256"
+            },
+            "current_git_baseline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Current Git Baseline"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "initial_git_baseline": {
+              "title": "Initial Git Baseline",
+              "type": "string"
+            },
+            "item_id": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            },
+            "last_findings_hash": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Findings Hash"
+            },
+            "last_reviewed_tree_sha": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Reviewed Tree Sha"
+            },
+            "original_request": {
+              "title": "Original Request",
+              "type": "string"
+            },
+            "original_request_sha256": {
+              "title": "Original Request Sha256",
+              "type": "string"
+            },
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "plan_stamp": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp"
+            },
+            "plan_stamp_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan Stamp Sha256"
+            },
+            "position": {
+              "title": "Position",
+              "type": "integer"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            },
+            "push_receipt_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Push Receipt Id"
+            },
+            "skipped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Skipped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "workspace_id",
+            "grant_id",
+            "work_id",
+            "position",
+            "phase",
+            "claimed_revision_id",
+            "initial_git_baseline",
+            "original_request",
+            "original_request_sha256",
+            "close_attempts_started",
+            "consecutive_no_progress"
+          ],
+          "title": "ExecutionGrantItemView",
+          "type": "object"
+        },
+        "ExecutionGrantView": {
+          "additionalProperties": false,
+          "properties": {
+            "authorization_hash": {
+              "title": "Authorization Hash",
+              "type": "string"
+            },
+            "canceled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Canceled At"
+            },
+            "completed_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Completed At"
+            },
+            "continuations_scheduled": {
+              "title": "Continuations Scheduled",
+              "type": "integer"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "grant_id": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            },
+            "grant_version": {
+              "title": "Grant Version",
+              "type": "integer"
+            },
+            "judge_sha256": {
+              "title": "Judge Sha256",
+              "type": "string"
+            },
+            "max_close_attempts": {
+              "title": "Max Close Attempts",
+              "type": "integer"
+            },
+            "max_continuations": {
+              "title": "Max Continuations",
+              "type": "integer"
+            },
+            "max_no_progress": {
+              "title": "Max No Progress",
+              "type": "integer"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "owner_id": {
+              "format": "uuid",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "paused_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Paused At"
+            },
+            "remote_ref": {
+              "title": "Remote Ref",
+              "type": "string"
+            },
+            "repository": {
+              "title": "Repository",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "terminal_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Terminal Reason"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "grant_id",
+            "workspace_id",
+            "owner_id",
+            "repository",
+            "remote_ref",
+            "state",
+            "mode",
+            "grant_version",
+            "max_continuations",
+            "max_close_attempts",
+            "max_no_progress",
+            "continuations_scheduled",
+            "authorization_hash",
+            "judge_sha256",
+            "created_at",
+            "expires_at"
+          ],
+          "title": "ExecutionGrantView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "grant": {
+          "$ref": "#/$defs/ExecutionGrantView"
+        },
+        "item": {
+          "$ref": "#/$defs/ExecutionGrantItemView"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "type": {
+          "const": "skip_active_item",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "grant",
+        "item",
+        "reason"
+      ],
+      "title": "SkipActiveItemResult",
+      "type": "object"
+    },
     "StampExecutionPlanResult": {
       "$defs": {
         "Candidate": {
@@ -13084,6 +13576,34 @@
           "title": "SetExecutionStateResult",
           "type": "object"
         },
+        "SkipActiveItemResult": {
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/ExecutionGrantView"
+            },
+            "item": {
+              "$ref": "#/$defs/ExecutionGrantItemView"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            },
+            "type": {
+              "const": "skip_active_item",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grant",
+            "item",
+            "reason"
+          ],
+          "title": "SkipActiveItemResult",
+          "type": "object"
+        },
         "StampExecutionPlanResult": {
           "additionalProperties": false,
           "properties": {
@@ -13264,6 +13784,7 @@
                   "set_focus": "#/$defs/FocusResult",
                   "set_work_state": "#/$defs/WorkItemResult",
                   "settle_auditor_launch": "#/$defs/CloseAttemptResult",
+                  "skip_active_item": "#/$defs/SkipActiveItemResult",
                   "stamp_execution_plan": "#/$defs/StampExecutionPlanResult"
                 },
                 "propertyName": "type"
@@ -13328,6 +13849,9 @@
                 },
                 {
                   "$ref": "#/$defs/CompleteExecutionItemResult"
+                },
+                {
+                  "$ref": "#/$defs/SkipActiveItemResult"
                 }
               ]
             },

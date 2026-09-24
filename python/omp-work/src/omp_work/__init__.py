@@ -97,6 +97,7 @@ _COMMAND_TYPES = frozenset(
         "stamp_execution_plan",
         "set_execution_state",
         "complete_execution_item",
+        "skip_active_item",
     }
 )
 
