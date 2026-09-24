@@ -80,10 +80,7 @@ import {
 import { pendingOpsDir, type WorkClientConfig } from "./config";
 import { candidateDrift, type CandidateDriftShape, freezeCandidateCommit, headCommit, pushCandidate } from "./git";
 import { ackOps as ackClaimOps, claimPendingOp, dropPendingOp, intentFingerprint, readPendingClaims, resolvePendingOp } from "./pending-ops";
-import { plannedCandidateId, stableId } from "./plan-identity";
 import { bounded, healthWord, oneRecovery, redactSecrets } from "./status";
-
-export { plannedCandidateId } from "./plan-identity";
 
 const DRAIN_MAX_QUEUE = 8;
 const DRAIN_MAX_AGE_DAYS = 14;
@@ -254,6 +251,20 @@ function outcomeOf(result: { status: "applied" | "refused"; attempt?: CloseAttem
 	};
 }
 
+/** RFC-4122-shaped deterministic id over the canonical payload hash: the same
+ *  logical content mints the same id regardless of key insertion order, so a
+ *  crash/restart retry reconstructs the SAME intent fingerprint and finds its
+ *  pending-operation claim. */
+function stableId(...parts: unknown[]): UUID {
+	const hex = payloadHash(parts);
+	const variant = ((parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** Stable identity for one exact planned work revision and plan body. */
+export function plannedCandidateId(workId: string, revisionId: string, planSha256: string): UUID {
+	return stableId("planned-candidate", workId, revisionId, planSha256);
+}
 
 /** Intent fingerprints exclude volatile fields (timestamps) so a retry
  *  reconstructs the same intent; the persisted envelope keeps the original

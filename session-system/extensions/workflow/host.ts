@@ -38,8 +38,7 @@ import lockRefusalText from "./lock-refusal.md" with { type: "text" };
 import { checkProspectiveContract } from "./config";
 import sequenceText from "./sequence.md" with { type: "text" };
 import toolDescriptionTemplate from "./tool-description.md" with { type: "text" };
-import { plannedCandidateId } from "./plan-identity";
-import { buildCompletionEvidence } from "./work";
+import { buildCompletionEvidence, plannedCandidateId } from "./work";
 import {
 	type BackendIssue,
 	BatchPartialError,
