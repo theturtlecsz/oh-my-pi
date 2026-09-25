@@ -664,4 +664,170 @@ describe("OMP-262 operation reconciliation", () => {
 			expect(claim.record.result).toBeUndefined();
 		});
 	});
+
+	describe("pending-claim recovery reconciliation", () => {
+		const workspaceId = "00000000-0000-7000-8000-000000000000";
+		const ownerId = "00000000-0000-7000-8000-000000000002";
+		const grantId = "00000000-0000-7000-8000-000000000003";
+		const opId = "00000000-0000-7000-8000-000000000010";
+		const reqId = "00000000-0000-7000-8000-000000000011";
+
+		test("recovery with GET 404 x3 then applied match: resolves, claim .json has result, POST 0", async () => {
+			const tempDir = await makeTempDir();
+			let postCount = 0;
+			let getCount = 0;
+
+			const command = {
+				type: "seal_execution_criteria" as const,
+				payload: {
+					grant_id: grantId,
+					expected_grant_version: 2,
+					work_id: "00000000-0000-7000-8000-000000000001",
+					expected_revision_id: "00000000-0000-7000-8000-000000000002",
+					criteria: ["criterion 1"],
+					description_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+					judge_sha256: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+				},
+			};
+			const canonicalHash = payloadHash({
+				api_version: "work.omp.dev/v1",
+				workspace_id: workspaceId,
+				command,
+			});
+
+			const intent = intentFingerprint("intent", workspaceId, ownerId, command.type, command.payload);
+			const claim = await claimPendingOp(tempDir, intent, () => ({
+				api_version: "work.omp.dev/v1",
+				workspace_id: workspaceId,
+				operation_id: opId,
+				request_id: reqId,
+				correlation_id: "00000000-0000-7000-8000-000000000099",
+				command,
+			}));
+
+			const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+				const url = String(input);
+				const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+				if (method === "POST" || url.endsWith("/v1/commands")) {
+					postCount++;
+					return new Response(JSON.stringify({ error: "unexpected_post" }), { status: 500 });
+				}
+				if (url.includes(`/v1/operations/${opId}`)) {
+					getCount++;
+					if (getCount <= 3) {
+						return new Response("not found", { status: 404 });
+					}
+					return new Response(
+						JSON.stringify({
+							receipt: {
+								operation_id: opId,
+								request_id: reqId,
+								state: "applied",
+								request_sha256: canonicalHash,
+								result_sha256: "4567",
+								diagnostics: [],
+							},
+							command_type: "seal_execution_criteria",
+							request_id: reqId,
+							correlation_id: "00000000-0000-7000-8000-000000000099",
+							result: {
+								type: "seal_execution_criteria",
+								grant: { grant_id: grantId, grant_version: 3, state: "active" },
+								revision: { revision_id: "00000000-0000-7000-8000-000000000021" },
+							},
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				return new Response("not found", { status: 404 });
+			};
+
+			const backend = createWorkBackend(
+				{ baseUrl: "http://127.0.0.1:9999", workspaceId, ownerId },
+				() => "mock-token",
+				mockFetch as never,
+				tempDir,
+			);
+
+			await backend.getPendingExecutionClaims(grantId);
+
+			expect(postCount).toBe(0);
+			expect(getCount).toBe(4);
+
+			const claimAfter = JSON.parse(await Bun.file(claim.path).text()) as {
+				result?: { type: string };
+				resolved_at?: string;
+			};
+			expect(claimAfter.result).toBeDefined();
+			expect(claimAfter.result?.type).toBe("seal_execution_criteria");
+			expect(claimAfter.resolved_at).toBeDefined();
+		});
+
+		test("recovery with 404 forever: throws the refusal message after exactly OPERATION_POLL_ATTEMPTS GETs, claim bytes unchanged, POST 0", async () => {
+			const tempDir = await makeTempDir();
+			let postCount = 0;
+			let getCount = 0;
+
+			const command = {
+				type: "stamp_execution_plan" as const,
+				payload: {
+					grant_id: grantId,
+					expected_grant_version: 2,
+					work_id: "00000000-0000-7000-8000-000000000001",
+					revision_id: "00000000-0000-7000-8000-000000000002",
+					plan_stamp: "stamp-123",
+					commit_sha: "0123456789abcdef0123456789abcdef01234567",
+					candidate_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				},
+			};
+
+			const intent = intentFingerprint("intent", workspaceId, ownerId, command.type, command.payload);
+			const claim = await claimPendingOp(tempDir, intent, () => ({
+				api_version: "work.omp.dev/v1",
+				workspace_id: workspaceId,
+				operation_id: opId,
+				request_id: reqId,
+				correlation_id: "00000000-0000-7000-8000-000000000099",
+				command,
+			}));
+			const bytesBefore = await Bun.file(claim.path).text();
+
+			const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+				const url = String(input);
+				const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+				if (method === "POST" || url.endsWith("/v1/commands")) {
+					postCount++;
+					return new Response(JSON.stringify({ error: "unexpected_post" }), { status: 500 });
+				}
+				if (url.includes(`/v1/operations/${opId}`)) {
+					getCount++;
+					return new Response("not found", { status: 404 });
+				}
+				return new Response("not found", { status: 404 });
+			};
+
+			const backend = createWorkBackend(
+				{ baseUrl: "http://127.0.0.1:9999", workspaceId, ownerId },
+				() => "mock-token",
+				mockFetch as never,
+				tempDir,
+			);
+
+			let thrown: Error | null = null;
+			try {
+				await backend.getPendingExecutionClaims(grantId);
+			} catch (err) {
+				thrown = err as Error;
+			}
+
+			expect(thrown).not.toBeNull();
+			expect(thrown!.message).toContain(`unresolved pending claim ${claim.path}`);
+			expect(thrown!.message).toContain(`(op ${opId}, ${command.type})`);
+			expect(thrown!.message).toContain(`for grant ${grantId}:`);
+			expect(thrown!.message).toContain("automatic recovery refused; use stop/cancel or repair the claim");
+			expect(postCount).toBe(0);
+			expect(getCount).toBe(OPERATION_POLL_ATTEMPTS);
+			expect(await Bun.file(claim.path).text()).toBe(bytesBefore);
+		});
+	});
 });
