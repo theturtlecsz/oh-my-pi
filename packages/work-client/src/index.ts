@@ -34,6 +34,19 @@ export function payloadHash(value: unknown): string {
 
 export type CandidatePathBasis = "commit-diff" | "sealed-snapshot";
 
+const UTF8 = new TextEncoder();
+
+/** UTF-8 byte-order comparator shared by every canonical path sort (candidate
+ *  hashes and code-snapshot manifests). Python sorts on `path.encode("utf-8")`,
+ *  so a plain JS string compare would diverge for non-ASCII names. */
+export function compareUtf8Bytes(a: string, b: string): number {
+	const x = UTF8.encode(a);
+	const y = UTF8.encode(b);
+	const n = Math.min(x.length, y.length);
+	for (let i = 0; i < n; i++) if (x[i] !== y[i]) return x[i] - y[i];
+	return x.length - y.length;
+}
+
 /** Canonical candidate hash, pinned by decision 0004 + contracts/v1/candidate-hash.json.
  *  Mirrors canonical.py candidate_sha256 exactly: byte-order path sort, and refusal of
  *  empty sets, duplicates, `./`, trailing slash, backslash, `//`, and control chars.
@@ -48,14 +61,7 @@ export function candidateSha256(
 	}
 	if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commitSha))
 		throw new Error("commit_sha must be a full lowercase hex object id (40 or 64 chars)");
-	const utf8 = new TextEncoder();
-	const ordered = [...paths].sort((a, b) => {
-		const x = utf8.encode(a);
-		const y = utf8.encode(b);
-		const n = Math.min(x.length, y.length);
-		for (let i = 0; i < n; i++) if (x[i] !== y[i]) return x[i] - y[i];
-		return x.length - y.length;
-	});
+	const ordered = [...paths].sort(compareUtf8Bytes);
 	if (!ordered.length) throw new Error("candidate path set must not be empty");
 	let previous: string | null = null;
 	for (const path of ordered) {
@@ -76,6 +82,132 @@ export function candidateSha256(
 		payload.path_basis = "sealed-snapshot";
 	}
 	return payloadHash(payload);
+}
+
+// ---- knowledge contracts (mirrors knowledge_contracts.py) ----
+
+export const CODE_SNAPSHOT_ALGORITHM = "work.omp.dev/v1/code-snapshot";
+export const CHILD_FACT_ALGORITHM = "work.omp.dev/v1/child-fact";
+
+export type FileKind = "base" | "modified" | "untracked" | "deleted";
+export type JobState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type ExtractionState = "extracted" | "no_lesson";
+export type OperationKind = "ingest" | "query" | "lookup" | "correct" | "status";
+
+/** Authoritative native identity for a repository. */
+export type RepositoryIdentity = {
+	workspace_id: UUID;
+	repository_id: UUID;
+	canonical_remote_url: string;
+	root_commits: string[];
+	verified_at: string;
+};
+
+/** Location reference pointing to a file and optional fact in a snapshot. */
+export type SourceRef = {
+	repository_id: UUID;
+	snapshot_id: string;
+	path: string;
+	fact_id: string | null;
+};
+
+/** File entry within a code snapshot manifest. Deleted files carry null sha256/size. */
+export type ManifestFile = {
+	path: string;
+	kind: FileKind;
+	sha256: string | null;
+	size: number | null;
+};
+
+/** Manifest of files comprising an isolated code snapshot. */
+export type CodeSnapshotManifest = {
+	workspace_id: UUID;
+	repository_id: UUID;
+	base_commit: string;
+	files: ManifestFile[];
+};
+
+/** Enola code AST symbol observation. */
+export type EnolaFact = {
+	fact_id: string;
+	kind: string;
+	name: string;
+	file: string;
+	line: number;
+};
+
+/** Asynchronous ingestion work item tracked across states. */
+export type IngestionJob = {
+	job_id: UUID;
+	workspace_id: UUID;
+	repository_id: UUID;
+	snapshot_id: string;
+	idempotency_key: string;
+	request_sha256: string;
+	state: JobState;
+	error_code: string | null;
+};
+
+/** Receipt proving knowledge extraction completion. */
+export type IngestionReceipt = {
+	receipt_id: UUID;
+	job_id: UUID;
+	snapshot_id: string;
+	extraction_state: ExtractionState;
+	fact_count: number;
+	graph_sha256: string;
+};
+
+/** Semantic search query across a repository snapshot. */
+export type KnowledgeQuery = {
+	workspace_id: UUID;
+	repository_id: UUID;
+	snapshot_id: string;
+	text: string;
+	limit: number;
+};
+
+/** Search hit returned by a knowledge provider. */
+export type KnowledgeHit = {
+	child_fact_id: string;
+	source: SourceRef;
+	kind: string;
+	name: string;
+	corrected: boolean;
+};
+
+/** Routing descriptor for a knowledge provider and supported operations. */
+export type ProviderRoute = {
+	provider: string;
+	provider_version: string;
+	operations: OperationKind[];
+};
+
+/** Canonical code-snapshot id: files sorted by UTF-8 byte order of path, each
+ *  serialized as {path,kind,sha256,size} with null for absent values. */
+export function codeSnapshotId(manifest: CodeSnapshotManifest): string {
+	const files = [...manifest.files]
+		.sort((a, b) => compareUtf8Bytes(a.path, b.path))
+		.map(f => ({ path: f.path, kind: f.kind, sha256: f.sha256, size: f.size }));
+	return payloadHash({
+		algorithm: CODE_SNAPSHOT_ALGORITHM,
+		base_commit: manifest.base_commit,
+		files,
+		repo: manifest.repository_id,
+		ws: manifest.workspace_id,
+	});
+}
+
+/** Canonical child-fact id binding one Enola fact to its snapshot. */
+export function childFactId(snapshotId: string, fact: EnolaFact): string {
+	if (!/^[0-9a-f]{64}$/.test(snapshotId))
+		throw new Error(`snap must be a 64-char lowercase hex string, got ${JSON.stringify(snapshotId)}`);
+	return payloadHash({
+		algorithm: CHILD_FACT_ALGORITHM,
+		fact_id: fact.fact_id,
+		file: fact.file,
+		snap: snapshotId,
+	});
 }
 
 // ---- receipts + shared entities ----
