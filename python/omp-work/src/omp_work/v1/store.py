@@ -1040,6 +1040,8 @@ class PostgresWorkStore:
                     "generic append_evidence rejects closeout reviews; use record_closeout_review under work.close",
                 ),
             )
+        if receipt.issuer == "service" or receipt.issuer.startswith("work-service/"):
+            raise WorkStoreError("invalid_request", ("reserved issuer",))
 
         cur.execute(
             f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND receipt_id=%s",
