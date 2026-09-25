@@ -170,6 +170,24 @@ class Settings(BaseSettings):
     # at boot. Costs a dependency re-download on the next run for that issue.
     reclaim_workspace_caches: bool = Field(True, alias="ROBOMP_RECLAIM_WORKSPACE_CACHES")
 
+    # Jev typed decisions / issue prefilter
+    jev_enabled: bool = Field(False, alias="ROBOMP_JEV_ENABLED")
+    prefilter_enabled: bool = Field(False, alias="ROBOMP_PREFILTER")
+    jev_base_url: str = Field("https://api.typesafe.ai", alias="ROBOMP_JEV_BASE_URL")
+    typesafe_api_key: SecretStr | None = Field(None, alias="TYPESAFE_API_KEY")
+    prefilter_threshold: float = Field(0.90, alias="ROBOMP_PREFILTER_THRESHOLD")
+
+    @field_validator("typesafe_api_key", mode="before")
+    @classmethod
+    def _blank_typesafe_key_disables(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        if hasattr(value, "get_secret_value"):
+            inner = value.get_secret_value()  # type: ignore[attr-defined]
+            if isinstance(inner, str) and not inner.strip():
+                return None
+        return value
+
     @field_validator("bot_login", mode="after")
     @classmethod
     def _require_bot_login(cls, value: str) -> str:
