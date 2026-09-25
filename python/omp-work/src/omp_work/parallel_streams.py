@@ -6,6 +6,7 @@ provider partitions. Store: ACTIVE/parallel-runtime/parallel.db
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -13,7 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-ACTIVE = Path("/home/thetu/.codex/workflows/economy/ACTIVE")
+ACTIVE = Path(
+    os.environ.get("OMP_ECONOMY_ACTIVE_DIR") or (Path.home() / ".codex/workflows/economy/ACTIVE")
+)
 RUNTIME = ACTIVE / "parallel-runtime"
 DB = RUNTIME / "parallel.db"
 POLICY = ACTIVE / "PARALLEL-STREAMS.json"

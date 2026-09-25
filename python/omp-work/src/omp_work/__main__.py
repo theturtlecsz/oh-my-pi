@@ -203,7 +203,34 @@ def main(argv: list[str] | None = None) -> int | None:
         print(json.dumps(r.to_dict(), indent=2))
         return 0
     if args.command == "headroom":
-        caps = "/home/thetu/.codex/workflows/economy/ACTIVE/BUDGET-CAPS.json"
+        active_dir = Path(
+            os.environ.get("OMP_ECONOMY_ACTIVE_DIR")
+            or (Path.home() / ".codex/workflows/economy/ACTIVE")
+        )
+        caps = active_dir / "BUDGET-CAPS.json"
+        if not caps.is_file():
+            from .budget_headroom import Headroom
+
+            print(
+                json.dumps(
+                    Headroom(
+                        soft_warn_fraction=0.7,
+                        hard_refuse_fraction=1.0,
+                        milestone_soft_tokens=None,
+                        milestone_hard_tokens=None,
+                        spent_tokens=0,
+                        soft_remaining=None,
+                        hard_remaining=None,
+                        soft_fraction_used=None,
+                        hard_fraction_used=None,
+                        soft_warn=False,
+                        hard_refuse=False,
+                        notes=["BUDGET-CAPS missing"],
+                    ).to_dict(),
+                    indent=2,
+                )
+            )
+            return 0
         print(json.dumps(compute_headroom(caps_path=caps).to_dict(), indent=2))
         return 0
     if args.command == "stall-check":

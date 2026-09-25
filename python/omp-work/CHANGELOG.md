@@ -32,6 +32,10 @@
 
 ### Fixed
 
+- Parallel job completion now releases leases and reservations in the terminal transaction, preserves a winning terminal result, and can persist a bounded downstream closeout obligation for safe retry after daemon interruption. Cancellation waits for verified worker termination; checkpoint outcomes remain supported.
+- Expired execution grants fence fresh grant-linked commands and continuations while preserving idempotent replay, delivery/auditor settlement, and explicit owner reconciliation before replacement admission.
+- S2 job mirrors preserve `empty_soft`, reject foreign identities, retain namespace-scoped deletion tombstones, and compare row identities and resource contents. A separate additive jobs migration records mirror provenance; explicit legacy reconciliation requires a hash-pinned allowlist and current identity checks.
+- WAL uploads retain the source spool until head-object sha256+size and evidence checks pass; restore drills reject a dump outside the backup prefix and record `passed:logical_restore:<reason>`.
 - Cutover status now reports the persisted first-mutation request, the database rejects unpaired first-mutation stamps on every write path, and the recovery runbook covers deadline overruns and failed Linear credential revocation.
 - OMP-123: Normalized `{"raw": report}` as a direct auditor transport envelope at the WorkService settle boundary, supporting task tool terminal yield payloads without loosening validation rules.
 - `execution_grant_inactive` refusals are treated as not applied, so clients release the pending operation instead of reporting an unknown outcome.
