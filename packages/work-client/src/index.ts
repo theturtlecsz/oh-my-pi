@@ -698,6 +698,16 @@ export type CompleteExecutionItemPayload = {
 	judge_sha256: string;
 };
 
+export type SkipActiveItemPayload = {
+	grant_id: UUID;
+	expected_grant_version: number;
+	position: number;
+	work_id: UUID;
+	expected_focus_version: number;
+	judge_sha256: string;
+	reason: string;
+};
+
 export type Command =
 	| { type: "create_work_batch"; payload: CreateWorkBatchPayload }
 	| { type: "create_same_session_child"; payload: CreateSameSessionChildPayload }
@@ -724,7 +734,8 @@ export type Command =
 	| { type: "seal_execution_criteria"; payload: SealExecutionCriteriaPayload }
 	| { type: "stamp_execution_plan"; payload: StampExecutionPlanPayload }
 	| { type: "set_execution_state"; payload: SetExecutionStatePayload }
-	| { type: "complete_execution_item"; payload: CompleteExecutionItemPayload };
+	| { type: "complete_execution_item"; payload: CompleteExecutionItemPayload }
+	| { type: "skip_active_item"; payload: SkipActiveItemPayload };
 
 // ---- command results ----
 
@@ -816,6 +827,12 @@ export type CommandResult =
 			work_id: UUID;
 			state: string;
 			closeout_receipt: EvidenceReceipt;
+	  }
+	| {
+			type: "skip_active_item";
+			grant: ExecutionGrantView;
+			item: ExecutionGrantItemView;
+			reason: string;
 	  };
 
 export type ExecutionGrantView = {
