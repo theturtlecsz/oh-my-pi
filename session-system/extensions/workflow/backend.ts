@@ -32,6 +32,12 @@ export interface ExecutionSnapshot {
 	activeItem: ExecutionGrantItemView | null;
 }
 
+export interface CommittedSkipClaim {
+	claimId: string;
+	command: Extract<Command, { type: "skip_active_item" }>;
+	result: Extract<CommandResult, { type: "skip_active_item" }>;
+}
+
 
 
 export const WORKFLOW_SEQUENCE =
@@ -695,6 +701,8 @@ export interface WorkflowBackend {
 		reason: string;
 	}): Promise<ExecutionSnapshot>;
 	getPendingExecutionClaims?(grantId?: UUID): Promise<Array<{ command: Command; result?: CommandResult }>>;
+	getCommittedSkipClaims?(grantId: string): Promise<CommittedSkipClaim[]>;
+	acknowledgeSkipClaim?(claimId: string): Promise<void>;
 }
 
 /** Thrown by createBatch after a partial publish — the host formats the exact

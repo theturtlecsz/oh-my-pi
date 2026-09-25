@@ -9,7 +9,8 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, isAbsolute } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import {
 	type Candidate,
 	type CloseAttempt,
@@ -76,6 +77,7 @@ import {
 	type WorkflowCheckpoint,
 	type ExecutionSnapshot,
 	type ExecutionChildren,
+	type CommittedSkipClaim,
 } from "./backend";
 import { pendingOpsDir, type WorkClientConfig } from "./config";
 import { candidateDrift, type CandidateDriftShape, freezeCandidateCommit, headCommit, pushCandidate } from "./git";
@@ -2268,6 +2270,98 @@ export function createWorkBackend(
 				}
 			}
 			return results;
+		},
+		async getCommittedSkipClaims(grantId: string): Promise<CommittedSkipClaim[]> {
+			const { claims, unreadable } = await readPendingClaims(pendingDir);
+			if (unreadable.length > 0) {
+				throw new Error(`unreadable pending claim(s): ${unreadable.join(", ")} — refusing recovery to prevent duplicate execution`);
+			}
+			const results: CommittedSkipClaim[] = [];
+			for (const c of claims) {
+				const env = c.record.envelope as CommandEnvelope | undefined;
+				if (!env || typeof env !== "object" || !env.command || typeof env.command !== "object" || !("type" in env.command)) {
+					continue;
+				}
+				const cmd = env.command as Command;
+				if (cmd.type !== "skip_active_item") continue;
+				if (env.workspace_id !== config.workspaceId) continue;
+				if (cmd.payload.grant_id !== grantId) continue;
+
+				const expectedIntent = intentFingerprint("intent", config.workspaceId, config.ownerId, cmd.type, scrubVolatile(cmd.type, cmd.payload));
+				if (basename(c.path) !== `${expectedIntent}.json`) continue;
+
+				const claimId = basename(c.path, ".json");
+
+				if (c.record.result !== undefined) {
+					const res = c.record.result as CommandResult | undefined;
+					if (res && res.type === "skip_active_item") {
+						results.push({
+							claimId,
+							command: cmd,
+							result: res,
+						});
+					}
+					continue;
+				}
+
+				if (typeof env.operation_id !== "string") {
+					throw new Error(
+						`unresolved pending claim ${c.path} (op unknown, ${cmd.type}) for grant ${grantId}: missing operation_id; automatic recovery refused; use stop/cancel or repair the claim`,
+					);
+				}
+
+				const match = await reconcileOperation(env);
+				if ("reason" in match) {
+					throw new Error(
+						`unresolved pending claim ${c.path} (op ${env.operation_id}, ${cmd.type}) for grant ${grantId}: ${match.reason}; automatic recovery refused; use stop/cancel or repair the claim`,
+					);
+				}
+
+				await resolvePendingOp(c.path, c.record, match.result);
+				c.record.result = match.result;
+				c.record.resolved_at = new Date().toISOString();
+
+				results.push({
+					claimId,
+					command: cmd,
+					result: match.result as Extract<CommandResult, { type: "skip_active_item" }>,
+				});
+			}
+			return results;
+		},
+		async acknowledgeSkipClaim(claimId: string): Promise<void> {
+			const filename = basename(claimId.endsWith(".json") ? claimId : `${claimId}.json`);
+			const path = join(pendingDir, filename);
+			let content: string;
+			try {
+				content = await Bun.file(path).text();
+			} catch (err) {
+				if (isEnoent(err)) return;
+				throw err;
+			}
+
+			let record: PendingRecord;
+			try {
+				record = JSON.parse(content) as PendingRecord;
+			} catch {
+				throw new Error(`claim ${path} is unreadable`);
+			}
+
+			const env = record?.envelope as CommandEnvelope | undefined;
+			const cmd = env?.command as Command | undefined;
+			const isMatchingSkipClaim =
+				env &&
+				typeof env === "object" &&
+				env.workspace_id === config.workspaceId &&
+				cmd &&
+				typeof cmd === "object" &&
+				cmd.type === "skip_active_item";
+
+			if (!isMatchingSkipClaim) {
+				throw new Error(`claim ${path} is not a skip_active_item claim for workspace ${config.workspaceId}`);
+			}
+
+			await dropPendingOp(path);
 		},
 	};
 	return backend;
