@@ -178,6 +178,7 @@ import { unmountAll } from "./ssh/sshfs-mount";
 import {
 	type BuildSystemPromptResult,
 	buildSystemPrompt as buildSystemPromptInternal,
+	type InstructionPrepDegradation,
 	loadProjectContextFiles as loadContextFilesInternal,
 	projectSystemPromptToolMetadata,
 } from "./system-prompt";
@@ -2950,6 +2951,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const eagerTasksAlways = settings.get("task.eager") === "always";
 		const intentField = $flag("PI_INTENT_TRACING", settings.get("tools.intentTracing")) ? INTENT_FIELD : undefined;
 		const includeWorkspaceTree = settings.get("includeWorkspaceTree") ?? false;
+		let latestDegradations: InstructionPrepDegradation[] = [];
 		const rebuildSystemPrompt = async (
 			toolNames: string[],
 			tools: Map<string, AgentTool>,
@@ -3075,6 +3077,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				renderMermaid: settings.get("tui.renderMermaid"),
 				activeRepoContext,
 			});
+			latestDegradations = defaultPrompt.instructionPrepDegradations ?? [];
 
 			if (options.systemPrompt === undefined) {
 				return defaultPrompt;
@@ -3642,6 +3645,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			skillWarnings,
 			skillsReloadable: options.skills === undefined,
 			skillsSettings: settings.getGroup("skills"),
+			getInstructionPrepDegradations: () => latestDegradations,
 			modelRegistry,
 			toolRegistry,
 			memoryAgentDir: agentDir,
