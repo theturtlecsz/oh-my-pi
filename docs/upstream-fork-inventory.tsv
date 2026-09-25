@@ -114,6 +114,7 @@ docs/programme/ORIGINAL-OBLIGATIONS.md	fork-only	added	2bf03ded65e3	OMP-325: ori
 docs/programme/README.md	fork-only	added	d783fa37b582	OMP-325: consolidated programme handoff index; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/README.md	retained
 docs/programme/REVIEW-SUMMARY.md	fork-only	added	8b15bdaa18ae	OMP-325: consolidated handoff review summary; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/REVIEW-SUMMARY.md	retained
 docs/programme/SCOPE-PRESERVATION.md	fork-only	added	4a770b5114c9	OMP-325: scope-preservation check; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/SCOPE-PRESERVATION.md	retained
+docs/programme/R00-BASELINE-2026-09-25.md	fork-only	added	72aa400cefb7	OMP-320: Autoresearch R00 baseline reconciliation recording effective installed/development identities, ECC WP1-WP8 status, shared interfaces, model/tool/memory capabilities, research donor licenses, and missing prerequisite ownership	retained
 docs/upstream-18.0.6-changelog.tsv	fork-only	added	ec9a00c04da9	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-matrix.tsv	fork-only	added	0b52aac14438	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-sources.tsv	fork-only	added	a3afa2e62165	feat(omp-156): pre-merge inventory oracle and safe update driver	retained
