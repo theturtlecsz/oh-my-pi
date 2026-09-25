@@ -121,9 +121,11 @@ Manifest capture (`capture_manifest`):
 
 - Acceptance for OMP-279 is **source delivery plus candidate qualification
   only**.
-- The owner approval is already committed in s07:
-  `contracts/v1/approval.json` records issue `OMP-279` with contract digest
-  `46b6ecc8cde78f2f0832d03c5fb9ae36f49150b0c8ec5a109e1b41a725e6d268`.
+- The OMP-279 owner approval was committed in s06/s07 at digest
+  `46b6ecc8cde78f2f0832d03c5fb9ae36f49150b0c8ec5a109e1b41a725e6d268`
+  (commit `4e7cc237e8`), since superseded by the live OMP-283 re-approval
+  (`contracts/v1/approval.json` records issue `OMP-283` with digest
+  `cb9dde61ebdca590e478e06cff2cac033ef9f4c736b8a37578a4918ad42d334d`).
 - Deploying the contract, restarting the service, and live activation are
   **owner mutation-window actions** and were not performed here.
 - FK-3 (omp-knowledge, Cognee, A/B snapshot isolation) is moved to **OMP-288**.
