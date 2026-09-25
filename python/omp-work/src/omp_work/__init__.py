@@ -180,6 +180,29 @@ def contract_sha256() -> str:
     return digest.hexdigest()
 
 
+def approval_attestation(contract_sha256: str, issue: str, approved_at: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"omp-work approve\0")
+    digest.update(CONTRACT_VERSION.encode())
+    digest.update(b"\0")
+    digest.update(contract_sha256.encode())
+    digest.update(b"\0")
+    digest.update(issue.encode())
+    digest.update(b"\0")
+    digest.update(approved_at.encode())
+    return digest.hexdigest()
+
+
+def validate_approval_attestation() -> None:
+    approval_path = _contract_dir() / "approval.json"
+    raw = json.loads(approval_path.read_text())
+    expected = approval_attestation(
+        raw["contract_sha256"], raw["issue"], raw["approved_at"]
+    )
+    if raw.get("attestation") != expected:
+        raise ValueError("approval attestation missing or invalid")
+
+
 def validate_bundle(*, require_approval: bool = True) -> None:
     contract = load_contract()
     examples = load_examples()
@@ -238,10 +261,12 @@ def validate_bundle(*, require_approval: bool = True) -> None:
 
 __all__ = [
     "CONTRACT_VERSION",
+    "approval_attestation",
     "contract_sha256",
     "generate_api_schema",
     "generate_schema",
     "load_contract",
     "load_examples",
+    "validate_approval_attestation",
     "validate_bundle",
 ]

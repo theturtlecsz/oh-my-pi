@@ -1430,6 +1430,19 @@
           "title": "Approved By",
           "type": "string"
         },
+        "attestation": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attestation"
+        },
         "contract_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Contract Sha256",
@@ -1461,7 +1474,8 @@
             "OMP-247",
             "OMP-266",
             "OMP-279",
-            "OMP-283"
+            "OMP-283",
+            "OMP-295"
           ],
           "title": "Issue",
           "type": "string"

@@ -12,9 +12,11 @@ import uvicorn
 from . import (
     CONTRACT_VERSION,
     _contract_dir,
+    approval_attestation,
     contract_sha256,
     generate_api_schema,
     generate_schema,
+    validate_approval_attestation,
     validate_bundle,
 )
 from .operations import cli as operations_cli
@@ -53,6 +55,7 @@ def _approve(issue: str) -> None:
         "approved_by": "owner",
         "approved_at": approved_at,
         "issue": issue,
+        "attestation": approval_attestation(digest, issue, approved_at),
     }
     try:
         Approval.model_validate(payload)
@@ -188,6 +191,8 @@ def main(argv: list[str] | None = None) -> int | None:
     if args.command == "validate":
         try:
             validate_bundle(require_approval=args.require_approval)
+            if args.require_approval:
+                validate_approval_attestation()
         except ValueError as error:
             raise SystemExit(str(error)) from error
         print(f"{CONTRACT_VERSION} {contract_sha256()} valid")
