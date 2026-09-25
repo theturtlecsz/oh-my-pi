@@ -684,6 +684,15 @@ export interface WorkflowBackend {
 		evidence: CompletionEvidence;
 		judgeSha256: string;
 	}): Promise<ExecutionSnapshot>;
+	skipActiveItem(input: {
+		grantId: string;
+		expectedGrantVersion: number;
+		position: number;
+		workId: string;
+		expectedFocusVersion: number;
+		judgeSha256: string;
+		reason: string;
+	}): Promise<ExecutionSnapshot>;
 	getPendingExecutionClaims?(grantId?: UUID): Promise<Array<{ command: Command; result?: CommandResult }>>;
 }
 
