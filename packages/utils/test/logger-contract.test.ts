@@ -44,7 +44,7 @@ async function runScenario(scenario: string): Promise<ScenarioResult> {
 	const proc = Bun.spawn(
 		[process.execPath, "--preload", preloadPath, probePath, scenario, primaryDir, secondaryDir, resultPath],
 		{
-			cwd: path.resolve(import.meta.dir, "../../.."),
+			cwd: primaryDir,
 			env: {
 				...process.env,
 				HOME: primaryDir,
@@ -340,7 +340,11 @@ test("root and direct source entry points expose identical public logger functio
 	roots.push(root);
 	const outputPath = path.join(root, "result.json");
 	const proc = Bun.spawn([process.execPath, apiProbePath, outputPath], {
-		cwd: path.resolve(import.meta.dir, "../../.."),
+		cwd: root,
+		env: {
+			...process.env,
+			HOME: root,
+		},
 		stdout: "pipe",
 		stderr: "pipe",
 	});

@@ -516,6 +516,39 @@ export async function withTempAgentDir<T>(
 	}
 }
 
+function isEnoent(err: unknown): boolean {
+	return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "ENOENT";
+}
+
+/**
+ * Read the host's package.json content (default: ~/.package.json).
+ * Returns null if the file does not exist.
+ */
+export async function readHostPackageJson(homeDir: string = os.homedir()): Promise<string | null> {
+	try {
+		return await Bun.file(path.join(homeDir, "package.json")).text();
+	} catch (err) {
+		if (isEnoent(err)) return null;
+		throw err;
+	}
+}
+
+/**
+ * Gate check asserting that host package.json was not modified during the test run.
+ */
+export function assertHostPackageJsonUnchanged(
+	before: string | null,
+	after: string | null,
+	homeDir: string = os.homedir(),
+): void {
+	if (before !== after) {
+		const pkgPath = path.join(homeDir, "package.json");
+		throw new Error(
+			`Host ${pkgPath} was modified during the test run! Tests must isolate HOME and package manager globals so the host environment is not mutated.`,
+		);
+	}
+}
+
 // Per-chunk watchdog. A bun child that wedges (e.g. the panic handler
 // deadlocking after a GC crash) would otherwise stall the whole run: the
 // parallel path awaits the child's stdout/stderr pipes, which stay open as
@@ -967,6 +1000,8 @@ if (import.meta.main) {
 		);
 	}
 
+	const initialHostPackageJson = isDryRun ? null : await readHostPackageJson();
+
 	const requestedCommands = await commandsForMode(requestedMode as Mode);
 	const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
 	// CI defaults to one process at a time, but memory-sized workflow buckets
@@ -977,11 +1012,23 @@ if (import.meta.main) {
 	// The sequential path is a pool of one, so a lone chunk keeps the whole budget.
 	const poolWidth = pooled ? testConcurrency(requestedCommands.length) : 1;
 	const testCommands = applyChunkBudget(requestedCommands, poolWidth);
-	if (pooled && !isDryRun) {
-		await runTestCommandsInParallel(testCommands, poolWidth);
-	} else {
-		for (const testCommand of testCommands) {
-			await runTestCommand(testCommand);
+	try {
+		if (pooled && !isDryRun) {
+			await runTestCommandsInParallel(testCommands, poolWidth);
+		} else {
+			for (const testCommand of testCommands) {
+				await runTestCommand(testCommand);
+			}
+		}
+	} finally {
+		if (!isDryRun) {
+			const finalHostPackageJson = await readHostPackageJson();
+			try {
+				assertHostPackageJsonUnchanged(initialHostPackageJson, finalHostPackageJson);
+			} catch (err) {
+				process.stdout.write(style.bold(style.red(`\n${(err as Error).message}\n`)));
+				process.exitCode = 1;
+			}
 		}
 	}
 }

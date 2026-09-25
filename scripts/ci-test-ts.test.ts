@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
-import { buildChildEnv, describeChunkFailure, withTempAgentDir } from "./ci-test-ts.ts";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+	assertHostPackageJsonUnchanged,
+	buildChildEnv,
+	describeChunkFailure,
+	readHostPackageJson,
+	withTempAgentDir,
+} from "./ci-test-ts.ts";
 
 // The two ways a chunk reaches SIGKILL are indistinguishable by exit code, so
 // these drive real subprocesses to produce a genuine 137 rather than asserting
@@ -125,5 +133,36 @@ describe("buildChildEnv", () => {
 		expect(allocatedDir).not.toBe("");
 		// Allocated directory removed in finally on failure
 		expect(await fs.stat(allocatedDir).catch(() => null)).toBeNull();
+	});
+});
+
+describe("host package.json gate check", () => {
+	test("readHostPackageJson returns file content when present and null when absent", async () => {
+		const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-test-home-"));
+		try {
+			expect(await readHostPackageJson(tempHome)).toBeNull();
+			const pkgPath = path.join(tempHome, "package.json");
+			await Bun.write(pkgPath, '{"name":"test"}\n');
+			expect(await readHostPackageJson(tempHome)).toBe('{"name":"test"}\n');
+		} finally {
+			await fs.rm(tempHome, { recursive: true, force: true });
+		}
+	});
+
+	test("assertHostPackageJsonUnchanged succeeds when content is unchanged", () => {
+		expect(() => assertHostPackageJsonUnchanged(null, null, "/fake")).not.toThrow();
+		expect(() => assertHostPackageJsonUnchanged('{"name":"a"}', '{"name":"a"}', "/fake")).not.toThrow();
+	});
+
+	test("assertHostPackageJsonUnchanged throws when host package.json was modified", () => {
+		expect(() => assertHostPackageJsonUnchanged('{"name":"a"}', '{"name":"b"}', "/fake")).toThrow(
+			/Host \/fake\/package\.json was modified during the test run/,
+		);
+		expect(() => assertHostPackageJsonUnchanged(null, '{"name":"new"}', "/fake")).toThrow(
+			/Host \/fake\/package\.json was modified during the test run/,
+		);
+		expect(() => assertHostPackageJsonUnchanged('{"name":"old"}', null, "/fake")).toThrow(
+			/Host \/fake\/package\.json was modified during the test run/,
+		);
 	});
 });

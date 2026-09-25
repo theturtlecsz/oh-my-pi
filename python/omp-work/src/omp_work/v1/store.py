@@ -363,6 +363,7 @@ class PostgresWorkStore:
             "complete_execution_item",
             "skip_active_item",
             "complete_work",
+            "record_external_delivery",
         }
         conflict = False
         with self._transaction(
@@ -456,6 +457,8 @@ class PostgresWorkStore:
                     result = self._attest_checkpoint_delivery(cur, envelope)
                 elif command.type == "record_closeout_review":
                     result = self._record_closeout_review(cur, envelope)
+                elif command.type == "record_external_delivery":
+                    result = self._record_external_delivery(cur, envelope)
                 elif command.type == "complete_work":
                     result = self._complete_work(cur, envelope)
                 elif command.type == "activate_cutover":
@@ -1038,6 +1041,13 @@ class PostgresWorkStore:
                 "invalid_request",
                 (
                     "generic append_evidence rejects closeout reviews; use record_closeout_review under work.close",
+                ),
+            )
+        if receipt.kind.value == "external_delivery":
+            raise WorkStoreError(
+                "invalid_request",
+                (
+                    "generic append_evidence rejects external_delivery; use record_external_delivery under work.close",
                 ),
             )
         if receipt.issuer == "service" or receipt.issuer.startswith("work-service/"):
@@ -3115,6 +3125,59 @@ class PostgresWorkStore:
             "receipt": receipt.model_dump(mode="json"),
             "attempt": _row_json(attempt),
             "event": event,
+        }
+
+    def _record_external_delivery(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute(
+            "SELECT state,archived,current_revision_id FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.work_id),
+        )
+        item = cur.fetchone()
+        if item is None:
+            raise WorkStoreError("invalid_request", ("unknown work item",))
+        if item["archived"]:
+            raise WorkStoreError("invalid_request", ("work item is archived",))
+        if item["state"] in ("DONE", "CANCELED", "CANCELLED"):
+            raise WorkStoreError(
+                "invalid_request",
+                (f"work item state is {item['state']}",),
+            )
+        if str(item["current_revision_id"]) != str(payload.revision_id):
+            raise WorkStoreError("stale_evidence", ("revision mismatch",))
+
+        receipt_id = uuid4()
+        now = datetime.now(UTC)
+        body = {"evidence": payload.evidence}
+        payload_hash = sha256(body)
+        cur.execute(
+            "INSERT INTO omp_evidence.receipts("
+            "receipt_id,workspace_id,work_id,revision_id,candidate_id,"
+            "kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,"
+            "candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit"
+            ") VALUES(%s,%s,%s,%s,NULL,'external_delivery',%s,%s,NULL,'service',%s,NULL,NULL,NULL,false,NULL,NULL)",
+            (
+                receipt_id,
+                envelope.workspace_id,
+                payload.work_id,
+                payload.revision_id,
+                canonical_json(body),
+                payload_hash,
+                now,
+            ),
+        )
+        cur.execute(
+            "UPDATE omp_work.work_items SET state='DONE',row_version=row_version+1 WHERE workspace_id=%s AND work_id=%s",
+            (envelope.workspace_id, payload.work_id),
+        )
+        return {
+            "type": "record_external_delivery",
+            "work_id": str(payload.work_id),
+            "revision_id": str(payload.revision_id),
+            "receipt_id": str(receipt_id),
+            "payload_sha256": payload_hash,
         }
 
     def _load_and_validate_completion_evidence(
