@@ -3227,7 +3227,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 					issued_at: new Date().toISOString(),
 				};
 				const expectedFocusVersion = await backend.getFocusVersion();
+				const grantId = randomUUID();
 				const begun = await backend.beginExecution({
+					grantId,
 					provenance,
 					remoteRef,
 					mode: isQueue ? "queue" : "single",

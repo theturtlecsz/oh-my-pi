@@ -87,6 +87,9 @@ const DRAIN_MAX_AGE_DAYS = 14;
 /** /center row bound — matches the existing queue digest bound (DRAIN_MAX_QUEUE). */
 const CENTER_MAX_ROWS = 8;
 
+/** OMP-233: the host mints the execution grant id; the adapter only validates it. */
+const UUID_SHAPED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function terminalNextAction(shape?: CandidateDriftShape): string {
 	switch (shape) {
 		case "unchanged":
@@ -2028,9 +2031,11 @@ export function createWorkBackend(
 		},
 
 		async beginExecution(input): Promise<ExecutionSnapshot> {
-			const grantId = randomUUID();
+			if (!UUID_SHAPED.test(input.grantId)) {
+				throw new Error(`beginExecution: grantId must be a UUID, got ${JSON.stringify(input.grantId)}`);
+			}
 			const result = await run("begin_execution", {
-				grant_id: grantId,
+				grant_id: input.grantId,
 				provenance: input.provenance,
 				remote_ref: input.remoteRef,
 				mode: input.mode,
