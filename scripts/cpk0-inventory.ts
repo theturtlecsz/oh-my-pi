@@ -86,7 +86,7 @@ function resolveFilePath(baseDir: string, relPath: string): string {
 	return p;
 }
 
-function extractApprovalFromNode(approvalProp: Node | undefined): {
+export function extractApprovalFromNode(approvalProp: Node | undefined): {
 	approval_tier: string;
 	dynamic: boolean;
 	tiers: string[];
@@ -102,9 +102,12 @@ function extractApprovalFromNode(approvalProp: Node | undefined): {
 		const val = init.getLiteralValue();
 		return { approval_tier: val, dynamic: false, tiers: [val] };
 	}
-	if (Node.isAsExpression(init) && Node.isStringLiteral(init.getExpression())) {
-		const val = (init.getExpression() as any).getLiteralValue();
-		return { approval_tier: val, dynamic: false, tiers: [val] };
+	if (Node.isAsExpression(init)) {
+		const inner = init.getExpression();
+		if (Node.isStringLiteral(inner)) {
+			const val = inner.getLiteralValue();
+			return { approval_tier: val, dynamic: false, tiers: [val] };
+		}
 	}
 	if (Node.isPropertyDeclaration(approvalProp)) {
 		const initNode = approvalProp.getInitializer();
