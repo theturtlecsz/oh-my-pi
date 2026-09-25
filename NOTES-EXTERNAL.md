@@ -180,3 +180,20 @@ python3 flood.py retest OMP-219-s01
 python3 flood.py retest OMP-283-s01
 ```
 
+## External test gate update: installed runtime staging and qualification (OMP-297)
+
+Per repository instructions ("No changes to GitHub settings, services, deployments or anything outside this worktree. If the task asks for one, write what it would be in NOTES-EXTERNAL.md in the worktree and continue"), the flood pre-batch test gate script `/home/thetu/flood/oh-my-pi-test.sh` is updated to include CI's required installed-runtime staging and qualification steps from `.github/workflows/ci.yml` ('Work Ledger PostgreSQL integration' job):
+
+1. **Stage isolated installed runtime**:
+   - Locates Python 3.13 via `uv python find 3.13` (running `uv python install 3.13` if needed; cached on arch-dev).
+   - Validates existence of prebuilt linux-x64 native addons (`pi_natives.linux-x64-baseline.node` and `pi_natives.linux-x64-modern.node`) hard-linked into `packages/natives/native/`.
+   - Runs `bun session-system/runtime/stage.ts` targeting a clean disposable temporary directory (`$stage_tmp/omp-installed-runtime`).
+   - Cleaned up via EXIT trap and immediate post-qualification removal.
+
+2. **Qualify installed isolation and controller recovery**:
+   - Verifies `bwrap` (bubblewrap) is available (present at `/usr/bin/bwrap`).
+   - Sets `ulimit -c 0` to prevent core dump generation during crash tests.
+   - Computes manifest SHA256 from `$staged_runtime/manifest.json`.
+   - Runs `uv run --project python/omp-work --extra dev pytest python/omp-work/tests/test_installed_runtime_isolation.py python/omp-work/tests/test_installed_execution_recovery.py` with `OMP_INSTALLED_RELEASE` and `OMP_INSTALLED_MANIFEST_SHA256`.
+   - A regression or deliberate break in `test_installed_runtime_isolation.py` (which skips without these env vars) now executes and turns the test gate red locally.
+
