@@ -1111,6 +1111,11 @@ class AssessBoundedIntakeCommand(StrictModel):
     payload: AssessBoundedIntakePayload
 
 
+class RecordFableAdviceCommand(StrictModel):
+    type: Literal["record_fable_advice"]
+    payload: RecordFableAdvicePayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -1143,7 +1148,8 @@ Command = Annotated[
     | SetExecutionStateCommand
     | CompleteExecutionItemCommand
     | SkipActiveItemCommand
-    | AssessBoundedIntakeCommand,
+    | AssessBoundedIntakeCommand
+    | RecordFableAdviceCommand,
     Field(discriminator="type"),
 ]
 
@@ -1510,6 +1516,15 @@ class FableAdvicePayload(StrictModel):
     advisor_model_family: Literal["fable"] = "fable"
     advice_sha256: hex64
     disposition: Literal["considered"] = "considered"
+    intake_semantic_sha256: hex64
+    rule_bundle_sha256: hex64
+
+
+class RecordFableAdvicePayload(StrictModel):
+    work_id: UUID
+    revision_id: UUID
+    advice_sha256: hex64
+    disposition: Literal["considered"]
     intake_semantic_sha256: hex64
     rule_bundle_sha256: hex64
 

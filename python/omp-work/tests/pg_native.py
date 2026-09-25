@@ -10,47 +10,66 @@ from __future__ import annotations
 import contextlib
 import json
 import subprocess
+import sys
+import time
 from collections.abc import Generator
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import psycopg
 
+_SUPERVISOR = Path(__file__).with_name("pg_supervisor.py")
+
+
+def _wait_until_ready(process: subprocess.Popen[bytes], port: int, log: Path) -> None:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"postgres supervisor exited with {process.returncode}:\n"
+                f"{log.read_text(errors='replace')[-4000:]}"
+            )
+        if (
+            subprocess.run(
+                ["pg_isready", "-h", "127.0.0.1", "-p", str(port), "-U", "postgres"],
+                capture_output=True,
+            ).returncode
+            == 0
+        ):
+            return
+        time.sleep(0.1)
+    raise RuntimeError(f"postgres on port {port} did not become ready:\n{log.read_text(errors='replace')[-4000:]}")
+
 
 @contextlib.contextmanager
 def native_postgres(root: Path, port: int) -> Generator[None]:
     data_dir = root / "pgdata"
     root.mkdir(parents=True, exist_ok=True)
+    log = root / "postgres.log"
     subprocess.run(
         ["initdb", "-D", str(data_dir), "-U", "postgres", "-A", "trust", "-E", "UTF8"],
         check=True,
         capture_output=True,
     )
-    subprocess.run(
-        [
-            "pg_ctl",
-            "-D",
-            str(data_dir),
-            "-l",
-            str(root / "postgres.log"),
-            "-w",
-            "-o",
-            # All fixture clients use loopback TCP. Disable unused Unix sockets
-            # so long or space-containing pytest paths cannot break startup.
-            f"-p {port} -c unix_socket_directories= -c listen_addresses=127.0.0.1",
-            "start",
-        ],
-        check=True,
-        capture_output=True,
+    # The supervisor runs postgres in this process's group and stops it when
+    # this pipe closes, so a SIGKILLed pytest cannot leave the server behind.
+    supervisor = subprocess.Popen(
+        [sys.executable, str(_SUPERVISOR), str(data_dir), str(port), str(log)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     try:
+        _wait_until_ready(supervisor, port, log)
         yield
     finally:
-        subprocess.run(
-            ["pg_ctl", "-D", str(data_dir), "-m", "fast", "-w", "stop"],
-            check=False,
-            capture_output=True,
-        )
+        if supervisor.stdin:
+            supervisor.stdin.close()
+        try:
+            supervisor.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            supervisor.kill()
+            supervisor.wait(timeout=10)
 
 
 def seed_authority(dsn_kwargs: dict, workspace_id: UUID, actor_id: UUID) -> None:

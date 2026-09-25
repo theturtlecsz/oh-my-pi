@@ -339,6 +339,11 @@ class RecordExternalDeliveryResult(StrictModel):
     payload_sha256: hex64
 
 
+class RecordFableAdviceResult(StrictModel):
+    type: Literal["record_fable_advice"]
+    receipt: EvidenceReceipt
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -362,7 +367,8 @@ CommandResult = Annotated[
     | CompleteExecutionItemResult
     | SkipActiveItemResult
     | AssessBoundedIntakeResult
-    | RecordExternalDeliveryResult,
+    | RecordExternalDeliveryResult
+    | RecordFableAdviceResult,
     Field(discriminator="type"),
 ]
 

@@ -5227,6 +5227,25 @@
           "title": "RecordExternalDeliveryResult",
           "type": "object"
         },
+        "RecordFableAdviceResult": {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "record_fable_advice",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "receipt"
+          ],
+          "title": "RecordFableAdviceResult",
+          "type": "object"
+        },
         "RelationResult": {
           "additionalProperties": false,
           "properties": {
@@ -5578,6 +5597,7 @@
               "put_relation": "#/$defs/RelationResult",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
               "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
+              "record_fable_advice": "#/$defs/RecordFableAdviceResult",
               "record_project_health": "#/$defs/ProjectHealthResult",
               "remove_relation": "#/$defs/RelationResult",
               "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
@@ -5662,6 +5682,9 @@
             },
             {
               "$ref": "#/$defs/RecordExternalDeliveryResult"
+            },
+            {
+              "$ref": "#/$defs/RecordFableAdviceResult"
             }
           ],
           "title": "Result"
@@ -9762,6 +9785,195 @@
         "payload_sha256"
       ],
       "title": "RecordExternalDeliveryResult",
+      "type": "object"
+    },
+    "RecordFableAdviceResult": {
+      "$defs": {
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout",
+            "handoff",
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission",
+            "external_delivery"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "receipt": {
+          "$ref": "#/$defs/EvidenceReceipt"
+        },
+        "type": {
+          "const": "record_fable_advice",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "receipt"
+      ],
+      "title": "RecordFableAdviceResult",
       "type": "object"
     },
     "RelationEdge": {
@@ -13922,6 +14134,25 @@
           "title": "RecordExternalDeliveryResult",
           "type": "object"
         },
+        "RecordFableAdviceResult": {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "record_fable_advice",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "receipt"
+          ],
+          "title": "RecordFableAdviceResult",
+          "type": "object"
+        },
         "RelationResult": {
           "additionalProperties": false,
           "properties": {
@@ -14289,6 +14520,7 @@
                   "put_relation": "#/$defs/RelationResult",
                   "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
                   "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
+                  "record_fable_advice": "#/$defs/RecordFableAdviceResult",
                   "record_project_health": "#/$defs/ProjectHealthResult",
                   "remove_relation": "#/$defs/RelationResult",
                   "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
@@ -14373,6 +14605,9 @@
                 },
                 {
                   "$ref": "#/$defs/RecordExternalDeliveryResult"
+                },
+                {
+                  "$ref": "#/$defs/RecordFableAdviceResult"
                 }
               ]
             },

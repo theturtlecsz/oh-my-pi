@@ -11,6 +11,7 @@ import psycopg
 from psycopg.rows import dict_row
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter, ValidationError
 
 from omp_work import contract_sha256
 from omp_work.operations.config import OperationsConfig
@@ -19,12 +20,14 @@ from omp_work.v1.canonical import sha256
 from omp_work.v1.models import (
     AppendEvidenceCommand,
     AppendEvidencePayload,
+    Command,
     CommandEnvelope,
     CreateWorkBatchCommand,
     CreateWorkBatchPayload,
     CreateWorkInput,
     EvidenceKind,
     EvidenceReceipt,
+    RecordFableAdviceCommand,
 )
 from omp_work.v1.server import create_app
 from pg_native import native_postgres, seed_authority
@@ -349,3 +352,38 @@ def test_append_evidence_rejects_reserved_issuers(
         assert replay_forged_resp.status_code == 400
         assert replay_forged_resp.json()["error"]["code"] == "invalid_request"
         assert "reserved issuer" in replay_forged_resp.json()["error"]["diagnostics"]
+
+
+def _record_fable_advice_dict() -> dict[str, object]:
+    return {
+        "type": "record_fable_advice",
+        "payload": {
+            "work_id": str(uuid4()),
+            "revision_id": str(uuid4()),
+            "advice_sha256": "a" * 64,
+            "disposition": "considered",
+            "intake_semantic_sha256": "b" * 64,
+            "rule_bundle_sha256": "c" * 64,
+        },
+    }
+
+
+def test_record_fable_advice_parses_via_command_discriminator() -> None:
+    command = TypeAdapter(Command).validate_python(_record_fable_advice_dict())
+    assert isinstance(command, RecordFableAdviceCommand)
+    assert command.type == "record_fable_advice"
+    assert command.payload.disposition == "considered"
+
+
+def test_record_fable_advice_rejects_ignored_disposition() -> None:
+    data = _record_fable_advice_dict()
+    data["payload"]["disposition"] = "ignored"  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        TypeAdapter(Command).validate_python(data)
+
+
+def test_record_fable_advice_rejects_non_hex_advice_sha256() -> None:
+    data = _record_fable_advice_dict()
+    data["payload"]["advice_sha256"] = "z" * 64  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        TypeAdapter(Command).validate_python(data)
