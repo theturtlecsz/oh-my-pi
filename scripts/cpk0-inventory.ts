@@ -66,6 +66,17 @@ export interface AuthorityCrossingEntry {
 	gate_type: string;
 }
 
+export interface RulePathsInventory {
+	advisor: string[];
+	session_system: {
+		hooks: string[];
+		rules: string[];
+		extensions: string[];
+		agents: string[];
+		skills: string[];
+	};
+}
+
 export interface SurfaceInventory {
 	schema_version: string;
 	task: string;
@@ -76,6 +87,8 @@ export interface SurfaceInventory {
 		hooks: SubsystemSurfaces;
 	};
 	authority_crossings: AuthorityCrossingEntry[];
+	prompts: string[];
+	rule_paths: RulePathsInventory;
 }
 
 function resolveFilePath(baseDir: string, relPath: string): string {
@@ -220,6 +233,13 @@ function extractMember(m: Node): MemberInventoryEntry {
 		kind: "unknown",
 		optional: false,
 	};
+}
+
+export function scanGlob(pattern: string, repoRoot: string): string[] {
+	const glob = new Bun.Glob(pattern);
+	const scanned = Array.from(glob.scanSync({ cwd: repoRoot, onlyFiles: true, dot: false }));
+	const normalized = scanned.map(p => p.replaceAll("\\", "/"));
+	return Array.from(new Set(normalized)).sort();
 }
 
 export function generateInventory(repoRoot: string = process.cwd()): SurfaceInventory {
@@ -565,6 +585,17 @@ export function generateInventory(repoRoot: string = process.cwd()): SurfaceInve
 		},
 	];
 
+	// ---------------------------------------------------------------------------
+	// 4. Prompts and Rule Paths Discovery
+	// ---------------------------------------------------------------------------
+	const prompts = scanGlob("packages/coding-agent/src/**/*.md", repoRoot);
+	const advisor = prompts.filter(p => p.includes("src/prompts/advisor/"));
+	const hooks = scanGlob("session-system/hooks/**/*.mjs", repoRoot);
+	const rules = scanGlob("session-system/rules/**/*.md", repoRoot);
+	const extensions = scanGlob("session-system/extensions/**/*.{ts,md}", repoRoot);
+	const agents = scanGlob("session-system/agents/**/*.md", repoRoot);
+	const skills = scanGlob("session-system/skills/*/SKILL.md", repoRoot);
+
 	return {
 		schema_version: "cpk0/v1",
 		task: "OMP-287",
@@ -576,6 +607,17 @@ export function generateInventory(repoRoot: string = process.cwd()): SurfaceInve
 			hooks: hooksSurfaces,
 		},
 		authority_crossings: authorityCrossings,
+		prompts,
+		rule_paths: {
+			advisor,
+			session_system: {
+				hooks,
+				rules,
+				extensions,
+				agents,
+				skills,
+			},
+		},
 	};
 }
 
