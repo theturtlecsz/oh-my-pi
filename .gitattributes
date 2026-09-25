@@ -54,6 +54,10 @@ poetry.lock -text
 
 # Changelogs are append-mostly; auto-merge by unioning both sides.
 packages/*/CHANGELOG.md merge=union
+python/omp-work/CHANGELOG.md merge=union
+
+# The upstream fork inventory is append-mostly; auto-merge by unioning both sides.
+docs/upstream-fork-inventory.tsv merge=union
 
 
 # OMP-156: whitespace upstream ships intentionally — vendored license texts are
