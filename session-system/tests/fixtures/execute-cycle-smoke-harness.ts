@@ -15,6 +15,7 @@ import { loadBearer, loadWorkConfig } from "../../extensions/workflow/config";
 import { dirtyPaths, executionPrimaryRoot, freezeCandidateCommit, rangeDiffSha256 } from "../../extensions/workflow/git";
 import { createWorkflowHost } from "../../extensions/workflow/host";
 import { WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
+import { grantRemoteRef } from "./grant-remote-ref";
 
 const scenario = process.argv[3] as "single" | "dirty" | "foreign-lane" | "queue" | "contract-pause" | "start-only" | "recovery" | "recovery-new-session" | "tamper-a" | "tamper-b" | "tamper-c" | "tamper-d" | "blocked" | "freeze-probes" | "judge-freeze" | "judge-resume" | "already-delivered" | "already-unmet" | "zero-path-queue" | "stale-attempt" | "zero-change-remediation";
 const ownerProbe = process.argv[2];
@@ -889,6 +890,7 @@ if (scenario === "dirty") {
 	if (sealOutcome.status === "refused") throw new Error(`seed manifest seal refused: ${JSON.stringify(sealOutcome.event)}`);
 	const seedDetail = await seedBackend.issueDetail(seedIssue.key);
 	out.seedAttempt = seedDetail.attemptSnapshot;
+	const aRef = grantRemoteRef(await execute({ action: "get_execution" }));
 	// The post-yield checkpoint attestation/outbox bookkeeping bumps the grant
 	// version asynchronously; retry the stop until a fresh snapshot wins.
 	let stopResult = "";
@@ -909,6 +911,11 @@ if (scenario === "dirty") {
 	// grant B's freeze push must recover over it (OMP-245).
 	await fakeSessionManager.moveTo(ownerProbe);
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	const bRef = grantRemoteRef(await execute({ action: "get_execution" }));
+	for (const args of [["fetch", "-q", "origin", aRef], ["push", "-q", "--force", "origin", `FETCH_HEAD:${bRef}`]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: ownerProbe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
 	planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
 	fs.mkdirSync(path.dirname(planDiskPath), { recursive: true });
 	await execute({ action: "seal_execution_criteria", criteria: ["AC-1 deliver smoke feature"] });
@@ -933,15 +940,15 @@ if (scenario === "dirty") {
 	// Wedge the lane with a foreign sibling commit (off origin/main) that no
 	// grant ever froze, then drop it from local main so the grant baseline
 	// stays origin/main and the fresh candidate is a sibling of the lane tip.
-	const laneRef = `refs/heads/execution/${(workKeyArg || "OMP-1").toLowerCase()}`;
-	fs.writeFileSync(path.join(probe, "foreign.txt"), "foreign\n");
-	for (const args of [["add", "--", "foreign.txt"], ["commit", "-q", "-m", "foreign lane wedge"], ["push", "-q", "origin", `HEAD:${laneRef}`], ["reset", "-q", "--hard", "origin/main"]]) {
-		const gitRun = Bun.spawnSync(["git", ...args], { cwd: probe });
-		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
-	}
 	const executeCmd = extension.commands.get("execute");
 	if (!executeCmd) throw new Error("execute command missing");
 	await executeCmd.handler(workKeyArg || "OMP-1", cmdCtx);
+	const laneRef = grantRemoteRef(await execute({ action: "get_execution" }));
+	fs.writeFileSync(path.join(ownerProbe, "foreign.txt"), "foreign\n");
+	for (const args of [["add", "--", "foreign.txt"], ["commit", "-q", "-m", "foreign lane wedge"], ["push", "-q", "--force", "origin", `HEAD:${laneRef}`], ["reset", "-q", "--hard", "origin/main"]]) {
+		const gitRun = Bun.spawnSync(["git", ...args], { cwd: ownerProbe });
+		if (gitRun.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${gitRun.stderr.toString()}`);
+	}
 	await execute({ action: "seal_execution_criteria", criteria: ["AC-1 deliver smoke feature"] });
 	const planFile = "local://execute-plan.md";
 	const planDiskPath = path.join(path.dirname(probe), "execute-plan.md");
