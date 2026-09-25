@@ -18,6 +18,7 @@ import {
 	stringifyJson,
 	toError,
 } from "@oh-my-pi/pi-utils";
+import type { InstructionPrepDegradation } from "../system-prompt";
 import type { PersistedTaskCallRef, PersistedTaskResultRef } from "../task/recovery";
 import type { StructuredSubagentSchemaMode } from "../task/types";
 import { ArtifactManager } from "./artifacts";
@@ -2245,8 +2246,13 @@ export class SessionManager {
 		spawns?: string;
 		readSummarize?: boolean;
 		advisor?: string;
+		instructionPrepDegradations?: readonly InstructionPrepDegradation[];
 	}): string {
-		const entry: SessionInitEntry = { type: "session_init", ...this.#freshEntryFields(), ...init };
+		const { instructionPrepDegradations, ...rest } = init;
+		const entry: SessionInitEntry = { type: "session_init", ...this.#freshEntryFields(), ...rest };
+		if (instructionPrepDegradations && instructionPrepDegradations.length > 0) {
+			entry.instructionPrepDegradations = [...instructionPrepDegradations];
+		}
 		this.#recordEntry(entry);
 		return entry.id;
 	}
@@ -2780,6 +2786,7 @@ export class SessionManager {
 			spawns?: string;
 			readSummarize?: boolean;
 			advisor?: string;
+			instructionPrepDegradations?: InstructionPrepDegradation[];
 		} | null;
 	} | null> {
 		let header: SessionHeader | undefined;
@@ -2796,6 +2803,7 @@ export class SessionManager {
 			spawns?: string;
 			readSummarize?: boolean;
 			advisor?: string;
+			instructionPrepDegradations?: InstructionPrepDegradation[];
 		} | null = null;
 		const visit = (entry: FileEntry): void => {
 			if (entry.type === "session") {
@@ -2817,6 +2825,9 @@ export class SessionManager {
 					spawns: entry.spawns,
 					advisor: entry.advisor,
 				};
+				if (entry.instructionPrepDegradations) {
+					init.instructionPrepDegradations = entry.instructionPrepDegradations;
+				}
 			}
 		};
 

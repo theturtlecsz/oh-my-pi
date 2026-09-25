@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, MessageAttribution, ServiceTierByFamily, TextContent } from "@oh-my-pi/pi-ai";
+import type { InstructionPrepDegradation } from "../system-prompt";
 import type { PersistedTaskCallRef, PersistedTaskResultRef } from "../task/recovery";
 import type { StructuredSubagentSchemaMode } from "../task/types";
 import type { CompactionMethod } from "./compaction-methods";
@@ -239,6 +240,8 @@ export interface SessionInitEntry extends SessionEntryBase {
 	readSummarize?: boolean;
 	/** Effective advisor for this subagent: `"on"` = advisor-role model, else an explicit model pattern; absent = unadvised. */
 	advisor?: string;
+	/** Required instruction-prep steps that timed out or failed when this contract was built. */
+	instructionPrepDegradations?: InstructionPrepDegradation[];
 }
 
 /** Mode change entry - tracks agent mode transitions (e.g. plan mode). */
