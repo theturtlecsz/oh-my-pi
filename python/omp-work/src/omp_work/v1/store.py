@@ -51,7 +51,10 @@ from .models import (
     SameSessionFoundFixedPayload,
 )
 from .semantics import (
+    BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
+    bounded_intake_semantic_sha256,
     completion_blockers,
+    evaluate_bounded_intake,
     normalize_auditor_report,
     validate_completion_evidence,
     validate_cutover_manifest,
@@ -473,6 +476,8 @@ class PostgresWorkStore:
                     result = self._complete_execution_item(cur, envelope)
                 elif command.type == "skip_active_item":
                     result = self._skip_active_item(cur, envelope)
+                elif command.type == "assess_bounded_intake":
+                    result = self._assess_bounded_intake(envelope)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -5390,6 +5395,19 @@ class PostgresWorkStore:
             "grant": _row_json(updated_grant),
             "item": _row_json(updated_item),
             "reason": payload.reason,
+        }
+
+    def _assess_bounded_intake(self, envelope: CommandEnvelope) -> dict[str, object]:
+        draft = envelope.command.payload.draft
+        questions, issue_count = evaluate_bounded_intake(draft)
+        semantic_sha = bounded_intake_semantic_sha256(draft)
+        return {
+            "type": "assess_bounded_intake",
+            "semantic_sha256": semantic_sha,
+            "rule_bundle_sha256": BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
+            "ready_for_ratification": issue_count == 0,
+            "issue_count": issue_count,
+            "questions": [q.model_dump(mode="json") for q in questions],
         }
 
     def _item_view(
