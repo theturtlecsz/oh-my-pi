@@ -87,6 +87,9 @@ const DRAIN_MAX_AGE_DAYS = 14;
 /** /center row bound — matches the existing queue digest bound (DRAIN_MAX_QUEUE). */
 const CENTER_MAX_ROWS = 8;
 
+/** OMP-233: the host mints the execution grant id; the adapter only validates it. */
+const UUID_SHAPED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function terminalNextAction(shape?: CandidateDriftShape): string {
 	switch (shape) {
 		case "unchanged":
@@ -2006,15 +2009,73 @@ export function createWorkBackend(
 			}
 
 			const eligibleItems = tree.items.filter(isEligible);
-			const remaining = eligibleItems.filter(i => !currentItem || i.work_id !== currentItem.work_id);
-			remaining.sort((a, b) => {
+			const eligibleById = new Map<string, WorkItemView>();
+			for (const item of eligibleItems) eligibleById.set(item.work_id, item);
+
+			const compareItems = (a: WorkItemView, b: WorkItemView): number => {
 				const numA = parseKeyNumber(a.alias.key);
 				const numB = parseKeyNumber(b.alias.key);
 				if (numA !== numB) return numA - numB;
 				return a.work_id.localeCompare(b.work_id);
-			});
+			};
 
-			const ordered = currentItem ? [currentItem, ...remaining] : remaining;
+			const dependencies = new Map<string, Set<string>>();
+			const dependents = new Map<string, Set<string>>();
+			for (const item of eligibleItems) {
+				dependencies.set(item.work_id, new Set<string>());
+				dependents.set(item.work_id, new Set<string>());
+			}
+
+			for (const rel of relations) {
+				if (rel.active && rel.kind === "parent") {
+					if (eligibleById.has(rel.source_work_id) && eligibleById.has(rel.target_work_id)) {
+						dependencies.get(rel.target_work_id)!.add(rel.source_work_id);
+						dependents.get(rel.source_work_id)!.add(rel.target_work_id);
+					}
+				}
+			}
+
+			const readyIds = new Set<string>();
+			for (const [id, deps] of dependencies) {
+				if (deps.size === 0) {
+					readyIds.add(id);
+				}
+			}
+
+			const ordered: WorkItemView[] = [];
+			while (readyIds.size > 0) {
+				let nextId: string;
+				if (currentItem && readyIds.has(currentItem.work_id)) {
+					nextId = currentItem.work_id;
+				} else {
+					let minItem: WorkItemView | null = null;
+					for (const id of readyIds) {
+						const item = eligibleById.get(id)!;
+						if (minItem === null || compareItems(item, minItem) < 0) {
+							minItem = item;
+						}
+					}
+					nextId = minItem!.work_id;
+				}
+
+				readyIds.delete(nextId);
+				ordered.push(eligibleById.get(nextId)!);
+
+				for (const parentId of dependents.get(nextId)!) {
+					const parentDeps = dependencies.get(parentId)!;
+					parentDeps.delete(nextId);
+					if (parentDeps.size === 0) {
+						readyIds.add(parentId);
+					}
+				}
+			}
+
+			if (ordered.length < eligibleItems.length) {
+				const placed = new Set(ordered.map(i => i.work_id));
+				const unplaced = eligibleItems.filter(i => !placed.has(i.work_id));
+				unplaced.sort(compareItems);
+				ordered.push(...unplaced);
+			}
 			return ordered.map((item, idx) => ({
 				work_id: item.work_id,
 				revision_id: item.revision.revision_id,
@@ -2028,9 +2089,11 @@ export function createWorkBackend(
 		},
 
 		async beginExecution(input): Promise<ExecutionSnapshot> {
-			const grantId = randomUUID();
+			if (!UUID_SHAPED.test(input.grantId)) {
+				throw new Error(`beginExecution: grantId must be a UUID, got ${JSON.stringify(input.grantId)}`);
+			}
 			const result = await run("begin_execution", {
-				grant_id: grantId,
+				grant_id: input.grantId,
 				provenance: input.provenance,
 				remote_ref: input.remoteRef,
 				mode: input.mode,

@@ -47,6 +47,7 @@ class EvidenceKind(StrEnum):
     SAME_SESSION_FOUND_FIXED = "same_session_found_fixed"
     INTAKE_PUBLICATION = "intake_publication"
     INTAKE_ADMISSION = "intake_admission"
+    EXTERNAL_DELIVERY = "external_delivery"
 
 
 class CloseAttemptState(StrEnum):
@@ -133,7 +134,7 @@ class EvidenceReceipt(StrictModel):
     receipt_id: UUID
     work_id: UUID
     revision_id: UUID
-    candidate_id: UUID
+    candidate_id: UUID | None = None
     kind: EvidenceKind
     payload: dict[str, Any] = Field(default_factory=dict)
     payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -150,6 +151,14 @@ class EvidenceReceipt(StrictModel):
     remote_commit: str | None = Field(
         default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
     )
+
+    @model_validator(mode="after")
+    def validate_candidate_binding(self) -> EvidenceReceipt:
+        if self.candidate_id is None and self.kind is not EvidenceKind.EXTERNAL_DELIVERY:
+            raise ValueError(
+                "only external_delivery receipts may omit a candidate_id"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_payload_size(self) -> EvidenceReceipt:
@@ -1336,6 +1345,7 @@ class Approval(StrictModel):
         "OMP-247",
         "OMP-266",
         "OMP-279",
+        "OMP-283",
     ]
 
 

@@ -625,6 +625,7 @@ export interface WorkflowBackend {
 	finalizeExecutionCandidate(key: string, plannedCandidateId: string, freeze: { commitSha: string; candidateSha256: string; paths: string[] }): Promise<Candidate>;
 	snapshotQueue(projectFilter?: string, currentKey?: string): Promise<ExecutionGrantItemClaim[]>;
 	beginExecution(input: {
+		grantId: UUID;
 		provenance: ExecutionProvenanceEnvelope;
 		remoteRef: string;
 		mode: ExecutionMode;
