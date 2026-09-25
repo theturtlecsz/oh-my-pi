@@ -153,6 +153,7 @@ export class TanCommandController {
 							systemPrompt: clone.systemPrompt ? clone.systemPrompt.join("\n\n") : systemPrompt.join("\n\n"),
 							task: trimmedWork,
 							tools: clone.getEnabledToolNames(),
+							instructionPrepDegradations: clone.instructionPrepDegradations,
 						});
 						const abortClone = () => {
 							void clone?.abort();
