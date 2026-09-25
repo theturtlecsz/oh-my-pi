@@ -19,8 +19,9 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { $which, TempDir } from "@oh-my-pi/pi-utils";
+import { $which, isEnoent, TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import {
 	type InstalledVersionVerification,
@@ -37,6 +38,8 @@ const NEW_VERSION = "2.0.0";
 let fixtureDir: TempDir;
 let oldDir: string;
 let newDir: string;
+let initialHostPackageJson: string | null = null;
+const hostPackageJsonPath = path.join(os.homedir(), "package.json");
 
 // printVerifiedVersion renders theme glyphs; the update command initializes
 // the theme before calling into update-cli, so the tests must too. Keep one
@@ -44,6 +47,11 @@ let newDir: string;
 beforeAll(async () => {
 	vi.spyOn(console, "log").mockImplementation(() => {});
 	await initTheme();
+	try {
+		initialHostPackageJson = await Bun.file(hostPackageJsonPath).text();
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+	}
 	fixtureDir = await TempDir.create("@omp-rename-itest-");
 	({ oldDir, newDir } = await makeFixtures(fixtureDir.path()));
 });
@@ -51,6 +59,13 @@ beforeAll(async () => {
 afterAll(async () => {
 	vi.restoreAllMocks();
 	await fixtureDir.remove();
+	let finalHostPackageJson: string | null = null;
+	try {
+		finalHostPackageJson = await Bun.file(hostPackageJsonPath).text();
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+	}
+	expect(finalHostPackageJson).toBe(initialHostPackageJson);
 });
 
 /** Two shared, read-only packages that expose the same `omp` bin. */
@@ -84,32 +99,46 @@ const RELEASE: ReleaseInfo = {
 describe.skipIf(process.platform === "win32" || !$which("npm"))("rename migration over real npm", () => {
 	it.concurrent("takes bin ownership with --force, survives the uninstall deleting the bin, and lands on the new version", async () => {
 		const root = fixtureDir.path();
-		const prefix = path.join(root, "npm-prefix");
+		const npmRoot = path.join(root, "npm-test");
+		const prefix = path.join(npmRoot, "prefix");
 		const binDir = path.join(prefix, "bin");
+		const homeDir = path.join(npmRoot, "home");
+		const cacheDir = path.join(npmRoot, "cache");
+		await fs.mkdir(binDir, { recursive: true });
+		await fs.mkdir(homeDir, { recursive: true });
+		await fs.mkdir(cacheDir, { recursive: true });
 		const env = {
 			...process.env,
-			npm_config_cache: path.join(root, "npm-cache"),
+			HOME: homeDir,
+			npm_config_cache: cacheDir,
+			npm_config_userconfig: path.join(npmRoot, ".npmrc"),
 			npm_config_update_notifier: "false",
 			npm_config_fund: "false",
 			npm_config_audit: "false",
+			XDG_CONFIG_HOME: path.join(npmRoot, "xdg-config"),
+			XDG_DATA_HOME: path.join(npmRoot, "xdg-data"),
+			XDG_CACHE_HOME: path.join(npmRoot, "xdg-cache"),
 		};
 
-		const seed = await $`npm install -g --prefix ${prefix} ${oldDir}`.env(env).quiet().nothrow();
+		const seed = await $`npm install -g --prefix ${prefix} ${oldDir}`.env(env).cwd(npmRoot).quiet().nothrow();
 		expect(seed.exitCode).toBe(0);
 
 		// The load-bearing precondition for --force: while the old package owns
 		// the bin, a plain install of the new package fails instead of clobbering.
-		const plain = await $`npm install -g --prefix ${prefix} ${newDir}`.env(env).quiet().nothrow();
+		const plain = await $`npm install -g --prefix ${prefix} ${newDir}`.env(env).cwd(npmRoot).quiet().nothrow();
 		expect(plain.exitCode).not.toBe(0);
 		expect(await verifyLauncher(binDir, OLD_VERSION)).toMatchObject({ ok: true, actual: OLD_VERSION });
 
 		const verifications: InstalledVersionVerification[] = [];
 		const steps: RenameMigrationSteps = {
 			async install() {
-				return (await $`npm install -g --force --prefix ${prefix} ${newDir}`.env(env).quiet().nothrow()).exitCode;
+				return (
+					await $`npm install -g --force --prefix ${prefix} ${newDir}`.env(env).cwd(npmRoot).quiet().nothrow()
+				).exitCode;
 			},
 			async removeOld() {
-				return (await $`npm uninstall -g --prefix ${prefix} ${OLD_PKG}`.env(env).quiet().nothrow()).exitCode;
+				return (await $`npm uninstall -g --prefix ${prefix} ${OLD_PKG}`.env(env).cwd(npmRoot).quiet().nothrow())
+					.exitCode;
 			},
 			async verify() {
 				const result = await verifyLauncher(binDir, NEW_VERSION);
@@ -132,25 +161,42 @@ describe.skipIf(process.platform === "win32" || !$which("npm"))("rename migratio
 describe.skipIf(process.platform === "win32")("rename migration over real bun", () => {
 	it.concurrent("clobbers the old bin on install, survives removing the old package, and lands on the new version", async () => {
 		const root = fixtureDir.path();
-		const binDir = path.join(root, "bun-bin");
+		const bunRoot = path.join(root, "bun-test");
+		const binDir = path.join(bunRoot, "bin");
+		const globalDir = path.join(bunRoot, "global");
+		const homeDir = path.join(bunRoot, "home");
+		const cacheDir = path.join(bunRoot, "cache");
 		await fs.mkdir(binDir, { recursive: true });
+		await fs.mkdir(globalDir, { recursive: true });
+		await fs.mkdir(homeDir, { recursive: true });
+		await fs.mkdir(cacheDir, { recursive: true });
+		// Initialize the global manifest so Bun finds it in globalDir and
+		// does not walk parent directories looking for an enclosing package.json.
+		await Bun.write(path.join(globalDir, "package.json"), "{}");
 		const env = {
 			...process.env,
-			BUN_INSTALL_GLOBAL_DIR: path.join(root, "bun-global"),
+			HOME: homeDir,
+			BUN_INSTALL: bunRoot,
+			BUN_INSTALL_GLOBAL_DIR: globalDir,
 			BUN_INSTALL_BIN: binDir,
+			BUN_INSTALL_CACHE_DIR: cacheDir,
+			XDG_CONFIG_HOME: path.join(bunRoot, "xdg-config"),
+			XDG_DATA_HOME: path.join(bunRoot, "xdg-data"),
+			XDG_CACHE_HOME: path.join(bunRoot, "xdg-cache"),
+			XDG_STATE_HOME: path.join(bunRoot, "xdg-state"),
 		};
 
-		const seed = await $`bun add -g file:${oldDir}`.env(env).quiet().nothrow();
+		const seed = await $`bun add -g file:${oldDir}`.env(env).cwd(bunRoot).quiet().nothrow();
 		expect(seed.exitCode).toBe(0);
 		expect(await verifyLauncher(binDir, OLD_VERSION)).toMatchObject({ ok: true, actual: OLD_VERSION });
 
 		const verifications: InstalledVersionVerification[] = [];
 		const steps: RenameMigrationSteps = {
 			async install() {
-				return (await $`bun add -g file:${newDir}`.env(env).quiet().nothrow()).exitCode;
+				return (await $`bun add -g file:${newDir}`.env(env).cwd(bunRoot).quiet().nothrow()).exitCode;
 			},
 			async removeOld() {
-				return (await $`bun remove -g ${OLD_PKG}`.env(env).quiet().nothrow()).exitCode;
+				return (await $`bun remove -g ${OLD_PKG}`.env(env).cwd(bunRoot).quiet().nothrow()).exitCode;
 			},
 			async verify() {
 				const result = await verifyLauncher(binDir, NEW_VERSION);
@@ -163,7 +209,17 @@ describe.skipIf(process.platform === "win32")("rename migration over real bun", 
 		expect(verifications.map(result => ({ ok: result.ok, actual: result.actual }))).toEqual([
 			{ ok: true, actual: NEW_VERSION },
 		]);
-		const globalManifest = await Bun.file(path.join(root, "bun-global", "package.json")).json();
+		const globalManifest = await Bun.file(path.join(globalDir, "package.json")).json();
 		expect(Object.keys(globalManifest.dependencies ?? {})).toEqual([NEW_PKG]);
 	}, 120_000);
+
+	it("leaves $HOME/package.json byte-identical without leaking fixture dependencies", async () => {
+		let currentHostPackageJson: string | null = null;
+		try {
+			currentHostPackageJson = await Bun.file(hostPackageJsonPath).text();
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+		expect(currentHostPackageJson).toBe(initialHostPackageJson);
+	});
 });
