@@ -18,16 +18,20 @@ bun scripts/cpk0-inventory.ts --check
 
 ## Inventory Structure and Field Reference
 
-The inventory contains three primary sections: `tools`, `extension_surfaces`, and `authority_crossings`.
+The inventory contains five primary sections: `tools`, `extension_surfaces`, `authority_crossings`, `prompts`, and `rule_paths`.
 
 ### 1. Top-Level Fields
 
-- `schema_version` (`string`): Schema identifier (`"cpk0/v1"`).
-- `task` (`string`): Task identifier (`"OMP-287"`).
-- `description` (`string`): High-level description of the inventory artifact.
-- `tools` (`ToolInventoryEntry[]`): Complete list of first-party tools the coding agent can register.
-- `extension_surfaces` (`object`): Exported interfaces and types for extensions and hooks.
-- `authority_crossings` (`AuthorityCrossingEntry[]`): Capability classifications detailing authority and gating mechanisms.
+| Field | Type | Description |
+|---|---|---|
+| `schema_version` | `string` | Schema identifier (`"cpk0/v1"`). |
+| `task` | `string` | Task identifier (`"OMP-287"`). |
+| `description` | `string` | High-level description of the inventory artifact. |
+| `tools` | `ToolInventoryEntry[]` | Complete list of first-party tools the coding agent can register. |
+| `extension_surfaces` | `object` | Exported interfaces and types for extensions and hooks. |
+| `authority_crossings` | `AuthorityCrossingEntry[]` | Capability classifications detailing authority and gating mechanisms. |
+| `prompts` | `string[]` | Sorted, deduped repo-relative POSIX paths of every `**/*.md` under `packages/coding-agent/src`, found with `Bun.Glob`. |
+| `rule_paths` | `RulePathsInventory` | Rule, prompt, and extension paths across advisor prompts and session-system subsystems. |
 
 ---
 
@@ -110,3 +114,24 @@ Classifies every major capability granted to extensions and hooks across 7 autho
 5. **`timers`**: Background timer scheduling. Gated by `ManagedTimerTracker` lifecycle tracking (automatic cancellation and unreferencing on session disposal).
 6. **`filesystem_facing_apis`**: Working directory and session file path access. Gated by host OS user/group file permissions; no in-process filesystem sandbox.
 7. **`tool_invocation`**: Tool call/result interception and same-name delegation (`invokeTool`). Gated by sequential pipeline handler execution, blocking short-circuiting, same-tool delegation bounds, and recursion depth limits.
+
+---
+
+### 5. Prompts (`prompts`)
+
+Sorted, deduped repo-relative POSIX paths of every `**/*.md` under `packages/coding-agent/src` (`packages/coding-agent/src/**/*.md`), found with `Bun.Glob`.
+
+---
+
+### 6. Rule Paths (`rule_paths`)
+
+Catalogs prompt, rule, and extension file paths across advisor prompts and session-system subsystems.
+
+| Field | Type | Description |
+|---|---|---|
+| `advisor` | `string[]` | The `prompts` entries under `packages/coding-agent/src/prompts/advisor/`. |
+| `session_system.hooks` | `string[]` | Hook scripts matching `session-system/hooks/**/*.mjs` (`session_system.hooks`). |
+| `rules` | `string[]` | Rule markdown files matching `session-system/rules/**/*.md` (`session_system.rules`). |
+| `extensions` | `string[]` | Extension files matching `session-system/extensions/**/*.{ts,md}` (`session_system.extensions`). |
+| `agents` | `string[]` | Agent definition files matching `session-system/agents/**/*.md` (`session_system.agents`). |
+| `skills` | `string[]` | Skill instruction files matching `session-system/skills/*/SKILL.md` (`session_system.skills`). |
