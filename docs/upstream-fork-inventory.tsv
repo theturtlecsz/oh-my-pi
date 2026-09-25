@@ -435,7 +435,6 @@ python/omp-work/tests/test_omp_work_cli.py	fork-only	added	da92161645e0	salvage-
 python/omp-work/tests/test_parallel_streams.py	fork-only	added	ecbac60aa8cf	salvage-omp-work-dirty-s08: unit and integration tests for parallel streams admission, leases, reservations, and CLI	retained
 python/omp-work/tests/test_pg_native.py	fork-only	added	7dd6ea508fee	Real PostgreSQL TCP and shutdown regression under long space-containing fixture paths	retained
 python/omp-work/tests/test_pg_native_lifetime.py	fork-only	added	efe29e765504	SIGKILL-lifetime regression: a child process starts the native postgres fixture, is SIGKILLed, and the postmaster pid must be gone within 10s	retained
-python/omp-work/tests/test_postgres_operations.py	fork-only	added	6b7208f2338b	ci: repair red main baseline (OMP-217); session candidate: OMP-182; session candidate: OMP-180; session candidate: OMP-140; session candidate: OMP-89	retained
 python/omp-work/tests/test_postgres_operations.py	fork-only	added	0f55a14ebda8	ci: repair red main baseline (OMP-217); session candidate: OMP-182; session candidate: OMP-180; session candidate: OMP-140; session candidate: OMP-89; OMP-283: pin migration 0024 in forward-only migration set	retained
 python/omp-work/tests/test_r02_contracts.py	fork-only	added	c9845edf0366	salvage-omp-work-dirty-s01: unit tests for R02 contracts validation	retained
 python/omp-work/tests/test_r03_committed_unacked_recovery.py	fork-only	added	a77735014e77	salvage-omp-work-dirty-s07: process tests for R03 committed unacked recovery and evidence trust validation	retained
