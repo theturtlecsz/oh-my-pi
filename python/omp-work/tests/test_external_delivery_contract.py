@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 import omp_work
+from omp_work.v1.api_models import CommandResponse, RecordExternalDeliveryResult
 from omp_work.v1.models import (
     Approval,
     CommandEnvelope,
@@ -189,3 +190,93 @@ def test_record_external_delivery_requires_work_close_scope() -> None:
         service.execute(principal, _delivery_envelope())
     assert exc.value.code == "forbidden"
     assert exc.value.status == 403
+
+
+RECEIPT = UUID("00000000-0000-7000-8000-000000000004")
+
+
+def _delivery_result(**updates: object) -> dict[str, object]:
+    data: dict[str, object] = {
+        "type": "record_external_delivery",
+        "work_id": WORK,
+        "revision_id": REVISION,
+        "receipt_id": RECEIPT,
+        "payload_sha256": "f" * 64,
+    }
+    data.update(updates)
+    return data
+
+
+def _delivery_response(**result_updates: object) -> dict[str, object]:
+    return {
+        "receipt": {
+            "operation_id": uuid4(),
+            "request_id": uuid4(),
+            "state": "applied",
+            "request_sha256": "0" * 64,
+            "result_sha256": "1" * 64,
+        },
+        "result": _delivery_result(**result_updates),
+    }
+
+
+def test_command_response_parses_record_external_delivery_result() -> None:
+    response = CommandResponse.model_validate(_delivery_response())
+    assert isinstance(response.result, RecordExternalDeliveryResult)
+    assert response.result.type == "record_external_delivery"
+    assert response.result.work_id == WORK
+    assert response.result.revision_id == REVISION
+    assert response.result.receipt_id == RECEIPT
+    assert response.result.payload_sha256 == "f" * 64
+    assert CommandResponse.model_validate_json(response.model_dump_json()) == response
+
+
+@pytest.mark.parametrize(
+    "payload_sha256",
+    [
+        "f" * 63,
+        "f" * 65,
+        "g" * 64,
+        "F" * 64,
+        "",
+        "not-a-sha",
+    ],
+)
+def test_record_external_delivery_result_refuses_invalid_payload_sha256(
+    payload_sha256: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        CommandResponse.model_validate(
+            _delivery_response(payload_sha256=payload_sha256)
+        )
+
+
+def test_record_external_delivery_result_refuses_missing_receipt_id() -> None:
+    result = _delivery_result()
+    del result["receipt_id"]
+    with pytest.raises(ValidationError):
+        CommandResponse.model_validate(
+            {
+                "receipt": {
+                    "operation_id": uuid4(),
+                    "request_id": uuid4(),
+                    "state": "applied",
+                    "request_sha256": "0" * 64,
+                    "result_sha256": "1" * 64,
+                },
+                "result": result,
+            }
+        )
+
+
+def test_record_external_delivery_result_refuses_null_receipt_id() -> None:
+    with pytest.raises(ValidationError):
+        CommandResponse.model_validate(_delivery_response(receipt_id=None))
+
+
+def test_record_external_delivery_result_refuses_unknown_field() -> None:
+    with pytest.raises(ValidationError):
+        RecordExternalDeliveryResult.model_validate(
+            _delivery_result(extra="unexpected")
+        )
+

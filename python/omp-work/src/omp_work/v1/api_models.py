@@ -331,6 +331,14 @@ class AssessBoundedIntakeResult(StrictModel):
     questions: tuple[IntakeBlockingQuestion, ...]
 
 
+class RecordExternalDeliveryResult(StrictModel):
+    type: Literal["record_external_delivery"]
+    work_id: UUID
+    revision_id: UUID
+    receipt_id: UUID
+    payload_sha256: hex64
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -353,7 +361,8 @@ CommandResult = Annotated[
     | SetExecutionStateResult
     | CompleteExecutionItemResult
     | SkipActiveItemResult
-    | AssessBoundedIntakeResult,
+    | AssessBoundedIntakeResult
+    | RecordExternalDeliveryResult,
     Field(discriminator="type"),
 ]
 

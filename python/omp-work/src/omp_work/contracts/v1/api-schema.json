@@ -5188,6 +5188,45 @@
           "title": "RecordCloseoutReviewResult",
           "type": "object"
         },
+        "RecordExternalDeliveryResult": {
+          "additionalProperties": false,
+          "properties": {
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_external_delivery",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_id",
+            "revision_id",
+            "receipt_id",
+            "payload_sha256"
+          ],
+          "title": "RecordExternalDeliveryResult",
+          "type": "object"
+        },
         "RelationResult": {
           "additionalProperties": false,
           "properties": {
@@ -5538,6 +5577,7 @@
               "finalize_candidate": "#/$defs/FinalizeCandidateResult",
               "put_relation": "#/$defs/RelationResult",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
+              "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
               "record_project_health": "#/$defs/ProjectHealthResult",
               "remove_relation": "#/$defs/RelationResult",
               "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
@@ -5619,6 +5659,9 @@
             },
             {
               "$ref": "#/$defs/AssessBoundedIntakeResult"
+            },
+            {
+              "$ref": "#/$defs/RecordExternalDeliveryResult"
             }
           ],
           "title": "Result"
@@ -9680,6 +9723,45 @@
         "event"
       ],
       "title": "RecordCloseoutReviewResult",
+      "type": "object"
+    },
+    "RecordExternalDeliveryResult": {
+      "additionalProperties": false,
+      "properties": {
+        "payload_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Payload Sha256",
+          "type": "string"
+        },
+        "receipt_id": {
+          "format": "uuid",
+          "title": "Receipt Id",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "record_external_delivery",
+          "title": "Type",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "work_id",
+        "revision_id",
+        "receipt_id",
+        "payload_sha256"
+      ],
+      "title": "RecordExternalDeliveryResult",
       "type": "object"
     },
     "RelationEdge": {
@@ -13801,6 +13883,45 @@
           "title": "RecordCloseoutReviewResult",
           "type": "object"
         },
+        "RecordExternalDeliveryResult": {
+          "additionalProperties": false,
+          "properties": {
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_external_delivery",
+              "title": "Type",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_id",
+            "revision_id",
+            "receipt_id",
+            "payload_sha256"
+          ],
+          "title": "RecordExternalDeliveryResult",
+          "type": "object"
+        },
         "RelationResult": {
           "additionalProperties": false,
           "properties": {
@@ -14167,6 +14288,7 @@
                   "finalize_candidate": "#/$defs/FinalizeCandidateResult",
                   "put_relation": "#/$defs/RelationResult",
                   "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
+                  "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
                   "record_project_health": "#/$defs/ProjectHealthResult",
                   "remove_relation": "#/$defs/RelationResult",
                   "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
@@ -14248,6 +14370,9 @@
                 },
                 {
                   "$ref": "#/$defs/AssessBoundedIntakeResult"
+                },
+                {
+                  "$ref": "#/$defs/RecordExternalDeliveryResult"
                 }
               ]
             },
