@@ -38,6 +38,7 @@ class WorkService:
         "record_project_health": "work.mutate",
         "append_evidence": "work.approve",
         "finalize_candidate": "work.approve",
+        "assess_bounded_intake": "work.approve",
         "create_same_session_child": "work.close",
         "begin_close_attempt": "work.close",
         "seal_audit_manifest": "work.close",
