@@ -1,0 +1,20 @@
+{
+  "schema_version": "cpk0-baseline/v1",
+  "method": {
+    "startup": "PI_TIMING=x cli.ts, temp HOME, median of 5",
+    "memory": "exit RSS minus bare bun RSS",
+    "tokens": "strict count of default buildSystemPrompt"
+  },
+  "observed": {
+    "startup_latency_ms": 1804,
+    "memory_overhead_mb": 283.2,
+    "system_prompt_tokens": 2353,
+    "runs": 5
+  },
+  "budgets": {
+    "startup_latency_ms": 2706,
+    "memory_overhead_mb": 425,
+    "system_prompt_tokens": 2589
+  },
+  "platform": "linux"
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * scripts/cpk0-baseline.ts — CPK-0 baseline startup measurements (OMP-204-s03).
+ * scripts/cpk0-baseline.ts — CPK-0 baseline startup measurements (OMP-204-s03, OMP-204-s04).
  *
  * Freezes the three CPK-0 baseline numbers for the coding-agent CLI:
  *   - startup_latency_ms: median cold-boot wall time (spawn -> exit) of
@@ -16,15 +16,19 @@
  *
  * Usage:
  *   bun scripts/cpk0-baseline.ts
+ *   bun scripts/cpk0-baseline.ts --write
+ *   bun scripts/cpk0-baseline.ts --check [--budget <path>]
  */
 
 import * as os from "node:os";
 import * as path from "node:path";
+import { parseArgs } from "node:util";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { isEnoent, TempDir } from "@oh-my-pi/pi-utils";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
+export const BASELINE_PATH = path.join(REPO_ROOT, "docs/cpk0/baseline.json");
 const CLI_PATH = path.join(REPO_ROOT, "packages/coding-agent/src/cli.ts");
 const PRELOAD_PATH = path.join(import.meta.dir, "cpk0-rss-preload.ts");
 const STARTUP_TIMINGS_PATTERN = /--- Startup timings/i;
@@ -46,6 +50,29 @@ export interface Baseline {
 	system_prompt_tokens: number;
 	/** Number of CLI (and bare-runtime) samples behind the medians. */
 	runs: number;
+}
+
+/** Enforced budget thresholds for CPK-0 metrics. */
+export interface BaselineBudgets {
+	/** Upper bound for cold-boot wall time, in milliseconds. */
+	startup_latency_ms: number;
+	/** Upper bound for CLI RSS minus bare-runtime RSS, in MiB. */
+	memory_overhead_mb: number;
+	/** Upper bound for default system prompt token count. */
+	system_prompt_tokens: number;
+}
+
+/** Committed baseline document format (docs/cpk0/baseline.json). */
+export interface BaselineDocument {
+	schema_version: "cpk0-baseline/v1";
+	method: {
+		startup: string;
+		memory: string;
+		tokens: string;
+	};
+	observed: Baseline;
+	budgets: BaselineBudgets;
+	platform: string;
 }
 
 /** One CLI cold-boot sample. */
@@ -197,7 +224,112 @@ export async function measureBaseline(runs = 5): Promise<Baseline> {
 	};
 }
 
-if (import.meta.main) {
+/**
+ * Compare observed baseline metrics against budget limits.
+ * Returns the names of any metrics where observed exceeds budget.
+ */
+export function checkAgainstBudget(observed: Baseline, budgets: BaselineBudgets): string[] {
+	const over: string[] = [];
+	if (observed.startup_latency_ms > budgets.startup_latency_ms) {
+		over.push("startup_latency_ms");
+	}
+	if (observed.memory_overhead_mb > budgets.memory_overhead_mb) {
+		over.push("memory_overhead_mb");
+	}
+	if (observed.system_prompt_tokens > budgets.system_prompt_tokens) {
+		over.push("system_prompt_tokens");
+	}
+	return over;
+}
+
+export async function runCli(): Promise<void> {
+	const { values } = parseArgs({
+		args: process.argv.slice(2),
+		options: {
+			write: { type: "boolean", default: false },
+			check: { type: "boolean", default: false },
+			budget: { type: "string" },
+		},
+		strict: true,
+	});
+
+	if (values.write && (values.check || values.budget)) {
+		console.error("Cannot combine --write with --check or --budget");
+		process.exit(1);
+	}
+
+	if (values.write) {
+		const observed = await measureBaseline(5);
+		const doc: BaselineDocument = {
+			schema_version: "cpk0-baseline/v1",
+			method: {
+				startup: "PI_TIMING=x cli.ts, temp HOME, median of 5",
+				memory: "exit RSS minus bare bun RSS",
+				tokens: "strict count of default buildSystemPrompt",
+			},
+			observed,
+			budgets: {
+				startup_latency_ms: Math.ceil(observed.startup_latency_ms * 1.5),
+				memory_overhead_mb: Math.ceil(observed.memory_overhead_mb * 1.5),
+				system_prompt_tokens: Math.ceil(observed.system_prompt_tokens * 1.1),
+			},
+			platform: process.platform,
+		};
+		await Bun.write(BASELINE_PATH, `${JSON.stringify(doc, null, 2)}\n`);
+		console.log(`Wrote baseline to ${path.relative(REPO_ROOT, BASELINE_PATH)}`);
+		return;
+	}
+
+	if (values.check || values.budget) {
+		const budgetPath = values.budget ? path.resolve(process.cwd(), values.budget) : BASELINE_PATH;
+		let budgetText: string;
+		try {
+			budgetText = await Bun.file(budgetPath).text();
+		} catch (err) {
+			console.error(`Failed to read budget file at ${budgetPath}: ${err}`);
+			process.exit(1);
+		}
+		let rawData: unknown;
+		try {
+			rawData = JSON.parse(budgetText);
+		} catch (err) {
+			console.error(`Invalid JSON in budget file at ${budgetPath}: ${err}`);
+			process.exit(1);
+		}
+		const budgets =
+			rawData && typeof rawData === "object" && "budgets" in rawData
+				? (rawData as { budgets: BaselineBudgets }).budgets
+				: (rawData as BaselineBudgets);
+
+		if (
+			!budgets ||
+			typeof budgets.startup_latency_ms !== "number" ||
+			typeof budgets.memory_overhead_mb !== "number" ||
+			typeof budgets.system_prompt_tokens !== "number"
+		) {
+			console.error(
+				`Invalid budget file at ${budgetPath}: missing startup_latency_ms, memory_overhead_mb, or system_prompt_tokens`,
+			);
+			process.exit(1);
+		}
+
+		const observed = await measureBaseline(5);
+		const over = checkAgainstBudget(observed, budgets);
+		const metrics: (keyof BaselineBudgets)[] = ["startup_latency_ms", "memory_overhead_mb", "system_prompt_tokens"];
+		for (const metric of metrics) {
+			const isOver = over.includes(metric);
+			console.log(`${metric} ${observed[metric]}/${budgets[metric]} ${isOver ? "OVER" : "OK"}`);
+		}
+		if (over.length > 0) {
+			process.exit(1);
+		}
+		return;
+	}
+
 	const baseline = await measureBaseline();
 	console.log(JSON.stringify(baseline, null, 2));
+}
+
+if (import.meta.main) {
+	await runCli();
 }
