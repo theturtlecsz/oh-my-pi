@@ -949,6 +949,50 @@ export type ActivityEvent = {
 };
 export type ActivityView = { workspace_id: UUID; total: number; events: ActivityEvent[] };
 
+/** Bounded work-item listing row (OMP-279) — mirrors api_models.WorkItemSummary. */
+export type WorkItemSummary = {
+	work_id: UUID;
+	key: string;
+	state: string;
+	created_at: string;
+};
+/** Keyset page over work items, ordered by (created_at, work_id) (OMP-279). */
+export type WorkItemsPage = {
+	items: WorkItemSummary[];
+	next_created_at: string | null;
+	next_work_id: UUID | null;
+};
+/** Append-only domain event read (OMP-279) — mirrors api_models.DomainEventView. */
+export type DomainEventView = {
+	event_id: UUID;
+	sequence: number;
+	workspace_id: UUID;
+	aggregate_type: string;
+	aggregate_id: UUID;
+	aggregate_version: number;
+	actor_id: UUID;
+	actor_kind: string;
+	capability_id: UUID;
+	request_id: UUID;
+	correlation_id: UUID;
+	operation_id: UUID;
+	causation_id: UUID;
+	event_type: string;
+	outcome: string;
+	payload: Record<string, unknown>;
+	payload_sha256: string;
+	previous_event_sha256: string | null;
+	event_sha256: string;
+	occurred_at: string;
+};
+/** Keyset page over domain events, ordered by sequence (OMP-279). */
+export type DomainEventsPage = {
+	events: DomainEventView[];
+	watermark_sequence: number;
+	next_after_sequence: number;
+	has_more: boolean;
+};
+
 export type CommandEnvelope = {
 	api_version: "work.omp.dev/v1";
 	workspace_id: UUID;
@@ -1081,6 +1125,40 @@ export class WorkClient {
 		if (options.limit !== undefined) params.set("limit", String(options.limit));
 		const query = params.size > 0 ? `?${params}` : "";
 		return this.request("GET", `/v1/workspaces/${this.workspaceId}/activity${query}`) as Promise<ActivityView>;
+	}
+
+	/** One immutable revision by number or revision id (OMP-279). */
+	revision(key: string, selector: UUID | number): Promise<WorkRevision> {
+		return this.request(
+			"GET",
+			`/v1/work-items/${encodeURIComponent(key)}/revisions/${encodeURIComponent(String(selector))}`,
+		) as Promise<WorkRevision>;
+	}
+
+	/** One evidence receipt by id (OMP-279). */
+	receipt(id: UUID): Promise<EvidenceReceipt> {
+		return this.request("GET", `/v1/receipts/${encodeURIComponent(id)}`) as Promise<EvidenceReceipt>;
+	}
+
+	/** Keyset page over work items (OMP-279); `after` sets both cursor params. */
+	workItems(options: { after?: { created_at: string; work_id: UUID }; limit?: number } = {}): Promise<WorkItemsPage> {
+		const params = new URLSearchParams();
+		if (options.after !== undefined) {
+			params.set("after_created_at", options.after.created_at);
+			params.set("after_work_id", options.after.work_id);
+		}
+		if (options.limit !== undefined) params.set("limit", String(options.limit));
+		const query = params.size > 0 ? `?${params}` : "";
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/work-items${query}`) as Promise<WorkItemsPage>;
+	}
+
+	/** Keyset page over domain events (OMP-279); omitted params stay absent. */
+	events(options: { afterSequence?: number; limit?: number } = {}): Promise<DomainEventsPage> {
+		const params = new URLSearchParams();
+		if (options.afterSequence !== undefined) params.set("after_sequence", String(options.afterSequence));
+		if (options.limit !== undefined) params.set("limit", String(options.limit));
+		const query = params.size > 0 ? `?${params}` : "";
+		return this.request("GET", `/v1/workspaces/${this.workspaceId}/events${query}`) as Promise<DomainEventsPage>;
 	}
 
 	/** Liveness/readiness probes — unauthenticated by design, so a missing or
