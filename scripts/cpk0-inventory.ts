@@ -131,8 +131,10 @@ function extractApprovalFromNode(approvalProp: Node | undefined): {
 	if (Node.isArrowFunction(fnNode)) {
 		const body = fnNode.getBody();
 		if (Node.isConditionalExpression(body)) {
-			if (Node.isStringLiteral(body.getWhenTrue())) foundTiers.add(body.getWhenTrue().getLiteralValue());
-			if (Node.isStringLiteral(body.getWhenFalse())) foundTiers.add(body.getWhenFalse().getLiteralValue());
+			const whenTrue = body.getWhenTrue();
+			if (Node.isStringLiteral(whenTrue)) foundTiers.add(whenTrue.getLiteralValue());
+			const whenFalse = body.getWhenFalse();
+			if (Node.isStringLiteral(whenFalse)) foundTiers.add(whenFalse.getLiteralValue());
 		} else if (Node.isStringLiteral(body)) {
 			foundTiers.add(body.getLiteralValue());
 		}
@@ -145,8 +147,10 @@ function extractApprovalFromNode(approvalProp: Node | undefined): {
 		if (Node.isStringLiteral(expr)) {
 			foundTiers.add(expr.getLiteralValue());
 		} else if (Node.isConditionalExpression(expr)) {
-			if (Node.isStringLiteral(expr.getWhenTrue())) foundTiers.add(expr.getWhenTrue().getLiteralValue());
-			if (Node.isStringLiteral(expr.getWhenFalse())) foundTiers.add(expr.getWhenFalse().getLiteralValue());
+			const whenTrue = expr.getWhenTrue();
+			if (Node.isStringLiteral(whenTrue)) foundTiers.add(whenTrue.getLiteralValue());
+			const whenFalse = expr.getWhenFalse();
+			if (Node.isStringLiteral(whenFalse)) foundTiers.add(whenFalse.getLiteralValue());
 		} else if (Node.isObjectLiteralExpression(expr)) {
 			const tierProp = expr.getProperty("tier");
 			if (tierProp && Node.isPropertyAssignment(tierProp)) {

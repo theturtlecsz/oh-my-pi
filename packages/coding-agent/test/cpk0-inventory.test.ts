@@ -2,7 +2,12 @@ import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { generateInventory } from "../../../scripts/cpk0-inventory";
+import {
+	type AuthorityCrossingEntry,
+	generateInventory,
+	type SurfaceInventory,
+	type ToolInventoryEntry,
+} from "../../../scripts/cpk0-inventory";
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 const inventoryPath = path.join(repoRoot, "docs/cpk0/surface-inventory.json");
@@ -32,8 +37,8 @@ describe("CPK-0 surface inventory (OMP-287)", () => {
 
 	describe("tool inventory completeness", () => {
 		it("enumerates all first-party tools including custom and injected tools", () => {
-			const inventory = JSON.parse(fs.readFileSync(inventoryPath, "utf8"));
-			const toolsByName = new Map(inventory.tools.map((t: { name: string }) => [t.name, t]));
+			const inventory = JSON.parse(fs.readFileSync(inventoryPath, "utf8")) as SurfaceInventory;
+			const toolsByName = new Map<string, ToolInventoryEntry>(inventory.tools.map(t => [t.name, t]));
 
 			// Injected custom tools
 			expect(toolsByName.has("generate_image")).toBe(true);
@@ -166,9 +171,9 @@ describe("CPK-0 surface inventory (OMP-287)", () => {
 
 	describe("authority crossings classification", () => {
 		it("covers all required capability crossings with authority and gate descriptions", () => {
-			const inventory = JSON.parse(fs.readFileSync(inventoryPath, "utf8"));
+			const inventory = JSON.parse(fs.readFileSync(inventoryPath, "utf8")) as SurfaceInventory;
 			const crossings = inventory.authority_crossings;
-			const crossingMap = new Map(crossings.map((c: { capability: string }) => [c.capability, c]));
+			const crossingMap = new Map<string, AuthorityCrossingEntry>(crossings.map(c => [c.capability, c]));
 
 			const requiredCapabilities = [
 				"command_registration",
