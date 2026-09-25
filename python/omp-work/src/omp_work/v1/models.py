@@ -891,6 +891,30 @@ class CompleteExecutionItemPayload(StrictModel):
     judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class SkipActiveItemPayload(StrictModel):
+    """OMP-219: owner-only deferral of the grant's active item — it supersedes any
+    open close attempt, the work item stays open, and the grant advances or
+    completes without spending a close-attempt budget slot."""
+
+    grant_id: UUID
+    expected_grant_version: int = Field(ge=1)
+    position: int = Field(ge=0)
+    work_id: UUID
+    expected_focus_version: int = Field(ge=0)
+    judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=240)
+
+    @field_validator("reason")
+    @classmethod
+    def _trim_reason(cls, v: str) -> str:
+        trimmed = v.strip()
+        if not trimmed:
+            raise ValueError("skip reason must not be blank")
+        if len(trimmed) > 240:
+            raise ValueError("skip reason exceeds 240 characters")
+        return trimmed
+
+
 class BeginExecutionCommand(StrictModel):
     type: Literal["begin_execution"]
     payload: BeginExecutionPayload
@@ -919,6 +943,11 @@ class SetExecutionStateCommand(StrictModel):
 class CompleteExecutionItemCommand(StrictModel):
     type: Literal["complete_execution_item"]
     payload: CompleteExecutionItemPayload
+
+
+class SkipActiveItemCommand(StrictModel):
+    type: Literal["skip_active_item"]
+    payload: SkipActiveItemPayload
 
 
 class CreateWorkBatchCommand(StrictModel):
@@ -1065,7 +1094,8 @@ Command = Annotated[
     | SealExecutionCriteriaCommand
     | StampExecutionPlanCommand
     | SetExecutionStateCommand
-    | CompleteExecutionItemCommand,
+    | CompleteExecutionItemCommand
+    | SkipActiveItemCommand,
     Field(discriminator="type"),
 ]
 
@@ -1291,6 +1321,7 @@ class Approval(StrictModel):
         "OMP-147",
         "OMP-180",
         "OMP-194",
+        "OMP-219",
         "OMP-222",
         "OMP-247",
         "OMP-266",

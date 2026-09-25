@@ -57,6 +57,7 @@ class WorkService:
         "stamp_execution_plan": "work.execute",
         "set_execution_state": "work.execute",
         "complete_execution_item": "work.execute",
+        "skip_active_item": "work.execute",
     }
 
     def __init__(self, store: WorkStore) -> None:

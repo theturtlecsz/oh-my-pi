@@ -277,6 +277,13 @@ class CompleteExecutionItemResult(StrictModel):
     closeout_receipt: EvidenceReceipt
 
 
+class SkipActiveItemResult(StrictModel):
+    type: Literal["skip_active_item"]
+    grant: ExecutionGrantView
+    item: ExecutionGrantItemView
+    reason: str
+
+
 class RecordCloseoutReviewResult(StrictModel):
     type: Literal["record_closeout_review"]
     status: Literal["applied", "refused"]
@@ -333,7 +340,8 @@ CommandResult = Annotated[
     | SealExecutionCriteriaResult
     | StampExecutionPlanResult
     | SetExecutionStateResult
-    | CompleteExecutionItemResult,
+    | CompleteExecutionItemResult
+    | SkipActiveItemResult,
     Field(discriminator="type"),
 ]
 
