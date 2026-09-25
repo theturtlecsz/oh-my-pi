@@ -14,6 +14,7 @@
 - Controlled Linear-to-WorkService cutover with source-watermarked imports, exact-backup receipts, immutable rehearsal/final evidence, fenced Linear writes, atomic authority/selector and managed-service activation, bounded pre-write rollback, post-write repair recovery, and read-only OAuth recovery exports.
 - OMP-25 `/center`: bounded read-only recent-activity projection — `GET /v1/workspaces/{workspace_id}/activity?project_id=&limit=` returns newest-first applied receipt/close-proposal/completion event metadata (work key/title, project, normalized kind, timestamp; never payload bodies), `work.read` only, limit validated 1–20.
 - `assess_bounded_intake` command (`work.approve`) evaluates a bounded intake draft and returns its semantic hash, rule bundle hash, readiness, and blocking questions without writing work items (OMP-266).
+- Owner-initiated `skip_active_item` execution command defers one unsatisfiable queued grant item (superseding its open close attempts) without cancelling the work item or stopping the grant.
 
 ### Changed
 

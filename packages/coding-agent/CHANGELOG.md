@@ -9,6 +9,11 @@
 - Added a cancellable `plan_approved` extension event that both interactive and ACP hosts await before an approved plan can leave plan mode and execute.
 - Added an `inline` placement option to `ExtensionUIContext.setStatus` (`{ placement: "inline" }`) that renders a status in the main status line beside the path/branch segments; inline statuses truncate and disappear before any configured segment shrinks or drops. Footer placement remains the default.
 - Added stable, read-only `InputEvent.originalText` so extensions can distinguish pipeline-ingress input from text rewritten by earlier input handlers.
+- Added owner `/execute skip <key> [reason]` to skip the active grant item and advance the queue (skipping the last item arms cleanup).
+
+### Changed
+
+- `--queue` now orders items dependency-first so umbrella items run after their queued children instead of ahead of them.
 
 ### Fixed
 
