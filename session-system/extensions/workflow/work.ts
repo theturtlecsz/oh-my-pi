@@ -208,7 +208,12 @@ const NON_APPLYING_CODES = new Set([
 	"focus_conflict",
 	"stale_evidence",
 	"completion_blocked",
+	"execution_grant_inactive",
 ]);
+
+export const OPERATION_POLL_ATTEMPTS = 10;
+export const OPERATION_POLL_INTERVAL_MS = 100;
+
 
 /** Model-facing kinds map one-for-one onto the service's receipt kinds
  *  (`plan`/`push` are minted internally by stampPlan/closeWithVerdict; `audit`
@@ -536,6 +541,47 @@ type ReconciledExecutionCommand = Extract<
 function isReconciledExecutionCommand(cmd: Command): cmd is ReconciledExecutionCommand {
 	return cmd.type === "seal_execution_criteria" || cmd.type === "stamp_execution_plan" || cmd.type === "set_execution_state";
 }
+
+export type MatchStoredOperationOutcome =
+	| { result: CommandResult }
+	| { reason: string };
+
+export function matchStoredOperation(
+	env: CommandEnvelope,
+	stored: StoredOperation,
+): MatchStoredOperationOutcome {
+	const receipt = stored?.receipt;
+	const expectedRequestSha256 = payloadHash({
+		api_version: env.api_version,
+		workspace_id: env.workspace_id,
+		command: env.command,
+	});
+
+	const matchesIdentity =
+		Boolean(receipt) &&
+		receipt.operation_id === env.operation_id &&
+		receipt.request_id === env.request_id &&
+		stored?.request_id === env.request_id &&
+		stored?.command_type === env.command.type &&
+		receipt.request_sha256 === expectedRequestSha256 &&
+		(stored?.result == null || stored.result.type === env.command.type);
+
+	if (!matchesIdentity) {
+		return { reason: "identity mismatch" };
+	}
+
+	const isApplied = receipt && (receipt.state === "applied" || receipt.state === "replayed");
+	if (!isApplied) {
+		return { reason: `state is ${receipt?.state}` };
+	}
+
+	if (stored?.result == null) {
+		return { reason: "result is null" };
+	}
+
+	return { result: stored.result };
+}
+
 
 export function createWorkBackend(
 	config: WorkClientConfig,
@@ -2082,38 +2128,15 @@ export function createWorkBackend(
 						);
 					}
 
-					const receipt = stored?.receipt;
-					const expectedRequestSha256 = payloadHash({
-						api_version: env.api_version,
-						workspace_id: env.workspace_id,
-						command: env.command,
-					});
-					const matchesIdentity =
-						receipt &&
-						receipt.operation_id === env.operation_id &&
-						receipt.request_id === env.request_id &&
-						stored.command_type === cmd.type &&
-						receipt.request_sha256 === expectedRequestSha256;
-
-					const isApplied = receipt && (receipt.state === "applied" || receipt.state === "replayed");
-					const hasResult = stored?.result !== null && stored?.result !== undefined;
-
-					if (!matchesIdentity || !isApplied || !hasResult) {
-						let reason = "unknown outcome";
-						if (!matchesIdentity) {
-							reason = "identity mismatch";
-						} else if (!isApplied) {
-							reason = `state is ${receipt?.state}`;
-						} else if (!hasResult) {
-							reason = "result is null";
-						}
+					const match = matchStoredOperation(env, stored);
+					if ("reason" in match) {
 						throw new Error(
-							`unresolved pending claim ${c.path} (op ${env.operation_id}, ${cmd.type}) for grant ${grantId}: ${reason}; automatic recovery refused; use stop/cancel or repair the claim`,
+							`unresolved pending claim ${c.path} (op ${env.operation_id}, ${cmd.type}) for grant ${grantId}: ${match.reason}; automatic recovery refused; use stop/cancel or repair the claim`,
 						);
 					}
 
-					await resolvePendingOp(c.path, c.record, stored.result);
-					c.record.result = stored.result;
+					await resolvePendingOp(c.path, c.record, match.result);
+					c.record.result = match.result;
 					c.record.resolved_at = new Date().toISOString();
 				}
 			}
