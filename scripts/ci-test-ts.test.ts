@@ -5,9 +5,13 @@ import * as path from "node:path";
 import {
 	assertHostPackageJsonUnchanged,
 	buildChildEnv,
+	buildTimingRecords,
 	describeChunkFailure,
+	formatTimingTable,
 	readHostPackageJson,
+	shouldPrintTimingTable,
 	withTempAgentDir,
+	writeTimingJson,
 } from "./ci-test-ts.ts";
 
 // The two ways a chunk reaches SIGKILL are indistinguishable by exit code, so
@@ -164,5 +168,109 @@ describe("host package.json gate check", () => {
 		expect(() => assertHostPackageJsonUnchanged('{"name":"old"}', null, "/fake")).toThrow(
 			/Host \/fake\/package\.json was modified during the test run/,
 		);
+	});
+});
+
+describe("chunk timing summary and JSON output", () => {
+	test("buildTimingRecords rounds seconds and derives ok status from exit codes", () => {
+		const records = buildTimingRecords([
+			{ label: "fast-passed", seconds: 1.234, exitCode: 0 },
+			{ label: "slow-failed", seconds: 12.348, exitCode: 1 },
+			{ label: "zero-sec", seconds: 0, exitCode: 0 },
+			{ label: "timeout-killed", seconds: 60.101, exitCode: 137 },
+		]);
+
+		expect(records).toEqual([
+			{ label: "timeout-killed", seconds: 60.1, ok: false },
+			{ label: "slow-failed", seconds: 12.35, ok: false },
+			{ label: "fast-passed", seconds: 1.23, ok: true },
+			{ label: "zero-sec", seconds: 0, ok: true },
+		]);
+	});
+
+	test("buildTimingRecords sorts slowest first with deterministic label tie-breaking", () => {
+		const records = buildTimingRecords([
+			{ label: "chunk-b", seconds: 5.5, ok: true },
+			{ label: "chunk-a", seconds: 5.5, ok: true },
+			{ label: "chunk-slowest", seconds: 10, ok: true },
+			{ label: "chunk-fastest", seconds: 1, ok: true },
+		]);
+
+		expect(records.map(r => r.label)).toEqual(["chunk-slowest", "chunk-a", "chunk-b", "chunk-fastest"]);
+	});
+
+	test("formatTimingTable returns empty string when no records are given", () => {
+		expect(formatTimingTable([])).toBe("");
+	});
+
+	test("formatTimingTable renders aligned table with headers, seconds, and pass/fail status", () => {
+		const records = [
+			{ label: "packages/natives", seconds: 5.2, ok: true },
+			{ label: "packages/coding-agent (runtime)", seconds: 124.5, ok: true },
+			{ label: "session-system/tests", seconds: 2.1, ok: false },
+		];
+
+		const table = formatTimingTable(records);
+		const lines = table.trim().split("\n");
+
+		// Header checks
+		expect(lines[0]).toContain("━━━ Chunk Timing (slowest first) ━━━");
+		expect(lines[1]).toBe("");
+		expect(lines[2]).toMatch(/Chunk\s+Wall Time\s+Status/);
+		expect(lines[3]).toMatch(/─+\s+─+\s+─+/);
+
+		// Order check: slowest first
+		expect(lines[4]).toContain("packages/coding-agent (runtime)");
+		expect(lines[4]).toContain("124.50s");
+		expect(lines[4]).toContain("pass");
+
+		expect(lines[5]).toContain("packages/natives");
+		expect(lines[5]).toContain("5.20s");
+		expect(lines[5]).toContain("pass");
+
+		expect(lines[6]).toContain("session-system/tests");
+		expect(lines[6]).toContain("2.10s");
+		expect(lines[6]).toContain("fail");
+	});
+
+	test("writeTimingJson writes schema [{label, seconds, ok}] sorted slowest first to target file", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ci-timing-test-"));
+		const jsonPath = path.join(tempDir, "nested", "dir", "timing.json");
+		try {
+			const records = [
+				{ label: "chunk-b", seconds: 2.3, ok: true },
+				{ label: "chunk-a", seconds: 45.67, ok: false },
+			];
+			await writeTimingJson(records, jsonPath);
+
+			const content = await Bun.file(jsonPath).text();
+			const parsed = JSON.parse(content);
+			expect(parsed).toEqual([
+				{ label: "chunk-a", seconds: 45.67, ok: false },
+				{ label: "chunk-b", seconds: 2.3, ok: true },
+			]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("shouldPrintTimingTable enables timing table only for local and local-ts or when overridden", () => {
+		expect(shouldPrintTimingTable("local")).toBe(true);
+		expect(shouldPrintTimingTable("local-ts")).toBe(true);
+		expect(shouldPrintTimingTable("all")).toBe(false);
+		expect(shouldPrintTimingTable("workspace")).toBe(false);
+		expect(shouldPrintTimingTable("coding-agent-heavy")).toBe(false);
+
+		const prev = Bun.env.CI_TEST_TIMING_TABLE;
+		try {
+			Bun.env.CI_TEST_TIMING_TABLE = "1";
+			expect(shouldPrintTimingTable("workspace")).toBe(true);
+
+			Bun.env.CI_TEST_TIMING_TABLE = "0";
+			expect(shouldPrintTimingTable("local")).toBe(false);
+		} finally {
+			if (prev === undefined) delete Bun.env.CI_TEST_TIMING_TABLE;
+			else Bun.env.CI_TEST_TIMING_TABLE = prev;
+		}
 	});
 });
