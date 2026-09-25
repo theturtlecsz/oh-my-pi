@@ -2731,7 +2731,8 @@
             "handoff",
             "same_session_found_fixed",
             "intake_publication",
-            "intake_admission"
+            "intake_admission",
+            "external_delivery"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -2766,9 +2767,17 @@
               "title": "Candidate Commit"
             },
             "candidate_id": {
-              "format": "uuid",
-              "title": "Candidate Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
             },
             "candidate_sha256": {
               "anyOf": [
@@ -2872,7 +2881,6 @@
             "receipt_id",
             "work_id",
             "revision_id",
-            "candidate_id",
             "kind",
             "payload_sha256",
             "issuer",
@@ -4289,7 +4297,8 @@
             "handoff",
             "same_session_found_fixed",
             "intake_publication",
-            "intake_admission"
+            "intake_admission",
+            "external_delivery"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -4324,9 +4333,17 @@
               "title": "Candidate Commit"
             },
             "candidate_id": {
-              "format": "uuid",
-              "title": "Candidate Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
             },
             "candidate_sha256": {
               "anyOf": [
@@ -4430,7 +4447,6 @@
             "receipt_id",
             "work_id",
             "revision_id",
-            "candidate_id",
             "kind",
             "payload_sha256",
             "issuer",
@@ -5627,7 +5643,8 @@
             "handoff",
             "same_session_found_fixed",
             "intake_publication",
-            "intake_admission"
+            "intake_admission",
+            "external_delivery"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -5662,9 +5679,17 @@
               "title": "Candidate Commit"
             },
             "candidate_id": {
-              "format": "uuid",
-              "title": "Candidate Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
             },
             "candidate_sha256": {
               "anyOf": [
@@ -5768,7 +5793,6 @@
             "receipt_id",
             "work_id",
             "revision_id",
-            "candidate_id",
             "kind",
             "payload_sha256",
             "issuer",
@@ -6507,7 +6531,8 @@
             "handoff",
             "same_session_found_fixed",
             "intake_publication",
-            "intake_admission"
+            "intake_admission",
+            "external_delivery"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -6542,9 +6567,17 @@
               "title": "Candidate Commit"
             },
             "candidate_id": {
-              "format": "uuid",
-              "title": "Candidate Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
             },
             "candidate_sha256": {
               "anyOf": [
@@ -6648,7 +6681,6 @@
             "receipt_id",
             "work_id",
             "revision_id",
-            "candidate_id",
             "kind",
             "payload_sha256",
             "issuer",
@@ -7088,7 +7120,8 @@
             "handoff",
             "same_session_found_fixed",
             "intake_publication",
-            "intake_admission"
+            "intake_admission",
+            "external_delivery"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -7123,9 +7156,17 @@
           "title": "Candidate Commit"
         },
         "candidate_id": {
-          "format": "uuid",
-          "title": "Candidate Id",
-          "type": "string"
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
         },
         "candidate_sha256": {
           "anyOf": [
@@ -7229,7 +7270,6 @@
         "receipt_id",
         "work_id",
         "revision_id",
-        "candidate_id",
         "kind",
         "payload_sha256",
         "issuer",
@@ -7374,7 +7414,8 @@
             "handoff",
             "same_session_found_fixed",
             "intake_publication",
-            "intake_admission"
+            "intake_admission",
+            "external_delivery"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -7409,9 +7450,17 @@
               "title": "Candidate Commit"
             },
             "candidate_id": {
-              "format": "uuid",
-              "title": "Candidate Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
             },
             "candidate_sha256": {
               "anyOf": [
@@ -7515,7 +7564,6 @@
             "receipt_id",
             "work_id",
             "revision_id",
-            "candidate_id",
             "kind",
             "payload_sha256",
             "issuer",
@@ -9377,7 +9425,8 @@
             "handoff",
             "same_session_found_fixed",
             "intake_publication",
-            "intake_admission"
+            "intake_admission",
+            "external_delivery"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -9412,9 +9461,17 @@
               "title": "Candidate Commit"
             },
             "candidate_id": {
-              "format": "uuid",
-              "title": "Candidate Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
             },
             "candidate_sha256": {
               "anyOf": [
@@ -9518,7 +9575,6 @@
             "receipt_id",
             "work_id",
             "revision_id",
-            "candidate_id",
             "kind",
             "payload_sha256",
             "issuer",
@@ -10984,7 +11040,8 @@
             "handoff",
             "same_session_found_fixed",
             "intake_publication",
-            "intake_admission"
+            "intake_admission",
+            "external_delivery"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -11019,9 +11076,17 @@
               "title": "Candidate Commit"
             },
             "candidate_id": {
-              "format": "uuid",
-              "title": "Candidate Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
             },
             "candidate_sha256": {
               "anyOf": [
@@ -11125,7 +11190,6 @@
             "receipt_id",
             "work_id",
             "revision_id",
-            "candidate_id",
             "kind",
             "payload_sha256",
             "issuer",
@@ -12846,7 +12910,8 @@
             "handoff",
             "same_session_found_fixed",
             "intake_publication",
-            "intake_admission"
+            "intake_admission",
+            "external_delivery"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -12881,9 +12946,17 @@
               "title": "Candidate Commit"
             },
             "candidate_id": {
-              "format": "uuid",
-              "title": "Candidate Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
             },
             "candidate_sha256": {
               "anyOf": [
@@ -12987,7 +13060,6 @@
             "receipt_id",
             "work_id",
             "revision_id",
-            "candidate_id",
             "kind",
             "payload_sha256",
             "issuer",
@@ -15436,7 +15508,8 @@
             "handoff",
             "same_session_found_fixed",
             "intake_publication",
-            "intake_admission"
+            "intake_admission",
+            "external_delivery"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -15471,9 +15544,17 @@
               "title": "Candidate Commit"
             },
             "candidate_id": {
-              "format": "uuid",
-              "title": "Candidate Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
             },
             "candidate_sha256": {
               "anyOf": [
@@ -15577,7 +15658,6 @@
             "receipt_id",
             "work_id",
             "revision_id",
-            "candidate_id",
             "kind",
             "payload_sha256",
             "issuer",
