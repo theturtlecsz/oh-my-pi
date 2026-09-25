@@ -358,6 +358,7 @@ class PostgresWorkStore:
             "stamp_execution_plan",
             "set_execution_state",
             "complete_execution_item",
+            "skip_active_item",
             "complete_work",
         }
         conflict = False
@@ -470,6 +471,8 @@ class PostgresWorkStore:
                     result = self._set_execution_state(cur, envelope)
                 elif command.type == "complete_execution_item":
                     result = self._complete_execution_item(cur, envelope)
+                elif command.type == "skip_active_item":
+                    result = self._skip_active_item(cur, envelope)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -5254,6 +5257,139 @@ class PostgresWorkStore:
             "work_id": str(payload.work_id),
             "state": "DONE",
             "closeout_receipt": closeout_receipt_json,
+        }
+
+    def _skip_active_item(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute(
+            f"SELECT {_GRANT_FIELDS}, judge_manifest FROM omp_work.execution_grants WHERE workspace_id=%s AND grant_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.grant_id),
+        )
+        grant = cur.fetchone()
+        if grant is None:
+            raise WorkStoreError("invalid_request", ("unknown execution grant",))
+        if grant["state"] != "active":
+            raise WorkStoreError(
+                "execution_grant_inactive", (f"grant state is {grant['state']}",)
+            )
+        if grant["grant_version"] != payload.expected_grant_version:
+            raise WorkStoreError("revision_conflict", ("grant_version mismatch",))
+        if grant["judge_sha256"] != payload.judge_sha256:
+            raise WorkStoreError("execution_judge_drift", ("judge_sha256 mismatch",))
+        cur_service_fp = service_runtime_fingerprint()
+        grant_judge_manifest = grant.get("judge_manifest") or {}
+        if isinstance(grant_judge_manifest, str):
+            grant_judge_manifest = json.loads(grant_judge_manifest)
+        if grant_judge_manifest.get("service_fingerprint") != cur_service_fp:
+            raise WorkStoreError(
+                "execution_judge_drift", ("service_fingerprint drift",)
+            )
+
+        cur.execute(
+            f"SELECT {_GRANT_ITEM_FIELDS} FROM omp_work.execution_grant_items WHERE workspace_id=%s AND grant_id=%s AND position=%s AND work_id=%s FOR UPDATE",
+            (
+                envelope.workspace_id,
+                payload.grant_id,
+                payload.position,
+                payload.work_id,
+            ),
+        )
+        item = cur.fetchone()
+        if item is None:
+            raise WorkStoreError(
+                "invalid_request", ("item claim not found at position",)
+            )
+        if item["phase"] in ("completed", "abandoned", "skipped"):
+            raise WorkStoreError(
+                "invalid_request", (f"grant item is terminal: {item['phase']}",)
+            )
+        if item["phase"] == "pending":
+            raise WorkStoreError(
+                "invalid_request", ("grant item is pending, not active",)
+            )
+
+        cur.execute(
+            "SELECT version, work_id FROM omp_work.focus_slots WHERE workspace_id=%s AND owner_id=%s FOR UPDATE",
+            (envelope.workspace_id, grant["owner_id"]),
+        )
+        focus_slot = cur.fetchone()
+        current_focus_version = focus_slot["version"] if focus_slot else 0
+        if current_focus_version != payload.expected_focus_version:
+            raise WorkStoreError("focus_conflict", ("expected_focus_version mismatch",))
+        if focus_slot is None or focus_slot["work_id"] != payload.work_id:
+            raise WorkStoreError("focus_conflict", ("focused work mismatch",))
+
+        cur.execute(
+            f"SELECT {_ATTEMPT_FIELDS} FROM omp_work.close_attempts WHERE workspace_id=%s AND work_id=%s AND state = ANY(%s) FOR UPDATE",
+            (envelope.workspace_id, payload.work_id, list(_LIVE_STATES)),
+        )
+        attempts = cur.fetchall()
+        for att in attempts:
+            if att["state"] == "auditor_in_flight":
+                self._transition_attempt(
+                    cur,
+                    envelope.workspace_id,
+                    att["attempt_id"],
+                    "state='audit_ready', in_flight_launch_id=NULL, cancelled_launch_count=cancelled_launch_count+1",
+                )
+                self._transition_attempt(
+                    cur,
+                    envelope.workspace_id,
+                    att["attempt_id"],
+                    "state='superseded', terminal_reason='item_skipped'",
+                )
+            else:
+                self._transition_attempt(
+                    cur,
+                    envelope.workspace_id,
+                    att["attempt_id"],
+                    "state='superseded', terminal_reason='item_skipped'",
+                )
+
+        now = datetime.now(UTC)
+        cur.execute(
+            f"UPDATE omp_work.execution_grant_items SET phase='skipped', skipped_at=%s, terminal_reason='owner_skip' WHERE workspace_id=%s AND item_id=%s RETURNING {_GRANT_ITEM_FIELDS}",
+            (now, envelope.workspace_id, item["item_id"]),
+        )
+        updated_item = cur.fetchone()
+
+        cur.execute(
+            "UPDATE omp_work.focus_slots SET work_id=NULL, version=version+1 WHERE workspace_id=%s AND owner_id=%s AND work_id=%s AND version=%s",
+            (
+                envelope.workspace_id,
+                grant["owner_id"],
+                payload.work_id,
+                payload.expected_focus_version,
+            ),
+        )
+        if cur.rowcount == 0:
+            raise WorkStoreError("focus_conflict", ("concurrent focus slot modification",))
+
+        cur.execute(
+            "SELECT count(*) AS cnt FROM omp_work.execution_grant_items WHERE workspace_id=%s AND grant_id=%s AND phase NOT IN ('completed', 'abandoned', 'skipped')",
+            (envelope.workspace_id, payload.grant_id),
+        )
+        remaining = cur.fetchone()["cnt"]
+        if remaining == 0:
+            cur.execute(
+                f"UPDATE omp_work.execution_grants SET state='completed', completed_at=%s, grant_version=grant_version+1 WHERE workspace_id=%s AND grant_id=%s RETURNING {_GRANT_FIELDS}",
+                (now, envelope.workspace_id, payload.grant_id),
+            )
+            updated_grant = cur.fetchone()
+        else:
+            cur.execute(
+                f"UPDATE omp_work.execution_grants SET grant_version=grant_version+1 WHERE workspace_id=%s AND grant_id=%s RETURNING {_GRANT_FIELDS}",
+                (envelope.workspace_id, payload.grant_id),
+            )
+            updated_grant = cur.fetchone()
+
+        return {
+            "type": "skip_active_item",
+            "grant": _row_json(updated_grant),
+            "item": _row_json(updated_item),
+            "reason": payload.reason,
         }
 
     def _item_view(
