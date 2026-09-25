@@ -12,6 +12,9 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+hex64 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
 class WorkAlias(StrictModel):
     work_id: UUID
     key: str = Field(pattern=r"^(HOME|OMP)-[1-9][0-9]*$")
@@ -42,6 +45,8 @@ class EvidenceKind(StrEnum):
     CLOSEOUT = "closeout"
     HANDOFF = "handoff"
     SAME_SESSION_FOUND_FIXED = "same_session_found_fixed"
+    INTAKE_PUBLICATION = "intake_publication"
+    INTAKE_ADMISSION = "intake_admission"
 
 
 class CloseAttemptState(StrEnum):
@@ -304,7 +309,6 @@ class CompletionBlocker(StrictModel):
     detail: str
 
 
-
 class CompletionRunnerIdentity(StrictModel):
     issuer: Literal["work-service/auditor-settle"] = "work-service/auditor-settle"
     launch_id: UUID
@@ -362,6 +366,7 @@ class CompletionEvidence(StrictModel):
                 "artifacts must contain exactly one verification, audit, and push reference"
             )
         return self
+
 
 class OperationReceipt(StrictModel):
     operation_id: UUID
@@ -612,6 +617,7 @@ class CompleteWorkPayload(StrictModel):
     evidence: CompletionEvidence
     satisfied_work_ids: tuple[UUID, ...] = ()
     cancellations: tuple[CancellationProof, ...] = Field(default=(), max_length=128)
+
     @model_validator(mode="after")
     def _cancellations_unique(self) -> CompleteWorkPayload:
         ids = [proof.work_id for proof in self.cancellations]
@@ -883,6 +889,7 @@ class CompleteExecutionItemPayload(StrictModel):
     attempt_id: UUID
     evidence: CompletionEvidence
     judge_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
 
 class BeginExecutionCommand(StrictModel):
     type: Literal["begin_execution"]
@@ -1238,7 +1245,6 @@ class CutoverExample(StrictModel):
     parity_differences: tuple[str, ...]
 
 
-
 class CompletionEvidenceExample(StrictModel):
     """OMP-247: typed completion claim validated against service-owned rows."""
 
@@ -1247,6 +1253,7 @@ class CompletionEvidenceExample(StrictModel):
     foreign_receipt_result: Literal["completion_blocked"]
     self_asserted_audit_result: Literal["completion_blocked"]
     required_artifacts: tuple[Literal["verification", "audit", "push"], ...]
+
 
 class ContractExamples(StrictModel):
     immutable_revision: ImmutableRevisionExample
@@ -1258,6 +1265,7 @@ class ContractExamples(StrictModel):
     same_session: SameSessionExample
     cutover: CutoverExample
     completion_evidence: CompletionEvidenceExample
+
 
 class BindingManifest(StrictModel):
     paths: tuple[str, ...]
@@ -1285,4 +1293,141 @@ class Approval(StrictModel):
         "OMP-194",
         "OMP-222",
         "OMP-247",
+        "OMP-266",
     ]
+
+
+class IntakeSourceSpan(StrictModel):
+    id: str
+    start: int = Field(ge=0)
+    end: int
+    exact_text_sha256: hex64
+
+    @model_validator(mode="after")
+    def validate_span(self) -> IntakeSourceSpan:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
+
+
+class IntakeSource(StrictModel):
+    text: str
+    sha256: hex64
+    spans: tuple[IntakeSourceSpan, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_source(self) -> IntakeSource:
+        from .canonical import text_sha256
+
+        if text_sha256(self.text) != self.sha256:
+            raise ValueError("text sha256 mismatch")
+
+        seen_span_ids: set[str] = set()
+        raw_bytes = self.text.encode("utf-8")
+        for span in self.spans:
+            if span.id in seen_span_ids:
+                raise ValueError(f"duplicate span id: {span.id}")
+            seen_span_ids.add(span.id)
+
+            if span.start < 0 or span.end > len(raw_bytes):
+                raise ValueError(f"span {span.id} out of bounds")
+
+            span_bytes = raw_bytes[span.start : span.end]
+            try:
+                decoded_slice = span_bytes.decode("utf-8")
+            except UnicodeDecodeError as err:
+                raise ValueError(
+                    f"span {span.id} byte slice ({span.start}:{span.end}) does not decode as valid UTF-8"
+                ) from err
+
+            if text_sha256(decoded_slice) != span.exact_text_sha256:
+                raise ValueError(
+                    f"span {span.id} exact_text_sha256 mismatch: expected {text_sha256(decoded_slice)}, got {span.exact_text_sha256}"
+                )
+
+        return self
+
+
+class KnownIntakeValue(StrictModel):
+    kind: Literal["known"] = "known"
+    value: str | int | bool
+
+
+class UnknownIntakeValue(StrictModel):
+    kind: Literal["unknown"] = "unknown"
+
+
+IntakeValue = KnownIntakeValue | UnknownIntakeValue
+
+
+class IntakeClaim(StrictModel):
+    id: str
+    statement: str
+    source_span_ids: tuple[str, ...] = ()
+
+
+class IntakeGoal(IntakeClaim):
+    pass
+
+
+class IntakeConstraint(IntakeClaim):
+    key: str
+    value: IntakeValue
+    polarity: Literal["positive", "negative"]
+
+
+class IntakeUnknown(IntakeClaim):
+    kind: Literal["authority_or_dependency", "routine_choice"]
+    material: bool
+
+
+class IntakeAcceptanceCriterion(IntakeClaim):
+    observable_outcome: str
+    oracle: (
+        Literal[
+            "automated_test",
+            "static_check",
+            "manual_inspection",
+            "external_receipt",
+        ]
+        | None
+    ) = None
+
+
+class BoundedIntakeDraft(StrictModel):
+    archetype: Literal["small_code_change"] = "small_code_change"
+    source: IntakeSource
+    goal: IntakeGoal
+    constraints: tuple[IntakeConstraint, ...] = ()
+    unknowns: tuple[IntakeUnknown, ...] = ()
+    acceptance_criteria: tuple[IntakeAcceptanceCriterion, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_draft(self) -> BoundedIntakeDraft:
+        all_claims = (
+            self.goal,
+            *self.constraints,
+            *self.unknowns,
+            *self.acceptance_criteria,
+        )
+        seen_claim_ids: set[str] = set()
+        for claim in all_claims:
+            if claim.id in seen_claim_ids:
+                raise ValueError(f"duplicate claim id: {claim.id}")
+            seen_claim_ids.add(claim.id)
+
+        source_span_ids = {span.id for span in self.source.spans}
+        for claim in all_claims:
+            for span_ref in claim.source_span_ids:
+                if span_ref not in source_span_ids:
+                    raise ValueError(f"unknown span ref: {span_ref}")
+
+        return self
+
+
+class FableAdvicePayload(StrictModel):
+    advisor_model_family: Literal["fable"] = "fable"
+    advice_sha256: hex64
+    disposition: Literal["considered"] = "considered"
+    intake_semantic_sha256: hex64
+    rule_bundle_sha256: hex64

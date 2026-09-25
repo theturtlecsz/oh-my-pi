@@ -1055,7 +1055,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -1234,7 +1236,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -1437,7 +1441,8 @@
             "OMP-180",
             "OMP-194",
             "OMP-222",
-            "OMP-247"
+            "OMP-247",
+            "OMP-266"
           ],
           "title": "Issue",
           "type": "string"
@@ -2900,6 +2905,328 @@
         "paths"
       ],
       "title": "BindingManifest",
+      "type": "object"
+    },
+    "BoundedIntakeDraft": {
+      "$defs": {
+        "IntakeAcceptanceCriterion": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "observable_outcome": {
+              "title": "Observable Outcome",
+              "type": "string"
+            },
+            "oracle": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "automated_test",
+                    "static_check",
+                    "manual_inspection",
+                    "external_receipt"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Oracle"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "statement",
+            "observable_outcome"
+          ],
+          "title": "IntakeAcceptanceCriterion",
+          "type": "object"
+        },
+        "IntakeConstraint": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "polarity": {
+              "enum": [
+                "positive",
+                "negative"
+              ],
+              "title": "Polarity",
+              "type": "string"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/KnownIntakeValue"
+                },
+                {
+                  "$ref": "#/$defs/UnknownIntakeValue"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "id",
+            "statement",
+            "key",
+            "value",
+            "polarity"
+          ],
+          "title": "IntakeConstraint",
+          "type": "object"
+        },
+        "IntakeGoal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "statement"
+          ],
+          "title": "IntakeGoal",
+          "type": "object"
+        },
+        "IntakeSource": {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            },
+            "spans": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IntakeSourceSpan"
+              },
+              "title": "Spans",
+              "type": "array"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "sha256"
+          ],
+          "title": "IntakeSource",
+          "type": "object"
+        },
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        },
+        "IntakeUnknown": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "authority_or_dependency",
+                "routine_choice"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "material": {
+              "title": "Material",
+              "type": "boolean"
+            },
+            "source_span_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Source Span Ids",
+              "type": "array"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "statement",
+            "kind",
+            "material"
+          ],
+          "title": "IntakeUnknown",
+          "type": "object"
+        },
+        "KnownIntakeValue": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "known",
+              "default": "known",
+              "title": "Kind",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "title": "KnownIntakeValue",
+          "type": "object"
+        },
+        "UnknownIntakeValue": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "default": "unknown",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "title": "UnknownIntakeValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_criteria": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeAcceptanceCriterion"
+          },
+          "title": "Acceptance Criteria",
+          "type": "array"
+        },
+        "archetype": {
+          "const": "small_code_change",
+          "default": "small_code_change",
+          "title": "Archetype",
+          "type": "string"
+        },
+        "constraints": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeConstraint"
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "goal": {
+          "$ref": "#/$defs/IntakeGoal"
+        },
+        "source": {
+          "$ref": "#/$defs/IntakeSource"
+        },
+        "unknowns": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeUnknown"
+          },
+          "title": "Unknowns",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source",
+        "goal"
+      ],
+      "title": "BoundedIntakeDraft",
       "type": "object"
     },
     "CancelAuditorLaunchCommand": {
@@ -5374,7 +5701,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -8046,7 +8375,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -8597,7 +8928,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -9311,7 +9644,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -11506,7 +11841,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -11843,6 +12180,45 @@
       "title": "ExecutionProvenanceEnvelope",
       "type": "object"
     },
+    "FableAdvicePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "advice_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Advice Sha256",
+          "type": "string"
+        },
+        "advisor_model_family": {
+          "const": "fable",
+          "default": "fable",
+          "title": "Advisor Model Family",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "considered",
+          "default": "considered",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "intake_semantic_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Intake Semantic Sha256",
+          "type": "string"
+        },
+        "rule_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Rule Bundle Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "advice_sha256",
+        "intake_semantic_sha256",
+        "rule_bundle_sha256"
+      ],
+      "title": "FableAdvicePayload",
+      "type": "object"
+    },
     "FinalizeCandidateCommand": {
       "$defs": {
         "FinalizeCandidatePayload": {
@@ -12082,6 +12458,371 @@
         "new_revision_number"
       ],
       "title": "ImmutableRevisionExample",
+      "type": "object"
+    },
+    "IntakeAcceptanceCriterion": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "observable_outcome": {
+          "title": "Observable Outcome",
+          "type": "string"
+        },
+        "oracle": {
+          "anyOf": [
+            {
+              "enum": [
+                "automated_test",
+                "static_check",
+                "manual_inspection",
+                "external_receipt"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Oracle"
+        },
+        "source_span_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Span Ids",
+          "type": "array"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "statement",
+        "observable_outcome"
+      ],
+      "title": "IntakeAcceptanceCriterion",
+      "type": "object"
+    },
+    "IntakeClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "source_span_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Span Ids",
+          "type": "array"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "statement"
+      ],
+      "title": "IntakeClaim",
+      "type": "object"
+    },
+    "IntakeConstraint": {
+      "$defs": {
+        "KnownIntakeValue": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "known",
+              "default": "known",
+              "title": "Kind",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "title": "KnownIntakeValue",
+          "type": "object"
+        },
+        "UnknownIntakeValue": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "default": "unknown",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          "title": "UnknownIntakeValue",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "polarity": {
+          "enum": [
+            "positive",
+            "negative"
+          ],
+          "title": "Polarity",
+          "type": "string"
+        },
+        "source_span_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Span Ids",
+          "type": "array"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnownIntakeValue"
+            },
+            {
+              "$ref": "#/$defs/UnknownIntakeValue"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "id",
+        "statement",
+        "key",
+        "value",
+        "polarity"
+      ],
+      "title": "IntakeConstraint",
+      "type": "object"
+    },
+    "IntakeGoal": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "source_span_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Span Ids",
+          "type": "array"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "statement"
+      ],
+      "title": "IntakeGoal",
+      "type": "object"
+    },
+    "IntakeSource": {
+      "$defs": {
+        "IntakeSourceSpan": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "integer"
+            },
+            "exact_text_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Exact Text Sha256",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "start": {
+              "minimum": 0,
+              "title": "Start",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "end",
+            "exact_text_sha256"
+          ],
+          "title": "IntakeSourceSpan",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "spans": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntakeSourceSpan"
+          },
+          "title": "Spans",
+          "type": "array"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "sha256"
+      ],
+      "title": "IntakeSource",
+      "type": "object"
+    },
+    "IntakeSourceSpan": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "title": "End",
+          "type": "integer"
+        },
+        "exact_text_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Exact Text Sha256",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "start",
+        "end",
+        "exact_text_sha256"
+      ],
+      "title": "IntakeSourceSpan",
+      "type": "object"
+    },
+    "IntakeUnknown": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "authority_or_dependency",
+            "routine_choice"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "material": {
+          "title": "Material",
+          "type": "boolean"
+        },
+        "source_span_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Span Ids",
+          "type": "array"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "statement",
+        "kind",
+        "material"
+      ],
+      "title": "IntakeUnknown",
+      "type": "object"
+    },
+    "KnownIntakeValue": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "known",
+          "default": "known",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "title": "KnownIntakeValue",
       "type": "object"
     },
     "OperationReceipt": {
@@ -12533,7 +13274,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -12737,7 +13480,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -14695,6 +15440,19 @@
       "additionalProperties": false,
       "properties": {},
       "title": "StrictModel",
+      "type": "object"
+    },
+    "UnknownIntakeValue": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "unknown",
+          "default": "unknown",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "title": "UnknownIntakeValue",
       "type": "object"
     },
     "WorkAlias": {

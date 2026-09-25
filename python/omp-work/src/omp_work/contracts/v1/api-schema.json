@@ -2637,7 +2637,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -4147,7 +4149,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -5403,7 +5407,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -6281,7 +6287,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -6572,7 +6580,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -6856,7 +6866,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -8813,7 +8825,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -9958,7 +9972,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -11772,7 +11788,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
@@ -14175,7 +14193,9 @@
             "push",
             "closeout",
             "handoff",
-            "same_session_found_fixed"
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission"
           ],
           "title": "EvidenceKind",
           "type": "string"
