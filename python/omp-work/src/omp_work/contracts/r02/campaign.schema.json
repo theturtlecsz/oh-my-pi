@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "omp:r02:campaign",
+  "title": "Campaign",
+  "type": "object",
+  "required": [
+    "id",
+    "revision",
+    "status",
+    "hypothesis_ids",
+    "resource_vector"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "active",
+        "paused",
+        "completed",
+        "cancelled"
+      ]
+    },
+    "hypothesis_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "resource_vector": {
+      "type": "object",
+      "required": [
+        "cpu",
+        "mem_gb"
+      ],
+      "properties": {
+        "cpu": {
+          "type": "number"
+        },
+        "mem_gb": {
+          "type": "number"
+        },
+        "gpu": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "policy_id": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "omp:r02:policy",
+  "title": "Policy",
+  "type": "object",
+  "required": [
+    "id",
+    "revision",
+    "actions",
+    "capabilities"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "properties": {
+        "min_schema": {
+          "type": "string"
+        },
+        "max_schema": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

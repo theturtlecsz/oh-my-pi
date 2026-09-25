@@ -3532,11 +3532,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						isIdle: () => !session.isStreaming,
 						abort: () => {
 							void session.abort({ reason: USER_INTERRUPT_LABEL }).catch(error => {
-								logger.error("Extension error", {
-									path: "<task-executor>",
-									event: "abort",
-									error: extensionAbortErrorMessage(error),
-								});
+								try {
+									logger.error("Extension error", {
+										path: "<task-executor>",
+										event: "abort",
+										error: extensionAbortErrorMessage(error),
+									});
+								} catch {
+									// Logger failure must not escape the void abort boundary.
+								}
 							});
 						},
 						hasPendingMessages: () => session.queuedMessageCount > 0,
