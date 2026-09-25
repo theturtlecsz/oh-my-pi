@@ -594,25 +594,27 @@ export function createWorkBackend(
 	/** Operation ids handed to the host since the last ack — drained by ackOps. */
 	const deliveredOps: UUID[] = [];
 
-	/** OMP-262: after a lost POST response (status 0 or >=500) the mutation may
-	 *  still have committed. Poll the operation read until the service's stored
-	 *  row is visible: a 404 is not proof of absence (the commit may be in
-	 *  flight), so keep polling. The FIRST stored row is definitive —
+	/** OMP-262: poll the operation read until the service's stored row is
+	 *  visible (both for lost POST responses and pending-claim recovery). A 404
+	 *  is not proof of absence (the commit may be in flight), so keep polling
+	 *  up to OPERATION_POLL_ATTEMPTS. The FIRST stored row is definitive —
 	 *  matchStoredOperation decides and no further GETs run. Any other read
-	 *  error, or an exhausted budget, leaves the outcome unknown. */
-	async function reconcileOperation(envelope: CommandEnvelope): Promise<MatchStoredOperationOutcome | { unknown: true }> {
+	 *  error stops immediately. An exhausted budget or error returns the reason. */
+	async function reconcileOperation(envelope: CommandEnvelope): Promise<MatchStoredOperationOutcome> {
+		let lastReason = "unknown outcome";
 		for (let attempt = 0; attempt < OPERATION_POLL_ATTEMPTS; attempt++) {
 			if (attempt > 0) await Bun.sleep(OPERATION_POLL_INTERVAL_MS);
 			let stored: StoredOperation;
 			try {
 				stored = await client.operation(envelope.operation_id);
 			} catch (error) {
+				lastReason = error instanceof Error ? error.message : String(error);
 				if (error instanceof WorkError && error.status === 404) continue;
-				return { unknown: true };
+				return { reason: lastReason };
 			}
 			return matchStoredOperation(envelope, stored);
 		}
-		return { unknown: true };
+		return { reason: lastReason };
 	}
 
 	/** Every mutation goes through a durable per-intent claim (plan §3):
@@ -2166,17 +2168,7 @@ export function createWorkBackend(
 						);
 					}
 
-					let stored: StoredOperation;
-					try {
-						stored = await client.operation(env.operation_id);
-					} catch (error) {
-						const reason = error instanceof Error ? error.message : String(error);
-						throw new Error(
-							`unresolved pending claim ${c.path} (op ${env.operation_id}, ${cmd.type}) for grant ${grantId}: ${reason}; automatic recovery refused; use stop/cancel or repair the claim`,
-						);
-					}
-
-					const match = matchStoredOperation(env, stored);
+					const match = await reconcileOperation(env);
 					if ("reason" in match) {
 						throw new Error(
 							`unresolved pending claim ${c.path} (op ${env.operation_id}, ${cmd.type}) for grant ${grantId}: ${match.reason}; automatic recovery refused; use stop/cancel or repair the claim`,
