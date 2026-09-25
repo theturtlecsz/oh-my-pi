@@ -218,6 +218,7 @@ packages/coding-agent/test/agent-session-tool-rebuild-skip.test.ts	shared	modifi
 packages/coding-agent/test/agent-session-tree-ask-reanswer.test.ts	shared	modified	b81d00b27e66	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/agent-session-tree-navigation.test.ts	shared	modified	d2f774e85b33	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/agent-session-user-shortcut-hooks.test.ts	shared	modified	5882b0f777de	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
+packages/coding-agent/test/blob-exposure-tunnels.test.ts	shared	modified	089fca656096	OMP-291: Polling-based file content synchronization and atomic argument recording in fake tunnel test fixture	retained
 packages/coding-agent/test/completed-task-result-contract.test.ts	fork-only	added	9d45c6c8db9e	OMP-246: Persisted ready/claim parsing, immutable copies and branch/discard refusal	retained
 packages/coding-agent/test/config/settings-backup-on-rewrite.test.ts	fork-only	added	fd1a138ab69b	session candidate: OMP-173; session candidate: OMP-172	retained
 packages/coding-agent/test/cpk0-approval-extraction.test.ts	fork-only	added	b5fb1c918fe3	OMP-204-s01: Unit tests for extractApprovalFromNode verifying tier and dynamic extraction across AST node variants	retained

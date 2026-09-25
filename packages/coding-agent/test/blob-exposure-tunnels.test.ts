@@ -54,24 +54,13 @@ function prepareFake(output: string, options: { exitCode?: number; restartOnce?:
 }
 
 async function waitForFileContent(filePath: string, matches: (text: string) => boolean): Promise<void> {
-	const matchesCurrentContent = (): boolean => {
+	while (true) {
 		try {
-			return matches(fs.readFileSync(filePath, "utf8"));
+			if (matches(fs.readFileSync(filePath, "utf8"))) return;
 		} catch {
-			return false;
+			// File does not exist yet.
 		}
-	};
-	if (matchesCurrentContent()) return;
-	const { promise, resolve } = Promise.withResolvers<void>();
-	const listener = (): void => {
-		if (matchesCurrentContent()) resolve();
-	};
-	fs.watchFile(filePath, { interval: 25, persistent: false }, listener);
-	listener();
-	try {
-		await promise;
-	} finally {
-		fs.unwatchFile(filePath, listener);
+		await Bun.sleep(25);
 	}
 }
 
@@ -101,8 +90,7 @@ beforeAll(() => {
 	fs.writeFileSync(
 		target,
 		`#!/bin/sh\n` +
-			`: > "$OMP_FAKE_TUNNEL_ARGS"\n` +
-			`for arg do printf '%s\\n' "$arg" >> "$OMP_FAKE_TUNNEL_ARGS"; done\n` +
+			`if [ "$#" -gt 0 ]; then printf '%s\\n' "$@" > "$OMP_FAKE_TUNNEL_ARGS"; else : > "$OMP_FAKE_TUNNEL_ARGS"; fi\n` +
 			`printf 'run\\n' >> "$OMP_FAKE_TUNNEL_RUNS"\n` +
 			`trap 'printf "SIGINT\\n" >> "$OMP_FAKE_TUNNEL_SIGNALS"; exit 0' INT\n` +
 			`trap 'printf "SIGTERM\\n" >> "$OMP_FAKE_TUNNEL_SIGNALS"; exit 0' TERM\n` +
