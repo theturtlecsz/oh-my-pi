@@ -661,6 +661,30 @@ export interface BuildSystemPromptOptions {
 	autoQaEnabled?: boolean;
 }
 
+/**
+ * Instruction-prep steps whose degradation is surfaced to the caller. The
+ * remaining prep steps are decorative: their timeout/failure only warms caches
+ * or enriches the prompt, so they are logged at debug level and never reported.
+ */
+export type InstructionPrepSource = "customPrompt" | "loadSystemPromptFiles" | "loadProjectContextFiles";
+
+/** A required instruction-prep step that did not complete in time or failed. */
+export interface InstructionPrepDegradation {
+	source: InstructionPrepSource;
+	cause: "timeout" | "error";
+}
+
+/** Prep steps whose degradation is reported; all others are decorative. */
+const REQUIRED_INSTRUCTION_PREP_SOURCES: readonly InstructionPrepSource[] = [
+	"customPrompt",
+	"loadSystemPromptFiles",
+	"loadProjectContextFiles",
+];
+
+function isRequiredInstructionPrepSource(name: string): name is InstructionPrepSource {
+	return (REQUIRED_INSTRUCTION_PREP_SOURCES as readonly string[]).includes(name);
+}
+
 /** Result of building provider-facing system prompt messages. */
 export interface BuildSystemPromptResult {
 	/** Ordered system prompt blocks. Providers should preserve entries as distinct messages/blocks. */
@@ -673,12 +697,19 @@ export interface BuildSystemPromptResult {
 	 * a catalog the prompt already carries (issue #7139).
 	 */
 	xdevCatalogNames?: readonly string[];
+	/**
+	 * Required instruction-prep steps that timed out or failed and fell back to
+	 * minimal defaults. `buildSystemPrompt` always sets it (`[]` when every
+	 * required step completed). Decorative prep steps (skills, workspace tree,
+	 * environment probes, …) are never reported here.
+	 */
+	instructionPrepDegradations?: InstructionPrepDegradation[];
 }
 
 /** Build the system prompt with tools, guidelines, and context */
 export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<BuildSystemPromptResult> {
 	if ($env.NULL_PROMPT === "true") {
-		return { systemPrompt: [] };
+		return { systemPrompt: [], instructionPrepDegradations: [] };
 	}
 
 	const {
@@ -755,9 +786,14 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		if (result === "__timeout__") {
 			timedOut.push(name);
 			// Let the work continue in the background so its caches still warm; just log on completion.
+			// Post-timeout completion is decorative for every step: the timeout itself is
+			// reported for required steps, so a late failure must not warn again.
 			void tagged.then(r => {
 				if (r.kind === "err") {
-					logger.warn("Background system prompt preparation step failed", { name, error: String(r.error) });
+					logger.debug("Background system prompt preparation step failed after timeout", {
+						name,
+						error: String(r.error),
+					});
 				} else {
 					logger.debug("Background system prompt preparation step completed after timeout", { name });
 				}
@@ -877,24 +913,43 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	clearTimeout(deadlineTimer);
 	const agentsMdFiles = Array.from(new Set(workspaceTree.agentsMdFiles)).sort().slice(0, AGENTS_MD_LIMIT);
 
-	if (timedOut.length > 0) {
+	// Only the required instruction-prep steps are surfaced; decorative steps
+	// (skills, workspace tree, environment probes, …) degrade silently.
+	const requiredTimedOut = timedOut.filter(isRequiredInstructionPrepSource);
+	const requiredFailed = failed.filter(entry => isRequiredInstructionPrepSource(entry.name));
+	const instructionPrepDegradations: InstructionPrepDegradation[] = [
+		...requiredTimedOut.map(source => ({ source, cause: "timeout" as const })),
+		...requiredFailed.map(entry => ({ source: entry.name as InstructionPrepSource, cause: "error" as const })),
+	];
+
+	if (requiredTimedOut.length > 0) {
 		logger.warn("System prompt preparation steps timed out; using minimal fallback for those steps", {
 			cwd: resolvedCwd,
 			timeoutMs: SYSTEM_PROMPT_PREP_TIMEOUT_MS,
-			steps: timedOut,
+			steps: requiredTimedOut,
 		});
 		process.stderr.write(
-			`Warning: system prompt preparation steps timed out after ${SYSTEM_PROMPT_PREP_TIMEOUT_MS}ms (${timedOut.join(", ")}); using minimal fallback for those steps.\n`,
+			`Warning: system prompt preparation steps timed out after ${SYSTEM_PROMPT_PREP_TIMEOUT_MS}ms (${requiredTimedOut.join(", ")}); using minimal fallback for those steps.\n`,
 		);
 	}
-	if (failed.length > 0) {
-		for (const { name, error } of failed) {
-			logger.warn("System prompt preparation step failed; using minimal fallback", {
-				cwd: resolvedCwd,
-				step: name,
-				error: String(error),
-			});
-		}
+	for (const { name, error } of requiredFailed) {
+		logger.warn("System prompt preparation step failed; using minimal fallback", {
+			cwd: resolvedCwd,
+			step: name,
+			error: String(error),
+		});
+	}
+	// Decorative steps never reach stderr or warn; keep a debug breadcrumb so a
+	// slow/failed enrichment is still diagnosable.
+	for (const name of timedOut.filter(name => !isRequiredInstructionPrepSource(name))) {
+		logger.debug("Decorative system prompt preparation step timed out", { cwd: resolvedCwd, step: name });
+	}
+	for (const { name, error } of failed.filter(entry => !isRequiredInstructionPrepSource(entry.name))) {
+		logger.debug("Decorative system prompt preparation step failed", {
+			cwd: resolvedCwd,
+			step: name,
+			error: String(error),
+		});
 	}
 
 	const promptCwd = normalizePromptPath(resolvedCwd);
@@ -1032,5 +1087,5 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	// default template; a resolved custom prompt uses a template that omits it.
 	const xdevCatalogNames =
 		!resolvedCustomPrompt && xdevTools.length > 0 ? xdevTools.map(mounted => mounted.name) : undefined;
-	return { systemPrompt, xdevCatalogNames };
+	return { systemPrompt, xdevCatalogNames, instructionPrepDegradations };
 }
