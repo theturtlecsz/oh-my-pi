@@ -415,6 +415,7 @@ class PostgresWorkStore:
                         raise WorkStoreError(
                             "cutover_invariant", ("awaiting_cutover_plan_attestation",)
                         )
+                self._require_unexpired_execution(cur, envelope)
                 if command.type == "create_work_batch":
                     result = self._create_batch(cur, envelope)
                 elif command.type == "create_same_session_child":
@@ -3931,6 +3932,53 @@ class PostgresWorkStore:
             "plan_sha256": payload.plan_sha256,
         }
 
+    def _require_unexpired_execution(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> None:
+        """Fence new effects; keep replay, delivery settlement and owner stop usable.
+
+        Expiry does not prove an external effect stopped. Preserve the grant and
+        its in-flight records until the owner reconciles them and explicitly stops
+        or cancels the grant. A replacement grant still needs normal admission.
+        """
+        command = envelope.command
+        if command.type in {
+            "begin_execution", "attest_checkpoint_delivery", "settle_auditor_launch",
+            "cancel_auditor_launch",
+        }:
+            return
+        data = command.payload.model_dump(mode="python")
+        if command.type == "set_execution_state" and data.get("target_state") in {
+            "paused", "stopped", "canceled",
+        }:
+            return
+        work_ids = [data[key] for key in ("work_id", "source_work_id", "target_work_id")
+                    if data.get(key) is not None]
+        for key in ("receipt", "input"):
+            nested = data.get(key)
+            if isinstance(nested, dict) and nested.get("work_id") is not None:
+                work_ids.append(nested["work_id"])
+        grant_id = data.get("grant_id") or data.get("execution_grant_id")
+        attempt_id = data.get("attempt_id")
+        if grant_id is None and attempt_id is None and not work_ids:
+            return
+        cur.execute(
+            "SELECT g.grant_id FROM omp_work.execution_grants g "
+            "WHERE g.workspace_id=%s AND g.state IN ('active','paused') "
+            "AND g.expires_at <= clock_timestamp() AND (g.grant_id=%s "
+            "OR EXISTS (SELECT 1 FROM omp_work.execution_grant_items i "
+            "WHERE i.workspace_id=g.workspace_id AND i.grant_id=g.grant_id AND i.work_id=ANY(%s::uuid[])) "
+            "OR EXISTS (SELECT 1 FROM omp_work.close_attempts a "
+            "WHERE a.workspace_id=g.workspace_id AND a.execution_grant_id=g.grant_id AND a.attempt_id=%s)) "
+            "FOR UPDATE OF g",
+            (envelope.workspace_id, grant_id, work_ids, attempt_id),
+        )
+        expired = cur.fetchone()
+        if expired is not None:
+            raise WorkStoreError("execution_grant_stale", (
+                f"execution grant expired: {expired['grant_id']}; reconcile in-flight effects, then stop or cancel before new admission",
+            ))
+
     def _begin_execution(
         self,
         cur: psycopg.Cursor[dict[str, object]],
@@ -3939,11 +3987,15 @@ class PostgresWorkStore:
     ) -> dict[str, object]:
         payload = envelope.command.payload
         cur.execute(
-            f"SELECT {_GRANT_FIELDS} FROM omp_work.execution_grants WHERE workspace_id=%s AND state IN ('active', 'paused') FOR UPDATE",
+            f"SELECT {_GRANT_FIELDS}, expires_at <= clock_timestamp() AS expired FROM omp_work.execution_grants WHERE workspace_id=%s AND state IN ('active', 'paused') FOR UPDATE",
             (envelope.workspace_id,),
         )
         existing = cur.fetchone()
         if existing is not None:
+            if existing["expired"]:
+                raise WorkStoreError("execution_grant_stale", (
+                    f"execution grant expired: {existing['grant_id']}; reconcile in-flight effects, then stop or cancel before new admission",
+                ))
             raise WorkStoreError(
                 "idempotency_conflict",
                 (f"active execution grant already exists: {existing['grant_id']}",),
