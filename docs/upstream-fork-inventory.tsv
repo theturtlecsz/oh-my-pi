@@ -104,6 +104,16 @@ docs/omp-stabilization-plan.md	fork-only	added	1512ca6e8e6a	OMP-249 ordered stab
 docs/omp-task-active-recovery-plan.md	fork-only	added	e9792d58523d	OMP-246: Actual shared-process task interruption reproduction plan	retained
 docs/omp-task-recovery-implementation-plan.md	fork-only	added	d4adffe069db	OMP-246: Original-child recovery plan with ownership, authority, persistence and review constraints	retained
 docs/omp-task-result-gap-plan.md	fork-only	added	3b0f2152d999	OMP-246: Actual held-authority-response completed-child gap reproduction plan	retained
+docs/programme/ACCEPTED-DECISIONS.md	fork-only	added	7f37cdab0672	OMP-325: accepted programme-wide product directions Q1–Q35; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/ACCEPTED-DECISIONS.md	retained
+docs/programme/AUTORESEARCH-IMPLEMENTATION-PLAN.md	fork-only	added	8abdbf2d7582	OMP-325: full autoresearch implementation plan; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/AUTORESEARCH-IMPLEMENTATION-PLAN.md	retained
+docs/programme/CONTINUATION-GOAL.md	fork-only	added	6db27c723f75	OMP-325: compact continuation goal for the finite OMP programme; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/CONTINUATION-GOAL.md	retained
+docs/programme/E1-CONTRACT-APPROVAL-PACKET.md	fork-only	added	e92297b7e88f	OMP-325: E1 WorkService contract approval packet; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/E1-CONTRACT-APPROVAL-PACKET.md	retained
+docs/programme/ECC-IMPLEMENTATION-SPEC.md	fork-only	added	0c2bbd3b0dd7	OMP-325: ECC-centered OMP implementation plan; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/ECC-IMPLEMENTATION-SPEC.md	retained
+docs/programme/GOAL-PROMPT.md	fork-only	added	2653b898066c	OMP-325: programme implementation goal and operational contract; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/GOAL-PROMPT.md	retained
+docs/programme/ORIGINAL-OBLIGATIONS.md	fork-only	added	2bf03ded65e3	OMP-325: original goal obligations traceability inventory; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/ORIGINAL-OBLIGATIONS.md	retained
+docs/programme/README.md	fork-only	added	d783fa37b582	OMP-325: consolidated programme handoff index; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/README.md	retained
+docs/programme/REVIEW-SUMMARY.md	fork-only	added	8b15bdaa18ae	OMP-325: consolidated handoff review summary; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/REVIEW-SUMMARY.md	retained
+docs/programme/SCOPE-PRESERVATION.md	fork-only	added	4a770b5114c9	OMP-325: scope-preservation check; copied byte-identical from /home/thetu/oh-my-pi/docs/programme/SCOPE-PRESERVATION.md	retained
 docs/upstream-18.0.6-changelog.tsv	fork-only	added	ec9a00c04da9	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-matrix.tsv	fork-only	added	0b52aac14438	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-sources.tsv	fork-only	added	a3afa2e62165	feat(omp-156): pre-merge inventory oracle and safe update driver	retained
