@@ -147,3 +147,36 @@ Acceptance:
 - [x] NOW, focus, grants, and effects are unchanged.
 
 All five checks are substantiated directly from the OMP-268-s02 evidence artifact's `checks` block (`rev3`, `desc_sha`, `title/scope/criteria`, `state`, `candidate`, `item_rest`, `tree_rest(relations/NOW/focus/grants/effects)`, all `true`) and its recorded `verdict: PASS`. r2 (`af997771-8a69-5afe-bf82-cb56a79d2128`) remains the preserved prior revision, superseded by r3.
+
+## External task plan updates: OMP-219 and OMP-283 (OMP-285)
+
+Per repository instructions ("No changes to GitHub settings, services, deployments or anything outside this worktree. If the task asks for one, write what it would be in NOTES-EXTERNAL.md in the worktree and continue"), the external flood task definitions in `/home/thetu/flood/tasks/` are updated as follows to follow the staged digest approval flow without editing flood worktrees:
+
+### 1. OMP-219 task definition update
+
+The separate owner approval slice `OMP-219-s02.md` is eliminated. The approval commit for prospective digest `31b2741a0629421e857d6b2d0367574e2f268dc120a1bb905a8f8706ddf0dd6b` rides on branch `OMP-219-s01` into main:
+- `OMP-219-s01.md`: Front matter `files` adds `python/omp-work/src/omp_work/contracts/v1/approval.json`, `packages/work-client/src/contract.ts`, and `docs/upstream-fork-inventory.tsv`.
+- `OMP-219-s02.md` (formerly s03, store implementation): `depends_on: [OMP-219-s01]`.
+- `OMP-219-s03.md` (formerly s04, TypeScript transport): `depends_on: [OMP-219-s01, OMP-219-s02]`.
+- `OMP-219-s04.md` (formerly s05, queue dependency ordering): `depends_on: [OMP-219-s03]`.
+- `OMP-219-s05.md` (formerly s06, host skip command): `depends_on: [OMP-219-s04]`.
+- `OMP-219-s06.md` (formerly s07, changelogs & inventory): `depends_on: [OMP-219-s01, OMP-219-s02, OMP-219-s03, OMP-219-s04, OMP-219-s05]`.
+- Former `OMP-219-s02.md` is removed from `tasks/`.
+
+### 2. OMP-283 task definition update
+
+The separate owner approval slice `OMP-283-s04.md` and redundant TS sync slice `OMP-283-s05.md` are consolidated. The approval commit for prospective digest `dcfcf3bb88035b286c1b231064b0707198efd22f1edb6e242b79d14d27fc98ef` rides on branch `OMP-283-s01` into main:
+- `OMP-283-s01.md`: Front matter `files` adds `python/omp-work/src/omp_work/contracts/v1/approval.json`, `packages/work-client/src/contract.ts`, and `docs/upstream-fork-inventory.tsv`.
+- `OMP-283-s02.md`: Store implementation & migration 0024; `depends_on: [OMP-283-s01]`.
+- `OMP-283-s03.md`: PostgreSQL refusal & authorization coverage; `depends_on: [OMP-283-s02]`.
+- `OMP-283-s04.md` (formerly s05): changelogs and verification only; `depends_on: [OMP-283-s01, OMP-283-s02, OMP-283-s03]`.
+- Former `OMP-283-s04.md` is removed from `tasks/`.
+
+### Operator unpark and retest procedure
+
+Once the owner approval commit is fast-forwarded to `OMP-219-s01` and `OMP-283-s01` following the documented flow in `docs/work-ledger-operations.md`:
+```sh
+python3 flood.py retest OMP-219-s01
+python3 flood.py retest OMP-283-s01
+```
+
