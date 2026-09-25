@@ -1065,6 +1065,15 @@ class AttestCutoverPlanCommand(StrictModel):
     payload: AttestCutoverPlanPayload
 
 
+class AssessBoundedIntakePayload(StrictModel):
+    draft: BoundedIntakeDraft
+
+
+class AssessBoundedIntakeCommand(StrictModel):
+    type: Literal["assess_bounded_intake"]
+    payload: AssessBoundedIntakePayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -1095,7 +1104,8 @@ Command = Annotated[
     | StampExecutionPlanCommand
     | SetExecutionStateCommand
     | CompleteExecutionItemCommand
-    | SkipActiveItemCommand,
+    | SkipActiveItemCommand
+    | AssessBoundedIntakeCommand,
     Field(discriminator="type"),
 ]
 

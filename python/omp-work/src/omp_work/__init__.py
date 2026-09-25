@@ -98,6 +98,7 @@ _COMMAND_TYPES = frozenset(
         "set_execution_state",
         "complete_execution_item",
         "skip_active_item",
+        "assess_bounded_intake",
     }
 )
 

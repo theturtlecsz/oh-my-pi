@@ -14,11 +14,13 @@ from .models import (
     CloseAttempt,
     CloseAttemptEvent,
     EvidenceReceipt,
+    IntakeBlockingQuestion,
     OperationReceipt,
     RelationEdge,
     StrictModel,
     WorkAlias,
     WorkRevision,
+    hex64,
 )
 
 
@@ -320,6 +322,15 @@ class AuthorityView(StrictModel):
     first_work_mutation_at: datetime | None = None
 
 
+class AssessBoundedIntakeResult(StrictModel):
+    type: Literal["assess_bounded_intake"]
+    semantic_sha256: hex64
+    rule_bundle_sha256: hex64
+    ready_for_ratification: bool
+    issue_count: int = Field(ge=0)
+    questions: tuple[IntakeBlockingQuestion, ...]
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -341,7 +352,8 @@ CommandResult = Annotated[
     | StampExecutionPlanResult
     | SetExecutionStateResult
     | CompleteExecutionItemResult
-    | SkipActiveItemResult,
+    | SkipActiveItemResult
+    | AssessBoundedIntakeResult,
     Field(discriminator="type"),
 ]
 

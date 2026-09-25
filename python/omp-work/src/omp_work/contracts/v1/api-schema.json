@@ -563,6 +563,98 @@
       "title": "ApiError",
       "type": "object"
     },
+    "AssessBoundedIntakeResult": {
+      "$defs": {
+        "IntakeBlockingQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "deduplication_key": {
+              "title": "Deduplication Key",
+              "type": "string"
+            },
+            "priority": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "rule_class": {
+              "enum": [
+                "contradictory_constraints",
+                "missing_verification_oracle",
+                "missing_consequential_authority_or_dependency"
+              ],
+              "title": "Rule Class",
+              "type": "string"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule_class",
+            "deduplication_key",
+            "statement",
+            "priority"
+          ],
+          "title": "IntakeBlockingQuestion",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "issue_count": {
+          "minimum": 0,
+          "title": "Issue Count",
+          "type": "integer"
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/IntakeBlockingQuestion"
+          },
+          "title": "Questions",
+          "type": "array"
+        },
+        "ready_for_ratification": {
+          "title": "Ready For Ratification",
+          "type": "boolean"
+        },
+        "rule_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Rule Bundle Sha256",
+          "type": "string"
+        },
+        "semantic_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Semantic Sha256",
+          "type": "string"
+        },
+        "type": {
+          "const": "assess_bounded_intake",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "semantic_sha256",
+        "rule_bundle_sha256",
+        "ready_for_ratification",
+        "issue_count",
+        "questions"
+      ],
+      "title": "AssessBoundedIntakeResult",
+      "type": "object"
+    },
     "AttestCutoverPlanResult": {
       "additionalProperties": false,
       "properties": {
@@ -3010,6 +3102,52 @@
           "title": "ActivateExecutionItemResult",
           "type": "object"
         },
+        "AssessBoundedIntakeResult": {
+          "additionalProperties": false,
+          "properties": {
+            "issue_count": {
+              "minimum": 0,
+              "title": "Issue Count",
+              "type": "integer"
+            },
+            "questions": {
+              "items": {
+                "$ref": "#/$defs/IntakeBlockingQuestion"
+              },
+              "title": "Questions",
+              "type": "array"
+            },
+            "ready_for_ratification": {
+              "title": "Ready For Ratification",
+              "type": "boolean"
+            },
+            "rule_bundle_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rule Bundle Sha256",
+              "type": "string"
+            },
+            "semantic_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Semantic Sha256",
+              "type": "string"
+            },
+            "type": {
+              "const": "assess_bounded_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "semantic_sha256",
+            "rule_bundle_sha256",
+            "ready_for_ratification",
+            "issue_count",
+            "questions"
+          ],
+          "title": "AssessBoundedIntakeResult",
+          "type": "object"
+        },
         "AttestCutoverPlanResult": {
           "additionalProperties": false,
           "properties": {
@@ -4828,6 +4966,50 @@
           "title": "FocusResult",
           "type": "object"
         },
+        "IntakeBlockingQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "deduplication_key": {
+              "title": "Deduplication Key",
+              "type": "string"
+            },
+            "priority": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "rule_class": {
+              "enum": [
+                "contradictory_constraints",
+                "missing_verification_oracle",
+                "missing_consequential_authority_or_dependency"
+              ],
+              "title": "Rule Class",
+              "type": "string"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule_class",
+            "deduplication_key",
+            "statement",
+            "priority"
+          ],
+          "title": "IntakeBlockingQuestion",
+          "type": "object"
+        },
         "OperationReceipt": {
           "additionalProperties": false,
           "properties": {
@@ -5326,6 +5508,7 @@
               "activate_cutover": "#/$defs/ActivateCutoverResult",
               "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
               "append_evidence": "#/$defs/EvidenceResult",
+              "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
               "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
               "begin_close_attempt": "#/$defs/CloseAttemptResult",
@@ -5417,6 +5600,9 @@
             },
             {
               "$ref": "#/$defs/SkipActiveItemResult"
+            },
+            {
+              "$ref": "#/$defs/AssessBoundedIntakeResult"
             }
           ],
           "title": "Result"
@@ -8431,6 +8617,50 @@
       "title": "HealthView",
       "type": "object"
     },
+    "IntakeBlockingQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Claim Ids",
+          "type": "array"
+        },
+        "deduplication_key": {
+          "title": "Deduplication Key",
+          "type": "string"
+        },
+        "priority": {
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "rule_class": {
+          "enum": [
+            "contradictory_constraints",
+            "missing_verification_oracle",
+            "missing_consequential_authority_or_dependency"
+          ],
+          "title": "Rule Class",
+          "type": "string"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_class",
+        "deduplication_key",
+        "statement",
+        "priority"
+      ],
+      "title": "IntakeBlockingQuestion",
+      "type": "object"
+    },
     "OperationReceipt": {
       "$defs": {
         "OperationState": {
@@ -11429,6 +11659,52 @@
           "title": "ActivateExecutionItemResult",
           "type": "object"
         },
+        "AssessBoundedIntakeResult": {
+          "additionalProperties": false,
+          "properties": {
+            "issue_count": {
+              "minimum": 0,
+              "title": "Issue Count",
+              "type": "integer"
+            },
+            "questions": {
+              "items": {
+                "$ref": "#/$defs/IntakeBlockingQuestion"
+              },
+              "title": "Questions",
+              "type": "array"
+            },
+            "ready_for_ratification": {
+              "title": "Ready For Ratification",
+              "type": "boolean"
+            },
+            "rule_bundle_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rule Bundle Sha256",
+              "type": "string"
+            },
+            "semantic_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Semantic Sha256",
+              "type": "string"
+            },
+            "type": {
+              "const": "assess_bounded_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "semantic_sha256",
+            "rule_bundle_sha256",
+            "ready_for_ratification",
+            "issue_count",
+            "questions"
+          ],
+          "title": "AssessBoundedIntakeResult",
+          "type": "object"
+        },
         "AttestCutoverPlanResult": {
           "additionalProperties": false,
           "properties": {
@@ -13247,6 +13523,50 @@
           "title": "FocusResult",
           "type": "object"
         },
+        "IntakeBlockingQuestion": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Claim Ids",
+              "type": "array"
+            },
+            "deduplication_key": {
+              "title": "Deduplication Key",
+              "type": "string"
+            },
+            "priority": {
+              "maximum": 2,
+              "minimum": 0,
+              "title": "Priority",
+              "type": "integer"
+            },
+            "rule_class": {
+              "enum": [
+                "contradictory_constraints",
+                "missing_verification_oracle",
+                "missing_consequential_authority_or_dependency"
+              ],
+              "title": "Rule Class",
+              "type": "string"
+            },
+            "statement": {
+              "title": "Statement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule_class",
+            "deduplication_key",
+            "statement",
+            "priority"
+          ],
+          "title": "IntakeBlockingQuestion",
+          "type": "object"
+        },
         "OperationReceipt": {
           "additionalProperties": false,
           "properties": {
@@ -13761,6 +14081,7 @@
                   "activate_cutover": "#/$defs/ActivateCutoverResult",
                   "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
                   "append_evidence": "#/$defs/EvidenceResult",
+                  "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
                   "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
                   "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
                   "begin_close_attempt": "#/$defs/CloseAttemptResult",
@@ -13852,6 +14173,9 @@
                 },
                 {
                   "$ref": "#/$defs/SkipActiveItemResult"
+                },
+                {
+                  "$ref": "#/$defs/AssessBoundedIntakeResult"
                 }
               ]
             },
