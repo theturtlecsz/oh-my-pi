@@ -6570,6 +6570,294 @@
       "title": "CreatedWorkItem",
       "type": "object"
     },
+    "DomainEventView": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_id": {
+          "format": "uuid",
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "actor_kind": {
+          "title": "Actor Kind",
+          "type": "string"
+        },
+        "aggregate_id": {
+          "format": "uuid",
+          "title": "Aggregate Id",
+          "type": "string"
+        },
+        "aggregate_type": {
+          "title": "Aggregate Type",
+          "type": "string"
+        },
+        "aggregate_version": {
+          "title": "Aggregate Version",
+          "type": "integer"
+        },
+        "capability_id": {
+          "format": "uuid",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "causation_id": {
+          "format": "uuid",
+          "title": "Causation Id",
+          "type": "string"
+        },
+        "correlation_id": {
+          "format": "uuid",
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "event_id": {
+          "format": "uuid",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_sha256": {
+          "title": "Event Sha256",
+          "type": "string"
+        },
+        "event_type": {
+          "title": "Event Type",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "operation_id": {
+          "format": "uuid",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "payload_sha256": {
+          "title": "Payload Sha256",
+          "type": "string"
+        },
+        "previous_event_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Event Sha256"
+        },
+        "request_id": {
+          "format": "uuid",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "sequence": {
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_id",
+        "sequence",
+        "workspace_id",
+        "aggregate_type",
+        "aggregate_id",
+        "aggregate_version",
+        "actor_id",
+        "actor_kind",
+        "capability_id",
+        "request_id",
+        "correlation_id",
+        "operation_id",
+        "causation_id",
+        "event_type",
+        "outcome",
+        "payload",
+        "payload_sha256",
+        "event_sha256",
+        "occurred_at"
+      ],
+      "title": "DomainEventView",
+      "type": "object"
+    },
+    "DomainEventsPage": {
+      "$defs": {
+        "DomainEventView": {
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "format": "uuid",
+              "title": "Actor Id",
+              "type": "string"
+            },
+            "actor_kind": {
+              "title": "Actor Kind",
+              "type": "string"
+            },
+            "aggregate_id": {
+              "format": "uuid",
+              "title": "Aggregate Id",
+              "type": "string"
+            },
+            "aggregate_type": {
+              "title": "Aggregate Type",
+              "type": "string"
+            },
+            "aggregate_version": {
+              "title": "Aggregate Version",
+              "type": "integer"
+            },
+            "capability_id": {
+              "format": "uuid",
+              "title": "Capability Id",
+              "type": "string"
+            },
+            "causation_id": {
+              "format": "uuid",
+              "title": "Causation Id",
+              "type": "string"
+            },
+            "correlation_id": {
+              "format": "uuid",
+              "title": "Correlation Id",
+              "type": "string"
+            },
+            "event_id": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            },
+            "event_sha256": {
+              "title": "Event Sha256",
+              "type": "string"
+            },
+            "event_type": {
+              "title": "Event Type",
+              "type": "string"
+            },
+            "occurred_at": {
+              "format": "date-time",
+              "title": "Occurred At",
+              "type": "string"
+            },
+            "operation_id": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            },
+            "outcome": {
+              "title": "Outcome",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "previous_event_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Previous Event Sha256"
+            },
+            "request_id": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            },
+            "sequence": {
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_id",
+            "sequence",
+            "workspace_id",
+            "aggregate_type",
+            "aggregate_id",
+            "aggregate_version",
+            "actor_id",
+            "actor_kind",
+            "capability_id",
+            "request_id",
+            "correlation_id",
+            "operation_id",
+            "causation_id",
+            "event_type",
+            "outcome",
+            "payload",
+            "payload_sha256",
+            "event_sha256",
+            "occurred_at"
+          ],
+          "title": "DomainEventView",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DomainEventView"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "next_after_sequence": {
+          "title": "Next After Sequence",
+          "type": "integer"
+        },
+        "watermark_sequence": {
+          "title": "Watermark Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "watermark_sequence",
+        "next_after_sequence",
+        "has_more"
+      ],
+      "title": "DomainEventsPage",
+      "type": "object"
+    },
     "EvidenceReceipt": {
       "$defs": {
         "EvidenceKind": {

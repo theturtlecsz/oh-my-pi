@@ -12,6 +12,7 @@ from omp_work import contract_sha256
 
 from .api_models import (
     CommandResponse,
+    DomainEventsPage,
     StoredOperationView,
     WorkflowView,
     WorkItemsPage,
@@ -109,6 +110,26 @@ class WorkClient:
                 params=params,
             )
         )
+
+    def events(
+        self,
+        after_sequence: int = 0,
+        limit: int = 500,
+        *,
+        after: int | None = None,
+    ) -> DomainEventsPage:
+        effective_after = after if after is not None else after_sequence
+        params: dict[str, object] = {
+            "after_sequence": effective_after,
+            "limit": limit,
+        }
+        return DomainEventsPage.model_validate(
+            self._get(
+                f"/v1/workspaces/{self._workspace_id}/events",
+                params=params,
+            )
+        )
+
 
     def _get(
         self, path: str, *, params: dict[str, object] | None = None
