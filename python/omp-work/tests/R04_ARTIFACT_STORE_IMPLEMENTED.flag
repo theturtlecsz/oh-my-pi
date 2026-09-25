@@ -1,0 +1,2 @@
+sealed-by=C24-mechanical
+acceptance=bytes-manifest-verify;escape-refuse;inaccessible-marked;acl-before-retrieve;no-cache-masquerade

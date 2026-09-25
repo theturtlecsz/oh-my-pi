@@ -600,6 +600,29 @@ class RecordCloseoutReviewPayload(StrictModel):
     authorization_ref: str = Field(min_length=1)
 
 
+class RecordExternalDeliveryPayload(StrictModel):
+    """OMP-283: owner-recorded proof that a work item was delivered outside the
+    ledger. evidence is kept verbatim; it must be non-blank, at most 4096 UTF-8
+    bytes, and free of NUL and line breaks."""
+
+    work_id: UUID
+    revision_id: UUID
+    evidence: str
+
+    @field_validator("evidence")
+    @classmethod
+    def _evidence_bounds(cls, v: str) -> str:
+        if len(v.encode()) > 4096:
+            raise ValueError("external delivery evidence exceeds 4096 UTF-8 bytes")
+        if not v.strip():
+            raise ValueError("external delivery evidence must not be blank")
+        if any(c in v for c in ("\x00", "\n", "\r")):
+            raise ValueError(
+                "external delivery evidence must not contain NUL or line breaks"
+            )
+        return v
+
+
 class CancellationProof(StrictModel):
     """Owner ruling 2026-08-23 (staged cancel batches, OMP-111): one historical work
     item canceled atomically with the primary's completion."""
@@ -1009,6 +1032,11 @@ class RecordCloseoutReviewCommand(StrictModel):
     payload: RecordCloseoutReviewPayload
 
 
+class RecordExternalDeliveryCommand(StrictModel):
+    type: Literal["record_external_delivery"]
+    payload: RecordExternalDeliveryPayload
+
+
 class CompleteWorkCommand(StrictModel):
     type: Literal["complete_work"]
     payload: CompleteWorkPayload
@@ -1101,6 +1129,7 @@ Command = Annotated[
     | SettleAuditorLaunchCommand
     | AttestCheckpointDeliveryCommand
     | RecordCloseoutReviewCommand
+    | RecordExternalDeliveryCommand
     | CompleteWorkCommand
     | RecordProjectHealthCommand
     | StageImportBatchCommand

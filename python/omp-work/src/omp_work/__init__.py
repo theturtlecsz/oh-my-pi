@@ -89,6 +89,7 @@ _COMMAND_TYPES = frozenset(
         "settle_auditor_launch",
         "attest_checkpoint_delivery",
         "record_closeout_review",
+        "record_external_delivery",
         "complete_work",
         "record_project_health",
         "stage_import_batch",

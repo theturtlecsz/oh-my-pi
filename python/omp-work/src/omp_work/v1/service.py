@@ -47,6 +47,7 @@ class WorkService:
         "settle_auditor_launch": "work.close",
         "attest_checkpoint_delivery": "work.close",
         "record_closeout_review": "work.close",
+        "record_external_delivery": "work.close",
         "complete_work": "work.close",
         "stage_import_batch": "work.import",
         "promote_import_batch": "work.import",
