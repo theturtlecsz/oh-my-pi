@@ -10,6 +10,7 @@
 - Added an `inline` placement option to `ExtensionUIContext.setStatus` (`{ placement: "inline" }`) that renders a status in the main status line beside the path/branch segments; inline statuses truncate and disappear before any configured segment shrinks or drops. Footer placement remains the default.
 - Added stable, read-only `InputEvent.originalText` so extensions can distinguish pipeline-ingress input from text rewritten by earlier input handlers.
 - Added owner `/execute skip <key> [reason]` to skip the active grant item and advance the queue (skipping the last item arms cleanup).
+- CPK-0 inventory now also lists bundled prompts and Advisor/Task Observer rule paths, and baseline startup latency, memory overhead and system-prompt token budgets are frozen in `docs/cpk0/baseline.json`.
 
 ### Changed
 
