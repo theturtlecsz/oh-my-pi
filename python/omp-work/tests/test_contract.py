@@ -979,9 +979,14 @@ def test_validate_completion_evidence_pure_semantics() -> None:
 def test_bundle_approval_and_tamper_detection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    package_root = tmp_path / "omp-work"
-    shutil.copytree(Path(__file__).parents[1], package_root)
-    contract_dir = package_root / "src/omp_work/contracts/v1"
+    contract_dir = tmp_path / "omp-work/src/omp_work/contracts/v1"
+    shutil.copytree(
+        Path(__file__).parents[1] / "src/omp_work/contracts/v1",
+        contract_dir,
+        ignore=shutil.ignore_patterns(
+            ".venv", ".pytest_cache", "__pycache__", "*.egg-info", ".coverage"
+        ),
+    )
     monkeypatch.setattr(omp_work, "_contract_dir", lambda: contract_dir)
     (contract_dir / "approval.json").unlink()
     with pytest.raises(ValueError, match="owner approval"):
@@ -1006,9 +1011,14 @@ def test_bundle_approval_and_tamper_detection(
 
 
 def _setup_contract_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    package_root = tmp_path / "omp-work"
-    shutil.copytree(Path(__file__).parents[1], package_root)
-    contract_dir = package_root / "src/omp_work/contracts/v1"
+    contract_dir = tmp_path / "omp-work/src/omp_work/contracts/v1"
+    shutil.copytree(
+        Path(__file__).parents[1] / "src/omp_work/contracts/v1",
+        contract_dir,
+        ignore=shutil.ignore_patterns(
+            ".venv", ".pytest_cache", "__pycache__", "*.egg-info", ".coverage"
+        ),
+    )
     monkeypatch.setattr(omp_work, "_contract_dir", lambda: contract_dir)
     monkeypatch.setattr(omp_work.__main__, "_contract_dir", lambda: contract_dir)
     return contract_dir
