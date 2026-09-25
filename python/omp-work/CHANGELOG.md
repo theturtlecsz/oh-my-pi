@@ -15,6 +15,11 @@
 - OMP-25 `/center`: bounded read-only recent-activity projection — `GET /v1/workspaces/{workspace_id}/activity?project_id=&limit=` returns newest-first applied receipt/close-proposal/completion event metadata (work key/title, project, normalized kind, timestamp; never payload bodies), `work.read` only, limit validated 1–20.
 - `assess_bounded_intake` command (`work.approve`) evaluates a bounded intake draft and returns its semantic hash, rule bundle hash, readiness, and blocking questions without writing work items (OMP-266).
 - Owner-initiated `skip_active_item` execution command defers one unsatisfiable queued grant item (superseding its open close attempts) without cancelling the work item or stopping the grant.
+- Exact revision and receipt reads: `GET /v1/work-items/{key}/revisions/{selector}` (by number or revision id) and `GET /v1/receipts/{receipt_id}`, both `work.read`-only and workspace-scoped (OMP-279).
+- Work-item enumeration: `GET /v1/workspaces/{workspace_id}/work-items` keyset-pages by `(created_at, work_id)` with a paired `after_created_at`/`after_work_id` cursor and 1–500 limit, past the 1,000-item `/tree` cap (OMP-279).
+- Domain event cursor: `GET /v1/workspaces/{workspace_id}/events` pages `omp_audit.domain_events` by `sequence` under a per-workspace advisory-lock commit watermark, returning `watermark_sequence`, `next_after_sequence`, `has_more`; candidate-scoped principals refused (OMP-279).
+- Knowledge contracts: strict `knowledge_contracts.py` models plus canonical code-snapshot and child-fact hash preimages, with golden vectors in `fixtures/knowledge_vectors.json` (OMP-279).
+- Repository identity and manifest capture: read-only resolution of a checkout to an existing `omp_work.repositories` row (normalized URL, verified root commits) and capture of base/modified/untracked/deleted file bytes as a code snapshot manifest (OMP-279).
 
 ### Changed
 
