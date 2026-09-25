@@ -370,3 +370,34 @@ class WorkItemsPage(StrictModel):
     next_created_at: datetime | None = None
     next_work_id: UUID | None = None
 
+
+class DomainEventView(StrictModel):
+    event_id: UUID
+    sequence: int
+    workspace_id: UUID
+    aggregate_type: str
+    aggregate_id: UUID
+    aggregate_version: int
+    actor_id: UUID
+    actor_kind: str
+    capability_id: UUID
+    request_id: UUID
+    correlation_id: UUID
+    operation_id: UUID
+    causation_id: UUID
+    event_type: str
+    outcome: str
+    payload: dict[str, Any]
+    payload_sha256: str
+    previous_event_sha256: str | None = None
+    event_sha256: str
+    occurred_at: datetime
+
+
+class DomainEventsPage(StrictModel):
+    events: tuple[DomainEventView, ...] = ()
+    watermark_sequence: int
+    next_after_sequence: int
+    has_more: bool
+
+

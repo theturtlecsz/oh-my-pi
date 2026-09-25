@@ -223,3 +223,32 @@ class WorkService:
                 diagnostics=error.diagnostics,
             ) from error
 
+    def events(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        *,
+        after_sequence: int = 0,
+        after: int | None = None,
+        limit: int = 500,
+    ) -> dict[str, object]:
+        if (
+            workspace_id not in principal.workspaces
+            or "work.read" not in principal.scopes
+            or principal.candidate_ids is not None
+        ):
+            raise WorkError("forbidden", status=403)
+        effective_after = after if after is not None else after_sequence
+        try:
+            return self._store.events(
+                workspace_id, principal.actor_id, after=effective_after, limit=limit
+            )
+        except WorkStoreError as error:
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+
+

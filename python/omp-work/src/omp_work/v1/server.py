@@ -232,6 +232,37 @@ def create_app(
                 status_code=error.status,
             )
 
+    @app.get("/v1/workspaces/{workspace_id}/events")
+    def events(
+        request: Request,
+        workspace_id: UUID,
+        after_sequence: int = Query(0, ge=0),
+        limit: int = Query(500, ge=1, le=500),
+    ) -> JSONResponse:
+        try:
+            _require_contract(request, service_digest)
+            principal = _principal(request, capabilities_dir)
+            return JSONResponse(
+                jsonable_encoder(
+                    service.events(
+                        principal, workspace_id, after_sequence=after_sequence, limit=limit
+                    )
+                )
+            )
+        except WorkError as error:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
+
+
     @app.get("/v1/operations/{operation_id}")
     def operation(
         request: Request,
