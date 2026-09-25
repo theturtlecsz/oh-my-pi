@@ -594,6 +594,27 @@ export function createWorkBackend(
 	/** Operation ids handed to the host since the last ack — drained by ackOps. */
 	const deliveredOps: UUID[] = [];
 
+	/** OMP-262: after a lost POST response (status 0 or >=500) the mutation may
+	 *  still have committed. Poll the operation read until the service's stored
+	 *  row is visible: a 404 is not proof of absence (the commit may be in
+	 *  flight), so keep polling. The FIRST stored row is definitive —
+	 *  matchStoredOperation decides and no further GETs run. Any other read
+	 *  error, or an exhausted budget, leaves the outcome unknown. */
+	async function reconcileOperation(envelope: CommandEnvelope): Promise<MatchStoredOperationOutcome | { unknown: true }> {
+		for (let attempt = 0; attempt < OPERATION_POLL_ATTEMPTS; attempt++) {
+			if (attempt > 0) await Bun.sleep(OPERATION_POLL_INTERVAL_MS);
+			let stored: StoredOperation;
+			try {
+				stored = await client.operation(envelope.operation_id);
+			} catch (error) {
+				if (error instanceof WorkError && error.status === 404) continue;
+				return { unknown: true };
+			}
+			return matchStoredOperation(envelope, stored);
+		}
+		return { unknown: true };
+	}
+
 	/** Every mutation goes through a durable per-intent claim (plan §3):
 	 *  persist the exact envelope before transport; on a lost response or
 	 *  restart the SAME intent resends those bytes or returns the stored
@@ -620,6 +641,19 @@ export function createWorkBackend(
 			deliveredOps.push(envelope.operation_id);
 			return record.result as Extract<CommandResult, { type: T }>;
 		}
+		if (claim.owner === false) {
+			// A peer (or a prior crash) owns this intent and left it unresolved.
+			// Never POST a second operation: reconcile the stored row instead.
+			const match = await reconcileOperation(envelope);
+			if ("result" in match) {
+				await resolvePendingOp(claim.path, record, match.result);
+				deliveredOps.push(envelope.operation_id);
+				return match.result as Extract<CommandResult, { type: T }>;
+			}
+			throw new Error(
+				`${type} (operation ${envelope.operation_id}) outcome unknown — the pending claim ${claim.path} is unresolved; refusing to risk a duplicate`,
+			);
+		}
 		try {
 			const response = await client.execute(envelope);
 			await resolvePendingOp(claim.path, record, response.result);
@@ -634,6 +668,20 @@ export function createWorkBackend(
 				// means this operation id exists under DIFFERENT bytes — that
 				// stored result can never satisfy this call.
 				await dropPendingOp(claim.path);
+				throw error;
+			}
+			if (error instanceof WorkError && (error.status === 0 || error.status >= 500)) {
+				// The POST response was lost; the mutation may have committed.
+				// Reconcile against the stored operation rather than re-POSTing.
+				const match = await reconcileOperation(envelope);
+				if ("result" in match) {
+					await resolvePendingOp(claim.path, record, match.result);
+					deliveredOps.push(envelope.operation_id);
+					return match.result as Extract<CommandResult, { type: T }>;
+				}
+				throw new Error(
+					`${type} (operation ${envelope.operation_id}) outcome unknown — ${error.message}; the pending claim ${claim.path} is unresolved`,
+				);
 			}
 			throw error;
 		}
