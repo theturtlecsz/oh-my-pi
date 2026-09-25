@@ -7447,6 +7447,52 @@
           "title": "RecordCloseoutReviewPayload",
           "type": "object"
         },
+        "RecordExternalDeliveryCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RecordExternalDeliveryPayload"
+            },
+            "type": {
+              "const": "record_external_delivery",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RecordExternalDeliveryCommand",
+          "type": "object"
+        },
+        "RecordExternalDeliveryPayload": {
+          "additionalProperties": false,
+          "description": "OMP-283: owner-recorded proof that a work item was delivered outside the\nledger. evidence is kept verbatim; it must be non-blank, at most 4096 UTF-8\nbytes, and free of NUL and line breaks.",
+          "properties": {
+            "evidence": {
+              "title": "Evidence",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence"
+          ],
+          "title": "RecordExternalDeliveryPayload",
+          "type": "object"
+        },
         "RecordProjectHealthCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8333,6 +8379,7 @@
               "promote_import_batch": "#/$defs/PromoteImportBatchCommand",
               "put_relation": "#/$defs/PutRelationCommand",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewCommand",
+              "record_external_delivery": "#/$defs/RecordExternalDeliveryCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
               "remove_relation": "#/$defs/RemoveRelationCommand",
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
@@ -8400,6 +8447,9 @@
             },
             {
               "$ref": "#/$defs/RecordCloseoutReviewCommand"
+            },
+            {
+              "$ref": "#/$defs/RecordExternalDeliveryCommand"
             },
             {
               "$ref": "#/$defs/CompleteWorkCommand"
@@ -14895,6 +14945,81 @@
         "authorization_ref"
       ],
       "title": "RecordCloseoutReviewPayload",
+      "type": "object"
+    },
+    "RecordExternalDeliveryCommand": {
+      "$defs": {
+        "RecordExternalDeliveryPayload": {
+          "additionalProperties": false,
+          "description": "OMP-283: owner-recorded proof that a work item was delivered outside the\nledger. evidence is kept verbatim; it must be non-blank, at most 4096 UTF-8\nbytes, and free of NUL and line breaks.",
+          "properties": {
+            "evidence": {
+              "title": "Evidence",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "evidence"
+          ],
+          "title": "RecordExternalDeliveryPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RecordExternalDeliveryPayload"
+        },
+        "type": {
+          "const": "record_external_delivery",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RecordExternalDeliveryCommand",
+      "type": "object"
+    },
+    "RecordExternalDeliveryPayload": {
+      "additionalProperties": false,
+      "description": "OMP-283: owner-recorded proof that a work item was delivered outside the\nledger. evidence is kept verbatim; it must be non-blank, at most 4096 UTF-8\nbytes, and free of NUL and line breaks.",
+      "properties": {
+        "evidence": {
+          "title": "Evidence",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "evidence"
+      ],
+      "title": "RecordExternalDeliveryPayload",
       "type": "object"
     },
     "RecordProjectHealthCommand": {
