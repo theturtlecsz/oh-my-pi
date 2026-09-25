@@ -126,6 +126,28 @@ describe("stamp payload parity", () => {
 	async function runExecution(workId: string, revisionId: string, planBytes: string) {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-262-exec-"));
 		tempDirs.push(tempDir);
+		// computeAuditTcb discovers the installed `auditor` agent from the
+		// filesystem; provide a project-level definition in the temp cwd so the
+		// test never depends on the user's real ~/.omp installation.
+		const agentsDir = path.join(tempDir, ".omp", "agents");
+		await fs.mkdir(agentsDir, { recursive: true });
+		await fs.writeFile(
+			path.join(agentsDir, "auditor.md"),
+			[
+				"---",
+				"name: auditor",
+				"description: Test fixture auditor",
+				"output:",
+				"  properties:",
+				"    report:",
+				"      type: string",
+				"---",
+				"",
+				"Test fixture auditor.",
+				"",
+			].join("\n"),
+			"utf-8",
+		);
 		const planFilePath = path.join(tempDir, "plan.md");
 		await fs.writeFile(planFilePath, planBytes, "utf-8");
 
