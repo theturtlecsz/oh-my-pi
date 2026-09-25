@@ -1,0 +1,84 @@
+{
+  "code_snapshots": [
+    {
+      "name": "three-file-snapshot-with-deleted",
+      "workspace_id": "00000000-0000-7000-8000-000000000001",
+      "repository_id": "00000000-0000-7000-8000-000000000002",
+      "base_commit": "0123456789abcdef0123456789abcdef01234567",
+      "files": [
+        {
+          "path": "README.md",
+          "kind": "modified",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "size": 512
+        },
+        {
+          "path": "old/deprecated.ts",
+          "kind": "deleted",
+          "sha256": null,
+          "size": null
+        },
+        {
+          "path": "src/index.ts",
+          "kind": "base",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "size": 1024
+        }
+      ],
+      "snapshot_id": "a86ca3d6ec8f9e67e50a01b9b1f80679c08cc2c4f26ba595d9d519c9360973a1"
+    },
+    {
+      "name": "two-file-snapshot-untracked",
+      "workspace_id": "aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee",
+      "repository_id": "ffffffff-0000-7111-8222-333333333333",
+      "base_commit": "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      "files": [
+        {
+          "path": "docs/guide.md",
+          "kind": "untracked",
+          "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "size": 2048
+        },
+        {
+          "path": "src/core.py",
+          "kind": "base",
+          "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+          "size": 4096
+        }
+      ],
+      "snapshot_id": "3ac467d7979ed71254d0588ea9e918feaf6478ae297bcf211bbb771d4a1432db"
+    }
+  ],
+  "child_facts": [
+    {
+      "name": "function-fact-config",
+      "snap": "a86ca3d6ec8f9e67e50a01b9b1f80679c08cc2c4f26ba595d9d519c9360973a1",
+      "fact_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "function",
+      "name_fact": "load_config",
+      "file": "src/config.py",
+      "line": 25,
+      "child_fact_id": "2aa23c3cbdf914c5a32c204353ae3180d582b83775d9ae96b16640b09763658d"
+    },
+    {
+      "name": "class-fact-snapshot-manager",
+      "snap": "a86ca3d6ec8f9e67e50a01b9b1f80679c08cc2c4f26ba595d9d519c9360973a1",
+      "fact_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "kind": "class",
+      "name_fact": "SnapshotManager",
+      "file": "src/snapshot.py",
+      "line": 10,
+      "child_fact_id": "5ed186d93a7f7c2fde4ea7c00c36c95557390e73f85083ff1fc5eda67959ae6d"
+    },
+    {
+      "name": "function-fact-test-config-distinct-file",
+      "snap": "a86ca3d6ec8f9e67e50a01b9b1f80679c08cc2c4f26ba595d9d519c9360973a1",
+      "fact_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "function",
+      "name_fact": "load_config",
+      "file": "tests/test_config.py",
+      "line": 25,
+      "child_fact_id": "d361aea032f8fe0d667a5dadb414d92cce36f9cc7485a3789f78bf311044f0cc"
+    }
+  ]
+}

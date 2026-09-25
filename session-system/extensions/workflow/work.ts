@@ -261,6 +261,10 @@ function stableId(...parts: unknown[]): UUID {
 	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
+export function plannedCandidateId(workId: string, revisionId: string, planSha256: string): UUID {
+	return stableId("planned-candidate", workId, revisionId, planSha256);
+}
+
 /** Intent fingerprints exclude volatile fields (timestamps) so a retry
  *  reconstructs the same intent; the persisted envelope keeps the original
  *  bytes, so a resend is a byte-identical replay. */
@@ -1292,7 +1296,7 @@ export function createWorkBackend(
 			}
 			// Deterministic per (work, revision, plan hash): an identical retry
 			// replays; a revised plan or revision mints a fresh candidate.
-			const candidateId = stableId("planned-candidate", item.work_id, item.revision.revision_id, stamp.hash);
+			const candidateId = plannedCandidateId(item.work_id, item.revision.revision_id, stamp.hash);
 			const payload: Record<string, unknown> = {
 				title: stamp.title,
 				body: stamp.body,

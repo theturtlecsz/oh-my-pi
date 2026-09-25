@@ -356,3 +356,17 @@ class ApiError(StrictModel):
 class CommandResponse(StrictModel):
     receipt: OperationReceipt
     result: CommandResult
+
+
+class WorkItemSummary(StrictModel):
+    work_id: UUID
+    key: str
+    state: str
+    created_at: datetime
+
+
+class WorkItemsPage(StrictModel):
+    items: tuple[WorkItemSummary, ...] = ()
+    next_created_at: datetime | None = None
+    next_work_id: UUID | None = None
+

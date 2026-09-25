@@ -1,0 +1,5163 @@
+{
+  "schema_version": "cpk0/v1",
+  "task": "OMP-287",
+  "description": "CPK-0 surface inventory: first-party tools, exported extension and hook surfaces, and authority classifications",
+  "tools": [
+    {
+      "name": "advise",
+      "source_file": "packages/coding-agent/src/advisor/advise-tool.ts",
+      "approval_tier": "exec",
+      "dynamic": false,
+      "tiers": [
+        "exec"
+      ],
+      "kind": "advisor"
+    },
+    {
+      "name": "ask",
+      "source_file": "packages/coding-agent/src/tools/ask.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "ast_edit",
+      "source_file": "packages/coding-agent/src/tools/ast-edit.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "read",
+        "write"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "ast_grep",
+      "source_file": "packages/coding-agent/src/tools/ast-grep.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin",
+      "description": "Search code with AST patterns (structural grep)"
+    },
+    {
+      "name": "bash",
+      "source_file": "packages/coding-agent/src/tools/bash.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "exec",
+        "write"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "browser",
+      "source_file": "packages/coding-agent/src/tools/browser.ts",
+      "approval_tier": "exec",
+      "dynamic": false,
+      "tiers": [
+        "exec"
+      ],
+      "kind": "builtin",
+      "description": "Control a headless browser to navigate and interact with web pages"
+    },
+    {
+      "name": "checkpoint",
+      "source_file": "packages/coding-agent/src/tools/checkpoint.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "computer",
+      "source_file": "packages/coding-agent/src/tools/computer.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "exec",
+        "read"
+      ],
+      "kind": "builtin",
+      "description": "Control the host desktop with persistent JavaScript and OS accessibility APIs"
+    },
+    {
+      "name": "debug",
+      "source_file": "packages/coding-agent/src/tools/debug.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "exec",
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "edit",
+      "source_file": "packages/coding-agent/src/edit/index.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "read",
+        "write"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "eval",
+      "source_file": "packages/coding-agent/src/tools/eval.ts",
+      "approval_tier": "exec",
+      "dynamic": false,
+      "tiers": [
+        "exec"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "generate_image",
+      "source_file": "packages/coding-agent/src/tools/image-gen.ts",
+      "approval_tier": "write",
+      "dynamic": false,
+      "tiers": [
+        "write"
+      ],
+      "kind": "custom"
+    },
+    {
+      "name": "github",
+      "source_file": "packages/coding-agent/src/tools/gh.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "exec",
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "glob",
+      "source_file": "packages/coding-agent/src/tools/glob.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "goal",
+      "source_file": "packages/coding-agent/src/goals/tools/goal-tool.ts",
+      "approval_tier": "exec",
+      "dynamic": false,
+      "tiers": [
+        "exec"
+      ],
+      "kind": "hidden"
+    },
+    {
+      "name": "grep",
+      "source_file": "packages/coding-agent/src/tools/grep.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "exec",
+        "read"
+      ],
+      "kind": "builtin",
+      "description": "Grep file contents using ripgrep (fast regex search)"
+    },
+    {
+      "name": "hub",
+      "source_file": "packages/coding-agent/src/tools/hub/index.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "exec",
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "inspect_image",
+      "source_file": "packages/coding-agent/src/tools/inspect-image.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "learn",
+      "source_file": "packages/coding-agent/src/tools/learn.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "read",
+        "write"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "lsp",
+      "source_file": "packages/coding-agent/src/lsp/tool.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "read",
+        "write"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "manage_skill",
+      "source_file": "packages/coding-agent/src/tools/manage-skill.ts",
+      "approval_tier": "write",
+      "dynamic": false,
+      "tiers": [
+        "write"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "memory_edit",
+      "source_file": "packages/coding-agent/src/tools/memory-edit.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "read",
+      "source_file": "packages/coding-agent/src/tools/read.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "exec",
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "recall",
+      "source_file": "packages/coding-agent/src/tools/memory-recall.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "reflect",
+      "source_file": "packages/coding-agent/src/tools/memory-reflect.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "retain",
+      "source_file": "packages/coding-agent/src/tools/memory-retain.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "rewind",
+      "source_file": "packages/coding-agent/src/tools/checkpoint.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "security_scan",
+      "source_file": "packages/coding-agent/src/tools/security-scan.ts",
+      "approval_tier": "exec",
+      "dynamic": false,
+      "tiers": [
+        "exec"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "task",
+      "source_file": "packages/coding-agent/src/task/index.ts",
+      "approval_tier": "exec",
+      "dynamic": false,
+      "tiers": [
+        "exec"
+      ],
+      "kind": "builtin",
+      "description": "Spawn subagents to complete delegated tasks"
+    },
+    {
+      "name": "think",
+      "source_file": "packages/coding-agent/src/tools/think.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "hidden",
+      "description": "private scratchpad; not shown to user"
+    },
+    {
+      "name": "todo",
+      "source_file": "packages/coding-agent/src/tools/todo.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "tts",
+      "source_file": "packages/coding-agent/src/tools/tts.ts",
+      "approval_tier": "write",
+      "dynamic": false,
+      "tiers": [
+        "write"
+      ],
+      "kind": "custom"
+    },
+    {
+      "name": "vibe_kill",
+      "source_file": "packages/coding-agent/src/tools/vibe.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "vibe"
+    },
+    {
+      "name": "vibe_list",
+      "source_file": "packages/coding-agent/src/tools/vibe.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "vibe"
+    },
+    {
+      "name": "vibe_send",
+      "source_file": "packages/coding-agent/src/tools/vibe.ts",
+      "approval_tier": "exec",
+      "dynamic": false,
+      "tiers": [
+        "exec"
+      ],
+      "kind": "vibe"
+    },
+    {
+      "name": "vibe_spawn",
+      "source_file": "packages/coding-agent/src/tools/vibe.ts",
+      "approval_tier": "exec",
+      "dynamic": false,
+      "tiers": [
+        "exec"
+      ],
+      "kind": "vibe"
+    },
+    {
+      "name": "vibe_wait",
+      "source_file": "packages/coding-agent/src/tools/vibe.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "vibe"
+    },
+    {
+      "name": "web_search",
+      "source_file": "packages/coding-agent/src/web/search/index.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "work",
+      "source_file": "session-system/extensions/workflow/host.ts",
+      "approval_tier": "exec",
+      "dynamic": false,
+      "tiers": [
+        "exec"
+      ],
+      "kind": "session_system"
+    },
+    {
+      "name": "write",
+      "source_file": "packages/coding-agent/src/tools/write.ts",
+      "approval_tier": "dynamic",
+      "dynamic": true,
+      "tiers": [
+        "exec",
+        "read",
+        "write"
+      ],
+      "kind": "builtin"
+    },
+    {
+      "name": "yield",
+      "source_file": "packages/coding-agent/src/tools/yield.ts",
+      "approval_tier": "read",
+      "dynamic": false,
+      "tiers": [
+        "read"
+      ],
+      "kind": "hidden"
+    }
+  ],
+  "extension_surfaces": {
+    "extensions": {
+      "interface_count": 81,
+      "type_count": 40,
+      "interfaces": [
+        {
+          "name": "AfterProviderResponseEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ProviderResponseMetadata"
+          ],
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"after_provider_response\""
+            }
+          ]
+        },
+        {
+          "name": "AssistantThinkingRenderContext",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "contentIndex",
+              "kind": "property",
+              "optional": false,
+              "type": "number"
+            },
+            {
+              "name": "thinkingIndex",
+              "kind": "property",
+              "optional": false,
+              "type": "number"
+            },
+            {
+              "name": "text",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "requestRender",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "void"
+            }
+          ]
+        },
+        {
+          "name": "BashToolCallEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolCallEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"bash\""
+            },
+            {
+              "name": "input",
+              "kind": "property",
+              "optional": false,
+              "type": "BashToolInput"
+            }
+          ]
+        },
+        {
+          "name": "BashToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"bash\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "BashToolDetails | undefined"
+            }
+          ]
+        },
+        {
+          "name": "BeforeAgentStartEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"before_agent_start\""
+            },
+            {
+              "name": "prompt",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "images",
+              "kind": "property",
+              "optional": true,
+              "type": "ImageContent[]"
+            },
+            {
+              "name": "systemPrompt",
+              "kind": "property",
+              "optional": false,
+              "type": "string[]"
+            }
+          ]
+        },
+        {
+          "name": "BeforeAgentStartEventResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "message",
+              "kind": "property",
+              "optional": true,
+              "type": "CustomMessagePayload"
+            },
+            {
+              "name": "systemPrompt",
+              "kind": "property",
+              "optional": true,
+              "type": "string[]"
+            }
+          ]
+        },
+        {
+          "name": "BeforeProviderRequestEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"before_provider_request\""
+            },
+            {
+              "name": "payload",
+              "kind": "property",
+              "optional": false,
+              "type": "unknown"
+            }
+          ]
+        },
+        {
+          "name": "CompactOptions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "onComplete",
+              "kind": "property",
+              "optional": true,
+              "type": "(result: CompactionResult) => void"
+            },
+            {
+              "name": "onError",
+              "kind": "property",
+              "optional": true,
+              "type": "(error: Error) => void"
+            },
+            {
+              "name": "mode",
+              "kind": "property",
+              "optional": true,
+              "type": "CompactMode"
+            },
+            {
+              "name": "internalGuidance",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ComposerShapeDefinition",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "label",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "style",
+              "kind": "property",
+              "optional": false,
+              "type": "ComposerStyle"
+            }
+          ]
+        },
+        {
+          "name": "ContextEventResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "messages",
+              "kind": "property",
+              "optional": true,
+              "type": "AgentMessage[]"
+            }
+          ]
+        },
+        {
+          "name": "ContextUsage",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "tokens",
+              "kind": "property",
+              "optional": false,
+              "type": "number"
+            },
+            {
+              "name": "contextWindow",
+              "kind": "property",
+              "optional": false,
+              "type": "number"
+            },
+            {
+              "name": "percent",
+              "kind": "property",
+              "optional": false,
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "name": "CredentialDisabledEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"credential_disabled\""
+            },
+            {
+              "name": "provider",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "disabledCause",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "CustomToolCallEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolCallEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "input",
+              "kind": "property",
+              "optional": false,
+              "type": "Record<string, unknown>"
+            }
+          ]
+        },
+        {
+          "name": "CustomToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "unknown"
+            }
+          ]
+        },
+        {
+          "name": "DiscoverExtensionPathOptions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/loader.ts",
+          "members": [
+            {
+              "name": "ambient",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "includeAmbientHooks",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        {
+          "name": "EditToolCallEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolCallEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"edit\""
+            },
+            {
+              "name": "input",
+              "kind": "property",
+              "optional": false,
+              "type": "Record<string, unknown>"
+            }
+          ]
+        },
+        {
+          "name": "EditToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"edit\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "EditToolDetails | undefined"
+            }
+          ]
+        },
+        {
+          "name": "Extension",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "path",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "resolvedPath",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "label",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "handlers",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<string, HandlerFn[]>"
+            },
+            {
+              "name": "tools",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<string, RegisteredTool<any, any>>"
+            },
+            {
+              "name": "toolRegistrationListeners",
+              "kind": "property",
+              "optional": true,
+              "type": "Set<ToolRegistrationListener>"
+            },
+            {
+              "name": "assistantThinkingRenderers",
+              "kind": "property",
+              "optional": false,
+              "type": "AssistantThinkingRenderer[]"
+            },
+            {
+              "name": "fileWriteFallbackHandlers",
+              "kind": "property",
+              "optional": false,
+              "type": "FileWriteFallbackHandler[]"
+            },
+            {
+              "name": "fileDeleteFallbackHandlers",
+              "kind": "property",
+              "optional": false,
+              "type": "FileDeleteFallbackHandler[]"
+            },
+            {
+              "name": "messageRenderers",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<string, MessageRenderer>"
+            },
+            {
+              "name": "composerShapes",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<string, ComposerShapeDefinition>"
+            },
+            {
+              "name": "commands",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<string, RegisteredCommand>"
+            },
+            {
+              "name": "flags",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<string, ExtensionFlag>"
+            },
+            {
+              "name": "shortcuts",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<KeyId, ExtensionShortcut>"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionActions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "sendMessage",
+              "kind": "property",
+              "optional": false,
+              "type": "SendMessageHandler"
+            },
+            {
+              "name": "sendUserMessage",
+              "kind": "property",
+              "optional": false,
+              "type": "SendUserMessageHandler"
+            },
+            {
+              "name": "appendEntry",
+              "kind": "property",
+              "optional": false,
+              "type": "AppendEntryHandler"
+            },
+            {
+              "name": "setLabel",
+              "kind": "property",
+              "optional": false,
+              "type": "(targetId: string, label: string | undefined) => void"
+            },
+            {
+              "name": "getActiveTools",
+              "kind": "property",
+              "optional": false,
+              "type": "GetActiveToolsHandler"
+            },
+            {
+              "name": "getAllTools",
+              "kind": "property",
+              "optional": false,
+              "type": "GetAllToolsHandler"
+            },
+            {
+              "name": "setActiveTools",
+              "kind": "property",
+              "optional": false,
+              "type": "SetActiveToolsHandler"
+            },
+            {
+              "name": "getCommands",
+              "kind": "property",
+              "optional": false,
+              "type": "GetCommandsHandler"
+            },
+            {
+              "name": "setModel",
+              "kind": "property",
+              "optional": false,
+              "type": "SetModelHandler"
+            },
+            {
+              "name": "getThinkingLevel",
+              "kind": "property",
+              "optional": false,
+              "type": "GetThinkingLevelHandler"
+            },
+            {
+              "name": "setThinkingLevel",
+              "kind": "property",
+              "optional": false,
+              "type": "SetThinkingLevelHandler"
+            },
+            {
+              "name": "getServiceTiers",
+              "kind": "property",
+              "optional": true,
+              "type": "GetServiceTiersHandler"
+            },
+            {
+              "name": "setServiceTier",
+              "kind": "property",
+              "optional": true,
+              "type": "SetServiceTierHandler"
+            },
+            {
+              "name": "getSessionName",
+              "kind": "property",
+              "optional": false,
+              "type": "() => string | undefined"
+            },
+            {
+              "name": "setSessionName",
+              "kind": "property",
+              "optional": false,
+              "type": "(name: string) => Promise<void>"
+            },
+            {
+              "name": "getSessionId",
+              "kind": "property",
+              "optional": true,
+              "type": "() => string"
+            },
+            {
+              "name": "deliverMessage",
+              "kind": "property",
+              "optional": true,
+              "type": "DeliverMessageHandler"
+            },
+            {
+              "name": "requestPersistedTurnContinuation",
+              "kind": "property",
+              "optional": true,
+              "type": "(request: PersistedTurnContinuationRequest) => PersistedTurnContinuationResult"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionAPI",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "logger",
+              "kind": "property",
+              "optional": false,
+              "type": "typeof PiLogger"
+            },
+            {
+              "name": "typebox",
+              "kind": "property",
+              "optional": false,
+              "type": "typeof TypeBox"
+            },
+            {
+              "name": "arktype",
+              "kind": "property",
+              "optional": false,
+              "type": "typeof ArkType"
+            },
+            {
+              "name": "zod",
+              "kind": "property",
+              "optional": false,
+              "type": "typeof zod"
+            },
+            {
+              "name": "pi",
+              "kind": "property",
+              "optional": false,
+              "type": "typeof PiCodingAgent"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"resources_discover\", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_start\", handler: ExtensionHandler<SessionStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_before_switch\", handler: ExtensionHandler<SessionBeforeSwitchEvent, SessionBeforeSwitchResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_switch\", handler: ExtensionHandler<SessionSwitchEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_before_branch\", handler: ExtensionHandler<SessionBeforeBranchEvent, SessionBeforeBranchResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_branch\", handler: ExtensionHandler<SessionBranchEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_before_compact\", handler: ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session.compacting\", handler: ExtensionHandler<SessionCompactingEvent, SessionCompactingResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_compact\", handler: ExtensionHandler<SessionCompactEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_shutdown\", handler: ExtensionHandler<SessionShutdownEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_before_tree\", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_tree\", handler: ExtensionHandler<SessionTreeEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"context\", handler: ExtensionHandler<ContextEvent, ContextEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"before_provider_request\", handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"after_provider_response\", handler: ExtensionHandler<AfterProviderResponseEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"before_agent_start\", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"plan_approved\", handler: ExtensionHandler<PlanApprovedEvent, PlanApprovedEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"agent_start\", handler: ExtensionHandler<AgentStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"agent_end\", handler: ExtensionHandler<AgentEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_stop\", handler: ExtensionHandler<SessionStopEvent, SessionStopEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"turn_start\", handler: ExtensionHandler<TurnStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"turn_end\", handler: ExtensionHandler<TurnEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"message_start\", handler: ExtensionHandler<MessageStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"message_update\", handler: ExtensionHandler<MessageUpdateEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"message_end\", handler: ExtensionHandler<MessageEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"tool_execution_start\", handler: ExtensionHandler<ToolExecutionStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"tool_execution_update\", handler: ExtensionHandler<ToolExecutionUpdateEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"tool_execution_end\", handler: ExtensionHandler<ToolExecutionEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"auto_compaction_start\", handler: ExtensionHandler<AutoCompactionStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"auto_compaction_end\", handler: ExtensionHandler<AutoCompactionEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"auto_retry_start\", handler: ExtensionHandler<AutoRetryStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"auto_retry_end\", handler: ExtensionHandler<AutoRetryEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"retry_fallback_applied\", handler: ExtensionHandler<RetryFallbackAppliedEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"retry_fallback_succeeded\", handler: ExtensionHandler<RetryFallbackSucceededEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"ttsr_triggered\", handler: ExtensionHandler<TtsrTriggeredEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"todo_reminder\", handler: ExtensionHandler<TodoReminderEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"goal_updated\", handler: ExtensionHandler<GoalUpdatedEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"credential_disabled\", handler: ExtensionHandler<CredentialDisabledEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"input\", handler: ExtensionHandler<InputEvent, InputEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"tool_approval_requested\", handler: ExtensionHandler<ToolApprovalRequestedEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"tool_approval_resolved\", handler: ExtensionHandler<ToolApprovalResolvedEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"tool_call\", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"tool_result\", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"user_bash\", handler: ExtensionHandler<UserBashEvent, UserBashEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"user_python\", handler: ExtensionHandler<UserPythonEvent, UserPythonEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"mcp_notification\", handler: ExtensionHandler<McpNotificationEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "registerTool",
+              "kind": "method",
+              "optional": false,
+              "parameters": "tool: ToolDefinition<TParams, TDetails>",
+              "return_type": "void"
+            },
+            {
+              "name": "registerFileWriteFallback",
+              "kind": "method",
+              "optional": false,
+              "parameters": "handler: FileWriteFallbackHandler",
+              "return_type": "void"
+            },
+            {
+              "name": "registerFileDeleteFallback",
+              "kind": "method",
+              "optional": false,
+              "parameters": "handler: FileDeleteFallbackHandler",
+              "return_type": "void"
+            },
+            {
+              "name": "registerCommand",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string, options: {\n\t\t\tdescription?: string;\n\t\t\tgetArgumentCompletions?: RegisteredCommand[\"getArgumentCompletions\"];\n\t\t\thandler: RegisteredCommand[\"handler\"];\n\t\t}",
+              "return_type": "void"
+            },
+            {
+              "name": "registerShortcut",
+              "kind": "method",
+              "optional": false,
+              "parameters": "shortcut: KeyId, options: {\n\t\t\tdescription?: string;\n\t\t\thandler: (ctx: ExtensionContext) => Promise<void> | void;\n\t\t}",
+              "return_type": "void"
+            },
+            {
+              "name": "registerFlag",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string, options: {\n\t\t\tdescription?: string;\n\t\t\ttype: \"boolean\" | \"string\";\n\t\t\tdefault?: boolean | string;\n\t\t}",
+              "return_type": "void"
+            },
+            {
+              "name": "setLabel",
+              "kind": "method",
+              "optional": false,
+              "parameters": "entryIdOrLabel: string, label?: string | undefined",
+              "return_type": "void"
+            },
+            {
+              "name": "getFlag",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string",
+              "return_type": "boolean | string | undefined"
+            },
+            {
+              "name": "registerMessageRenderer",
+              "kind": "method",
+              "optional": false,
+              "parameters": "customType: string, renderer: MessageRenderer<T>",
+              "return_type": "void"
+            },
+            {
+              "name": "registerAssistantThinkingRenderer",
+              "kind": "method",
+              "optional": false,
+              "parameters": "renderer: AssistantThinkingRenderer",
+              "return_type": "void"
+            },
+            {
+              "name": "registerComposerShape",
+              "kind": "method",
+              "optional": false,
+              "parameters": "definition: ComposerShapeDefinition",
+              "return_type": "void"
+            },
+            {
+              "name": "sendMessage",
+              "kind": "method",
+              "optional": false,
+              "parameters": "message: CustomMessagePayload<T>, options?: { triggerTurn?: boolean; deliverAs?: \"steer\" | \"followUp\" | \"nextTurn\" }",
+              "return_type": "void"
+            },
+            {
+              "name": "sendUserMessage",
+              "kind": "method",
+              "optional": false,
+              "parameters": "content: string | (TextContent | ImageContent)[], options?: { deliverAs?: \"steer\" | \"followUp\" }",
+              "return_type": "void"
+            },
+            {
+              "name": "appendEntry",
+              "kind": "method",
+              "optional": false,
+              "parameters": "customType: string, data?: T",
+              "return_type": "void"
+            },
+            {
+              "name": "exec",
+              "kind": "method",
+              "optional": false,
+              "parameters": "command: string, args: string[], options?: ExecOptions",
+              "return_type": "Promise<ExecResult>"
+            },
+            {
+              "name": "getActiveTools",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "string[]"
+            },
+            {
+              "name": "getAllTools",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "ToolInfo[]"
+            },
+            {
+              "name": "setActiveTools",
+              "kind": "method",
+              "optional": false,
+              "parameters": "toolNames: string[]",
+              "return_type": "Promise<void>"
+            },
+            {
+              "name": "getCommands",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "SlashCommandInfo[]"
+            },
+            {
+              "name": "setModel",
+              "kind": "method",
+              "optional": false,
+              "parameters": "model: Model",
+              "return_type": "Promise<boolean>"
+            },
+            {
+              "name": "getThinkingLevel",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "ThinkingLevel | undefined"
+            },
+            {
+              "name": "setThinkingLevel",
+              "kind": "method",
+              "optional": false,
+              "parameters": "level: ThinkingLevel",
+              "return_type": "void"
+            },
+            {
+              "name": "getServiceTiers",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "Readonly<ServiceTierByFamily>"
+            },
+            {
+              "name": "setServiceTier",
+              "kind": "method",
+              "optional": false,
+              "parameters": "family: Family, tier: ExtensionServiceTier<Family> | undefined",
+              "return_type": "void"
+            },
+            {
+              "name": "getSessionName",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "string | undefined"
+            },
+            {
+              "name": "setSessionName",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string",
+              "return_type": "Promise<void>"
+            },
+            {
+              "name": "getSessionId",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "string"
+            },
+            {
+              "name": "deliverMessage",
+              "kind": "method",
+              "optional": false,
+              "parameters": "message: ExtensionDeliveryPayload",
+              "return_type": "Promise<void>"
+            },
+            {
+              "name": "requestPersistedTurnContinuation",
+              "kind": "method",
+              "optional": false,
+              "parameters": "request: PersistedTurnContinuationRequest",
+              "return_type": "PersistedTurnContinuationResult"
+            },
+            {
+              "name": "registerProvider",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string, config: ProviderConfig",
+              "return_type": "void"
+            },
+            {
+              "name": "unregisterProvider",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string",
+              "return_type": "void"
+            },
+            {
+              "name": "events",
+              "kind": "property",
+              "optional": false,
+              "type": "EventBus"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionAskDialogChatResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "kind",
+              "kind": "property",
+              "optional": false,
+              "type": "\"chat\""
+            }
+          ]
+        },
+        {
+          "name": "ExtensionAskDialogOption",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "label",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "preview",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionAskDialogQuestion",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "id",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "question",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "header",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "options",
+              "kind": "property",
+              "optional": false,
+              "type": "ExtensionAskDialogOption[]"
+            },
+            {
+              "name": "multi",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "recommended",
+              "kind": "property",
+              "optional": true,
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionAskDialogResultItem",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "id",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "question",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "options",
+              "kind": "property",
+              "optional": false,
+              "type": "string[]"
+            },
+            {
+              "name": "multi",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            },
+            {
+              "name": "selectedOptions",
+              "kind": "property",
+              "optional": false,
+              "type": "string[]"
+            },
+            {
+              "name": "customInput",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "note",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "timedOut",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionAskDialogSubmitResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "kind",
+              "kind": "property",
+              "optional": false,
+              "type": "\"submit\""
+            },
+            {
+              "name": "results",
+              "kind": "property",
+              "optional": false,
+              "type": "ExtensionAskDialogResultItem[]"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionCommandContext",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ExtensionContext"
+          ],
+          "members": [
+            {
+              "name": "getContextUsage",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "ContextUsage | undefined"
+            },
+            {
+              "name": "waitForIdle",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "Promise<void>"
+            },
+            {
+              "name": "newSession",
+              "kind": "method",
+              "optional": false,
+              "parameters": "options?: {\n\t\tparentSession?: string;\n\t\tsetup?: (sessionManager: SessionManager) => Promise<void>;\n\t}",
+              "return_type": "Promise<{ cancelled: boolean }>"
+            },
+            {
+              "name": "branch",
+              "kind": "method",
+              "optional": false,
+              "parameters": "entryId: string",
+              "return_type": "Promise<{ cancelled: boolean }>"
+            },
+            {
+              "name": "navigateTree",
+              "kind": "method",
+              "optional": false,
+              "parameters": "targetId: string, options?: { summarize?: boolean }",
+              "return_type": "Promise<{ cancelled: boolean }>"
+            },
+            {
+              "name": "switchSession",
+              "kind": "method",
+              "optional": false,
+              "parameters": "sessionPath: string",
+              "return_type": "Promise<{ cancelled: boolean }>"
+            },
+            {
+              "name": "reload",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "Promise<void>"
+            },
+            {
+              "name": "compact",
+              "kind": "method",
+              "optional": false,
+              "parameters": "instructionsOrOptions?: string | CompactOptions",
+              "return_type": "Promise<void>"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionCommandContextActions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "getContextUsage",
+              "kind": "property",
+              "optional": false,
+              "type": "() => ContextUsage | undefined"
+            },
+            {
+              "name": "waitForIdle",
+              "kind": "property",
+              "optional": false,
+              "type": "() => Promise<void>"
+            },
+            {
+              "name": "newSession",
+              "kind": "property",
+              "optional": false,
+              "type": "(options?: {\n\t\tparentSession?: string;\n\t\tsetup?: (sessionManager: SessionManager) => Promise<void>;\n\t}) => Promise<{ cancelled: boolean }>"
+            },
+            {
+              "name": "branch",
+              "kind": "property",
+              "optional": false,
+              "type": "(entryId: string) => Promise<{ cancelled: boolean }>"
+            },
+            {
+              "name": "navigateTree",
+              "kind": "property",
+              "optional": false,
+              "type": "(targetId: string, options?: { summarize?: boolean }) => Promise<{ cancelled: boolean }>"
+            },
+            {
+              "name": "compact",
+              "kind": "property",
+              "optional": false,
+              "type": "(instructionsOrOptions?: string | CompactOptions) => Promise<void>"
+            },
+            {
+              "name": "switchSession",
+              "kind": "property",
+              "optional": false,
+              "type": "(sessionPath: string) => Promise<{ cancelled: boolean }>"
+            },
+            {
+              "name": "reload",
+              "kind": "property",
+              "optional": false,
+              "type": "() => Promise<void>"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionContext",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "ui",
+              "kind": "property",
+              "optional": false,
+              "type": "ExtensionUIContext"
+            },
+            {
+              "name": "mode",
+              "kind": "property",
+              "optional": false,
+              "type": "ExtensionMode"
+            },
+            {
+              "name": "getContextUsage",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "ContextUsage | undefined"
+            },
+            {
+              "name": "getAsyncJobSnapshot",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "AsyncJobSnapshot | null"
+            },
+            {
+              "name": "compact",
+              "kind": "method",
+              "optional": false,
+              "parameters": "instructionsOrOptions?: string | CompactOptions",
+              "return_type": "Promise<void>"
+            },
+            {
+              "name": "hasUI",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            },
+            {
+              "name": "taskDepth",
+              "kind": "property",
+              "optional": false,
+              "type": "number"
+            },
+            {
+              "name": "cwd",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "sessionManager",
+              "kind": "property",
+              "optional": false,
+              "type": "ReadonlySessionManager"
+            },
+            {
+              "name": "modelRegistry",
+              "kind": "property",
+              "optional": false,
+              "type": "ModelRegistry"
+            },
+            {
+              "name": "localProtocolOptions",
+              "kind": "property",
+              "optional": true,
+              "type": "LocalProtocolOptions"
+            },
+            {
+              "name": "model",
+              "kind": "property",
+              "optional": false,
+              "type": "Model | undefined"
+            },
+            {
+              "name": "models",
+              "kind": "property",
+              "optional": false,
+              "type": "ExtensionModelQuery"
+            },
+            {
+              "name": "isIdle",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "boolean"
+            },
+            {
+              "name": "abort",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "void"
+            },
+            {
+              "name": "hasPendingMessages",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "boolean"
+            },
+            {
+              "name": "shutdown",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "void"
+            },
+            {
+              "name": "getSystemPrompt",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "string[]"
+            },
+            {
+              "name": "memory",
+              "kind": "property",
+              "optional": true,
+              "type": "MemoryRuntimeContext"
+            },
+            {
+              "name": "setInterval",
+              "kind": "method",
+              "optional": false,
+              "parameters": "callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]",
+              "return_type": "Timer"
+            },
+            {
+              "name": "setTimeout",
+              "kind": "method",
+              "optional": false,
+              "parameters": "callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]",
+              "return_type": "Timer"
+            },
+            {
+              "name": "clearTimer",
+              "kind": "method",
+              "optional": false,
+              "parameters": "timer: Timer",
+              "return_type": "void"
+            },
+            {
+              "name": "invokeTool",
+              "kind": "method",
+              "optional": true,
+              "parameters": "params: Record<string, unknown>, options?: { signal?: AbortSignal; onUpdate?: AgentToolUpdateCallback<TDetails> }",
+              "return_type": "Promise<AgentToolResult<TDetails>>"
+            },
+            {
+              "name": "isProjectTrusted",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "boolean"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionContextActions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "getModel",
+              "kind": "property",
+              "optional": false,
+              "type": "() => Model | undefined"
+            },
+            {
+              "name": "isIdle",
+              "kind": "property",
+              "optional": false,
+              "type": "() => boolean"
+            },
+            {
+              "name": "abort",
+              "kind": "property",
+              "optional": false,
+              "type": "() => void"
+            },
+            {
+              "name": "hasPendingMessages",
+              "kind": "property",
+              "optional": false,
+              "type": "() => boolean"
+            },
+            {
+              "name": "shutdown",
+              "kind": "property",
+              "optional": false,
+              "type": "() => void"
+            },
+            {
+              "name": "getContextUsage",
+              "kind": "property",
+              "optional": false,
+              "type": "() => ContextUsage | undefined"
+            },
+            {
+              "name": "compact",
+              "kind": "property",
+              "optional": false,
+              "type": "(instructionsOrOptions?: string | CompactOptions) => Promise<void>"
+            },
+            {
+              "name": "getSystemPrompt",
+              "kind": "property",
+              "optional": false,
+              "type": "() => string[]"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionCustomOptions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "overlay",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "overlayOptions",
+              "kind": "property",
+              "optional": true,
+              "type": "OverlayOptions | (() => OverlayOptions)"
+            },
+            {
+              "name": "onHandle",
+              "kind": "property",
+              "optional": true,
+              "type": "(handle: OverlayHandle) => void"
+            },
+            {
+              "name": "signal",
+              "kind": "property",
+              "optional": true,
+              "type": "AbortSignal"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionDeliveryPayload",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "customType",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "content",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "display",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": true,
+              "type": "unknown"
+            },
+            {
+              "name": "triggerTurn",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionError",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "extensionPath",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "event",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "error",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "stack",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionFlag",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "name",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"boolean\" | \"string\""
+            },
+            {
+              "name": "default",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean | string"
+            },
+            {
+              "name": "extensionPath",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionModelQuery",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "list",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "Model[]"
+            },
+            {
+              "name": "current",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "Model | undefined"
+            },
+            {
+              "name": "resolve",
+              "kind": "method",
+              "optional": false,
+              "parameters": "spec: string",
+              "return_type": "Model | undefined"
+            },
+            {
+              "name": "family",
+              "kind": "method",
+              "optional": false,
+              "parameters": "model: Model",
+              "return_type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionRuntime",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ExtensionRuntimeState",
+            "ExtensionActions"
+          ],
+          "members": [
+            {
+              "name": "getServiceTiers",
+              "kind": "property",
+              "optional": false,
+              "type": "GetServiceTiersHandler"
+            },
+            {
+              "name": "setServiceTier",
+              "kind": "property",
+              "optional": false,
+              "type": "SetServiceTierHandler"
+            },
+            {
+              "name": "getSessionId",
+              "kind": "property",
+              "optional": false,
+              "type": "() => string"
+            },
+            {
+              "name": "deliverMessage",
+              "kind": "property",
+              "optional": false,
+              "type": "DeliverMessageHandler"
+            },
+            {
+              "name": "requestPersistedTurnContinuation",
+              "kind": "property",
+              "optional": false,
+              "type": "(request: PersistedTurnContinuationRequest) => PersistedTurnContinuationResult"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionRuntimeState",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "flagValues",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<string, boolean | string>"
+            },
+            {
+              "name": "pendingProviderRegistrations",
+              "kind": "property",
+              "optional": false,
+              "type": "Array<{ name: string; config: ProviderConfig; sourceId: string }>"
+            },
+            {
+              "name": "registerProvider",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string, config: ProviderConfig, sourceId: string",
+              "return_type": "void"
+            },
+            {
+              "name": "unregisterProvider",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string, sourceId: string",
+              "return_type": "void"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionShortcut",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "shortcut",
+              "kind": "property",
+              "optional": false,
+              "type": "KeyId"
+            },
+            {
+              "name": "description",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "handler",
+              "kind": "property",
+              "optional": false,
+              "type": "(ctx: ExtensionContext) => Promise<void> | void"
+            },
+            {
+              "name": "extensionPath",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionStatusOptions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "placement",
+              "kind": "property",
+              "optional": true,
+              "type": "ExtensionStatusPlacement"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionUIContext",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "timeoutStartsOnPresentation",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "select",
+              "kind": "method",
+              "optional": false,
+              "parameters": "title: string, options: ExtensionUISelectItem[], dialogOptions?: ExtensionUIDialogOptions",
+              "return_type": "Promise<string | undefined>"
+            },
+            {
+              "name": "confirm",
+              "kind": "method",
+              "optional": false,
+              "parameters": "title: string, message: string, dialogOptions?: ExtensionUIDialogOptions",
+              "return_type": "Promise<boolean>"
+            },
+            {
+              "name": "input",
+              "kind": "method",
+              "optional": false,
+              "parameters": "title: string, placeholder?: string, dialogOptions?: ExtensionUIDialogOptions",
+              "return_type": "Promise<string | undefined>"
+            },
+            {
+              "name": "askDialog",
+              "kind": "method",
+              "optional": true,
+              "parameters": "questions: ExtensionAskDialogQuestion[], dialogOptions?: ExtensionUIDialogOptions",
+              "return_type": "Promise<ExtensionAskDialogResult | undefined>"
+            },
+            {
+              "name": "notify",
+              "kind": "method",
+              "optional": false,
+              "parameters": "message: string, type?: \"info\" | \"warning\" | \"error\"",
+              "return_type": "void"
+            },
+            {
+              "name": "onTerminalInput",
+              "kind": "method",
+              "optional": false,
+              "parameters": "handler: TerminalInputHandler",
+              "return_type": "() => void"
+            },
+            {
+              "name": "setStatus",
+              "kind": "method",
+              "optional": false,
+              "parameters": "key: string, text: string | undefined, options?: ExtensionStatusOptions",
+              "return_type": "void"
+            },
+            {
+              "name": "setWorkingMessage",
+              "kind": "method",
+              "optional": false,
+              "parameters": "message?: string",
+              "return_type": "void"
+            },
+            {
+              "name": "setWidget",
+              "kind": "method",
+              "optional": false,
+              "parameters": "key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions",
+              "return_type": "void"
+            },
+            {
+              "name": "setFooter",
+              "kind": "method",
+              "optional": false,
+              "parameters": "factory: ExtensionUiComponentFactory | undefined",
+              "return_type": "void"
+            },
+            {
+              "name": "setHeader",
+              "kind": "method",
+              "optional": false,
+              "parameters": "factory: ExtensionUiComponentFactory | undefined",
+              "return_type": "void"
+            },
+            {
+              "name": "setTitle",
+              "kind": "method",
+              "optional": false,
+              "parameters": "title: string",
+              "return_type": "void"
+            },
+            {
+              "name": "custom",
+              "kind": "method",
+              "optional": false,
+              "parameters": "factory: (\n\t\t\ttui: TUI,\n\t\t\ttheme: Theme,\n\t\t\tkeybindings: KeybindingsManager,\n\t\t\tdone: (result: T) => void,\n\t\t) => ExtensionUiComponent | Promise<ExtensionUiComponent>, options?: ExtensionCustomOptions",
+              "return_type": "Promise<T>"
+            },
+            {
+              "name": "setEditorText",
+              "kind": "method",
+              "optional": false,
+              "parameters": "text: string",
+              "return_type": "void"
+            },
+            {
+              "name": "pasteToEditor",
+              "kind": "method",
+              "optional": false,
+              "parameters": "text: string",
+              "return_type": "void"
+            },
+            {
+              "name": "getEditorText",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "string"
+            },
+            {
+              "name": "editor",
+              "kind": "method",
+              "optional": false,
+              "parameters": "title: string, prefill?: string, dialogOptions?: ExtensionUIDialogOptions, editorOptions?: { promptStyle?: boolean }",
+              "return_type": "Promise<string | undefined>"
+            },
+            {
+              "name": "addAutocompleteProvider",
+              "kind": "method",
+              "optional": false,
+              "parameters": "factory: AutocompleteProviderFactory",
+              "return_type": "void"
+            },
+            {
+              "name": "setEditorComponent",
+              "kind": "method",
+              "optional": false,
+              "parameters": "factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined",
+              "return_type": "void"
+            },
+            {
+              "name": "theme",
+              "kind": "property",
+              "optional": false,
+              "type": "Theme"
+            },
+            {
+              "name": "getAllThemes",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "Promise<{ name: string; path: string | undefined }[]>"
+            },
+            {
+              "name": "getTheme",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string",
+              "return_type": "Promise<Theme | undefined>"
+            },
+            {
+              "name": "setTheme",
+              "kind": "method",
+              "optional": false,
+              "parameters": "theme: string | Theme",
+              "return_type": "Promise<{ success: boolean; error?: string }>"
+            },
+            {
+              "name": "getToolsExpanded",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "boolean"
+            },
+            {
+              "name": "setToolsExpanded",
+              "kind": "method",
+              "optional": false,
+              "parameters": "expanded: boolean",
+              "return_type": "void"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionUIDialogOptions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "signal",
+              "kind": "property",
+              "optional": true,
+              "type": "AbortSignal"
+            },
+            {
+              "name": "timeout",
+              "kind": "property",
+              "optional": true,
+              "type": "number"
+            },
+            {
+              "name": "onTimeout",
+              "kind": "property",
+              "optional": true,
+              "type": "() => void"
+            },
+            {
+              "name": "onTimeoutStart",
+              "kind": "property",
+              "optional": true,
+              "type": "() => void"
+            },
+            {
+              "name": "onTimeoutReset",
+              "kind": "property",
+              "optional": true,
+              "type": "() => void"
+            },
+            {
+              "name": "initialIndex",
+              "kind": "property",
+              "optional": true,
+              "type": "number"
+            },
+            {
+              "name": "outline",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "onLeft",
+              "kind": "property",
+              "optional": true,
+              "type": "() => void"
+            },
+            {
+              "name": "onRight",
+              "kind": "property",
+              "optional": true,
+              "type": "() => void"
+            },
+            {
+              "name": "onExternalEditor",
+              "kind": "property",
+              "optional": true,
+              "type": "() => void"
+            },
+            {
+              "name": "helpText",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "selectionMarker",
+              "kind": "property",
+              "optional": true,
+              "type": "\"radio\" | \"checkbox\""
+            },
+            {
+              "name": "checkedIndices",
+              "kind": "property",
+              "optional": true,
+              "type": "readonly number[]"
+            },
+            {
+              "name": "markableCount",
+              "kind": "property",
+              "optional": true,
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionUISelectOption",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "label",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ExtensionWidgetOptions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "placement",
+              "kind": "property",
+              "optional": true,
+              "type": "WidgetPlacement"
+            }
+          ]
+        },
+        {
+          "name": "GlobToolCallEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolCallEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"glob\""
+            },
+            {
+              "name": "input",
+              "kind": "property",
+              "optional": false,
+              "type": "GlobToolInput"
+            }
+          ]
+        },
+        {
+          "name": "GlobToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"glob\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "GlobToolDetails | undefined"
+            }
+          ]
+        },
+        {
+          "name": "GrepToolCallEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolCallEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"grep\""
+            },
+            {
+              "name": "input",
+              "kind": "property",
+              "optional": false,
+              "type": "GrepToolInput"
+            }
+          ]
+        },
+        {
+          "name": "GrepToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"grep\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "GrepToolDetails | undefined"
+            }
+          ]
+        },
+        {
+          "name": "InputEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"input\""
+            },
+            {
+              "name": "text",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "originalText",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "images",
+              "kind": "property",
+              "optional": true,
+              "type": "ImageContent[]"
+            },
+            {
+              "name": "source",
+              "kind": "property",
+              "optional": false,
+              "type": "\"interactive\" | \"rpc\" | \"extension\""
+            }
+          ]
+        },
+        {
+          "name": "InputEventResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "handled",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "text",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "images",
+              "kind": "property",
+              "optional": true,
+              "type": "ImageContent[]"
+            }
+          ]
+        },
+        {
+          "name": "LoadExtensionsResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "extensions",
+              "kind": "property",
+              "optional": false,
+              "type": "Extension[]"
+            },
+            {
+              "name": "errors",
+              "kind": "property",
+              "optional": false,
+              "type": "Array<{ path: string; error: string }>"
+            },
+            {
+              "name": "runtime",
+              "kind": "property",
+              "optional": false,
+              "type": "ExtensionRuntime"
+            }
+          ]
+        },
+        {
+          "name": "McpNotificationEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"mcp_notification\""
+            },
+            {
+              "name": "server",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "method",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "params",
+              "kind": "property",
+              "optional": false,
+              "type": "unknown"
+            }
+          ]
+        },
+        {
+          "name": "MessageEndEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"message_end\""
+            },
+            {
+              "name": "message",
+              "kind": "property",
+              "optional": false,
+              "type": "AgentMessage"
+            }
+          ]
+        },
+        {
+          "name": "MessageRenderOptions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "expanded",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            }
+          ]
+        },
+        {
+          "name": "MessageStartEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"message_start\""
+            },
+            {
+              "name": "message",
+              "kind": "property",
+              "optional": false,
+              "type": "AgentMessage"
+            }
+          ]
+        },
+        {
+          "name": "MessageUpdateEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"message_update\""
+            },
+            {
+              "name": "message",
+              "kind": "property",
+              "optional": false,
+              "type": "AgentMessage"
+            },
+            {
+              "name": "assistantMessageEvent",
+              "kind": "property",
+              "optional": false,
+              "type": "AssistantMessageEvent"
+            }
+          ]
+        },
+        {
+          "name": "PlanApprovedEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"plan_approved\""
+            },
+            {
+              "name": "planFilePath",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "planContent",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "title",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "PlanApprovedEventResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "cancel",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "reason",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ProviderConfig",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "baseUrl",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "apiKey",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "api",
+              "kind": "property",
+              "optional": true,
+              "type": "Api"
+            },
+            {
+              "name": "streamSimple",
+              "kind": "property",
+              "optional": true,
+              "type": "(model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream"
+            },
+            {
+              "name": "headers",
+              "kind": "property",
+              "optional": true,
+              "type": "Record<string, string>"
+            },
+            {
+              "name": "authHeader",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "models",
+              "kind": "property",
+              "optional": true,
+              "type": "ProviderModelConfig[]"
+            },
+            {
+              "name": "usage",
+              "kind": "property",
+              "optional": true,
+              "type": "UsageProvider"
+            },
+            {
+              "name": "oauth",
+              "kind": "property",
+              "optional": true,
+              "type": "{\n\t\t/** Display name in login UI. */\n\t\tname: string;\n\t\t/** Run the provider login flow and return credentials (or a plain API key) to persist. */\n\t\tlogin(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;\n\t\t/** Refresh expired credentials. */\n\t\trefreshToken?(credentials: OAuthCredentials): Promise<OAuthCredentials>;\n\t\t/** Convert credentials to an API key string for requests. */\n\t\tgetApiKey?(credentials: OAuthCredentials): string;\n\t\t/** Optional model rewrite hook for credential-aware routing (e.g., enterprise URLs). */\n\t\tmodifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];\n\t}"
+            },
+            {
+              "name": "fetchDynamicModels",
+              "kind": "property",
+              "optional": true,
+              "type": "(apiKey: string | undefined) => Promise<readonly ProviderModelConfig[]>"
+            }
+          ]
+        },
+        {
+          "name": "ProviderModelConfig",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "id",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "name",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "api",
+              "kind": "property",
+              "optional": true,
+              "type": "Api"
+            },
+            {
+              "name": "reasoning",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            },
+            {
+              "name": "thinking",
+              "kind": "property",
+              "optional": true,
+              "type": "Model[\"thinking\"]"
+            },
+            {
+              "name": "input",
+              "kind": "property",
+              "optional": false,
+              "type": "(\"text\" | \"image\")[]"
+            },
+            {
+              "name": "cost",
+              "kind": "property",
+              "optional": false,
+              "type": "{ input: number; output: number; cacheRead: number; cacheWrite: number }"
+            },
+            {
+              "name": "premiumMultiplier",
+              "kind": "property",
+              "optional": true,
+              "type": "number"
+            },
+            {
+              "name": "contextWindow",
+              "kind": "property",
+              "optional": false,
+              "type": "number"
+            },
+            {
+              "name": "maxTokens",
+              "kind": "property",
+              "optional": false,
+              "type": "number"
+            },
+            {
+              "name": "headers",
+              "kind": "property",
+              "optional": true,
+              "type": "Record<string, string>"
+            },
+            {
+              "name": "compat",
+              "kind": "property",
+              "optional": true,
+              "type": "ModelSpec<Api>[\"compat\"]"
+            }
+          ]
+        },
+        {
+          "name": "ReadToolCallEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolCallEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"read\""
+            },
+            {
+              "name": "input",
+              "kind": "property",
+              "optional": false,
+              "type": "ReadToolInput"
+            }
+          ]
+        },
+        {
+          "name": "ReadToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"read\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "ReadToolDetails | undefined"
+            }
+          ]
+        },
+        {
+          "name": "RegisteredCommand",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "name",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "getArgumentCompletions",
+              "kind": "property",
+              "optional": true,
+              "type": "(argumentPrefix: string) => AutocompleteItem[] | null"
+            },
+            {
+              "name": "handler",
+              "kind": "property",
+              "optional": false,
+              "type": "(args: string, ctx: ExtensionCommandContext) => Promise<void>"
+            }
+          ]
+        },
+        {
+          "name": "RegisteredTool",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "definition",
+              "kind": "property",
+              "optional": false,
+              "type": "ToolDefinition<TParams, TDetails>"
+            },
+            {
+              "name": "extensionPath",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ResourcesDiscoverEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"resources_discover\""
+            },
+            {
+              "name": "cwd",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "reason",
+              "kind": "property",
+              "optional": false,
+              "type": "\"startup\" | \"reload\""
+            }
+          ]
+        },
+        {
+          "name": "ResourcesDiscoverResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "skillPaths",
+              "kind": "property",
+              "optional": true,
+              "type": "string[]"
+            },
+            {
+              "name": "promptPaths",
+              "kind": "property",
+              "optional": true,
+              "type": "string[]"
+            },
+            {
+              "name": "themePaths",
+              "kind": "property",
+              "optional": true,
+              "type": "string[]"
+            }
+          ]
+        },
+        {
+          "name": "SourceInfo",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "path",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "source",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "scope",
+              "kind": "property",
+              "optional": false,
+              "type": "SourceScope"
+            },
+            {
+              "name": "origin",
+              "kind": "property",
+              "optional": false,
+              "type": "SourceOrigin"
+            },
+            {
+              "name": "baseDir",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ToolApprovalRequestedEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"tool_approval_requested\""
+            },
+            {
+              "name": "sessionId",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "toolCallId",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "reason",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "approvalMode",
+              "kind": "property",
+              "optional": false,
+              "type": "ApprovalMode"
+            }
+          ]
+        },
+        {
+          "name": "ToolApprovalResolvedEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"tool_approval_resolved\""
+            },
+            {
+              "name": "sessionId",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "toolCallId",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "approved",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            },
+            {
+              "name": "reason",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ToolDefinition",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "name",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "label",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "parameters",
+              "kind": "property",
+              "optional": false,
+              "type": "TParams"
+            },
+            {
+              "name": "hidden",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "defaultInactive",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "loadMode",
+              "kind": "property",
+              "optional": true,
+              "type": "ToolLoadMode"
+            },
+            {
+              "name": "deferrable",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "approval",
+              "kind": "property",
+              "optional": true,
+              "type": "ToolApproval"
+            },
+            {
+              "name": "strict",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "mcpServerName",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "mcpToolName",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "shellEnv",
+              "kind": "property",
+              "optional": true,
+              "type": "ToolShellEnvironmentHook"
+            },
+            {
+              "name": "sourcePath",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "execute",
+              "kind": "method",
+              "optional": false,
+              "parameters": "toolCallId: string, params: Static<TParams>, signal: AbortSignal | undefined, onUpdate: AgentToolUpdateCallback<TDetails> | undefined, ctx: ExtensionContext",
+              "return_type": "Promise<AgentToolResult<TDetails>>"
+            },
+            {
+              "name": "onSession",
+              "kind": "property",
+              "optional": true,
+              "type": "(event: ToolSessionEvent, ctx: ExtensionContext) => void | Promise<void>"
+            },
+            {
+              "name": "renderCall",
+              "kind": "property",
+              "optional": true,
+              "type": "(args: Static<TParams>, options: ToolRenderResultOptions, theme: Theme) => Component"
+            },
+            {
+              "name": "renderResult",
+              "kind": "property",
+              "optional": true,
+              "type": "(\n\t\tresult: AgentToolResult<TDetails>,\n\t\toptions: ToolRenderResultOptions,\n\t\ttheme: Theme,\n\t\targs?: Static<TParams>,\n\t) => Component"
+            }
+          ]
+        },
+        {
+          "name": "ToolExecutionEndEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"tool_execution_end\""
+            },
+            {
+              "name": "toolCallId",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "result",
+              "kind": "property",
+              "optional": false,
+              "type": "unknown"
+            },
+            {
+              "name": "isError",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            }
+          ]
+        },
+        {
+          "name": "ToolExecutionStartEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"tool_execution_start\""
+            },
+            {
+              "name": "toolCallId",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "args",
+              "kind": "property",
+              "optional": false,
+              "type": "unknown"
+            },
+            {
+              "name": "intent",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "ToolExecutionUpdateEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"tool_execution_update\""
+            },
+            {
+              "name": "toolCallId",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "args",
+              "kind": "property",
+              "optional": false,
+              "type": "unknown"
+            },
+            {
+              "name": "partialResult",
+              "kind": "property",
+              "optional": false,
+              "type": "unknown"
+            }
+          ]
+        },
+        {
+          "name": "ToolInfo",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "name",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "parameters",
+              "kind": "property",
+              "optional": false,
+              "type": "TSchema"
+            },
+            {
+              "name": "promptGuidelines",
+              "kind": "property",
+              "optional": true,
+              "type": "string[]"
+            },
+            {
+              "name": "sourceInfo",
+              "kind": "property",
+              "optional": false,
+              "type": "SourceInfo"
+            }
+          ]
+        },
+        {
+          "name": "ToolRenderResultOptions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "expanded",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            },
+            {
+              "name": "isPartial",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            },
+            {
+              "name": "spinnerFrame",
+              "kind": "property",
+              "optional": true,
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "name": "ToolSessionEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "reason",
+              "kind": "property",
+              "optional": false,
+              "type": "\"start\" | \"switch\" | \"branch\" | \"tree\" | \"shutdown\""
+            },
+            {
+              "name": "previousSessionFile",
+              "kind": "property",
+              "optional": false,
+              "type": "string | undefined"
+            }
+          ]
+        },
+        {
+          "name": "ToolShellEnvironmentContext",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "command",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "cwd",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "env",
+              "kind": "property",
+              "optional": false,
+              "type": "Record<string, string | undefined>"
+            }
+          ]
+        },
+        {
+          "name": "UserBashEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"user_bash\""
+            },
+            {
+              "name": "command",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "excludeFromContext",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            },
+            {
+              "name": "cwd",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "UserBashEventResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "result",
+              "kind": "property",
+              "optional": true,
+              "type": "BashResult"
+            }
+          ]
+        },
+        {
+          "name": "UserPythonEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"user_python\""
+            },
+            {
+              "name": "code",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "excludeFromContext",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            },
+            {
+              "name": "cwd",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "UserPythonEventResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "result",
+              "kind": "property",
+              "optional": true,
+              "type": "PythonResult"
+            }
+          ]
+        },
+        {
+          "name": "WriteToolCallEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolCallEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"write\""
+            },
+            {
+              "name": "input",
+              "kind": "property",
+              "optional": false,
+              "type": "WriteToolInput"
+            }
+          ]
+        },
+        {
+          "name": "WriteToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"write\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "undefined"
+            }
+          ]
+        }
+      ],
+      "types": [
+        {
+          "name": "AppendEntryHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "<T = unknown>(customType: string, data?: T) => void"
+        },
+        {
+          "name": "AssistantThinkingRenderer",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(\n\tcontext: AssistantThinkingRenderContext,\n\ttheme: Theme,\n) => Component | undefined"
+        },
+        {
+          "name": "AutocompleteProviderFactory",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(current: AutocompleteProvider) => AutocompleteProvider"
+        },
+        {
+          "name": "BeforeProviderRequestEventResult",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "unknown"
+        },
+        {
+          "name": "DeliverMessageHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(message: ExtensionDeliveryPayload) => Promise<void>"
+        },
+        {
+          "name": "ExtensionAskDialogResult",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "ExtensionAskDialogSubmitResult | ExtensionAskDialogChatResult"
+        },
+        {
+          "name": "ExtensionErrorListener",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/runner.ts",
+          "members": [],
+          "definition": "(error: ExtensionError) => void"
+        },
+        {
+          "name": "ExtensionEvent",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "| ResourcesDiscoverEvent\n\t| SessionEvent\n\t| ContextEvent\n\t| BeforeProviderRequestEvent\n\t| AfterProviderResponseEvent\n\t| BeforeAgentStartEvent\n\t| PlanApprovedEvent\n\t| AgentStartEvent\n\t| AgentEndEvent\n\t| SessionStopEvent\n\t| TurnStartEvent\n\t| TurnEndEvent\n\t| MessageStartEvent\n\t| MessageUpdateEvent\n\t| MessageEndEvent\n\t| ToolExecutionStartEvent\n\t| ToolExecutionUpdateEvent\n\t| ToolExecutionEndEvent\n\t| AutoCompactionStartEvent\n\t| AutoCompactionEndEvent\n\t| AutoRetryStartEvent\n\t| AutoRetryEndEvent\n\t| RetryFallbackAppliedEvent\n\t| RetryFallbackSucceededEvent\n\t| TtsrTriggeredEvent\n\t| TodoReminderEvent\n\t| GoalUpdatedEvent\n\t| CredentialDisabledEvent\n\t| McpNotificationEvent\n\t| UserBashEvent\n\t| UserPythonEvent\n\t| InputEvent\n\t| ToolCallEvent\n\t| ToolResultEvent\n\t| ToolApprovalRequestedEvent\n\t| ToolApprovalResolvedEvent"
+        },
+        {
+          "name": "ExtensionFactory",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(pi: ExtensionAPI) => void | Promise<void>"
+        },
+        {
+          "name": "ExtensionHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(event: E, ctx: ExtensionContext) => Promise<R | void> | R | void"
+        },
+        {
+          "name": "ExtensionMode",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "\"tui\" | \"rpc\" | \"json\" | \"print\""
+        },
+        {
+          "name": "ExtensionServiceTier",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "Family extends \"anthropic\"\n\t? \"priority\"\n\t: Family extends \"google\"\n\t\t? \"flex\" | \"priority\"\n\t\t: ServiceTier"
+        },
+        {
+          "name": "ExtensionStatusPlacement",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "\"footer\" | \"inline\""
+        },
+        {
+          "name": "ExtensionUiComponent",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "Component & { dispose?(): void }"
+        },
+        {
+          "name": "ExtensionUiComponentFactory",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(tui: TUI, theme: Theme) => ExtensionUiComponent"
+        },
+        {
+          "name": "ExtensionUISelectItem",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "string | ExtensionUISelectOption"
+        },
+        {
+          "name": "ExtensionWidgetContent",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "string[] | ExtensionUiComponentFactory | undefined"
+        },
+        {
+          "name": "GetActiveToolsHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "() => string[]"
+        },
+        {
+          "name": "GetAllToolsHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "() => ToolInfo[]"
+        },
+        {
+          "name": "GetCommandsHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "() => SlashCommandInfo[]"
+        },
+        {
+          "name": "GetServiceTiersHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "() => ServiceTierByFamily"
+        },
+        {
+          "name": "GetThinkingLevelHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "() => ThinkingLevel | undefined"
+        },
+        {
+          "name": "ManagedTimerErrorHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/managed-timers.ts",
+          "members": [],
+          "definition": "(event: string, error: string, stack?: string) => void"
+        },
+        {
+          "name": "MessageRenderer",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(\n\tmessage: CustomMessage<T>,\n\toptions: MessageRenderOptions,\n\ttheme: Theme,\n) => Component | undefined"
+        },
+        {
+          "name": "SendMessageHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "<T = unknown>(\n\tmessage: CustomMessagePayload<T>,\n\t/**\n\t * `deliverAs: \"nextTurn\"` queues hidden custom context for the next turn.\n\t * When paired with `triggerTurn: true` during prompt teardown, the session schedules\n\t * an internal continuation without surfacing the message in the editable pending queue.\n\t */\n\toptions?: { triggerTurn?: boolean; deliverAs?: \"steer\" | \"followUp\" | \"nextTurn\" },\n) => void"
+        },
+        {
+          "name": "SendUserMessageHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(\n\tcontent: string | (TextContent | ImageContent)[],\n\toptions?: { deliverAs?: \"steer\" | \"followUp\" },\n) => void"
+        },
+        {
+          "name": "SetActiveToolsHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(toolNames: string[]) => Promise<void>"
+        },
+        {
+          "name": "SetModelHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(model: Model) => Promise<boolean>"
+        },
+        {
+          "name": "SetServiceTierHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(family: ServiceTierFamily, tier: ServiceTier | undefined) => void"
+        },
+        {
+          "name": "SetThinkingLevelHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(level: ThinkingLevel, persist?: boolean) => void"
+        },
+        {
+          "name": "ShutdownHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/runner.ts",
+          "members": [],
+          "definition": "() => void"
+        },
+        {
+          "name": "SourceOrigin",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "\"package\" | \"top-level\""
+        },
+        {
+          "name": "SourceScope",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "\"user\" | \"project\" | \"temporary\""
+        },
+        {
+          "name": "SwitchSessionHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/runner.ts",
+          "members": [],
+          "definition": "(sessionPath: string) => Promise<{ cancelled: boolean }>"
+        },
+        {
+          "name": "TerminalInputHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(data: string) => { consume?: boolean; data?: string } | undefined"
+        },
+        {
+          "name": "ToolCallEvent",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "| BashToolCallEvent\n\t| ReadToolCallEvent\n\t| EditToolCallEvent\n\t| WriteToolCallEvent\n\t| GrepToolCallEvent\n\t| GlobToolCallEvent\n\t| CustomToolCallEvent"
+        },
+        {
+          "name": "ToolRegistrationListener",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(toolName: string) => void"
+        },
+        {
+          "name": "ToolResultEvent",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "| BashToolResultEvent\n\t| ReadToolResultEvent\n\t| EditToolResultEvent\n\t| WriteToolResultEvent\n\t| GrepToolResultEvent\n\t| GlobToolResultEvent\n\t| CustomToolResultEvent"
+        },
+        {
+          "name": "ToolShellEnvironmentHook",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "(context: ToolShellEnvironmentContext) => Record<string, string> | undefined"
+        },
+        {
+          "name": "WidgetPlacement",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [],
+          "definition": "\"aboveEditor\" | \"belowEditor\""
+        }
+      ]
+    },
+    "hooks": {
+      "interface_count": 20,
+      "type_count": 8,
+      "interfaces": [
+        {
+          "name": "BashToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"bash\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "BashToolDetails | undefined"
+            }
+          ]
+        },
+        {
+          "name": "BeforeAgentStartEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"before_agent_start\""
+            },
+            {
+              "name": "prompt",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "images",
+              "kind": "property",
+              "optional": true,
+              "type": "ImageContent[]"
+            }
+          ]
+        },
+        {
+          "name": "BeforeAgentStartEventResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [
+            {
+              "name": "message",
+              "kind": "property",
+              "optional": true,
+              "type": "CustomMessagePayload"
+            }
+          ]
+        },
+        {
+          "name": "ContextEventResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [
+            {
+              "name": "messages",
+              "kind": "property",
+              "optional": true,
+              "type": "Message[]"
+            }
+          ]
+        },
+        {
+          "name": "CustomToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "unknown"
+            }
+          ]
+        },
+        {
+          "name": "EditToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"edit\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "EditToolDetails | undefined"
+            }
+          ]
+        },
+        {
+          "name": "GlobToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"glob\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "GlobToolDetails | undefined"
+            }
+          ]
+        },
+        {
+          "name": "GrepToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"grep\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "GrepToolDetails | undefined"
+            }
+          ]
+        },
+        {
+          "name": "HookAPI",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_start\", handler: HookHandler<SessionStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_before_switch\", handler: HookHandler<SessionBeforeSwitchEvent, SessionBeforeSwitchResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_switch\", handler: HookHandler<SessionSwitchEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_before_branch\", handler: HookHandler<SessionBeforeBranchEvent, SessionBeforeBranchResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_branch\", handler: HookHandler<SessionBranchEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_before_compact\", handler: HookHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session.compacting\", handler: HookHandler<SessionCompactingEvent, SessionCompactingResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_compact\", handler: HookHandler<SessionCompactEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_shutdown\", handler: HookHandler<SessionShutdownEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_before_tree\", handler: HookHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"session_tree\", handler: HookHandler<SessionTreeEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"context\", handler: HookHandler<ContextEvent, ContextEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"before_agent_start\", handler: HookHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"agent_start\", handler: HookHandler<AgentStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"agent_end\", handler: HookHandler<AgentEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"turn_start\", handler: HookHandler<TurnStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"turn_end\", handler: HookHandler<TurnEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"auto_compaction_start\", handler: HookHandler<AutoCompactionStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"auto_compaction_end\", handler: HookHandler<AutoCompactionEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"auto_retry_start\", handler: HookHandler<AutoRetryStartEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"auto_retry_end\", handler: HookHandler<AutoRetryEndEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"ttsr_triggered\", handler: HookHandler<TtsrTriggeredEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"todo_reminder\", handler: HookHandler<TodoReminderEvent>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"tool_call\", handler: HookHandler<ToolCallEvent, ToolCallEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "on",
+              "kind": "method",
+              "optional": false,
+              "parameters": "event: \"tool_result\", handler: HookHandler<ToolResultEvent, ToolResultEventResult>",
+              "return_type": "void"
+            },
+            {
+              "name": "sendMessage",
+              "kind": "method",
+              "optional": false,
+              "parameters": "message: CustomMessagePayload<T>, options?: { triggerTurn?: boolean; deliverAs?: \"steer\" | \"followUp\" }",
+              "return_type": "void"
+            },
+            {
+              "name": "appendEntry",
+              "kind": "method",
+              "optional": false,
+              "parameters": "customType: string, data?: T",
+              "return_type": "void"
+            },
+            {
+              "name": "registerMessageRenderer",
+              "kind": "method",
+              "optional": false,
+              "parameters": "customType: string, renderer: HookMessageRenderer<T>",
+              "return_type": "void"
+            },
+            {
+              "name": "registerCommand",
+              "kind": "method",
+              "optional": false,
+              "parameters": "name: string, options: { description?: string; handler: RegisteredCommand[\"handler\"] }",
+              "return_type": "void"
+            },
+            {
+              "name": "exec",
+              "kind": "method",
+              "optional": false,
+              "parameters": "command: string, args: string[], options?: ExecOptions",
+              "return_type": "Promise<ExecResult>"
+            },
+            {
+              "name": "logger",
+              "kind": "property",
+              "optional": false,
+              "type": "typeof PiLogger"
+            },
+            {
+              "name": "typebox",
+              "kind": "property",
+              "optional": false,
+              "type": "typeof TypeBox"
+            },
+            {
+              "name": "arktype",
+              "kind": "property",
+              "optional": false,
+              "type": "typeof ArkType"
+            },
+            {
+              "name": "zod",
+              "kind": "property",
+              "optional": false,
+              "type": "typeof zod"
+            },
+            {
+              "name": "pi",
+              "kind": "property",
+              "optional": false,
+              "type": "typeof PiCodingAgent"
+            }
+          ]
+        },
+        {
+          "name": "HookCommandContext",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "extends": [
+            "HookContext"
+          ],
+          "members": [
+            {
+              "name": "waitForIdle",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "Promise<void>"
+            },
+            {
+              "name": "newSession",
+              "kind": "method",
+              "optional": false,
+              "parameters": "options?: {\n\t\tparentSession?: string;\n\t\tsetup?: (sessionManager: SessionManager) => Promise<void>;\n\t}",
+              "return_type": "Promise<{ cancelled: boolean }>"
+            },
+            {
+              "name": "branch",
+              "kind": "method",
+              "optional": false,
+              "parameters": "entryId: string",
+              "return_type": "Promise<{ cancelled: boolean }>"
+            },
+            {
+              "name": "navigateTree",
+              "kind": "method",
+              "optional": false,
+              "parameters": "targetId: string, options?: { summarize?: boolean }",
+              "return_type": "Promise<{ cancelled: boolean }>"
+            }
+          ]
+        },
+        {
+          "name": "HookContext",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [
+            {
+              "name": "ui",
+              "kind": "property",
+              "optional": false,
+              "type": "HookUIContext"
+            },
+            {
+              "name": "hasUI",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            },
+            {
+              "name": "cwd",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "sessionManager",
+              "kind": "property",
+              "optional": false,
+              "type": "ReadonlySessionManager"
+            },
+            {
+              "name": "modelRegistry",
+              "kind": "property",
+              "optional": false,
+              "type": "ModelRegistry"
+            },
+            {
+              "name": "model",
+              "kind": "property",
+              "optional": false,
+              "type": "Model | undefined"
+            },
+            {
+              "name": "isIdle",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "boolean"
+            },
+            {
+              "name": "abort",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "void"
+            },
+            {
+              "name": "hasQueuedMessages",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "boolean"
+            }
+          ]
+        },
+        {
+          "name": "HookError",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [
+            {
+              "name": "hookPath",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "event",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "error",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "HookMessageRenderOptions",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [
+            {
+              "name": "expanded",
+              "kind": "property",
+              "optional": false,
+              "type": "boolean"
+            }
+          ]
+        },
+        {
+          "name": "HookUIContext",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [
+            {
+              "name": "select",
+              "kind": "method",
+              "optional": false,
+              "parameters": "title: string, options: string[]",
+              "return_type": "Promise<string | undefined>"
+            },
+            {
+              "name": "confirm",
+              "kind": "method",
+              "optional": false,
+              "parameters": "title: string, message: string",
+              "return_type": "Promise<boolean>"
+            },
+            {
+              "name": "input",
+              "kind": "method",
+              "optional": false,
+              "parameters": "title: string, placeholder?: string",
+              "return_type": "Promise<string | undefined>"
+            },
+            {
+              "name": "notify",
+              "kind": "method",
+              "optional": false,
+              "parameters": "message: string, type?: \"info\" | \"warning\" | \"error\"",
+              "return_type": "void"
+            },
+            {
+              "name": "setStatus",
+              "kind": "method",
+              "optional": false,
+              "parameters": "key: string, text: string | undefined",
+              "return_type": "void"
+            },
+            {
+              "name": "custom",
+              "kind": "method",
+              "optional": false,
+              "parameters": "factory: (\n\t\t\ttui: TUI,\n\t\t\ttheme: Theme,\n\t\t\tdone: (result: T) => void,\n\t\t) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>",
+              "return_type": "Promise<T>"
+            },
+            {
+              "name": "setEditorText",
+              "kind": "method",
+              "optional": false,
+              "parameters": "text: string",
+              "return_type": "void"
+            },
+            {
+              "name": "getEditorText",
+              "kind": "method",
+              "optional": false,
+              "parameters": "",
+              "return_type": "string"
+            },
+            {
+              "name": "editor",
+              "kind": "method",
+              "optional": false,
+              "parameters": "title: string, prefill?: string, options?: { signal?: AbortSignal }, editorOptions?: { promptStyle?: boolean }",
+              "return_type": "Promise<string | undefined>"
+            },
+            {
+              "name": "theme",
+              "kind": "property",
+              "optional": false,
+              "type": "Theme"
+            }
+          ]
+        },
+        {
+          "name": "LoadedHook",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/loader.ts",
+          "members": [
+            {
+              "name": "path",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "resolvedPath",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "handlers",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<string, HandlerFn[]>"
+            },
+            {
+              "name": "messageRenderers",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<string, HookMessageRenderer>"
+            },
+            {
+              "name": "commands",
+              "kind": "property",
+              "optional": false,
+              "type": "Map<string, RegisteredCommand>"
+            },
+            {
+              "name": "setSendMessageHandler",
+              "kind": "property",
+              "optional": false,
+              "type": "(handler: SendMessageHandler) => void"
+            },
+            {
+              "name": "setAppendEntryHandler",
+              "kind": "property",
+              "optional": false,
+              "type": "(handler: AppendEntryHandler) => void"
+            }
+          ]
+        },
+        {
+          "name": "LoadHooksResult",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/loader.ts",
+          "members": [
+            {
+              "name": "hooks",
+              "kind": "property",
+              "optional": false,
+              "type": "LoadedHook[]"
+            },
+            {
+              "name": "errors",
+              "kind": "property",
+              "optional": false,
+              "type": "Array<{ path: string; error: string }>"
+            }
+          ]
+        },
+        {
+          "name": "ReadToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"read\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "ReadToolDetails | undefined"
+            }
+          ]
+        },
+        {
+          "name": "RegisteredCommand",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [
+            {
+              "name": "name",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "kind": "property",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "handler",
+              "kind": "property",
+              "optional": false,
+              "type": "(args: string, ctx: HookCommandContext) => Promise<void>"
+            }
+          ]
+        },
+        {
+          "name": "ToolCallEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [
+            {
+              "name": "type",
+              "kind": "property",
+              "optional": false,
+              "type": "\"tool_call\""
+            },
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "toolCallId",
+              "kind": "property",
+              "optional": false,
+              "type": "string"
+            },
+            {
+              "name": "input",
+              "kind": "property",
+              "optional": false,
+              "type": "Record<string, unknown>"
+            }
+          ]
+        },
+        {
+          "name": "WriteToolResultEvent",
+          "kind": "interface",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "extends": [
+            "ToolResultEventBase"
+          ],
+          "members": [
+            {
+              "name": "toolName",
+              "kind": "property",
+              "optional": false,
+              "type": "\"write\""
+            },
+            {
+              "name": "details",
+              "kind": "property",
+              "optional": false,
+              "type": "undefined"
+            }
+          ]
+        }
+      ],
+      "types": [
+        {
+          "name": "AppendEntryHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/loader.ts",
+          "members": [],
+          "definition": "<T = unknown>(customType: string, data?: T) => void"
+        },
+        {
+          "name": "HookErrorListener",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/runner.ts",
+          "members": [],
+          "definition": "(error: HookError) => void"
+        },
+        {
+          "name": "HookEvent",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [],
+          "definition": "| SessionEvent\n\t| ContextEvent\n\t| BeforeAgentStartEvent\n\t| AgentStartEvent\n\t| AgentEndEvent\n\t| TurnStartEvent\n\t| TurnEndEvent\n\t| AutoCompactionStartEvent\n\t| AutoCompactionEndEvent\n\t| AutoRetryStartEvent\n\t| AutoRetryEndEvent\n\t| TtsrTriggeredEvent\n\t| TodoReminderEvent\n\t| ToolCallEvent\n\t| ToolResultEvent"
+        },
+        {
+          "name": "HookFactory",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [],
+          "definition": "(pi: HookAPI) => void"
+        },
+        {
+          "name": "HookHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [],
+          "definition": "(event: E, ctx: HookContext) => Promise<R | void> | R | void"
+        },
+        {
+          "name": "HookMessageRenderer",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [],
+          "definition": "(\n\tmessage: HookMessage<T>,\n\toptions: HookMessageRenderOptions,\n\ttheme: Theme,\n) => Component | undefined"
+        },
+        {
+          "name": "SendMessageHandler",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/loader.ts",
+          "members": [],
+          "definition": "<T = unknown>(\n\tmessage: CustomMessagePayload<T>,\n\toptions?: { triggerTurn?: boolean; deliverAs?: \"steer\" | \"followUp\" },\n) => void"
+        },
+        {
+          "name": "ToolResultEvent",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/hooks/types.ts",
+          "members": [],
+          "definition": "| BashToolResultEvent\n\t| ReadToolResultEvent\n\t| EditToolResultEvent\n\t| WriteToolResultEvent\n\t| GrepToolResultEvent\n\t| GlobToolResultEvent\n\t| CustomToolResultEvent"
+        }
+      ]
+    }
+  },
+  "authority_crossings": [
+    {
+      "capability": "command_registration",
+      "label": "Command Registration",
+      "description": "Register slash commands (/command) into the session or user interface",
+      "methods": [
+        "ExtensionAPI.registerCommand",
+        "HookAPI.registerCommand"
+      ],
+      "authority_granted": "Allows extensions and hooks to register custom slash commands (/command-name) that execute arbitrary TypeScript code with host process privileges when triggered by the user or session.",
+      "gate": "User invocation gate: slash commands are inert until explicitly triggered by user input in the chat/CLI or via session slash command dispatch; command names are validated to prevent accidental namespace collisions.",
+      "gate_type": "user_invocation"
+    },
+    {
+      "capability": "tool_registration",
+      "label": "Tool Registration",
+      "description": "Register LLM-callable tools into the agent's tool set",
+      "methods": [
+        "ExtensionAPI.registerTool",
+        "ExtensionAPI.registerFileWriteFallback",
+        "ExtensionAPI.registerFileDeleteFallback"
+      ],
+      "authority_granted": "Allows extensions to register new tools into the agent's model-visible toolset, making them callable by the LLM during autonomous agent turns, or register fallback handlers for denied write/delete operations.",
+      "gate": "Tool approval policy gate (tools.approvalMode and tools.approval.<tool>). In non-yolo modes ('always-ask' and 'write'), write and exec tier executions prompt the user for interactive confirmation. Tool arguments are validated against declared schemas before execution.",
+      "gate_type": "approval_policy"
+    },
+    {
+      "capability": "execution",
+      "label": "Process Execution",
+      "description": "Direct child process and shell command execution",
+      "methods": [
+        "ExtensionAPI.exec",
+        "HookAPI.exec"
+      ],
+      "authority_granted": "Allows extensions and hooks to spawn arbitrary child processes and execute shell commands directly on the host operating system with the user's host OS permissions.",
+      "gate": "None (ungated): extension code executes commands directly on the host operating system without prompting the user or running inside an OS sandbox.",
+      "gate_type": "none"
+    },
+    {
+      "capability": "messaging",
+      "label": "Session Messaging & Journal",
+      "description": "Inject messages into conversation history or persist custom entries to the session journal",
+      "methods": [
+        "ExtensionAPI.sendMessage",
+        "ExtensionAPI.sendUserMessage",
+        "ExtensionAPI.appendEntry",
+        "ExtensionAPI.deliverMessage",
+        "HookAPI.sendMessage",
+        "HookAPI.appendEntry"
+      ],
+      "authority_granted": "Allows injecting synthetic assistant or user messages into the active context (influencing agent reasoning and autonomous behavior), triggering new model turns, and persisting custom metadata into the session journal.",
+      "gate": "Session lifecycle and schema validation gate: calling messaging APIs during extension load throws ExtensionRuntimeNotInitializedError; messages must follow session entry schemas and retain attribution tags.",
+      "gate_type": "session_lifecycle"
+    },
+    {
+      "capability": "timers",
+      "label": "Managed Timers & Scheduling",
+      "description": "Schedule delayed or periodic background execution on the event loop",
+      "methods": [
+        "ExtensionAPI.setTimeout",
+        "ExtensionAPI.setInterval",
+        "ExtensionAPI.clearTimeout",
+        "ExtensionAPI.clearInterval",
+        "ExtensionContext.setTimeout",
+        "ExtensionContext.setInterval",
+        "ExtensionContext.clearTimer"
+      ],
+      "authority_granted": "Allows scheduling asynchronous deferred or recurring execution on the Node.js/Bun event loop.",
+      "gate": "Managed timer lifecycle gate: handlers catch and contain uncaught exceptions to prevent process crashes; timer handles are tracked by ManagedTimerTracker and automatically cancelled/unreferenced on session disposal or shutdown.",
+      "gate_type": "lifecycle_tracking"
+    },
+    {
+      "capability": "filesystem_facing_apis",
+      "label": "Filesystem Access",
+      "description": "Access to workspace working directory, session files, and disk paths",
+      "methods": [
+        "ExtensionAPI.cwd",
+        "ExtensionContext.cwd",
+        "HookAPI.cwd",
+        "HookContext.cwd",
+        "ExtensionContext.sessionManager.getSessionFile"
+      ],
+      "authority_granted": "Exposes current workspace root and session file paths, enabling reading and writing of files on disk (via standard node:fs or exec).",
+      "gate": "Operating system file permissions gate: access is bounded by the POSIX user/group permissions of the host process; no kernel-level filesystem virtualization or chroot sandbox is applied.",
+      "gate_type": "os_permissions"
+    },
+    {
+      "capability": "tool_invocation",
+      "label": "Tool Invocation & Interception",
+      "description": "Intercept, inspect, modify, or block tool calls and results, or invoke tools",
+      "methods": [
+        "ExtensionAPI.on('tool_call')",
+        "ExtensionAPI.on('tool_result')",
+        "HookAPI.on('tool_call')",
+        "HookAPI.on('tool_result')",
+        "ExtensionContext.invokeTool"
+      ],
+      "authority_granted": "Allows intercepting all agent tool calls before execution (with authority to modify input arguments, substitute results, or block execution via { block: true, reason }) and after execution. invokeTool allows delegating execution to the native implementation of a shadowed built-in tool.",
+      "gate": "Interception pipeline gate & delegation boundary: tool_call handlers execute in registration order and can halt execution; invokeTool only permits same-tool delegation (cannot invoke arbitrary unapproved tools), inherits call approval, and is recursion-depth-guarded.",
+      "gate_type": "pipeline_gate"
+    }
+  ]
+}

@@ -191,6 +191,7 @@ import {
 	obfuscateProviderContext,
 } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
+import type { InstructionPrepDegradation } from "../system-prompt";
 import {
 	type BoundTaskDriverControls,
 	buildTaskReadContinuationRecord,
@@ -1193,10 +1194,12 @@ export class AgentSession {
 
 	#codeModeState: { namespacesInfo?: unknown };
 	#getApiKey?: Agent["getApiKey"];
+	#getInstructionPrepDegradations?: () => readonly InstructionPrepDegradation[];
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.#getApiKey = this.agent.getApiKey;
+		this.#getInstructionPrepDegradations = config.getInstructionPrepDegradations;
 		this.#codeModeState = config.codeModeState ?? {};
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
@@ -7483,6 +7486,11 @@ export class AgentSession {
 	/** Current effective system prompt blocks (includes any per-turn extension modifications) */
 	get systemPrompt(): string[] {
 		return this.agent.state.systemPrompt;
+	}
+
+	/** Required instruction-prep degradations from the latest prompt build. */
+	get instructionPrepDegradations(): readonly InstructionPrepDegradation[] {
+		return this.#getInstructionPrepDegradations?.() ?? [];
 	}
 
 	/** Marks streamed text as committed or buffered for turn-recovery replay decisions. */

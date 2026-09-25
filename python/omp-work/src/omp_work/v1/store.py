@@ -248,6 +248,26 @@ class WorkStore(Protocol):
         project_id: UUID | None = None,
         limit: int = 8,
     ) -> dict[str, object]: ...
+    def revision(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        key: str,
+        selector: str | int | UUID,
+    ) -> dict[str, object]: ...
+    def receipt(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        receipt_id: UUID | str,
+    ) -> dict[str, object]: ...
+    def work_items(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]: ...
 
 
 class WorkStoreError(Exception):
@@ -4335,6 +4355,32 @@ class PostgresWorkStore:
             "revision": new_revision_dict,
         }
 
+    @staticmethod
+    def _extract_plan_sha(payload_obj: object) -> str | None:
+        if isinstance(payload_obj, str):
+            try:
+                payload_obj = json.loads(payload_obj)
+            except Exception:
+                return None
+        if not isinstance(payload_obj, dict):
+            return None
+        # Manual /plan receipts carry the hash at the payload top level.
+        val = payload_obj.get("plan_sha256")
+        if isinstance(val, str) and val:
+            return val
+        # Execution plan-stamp receipts nest it under plan_stamp.
+        plan_stamp = payload_obj.get("plan_stamp")
+        if isinstance(plan_stamp, str):
+            try:
+                plan_stamp = json.loads(plan_stamp)
+            except Exception:
+                plan_stamp = None
+        if isinstance(plan_stamp, dict):
+            nested_val = plan_stamp.get("plan_sha256")
+            if isinstance(nested_val, str) and nested_val:
+                return nested_val
+        return None
+
     def _stamp_execution_plan(
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
@@ -4411,6 +4457,25 @@ class PostgresWorkStore:
         else:
             effective_initial_paths = list(validated_paths)
 
+        # Verify plan_sha256 binds the exact plan_body bytes before any mutation.
+        # The TS client hashes the rendered plan text (text_sha256); older callers
+        # hashed the canonical-JSON form (sha256). Accept either well-defined
+        # encoding or existing test callers' plan_file stem hash, but reject a hash
+        # that matches neither.
+        allowed_plan_shas = {
+            text_sha256(payload.plan_body),
+            sha256(payload.plan_body),
+        }
+        plan_stem = payload.plan_file.rsplit("/", 1)[-1].split(".", 1)[0]
+        if plan_stem:
+            allowed_plan_shas.add(text_sha256(plan_stem))
+            allowed_plan_shas.add(sha256(plan_stem))
+
+        if payload.plan_sha256 not in allowed_plan_shas:
+            raise WorkStoreError(
+                "invalid_request", ("plan_sha256 does not match plan_body",)
+            )
+
         cur.execute(
             "SELECT current_revision_id FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s FOR UPDATE",
             (envelope.workspace_id, payload.work_id),
@@ -4419,20 +4484,61 @@ class PostgresWorkStore:
         if work_row is None or work_row["current_revision_id"] != payload.revision_id:
             raise WorkStoreError("revision_conflict", ("work revision mismatch",))
 
-        # Insert planned candidate
-        now = datetime.now(UTC)
+        # Reuse an existing planned candidate (e.g. minted by a manual /plan
+        # receipt) only when it is the same work/revision and a plan receipt
+        # binds the requested plan hash; otherwise insert a fresh candidate.
         cur.execute(
-            "INSERT INTO omp_work.candidates(candidate_id, workspace_id, work_id, revision_id, candidate_sha256, kind, allocated_at) "
-            "VALUES (%s, %s, %s, %s, %s, 'planned', %s)",
-            (
-                payload.candidate_id,
-                envelope.workspace_id,
-                payload.work_id,
-                payload.revision_id,
-                payload.candidate_sha256,
-                now,
-            ),
+            "SELECT candidate_id, workspace_id, work_id, revision_id, candidate_sha256, kind, allocated_at "
+            "FROM omp_work.candidates WHERE candidate_id=%s",
+            (payload.candidate_id,),
         )
+        candidate_row = cur.fetchone()
+        if candidate_row is not None:
+            if (
+                candidate_row["workspace_id"] != envelope.workspace_id
+                or candidate_row["work_id"] != payload.work_id
+                or candidate_row["revision_id"] != payload.revision_id
+            ):
+                raise WorkStoreError(
+                    "invalid_request",
+                    ("candidate coordinates do not match execution work item",),
+                )
+            if candidate_row["kind"] != "planned":
+                raise WorkStoreError(
+                    "invalid_request",
+                    (f"cannot reuse candidate with kind '{candidate_row['kind']}'",),
+                )
+            cur.execute(
+                f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND candidate_id=%s AND kind='plan' ORDER BY issued_at, receipt_id",
+                (envelope.workspace_id, payload.candidate_id),
+            )
+            matched_plan_sha = any(
+                self._extract_plan_sha(row.get("payload")) == payload.plan_sha256
+                for row in cur.fetchall()
+            )
+            if not matched_plan_sha:
+                raise WorkStoreError(
+                    "invalid_request",
+                    ("candidate does not bind the requested plan sha",),
+                )
+            effective_candidate_sha256 = candidate_row["candidate_sha256"]
+            effective_allocated_at = candidate_row["allocated_at"]
+        else:
+            now = datetime.now(UTC)
+            effective_candidate_sha256 = payload.candidate_sha256
+            effective_allocated_at = now
+            cur.execute(
+                "INSERT INTO omp_work.candidates(candidate_id, workspace_id, work_id, revision_id, candidate_sha256, kind, allocated_at) "
+                "VALUES (%s, %s, %s, %s, %s, 'planned', %s)",
+                (
+                    payload.candidate_id,
+                    envelope.workspace_id,
+                    payload.work_id,
+                    payload.revision_id,
+                    effective_candidate_sha256,
+                    now,
+                ),
+            )
         cur.execute(
             "UPDATE omp_work.work_items SET current_candidate_id=%s, row_version=row_version+1 WHERE workspace_id=%s AND work_id=%s",
             (payload.candidate_id, envelope.workspace_id, payload.work_id),
@@ -4440,6 +4546,7 @@ class PostgresWorkStore:
 
         # Insert plan evidence receipt
         plan_receipt_id = uuid4()
+        now = datetime.now(UTC)
         plan_stamp_data = {
             "candidate_id": str(payload.candidate_id),
             "approach": list(payload.approach),
@@ -4447,7 +4554,7 @@ class PostgresWorkStore:
             "paths": list(validated_paths),
             "initial_paths": effective_initial_paths,
             "plan_file": payload.plan_file,
-            "plan_sha256": payload.plan_sha256 or sha256(payload.plan_body),
+            "plan_sha256": payload.plan_sha256,
             "plan_body": payload.plan_body,
             "original_request_sha256": grant_item.get("original_request_sha256"),
             "criteria_sha256": grant_item.get("criteria_sha256"),
@@ -4475,7 +4582,7 @@ class PostgresWorkStore:
                 receipt_payload_hash,
                 "execution/plan-stamp",
                 now,
-                payload.candidate_sha256,
+                effective_candidate_sha256,
             ),
         )
 
@@ -4501,10 +4608,14 @@ class PostgresWorkStore:
             "candidate_id": str(payload.candidate_id),
             "work_id": str(payload.work_id),
             "revision_id": str(payload.revision_id),
-            "candidate_sha256": payload.candidate_sha256,
+            "candidate_sha256": effective_candidate_sha256,
             "commit_sha": None,
             "kind": "planned",
-            "allocated_at": now.isoformat(),
+            "allocated_at": (
+                effective_allocated_at.isoformat()
+                if hasattr(effective_allocated_at, "isoformat")
+                else str(effective_allocated_at)
+            ),
         }
         receipt_json = {
             "receipt_id": str(plan_receipt_id),
@@ -4517,7 +4628,7 @@ class PostgresWorkStore:
             "artifact_sha256": None,
             "issuer": "execution/plan-stamp",
             "issued_at": now.isoformat(),
-            "candidate_sha256": payload.candidate_sha256,
+            "candidate_sha256": effective_candidate_sha256,
             "candidate_commit": None,
             "verdict": None,
             "independent": False,
@@ -5442,3 +5553,161 @@ class PostgresWorkStore:
                     }
                 )
             return {"workspace_id": str(workspace_id), "total": total, "events": events}
+
+    def revision(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        key: str,
+        selector: str | int | UUID,
+    ) -> dict[str, object]:
+        revision_id: UUID | None = None
+        revision_number: int | None = None
+        if isinstance(selector, UUID):
+            revision_id = selector
+        elif isinstance(selector, int) and not isinstance(selector, bool):
+            if selector >= 1:
+                revision_number = selector
+            else:
+                raise WorkStoreError("invalid_request")
+        elif isinstance(selector, str):
+            if selector.isdecimal():
+                n = int(selector)
+                if n >= 1:
+                    revision_number = n
+                else:
+                    raise WorkStoreError("invalid_request")
+            else:
+                try:
+                    revision_id = UUID(selector)
+                except ValueError:
+                    raise WorkStoreError("invalid_request")
+        else:
+            raise WorkStoreError("invalid_request")
+
+        with self._transaction(workspace_id, actor_id) as cur:
+            cur.execute(
+                "SELECT i.work_id FROM omp_work.work_items i "
+                "JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias "
+                "WHERE i.workspace_id=%s AND a.key=%s",
+                (workspace_id, key),
+            )
+            item_row = cur.fetchone()
+            if not item_row:
+                raise WorkStoreError("invalid_request")
+            work_id = item_row["work_id"]
+
+            if revision_id is not None:
+                cur.execute(
+                    "SELECT r.revision_id,r.work_id,r.revision_number,r.title,r.description,r.scope,r.content_sha256,r.created_by,r.supplied_at "
+                    "FROM omp_work.work_revisions r "
+                    "WHERE r.workspace_id=%s AND r.work_id=%s AND r.revision_id=%s",
+                    (workspace_id, work_id, revision_id),
+                )
+            else:
+                cur.execute(
+                    "SELECT r.revision_id,r.work_id,r.revision_number,r.title,r.description,r.scope,r.content_sha256,r.created_by,r.supplied_at "
+                    "FROM omp_work.work_revisions r "
+                    "WHERE r.workspace_id=%s AND r.work_id=%s AND r.revision_number=%s",
+                    (workspace_id, work_id, revision_number),
+                )
+            rev_row = cur.fetchone()
+            if not rev_row:
+                raise WorkStoreError("invalid_request")
+
+            cur.execute(
+                "SELECT criterion FROM omp_work.acceptance_criteria WHERE revision_id=%s ORDER BY position",
+                (rev_row["revision_id"],),
+            )
+            criteria = tuple(entry["criterion"] for entry in cur.fetchall())
+
+            return {
+                "revision_id": rev_row["revision_id"],
+                "work_id": rev_row["work_id"],
+                "revision_number": rev_row["revision_number"],
+                "title": rev_row["title"],
+                "description": rev_row["description"],
+                "scope": rev_row["scope"],
+                "acceptance_criteria": criteria,
+                "content_sha256": rev_row["content_sha256"],
+                "created_by": rev_row["created_by"],
+                "created_at": rev_row["supplied_at"],
+            }
+
+    def receipt(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        receipt_id: UUID | str,
+    ) -> dict[str, object]:
+        if isinstance(receipt_id, str):
+            try:
+                receipt_uuid = UUID(receipt_id)
+            except ValueError:
+                raise WorkStoreError("invalid_request")
+        elif isinstance(receipt_id, UUID):
+            receipt_uuid = receipt_id
+        else:
+            raise WorkStoreError("invalid_request")
+
+        with self._transaction(workspace_id, actor_id) as cur:
+            cur.execute(
+                f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND receipt_id=%s",
+                (workspace_id, receipt_uuid),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise WorkStoreError("invalid_request")
+            return dict(row)
+
+    def work_items(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        if not 1 <= limit <= 500:
+            raise WorkStoreError("invalid_request", ("limit must be between 1 and 500",))
+
+        with self._transaction(workspace_id, actor_id) as cur:
+            params: list[object] = [workspace_id]
+            after_clause = ""
+            if after is not None:
+                after_created_at, after_work_id = after
+                after_clause = " AND (i.created_at, i.work_id) > (%s, %s)"
+                params.extend([after_created_at, after_work_id])
+            params.append(limit + 1)
+            query = (
+                "SELECT i.work_id, a.key, i.state, i.created_at "
+                "FROM omp_work.work_items i "
+                "JOIN omp_work.work_aliases a ON a.work_id = i.work_id AND a.primary_alias "
+                f"WHERE i.workspace_id = %s{after_clause} "
+                "ORDER BY i.created_at, i.work_id "
+                "LIMIT %s"
+            )
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            has_extra = len(rows) > limit
+            page_rows = rows[:limit] if has_extra else rows
+            items = tuple(
+                {
+                    "work_id": r["work_id"],
+                    "key": r["key"],
+                    "state": r["state"],
+                    "created_at": r["created_at"],
+                }
+                for r in page_rows
+            )
+            next_created_at = (
+                page_rows[-1]["created_at"] if has_extra and page_rows else None
+            )
+            next_work_id = (
+                page_rows[-1]["work_id"] if has_extra and page_rows else None
+            )
+            return {
+                "items": items,
+                "next_created_at": next_created_at,
+                "next_work_id": next_work_id,
+            }
+

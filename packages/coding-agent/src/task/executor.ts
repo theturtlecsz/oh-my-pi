@@ -3456,6 +3456,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				outputSchema,
 				outputSchemaMode: options.outputSchemaMode,
 				restrictToolNames: restrictToolNames || undefined,
+				instructionPrepDegradations: session.instructionPrepDegradations,
 			});
 			if (options.taskRecovery) {
 				if (prewalk || advisorSelection || session.asyncJobManager)

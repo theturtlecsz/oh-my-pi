@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
+
 
 from .models import CommandEnvelope
 from .store import WorkStore, WorkStoreError
@@ -150,3 +152,74 @@ class WorkService:
                 status=statuses.get(error.code, 409),
                 diagnostics=error.diagnostics,
             ) from error
+
+    def revision(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        key: str,
+        selector: str | int | UUID,
+    ) -> dict[str, object]:
+        if (
+            workspace_id not in principal.workspaces
+            or "work.read" not in principal.scopes
+        ):
+            raise WorkError("forbidden", status=403)
+        try:
+            return self._store.revision(
+                workspace_id, principal.actor_id, key, selector
+            )
+        except WorkStoreError as error:
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+
+    def receipt(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        receipt_id: UUID | str,
+    ) -> dict[str, object]:
+        if (
+            workspace_id not in principal.workspaces
+            or "work.read" not in principal.scopes
+        ):
+            raise WorkError("forbidden", status=403)
+        try:
+            return self._store.receipt(workspace_id, principal.actor_id, receipt_id)
+        except WorkStoreError as error:
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+
+    def work_items(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        *,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        if (
+            workspace_id not in principal.workspaces
+            or "work.read" not in principal.scopes
+        ):
+            raise WorkError("forbidden", status=403)
+        try:
+            return self._store.work_items(
+                workspace_id, principal.actor_id, after, limit
+            )
+        except WorkStoreError as error:
+            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            raise WorkError(
+                error.code,
+                status=statuses.get(error.code, 409),
+                diagnostics=error.diagnostics,
+            ) from error
+

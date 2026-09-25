@@ -10,6 +10,7 @@ import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { InstructionPrepDegradation } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 interface CapturedJobRunContext {
@@ -56,12 +57,14 @@ function createCloneStub(overrides?: {
 	lastAssistantText?: string;
 	activeToolNames?: string[];
 	enabledToolNames?: string[];
+	instructionPrepDegradations?: InstructionPrepDegradation[];
 }) {
 	const appendMessage = vi.fn();
 	let listener: ((event: TanSessionEvent) => void) | undefined;
 	const clone = {
 		agent: { appendMessage },
 		sessionManager: overrides?.sessionManager,
+		instructionPrepDegradations: overrides?.instructionPrepDegradations,
 		setTodoPhases: vi.fn(),
 		getActiveToolNames: vi.fn(() => overrides?.activeToolNames ?? ["read", "bash"]),
 		getEnabledToolNames: vi.fn(() => overrides?.enabledToolNames ?? overrides?.activeToolNames ?? ["read", "bash"]),
@@ -391,6 +394,31 @@ describe("TanCommandController", () => {
 		expect(detachSession).toHaveBeenCalledWith(expect.stringMatching(/^Tan-/));
 		expect(clone.dispose).toHaveBeenCalled();
 		expect(unregister).not.toHaveBeenCalled();
+	});
+
+	it("records instruction-prep degradations in the tan's session init", async () => {
+		const harness = createContext();
+		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
+		const appendSessionInit = vi.fn();
+		const { clone } = createCloneStub({
+			sessionManager: { appendSessionInit },
+			instructionPrepDegradations: [{ source: "loadSystemPromptFiles", cause: "timeout" }],
+		});
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
+			session: clone,
+		} as unknown as CreateAgentSessionResult);
+		const controller = new TanCommandController(harness.ctx);
+
+		await controller.start("record degradations");
+		const run = harness.capturedRun;
+		if (!run) throw new Error("run function was not captured");
+		await run({ jobId: "job-123", signal: new AbortController().signal, reportProgress: async () => {} });
+
+		expect(appendSessionInit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				instructionPrepDegradations: [{ source: "loadSystemPromptFiles", cause: "timeout" }],
+			}),
+		);
 	});
 
 	it("copies and persists the full enabled tool set", async () => {
