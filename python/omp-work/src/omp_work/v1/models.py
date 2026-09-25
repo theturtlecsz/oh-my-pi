@@ -1335,6 +1335,7 @@ class Approval(StrictModel):
         "OMP-222",
         "OMP-247",
         "OMP-266",
+        "OMP-279",
     ]
 
 

@@ -2130,6 +2130,21 @@ export function createWorkBackend(
 			return { grant: result.grant, items: view.items, activeItem: result.item };
 		},
 
+		async skipActiveItem(input): Promise<ExecutionSnapshot> {
+			const result = await run("skip_active_item", {
+				grant_id: input.grantId,
+				expected_grant_version: input.expectedGrantVersion,
+				position: input.position,
+				work_id: input.workId,
+				expected_focus_version: input.expectedFocusVersion,
+				judge_sha256: input.judgeSha256,
+				reason: input.reason.trim(),
+			});
+			if (result.type !== "skip_active_item") throw new Error(`unexpected result ${result.type}`);
+			const view = await client.execution(input.grantId);
+			return { grant: result.grant, items: view.items, activeItem: view.active_item ?? null };
+		},
+
 		deliveredOps(): UUID[] {
 			return [...deliveredOps];
 		},

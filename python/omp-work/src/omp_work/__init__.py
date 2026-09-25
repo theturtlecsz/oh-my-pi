@@ -29,6 +29,10 @@ _READS = frozenset(
         "GET /v1/workspaces/{workspace_id}/execution/{grant_id}",
         "GET /v1/health/live",
         "GET /v1/health/ready",
+        "GET /v1/work-items/{key}/revisions/{selector}",
+        "GET /v1/receipts/{receipt_id}",
+        "GET /v1/workspaces/{workspace_id}/work-items",
+        "GET /v1/workspaces/{workspace_id}/events",
     }
 )
 _ERROR_CODES = frozenset(
