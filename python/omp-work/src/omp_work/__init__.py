@@ -104,6 +104,7 @@ _COMMAND_TYPES = frozenset(
         "complete_execution_item",
         "skip_active_item",
         "assess_bounded_intake",
+        "record_fable_advice",
     }
 )
 

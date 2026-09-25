@@ -7493,6 +7493,70 @@
           "title": "RecordExternalDeliveryPayload",
           "type": "object"
         },
+        "RecordFableAdviceCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RecordFableAdvicePayload"
+            },
+            "type": {
+              "const": "record_fable_advice",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RecordFableAdviceCommand",
+          "type": "object"
+        },
+        "RecordFableAdvicePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "advice_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Advice Sha256",
+              "type": "string"
+            },
+            "disposition": {
+              "const": "considered",
+              "title": "Disposition",
+              "type": "string"
+            },
+            "intake_semantic_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Intake Semantic Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "rule_bundle_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rule Bundle Sha256",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "advice_sha256",
+            "disposition",
+            "intake_semantic_sha256",
+            "rule_bundle_sha256"
+          ],
+          "title": "RecordFableAdvicePayload",
+          "type": "object"
+        },
         "RecordProjectHealthCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8380,6 +8444,7 @@
               "put_relation": "#/$defs/PutRelationCommand",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewCommand",
               "record_external_delivery": "#/$defs/RecordExternalDeliveryCommand",
+              "record_fable_advice": "#/$defs/RecordFableAdviceCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
               "remove_relation": "#/$defs/RemoveRelationCommand",
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
@@ -8492,6 +8557,9 @@
             },
             {
               "$ref": "#/$defs/AssessBoundedIntakeCommand"
+            },
+            {
+              "$ref": "#/$defs/RecordFableAdviceCommand"
             }
           ],
           "title": "Command"
@@ -15020,6 +15088,117 @@
         "evidence"
       ],
       "title": "RecordExternalDeliveryPayload",
+      "type": "object"
+    },
+    "RecordFableAdviceCommand": {
+      "$defs": {
+        "RecordFableAdvicePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "advice_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Advice Sha256",
+              "type": "string"
+            },
+            "disposition": {
+              "const": "considered",
+              "title": "Disposition",
+              "type": "string"
+            },
+            "intake_semantic_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Intake Semantic Sha256",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "rule_bundle_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Rule Bundle Sha256",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "advice_sha256",
+            "disposition",
+            "intake_semantic_sha256",
+            "rule_bundle_sha256"
+          ],
+          "title": "RecordFableAdvicePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RecordFableAdvicePayload"
+        },
+        "type": {
+          "const": "record_fable_advice",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RecordFableAdviceCommand",
+      "type": "object"
+    },
+    "RecordFableAdvicePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "advice_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Advice Sha256",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "considered",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "intake_semantic_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Intake Semantic Sha256",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "rule_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Rule Bundle Sha256",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "advice_sha256",
+        "disposition",
+        "intake_semantic_sha256",
+        "rule_bundle_sha256"
+      ],
+      "title": "RecordFableAdvicePayload",
       "type": "object"
     },
     "RecordProjectHealthCommand": {
