@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
+from .canonical import sha256
 from .models import (
     Anomaly,
     AuditManifest,
     AuditorLaunch,
+    BoundedIntakeDraft,
     Candidate,
     CloseAttempt,
     CloseAttemptState,
@@ -23,8 +25,12 @@ from .models import (
     ContractExamples,
     EvidenceKind,
     EvidenceReceipt,
+    IntakeBlockingQuestion,
+    IntakeConstraint,
+    KnownIntakeValue,
     RelationEdge,
     RelationKind,
+    UnknownIntakeValue,
 )
 
 
@@ -613,3 +619,169 @@ def validate_examples(examples: ContractExamples) -> None:
         or set(completion.required_artifacts) != {"verification", "audit", "push"}
     ):
         raise ValueError("completion evidence example failed")
+
+
+BOUNDED_INTAKE_RULE_BUNDLE_SHA256 = sha256(
+    {
+        "contract": "work.omp.dev/v1/bounded-intake",
+        "rules": (
+            "contradictory_constraints/v1",
+            "missing_verification_oracle/v1",
+            "missing_consequential_authority_or_dependency/v1",
+        ),
+        "question_limit": 2,
+    }
+)
+
+
+def bounded_intake_semantic_sha256(draft: BoundedIntakeDraft) -> str:
+    normalized = draft.model_dump(mode="json")
+    if "source" in normalized and "spans" in normalized["source"]:
+        normalized["source"]["spans"] = sorted(
+            normalized["source"]["spans"],
+            key=lambda item: item["id"],
+        )
+    if "constraints" in normalized:
+        normalized["constraints"] = sorted(
+            normalized["constraints"],
+            key=lambda item: item["id"],
+        )
+    if "unknowns" in normalized:
+        normalized["unknowns"] = sorted(
+            normalized["unknowns"],
+            key=lambda item: item["id"],
+        )
+    if "acceptance_criteria" in normalized:
+        normalized["acceptance_criteria"] = sorted(
+            normalized["acceptance_criteria"],
+            key=lambda item: item["id"],
+        )
+
+    def _sort_source_span_ids(node: Any) -> None:
+        if isinstance(node, dict):
+            if "source_span_ids" in node and isinstance(node["source_span_ids"], list):
+                node["source_span_ids"] = sorted(node["source_span_ids"])
+            for val in node.values():
+                _sort_source_span_ids(val)
+        elif isinstance(node, list):
+            for item in node:
+                _sort_source_span_ids(item)
+
+    _sort_source_span_ids(normalized)
+
+    return sha256(
+        {
+            "contract": "work.omp.dev/v1/bounded-intake",
+            "draft": normalized,
+        }
+    )
+
+
+def typed_value(v: object) -> tuple[str, object]:
+    tag = "bool" if isinstance(v, bool) else ("int" if isinstance(v, int) else "str")
+    return (tag, v)
+
+
+def evaluate_bounded_intake(
+    draft: BoundedIntakeDraft,
+) -> tuple[tuple[IntakeBlockingQuestion, ...], int]:
+    raw_questions: list[IntakeBlockingQuestion] = []
+
+    # 1. contradictory_constraints (priority 0)
+    grouped_constraints: dict[str, list[IntakeConstraint]] = {}
+    for c in draft.constraints:
+        norm_key = " ".join(c.key.casefold().split())
+        grouped_constraints.setdefault(norm_key, []).append(c)
+
+    for norm_key, constraints in grouped_constraints.items():
+        known_positives = [
+            c
+            for c in constraints
+            if c.polarity == "positive" and isinstance(c.value, KnownIntakeValue)
+        ]
+        known_negatives = [
+            c
+            for c in constraints
+            if c.polarity == "negative" and isinstance(c.value, KnownIntakeValue)
+        ]
+
+        pos_typed = {typed_value(c.value.value) for c in known_positives}
+        neg_typed = {typed_value(c.value.value) for c in known_negatives}
+
+        has_issue = False
+        conflicting_ids: set[str] = set()
+
+        if len(pos_typed) > 1:
+            has_issue = True
+            conflicting_ids.update(c.id for c in known_positives)
+
+        same_values = pos_typed & neg_typed
+        if same_values:
+            has_issue = True
+            conflicting_ids.update(
+                c.id for c in known_positives if typed_value(c.value.value) in same_values
+            )
+            conflicting_ids.update(
+                c.id for c in known_negatives if typed_value(c.value.value) in same_values
+            )
+
+        if has_issue:
+            key = f"constraint:{norm_key}"
+            raw_questions.append(
+                IntakeBlockingQuestion(
+                    rule_class="contradictory_constraints",
+                    deduplication_key=key,
+                    statement=f"contradictory_constraints:{key}",
+                    priority=0,
+                    claim_ids=tuple(sorted(conflicting_ids)),
+                )
+            )
+
+    # 2. missing_verification_oracle (priority 1)
+    for criterion in draft.acceptance_criteria:
+        if criterion.oracle is None:
+            key = f"oracle:{criterion.id}"
+            raw_questions.append(
+                IntakeBlockingQuestion(
+                    rule_class="missing_verification_oracle",
+                    deduplication_key=key,
+                    statement=f"missing_verification_oracle:{key}",
+                    priority=1,
+                    claim_ids=(criterion.id,),
+                )
+            )
+
+    # 3. missing_consequential_authority_or_dependency (priority 2)
+    for unknown in draft.unknowns:
+        if unknown.kind == "authority_or_dependency" and unknown.material:
+            key = f"authority:{unknown.id}"
+            raw_questions.append(
+                IntakeBlockingQuestion(
+                    rule_class="missing_consequential_authority_or_dependency",
+                    deduplication_key=key,
+                    statement=f"missing_consequential_authority_or_dependency:{key}",
+                    priority=2,
+                    claim_ids=(unknown.id,),
+                )
+            )
+
+    # Deduplicate by (rule_class, key)
+    seen_dedup: set[tuple[str, str]] = set()
+    deduped: list[IntakeBlockingQuestion] = []
+    for q in raw_questions:
+        dedup_item = (q.rule_class, q.deduplication_key)
+        if dedup_item not in seen_dedup:
+            seen_dedup.add(dedup_item)
+            deduped.append(q)
+
+    # Sort by (priority, key)
+    sorted_questions = sorted(
+        deduped,
+        key=lambda q: (q.priority, q.deduplication_key),
+    )
+
+    issue_count = len(sorted_questions)
+    capped_questions = tuple(sorted_questions[:2])
+
+    return capped_questions, issue_count
+

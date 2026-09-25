@@ -1431,3 +1431,16 @@ class FableAdvicePayload(StrictModel):
     disposition: Literal["considered"] = "considered"
     intake_semantic_sha256: hex64
     rule_bundle_sha256: hex64
+
+
+class IntakeBlockingQuestion(StrictModel):
+    rule_class: Literal[
+        "contradictory_constraints",
+        "missing_verification_oracle",
+        "missing_consequential_authority_or_dependency",
+    ]
+    deduplication_key: str
+    statement: str
+    priority: int = Field(ge=0, le=2)
+    claim_ids: tuple[str, ...] = ()
+
