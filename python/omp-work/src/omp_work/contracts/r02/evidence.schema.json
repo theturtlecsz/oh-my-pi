@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "omp:r02:evidence",
+  "title": "Evidence",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "content_digest",
+    "trust"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "metric",
+        "artifact_ref",
+        "log_ref",
+        "receipt"
+      ]
+    },
+    "content_digest": {
+      "type": "string",
+      "minLength": 8
+    },
+    "trust": {
+      "type": "string",
+      "enum": [
+        "untrusted",
+        "verified",
+        "trusted"
+      ]
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    }
+  },
+  "additionalProperties": false
+}
