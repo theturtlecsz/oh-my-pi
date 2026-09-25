@@ -218,10 +218,8 @@ packages/coding-agent/test/agent-session-tree-navigation.test.ts	shared	modified
 packages/coding-agent/test/agent-session-user-shortcut-hooks.test.ts	shared	modified	5882b0f777de	OMP-246 CI: Model required task result gate setter in unqualified extension runner fake	retained
 packages/coding-agent/test/completed-task-result-contract.test.ts	fork-only	added	9d45c6c8db9e	OMP-246: Persisted ready/claim parsing, immutable copies and branch/discard refusal	retained
 packages/coding-agent/test/config/settings-backup-on-rewrite.test.ts	fork-only	added	fd1a138ab69b	session candidate: OMP-173; session candidate: OMP-172	retained
-packages/coding-agent/test/cpk0-inventory.test.ts	fork-only	added	8bbdfba24433	OMP-287: Tests asserting committed CPK-0 surface inventory matches scripts/cpk0-inventory.ts generator output and interface contracts	retained
-packages/coding-agent/test/cpk0-approval-extraction.test.ts	fork-only	added	4778ad082581	OMP-204-s01: Unit tests for extractApprovalFromNode verifying tier and dynamic extraction across AST node variants	retained
 packages/coding-agent/test/cpk0-approval-extraction.test.ts	fork-only	added	b5fb1c918fe3	OMP-204-s01: Unit tests for extractApprovalFromNode verifying tier and dynamic extraction across AST node variants	retained
-packages/coding-agent/test/cpk0-inventory.test.ts	fork-only	added	d2c5ad1ab198	OMP-287: Tests asserting committed CPK-0 surface inventory matches scripts/cpk0-inventory.ts generator output and interface contracts	retained
+packages/coding-agent/test/cpk0-inventory.test.ts	fork-only	added	8bbdfba24433	OMP-287: Tests asserting committed CPK-0 surface inventory matches scripts/cpk0-inventory.ts generator output and interface contracts	retained
 packages/coding-agent/test/cursor-exec.test.ts	shared	modified	a41675735f0c	OMP-246: Preserve Cursor bridge edit/grep/approval contracts with required inert dispatch-guard fake; OMP-246 CI: Model required task result processing entry in unqualified bridge runner fake	retained
 packages/coding-agent/test/discovery-root.test.ts	fork-only	added	190a6034057b	OMP-249 executable configuration isolation and unchanged workspace/ordinary-discovery contracts	retained
 packages/coding-agent/test/discovery/claude-plugins.test.ts	shared	modified	fd3906bdc11c	test(omp-156): isolate plugin-precedence discovery test from the real HOME	retained
@@ -383,9 +381,7 @@ python/robomp/uv.lock	fork-only	added	5fd65f395c82	test(robomp): align queue and
 reanalyzed-omp-programs-v7.zip	fork-only	added	8db9e2905dc6	session candidate: OMP-177; session candidate: OMP-180	retained
 scripts/ci-test-ts.test.ts	shared	modified	7a963fa56a96	ci: repair red main baseline (OMP-217); fix(ci): extract withTempAgentDir wrapper and verify temp dir cleanup on resolve and reject; fix: slim session workflow loadout and isolate test execution (OMP-166)	retained
 scripts/ci-test-ts.ts	shared	modified	fe438dce3dd5	ci: repair red main baseline (OMP-217); fix(ci): extract withTempAgentDir wrapper and verify temp dir cleanup on resolve and reject; fix: slim session workflow loadout and isolate test execution (OMP-166)	retained
-scripts/cpk0-inventory.ts	fork-only	added	5afd617136e2	OMP-287: Generator script extracting first-party tools, extension/hook surfaces, and authority classifications from source AST	retained
-scripts/cpk0-inventory.ts	fork-only	added	5003bd6be6c1	OMP-287: Generator script extracting first-party tools, extension/hook surfaces, and authority classifications from source AST	retained
-scripts/cpk0-inventory.ts	fork-only	added	5003bd6be6c1	OMP-287: Generator script extracting first-party tools, extension/hook surfaces, and authority classifications from source AST; OMP-204-s01: exported type-safe extractApprovalFromNode (string-literal guard instead of any cast)	retained
+scripts/cpk0-inventory.ts	fork-only	added	9c3d72e8708b	OMP-287: Generator script extracting first-party tools, extension/hook surfaces, and authority classifications from source AST; OMP-289: TS2339 fixes; OMP-204-s01: exported type-safe extractApprovalFromNode (string-literal guard instead of any cast)	retained
 scripts/link-omp.sh	shared	modified	51a84679608b	session candidate: OMP-162	retained
 scripts/musl-release.test.ts	shared	modified	22483952d00e	feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 scripts/release.test.ts	shared	modified	419af93b3443	fix(release): format scripts/release.ts and scripts/release.test.ts; session candidate: OMP-209	retained
