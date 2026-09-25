@@ -33,6 +33,15 @@ def _aws(config: OperationsConfig, arguments: list[str]) -> bytes:
     return _run(command + arguments)
 
 
+def _verify_uploaded(config: OperationsConfig, key: str, digest: str, size: int) -> None:
+    try:
+        metadata = json.loads(_aws(config, ["s3api", "head-object", "--bucket", config.bucket, "--key", key]))
+    except (json.JSONDecodeError, TypeError) as error:
+        raise RuntimeError("backup object verification failed") from error
+    if not isinstance(metadata, dict) or metadata.get("Metadata", {}).get("sha256") != digest or metadata.get("ContentLength") != size:
+        raise RuntimeError("backup object verification failed")
+
+
 def _postgres_env(config: OperationsConfig) -> dict[str, str]:
     return os.environ | {"PGPASSWORD": config.read_secret("omp_work_backup")}
 
@@ -239,42 +248,41 @@ def create(config: OperationsConfig) -> str:
 
 def upload_wal(config: OperationsConfig) -> int:
     spool = config.data_dir / "wal"
-    if not spool.exists():
-        return 0
-    uploaded = 0
-    for segment in spool.iterdir():
-        if not segment.is_file() or segment.suffix == ".gpg":
-            continue
-        encrypted = segment.with_suffix(segment.suffix + ".gpg")
-        try:
-            digest = encrypt_file(
-                segment, encrypted, config.secret_path("gpg-passphrase")
-            )
-            key = f"{config.prefix}/wal/unknown/{segment.name}.gpg"
-            _aws(
-                config,
-                [
-                    "s3api",
-                    "put-object",
-                    "--bucket",
-                    config.bucket,
-                    "--key",
-                    key,
-                    "--body",
-                    str(encrypted),
-                    "--metadata",
-                    f"sha256={digest}",
-                ],
-            )
-            _aws(
-                config,
-                ["s3api", "head-object", "--bucket", config.bucket, "--key", key],
-            )
+    started, began = datetime.now(UTC), time.monotonic()
+    verified: list[Path] = []
+    byte_count = 0
+    prefix = f"{config.prefix}/wal/unknown"
+    try:
+        for segment in sorted(spool.iterdir()) if spool.exists() else []:
+            if not segment.is_file() or segment.suffix == ".gpg":
+                continue
+            # A crash's encrypted scratch file must not block a fresh retry.
+            encrypted = spool / f".{segment.name}.{uuid4().hex}.gpg"
+            try:
+                digest = encrypt_file(segment, encrypted, config.secret_path("gpg-passphrase"))
+                key = f"{prefix}/{segment.name}.gpg"
+                _aws(config, ["s3api", "put-object", "--bucket", config.bucket, "--key", key,
+                              "--body", str(encrypted), "--metadata", f"sha256={digest}"])
+                _verify_uploaded(config, key, digest, encrypted.stat().st_size)
+                verified.append(segment)
+                byte_count += segment.stat().st_size
+            finally:
+                encrypted.unlink(missing_ok=True)
+        # Retain the local spool until both object checks and durable evidence succeed.
+        _record_evidence(config, kind="wal_upload", started=started, backup_id=None,
+                         prefix=prefix, outcome="passed" if verified else "idle",
+                         duration=time.monotonic() - began, byte_count=byte_count)
+        for segment in verified:
             segment.unlink()
-            uploaded += 1
-        finally:
-            encrypted.unlink(missing_ok=True)
-    return uploaded
+        return len(verified)
+    except Exception:
+        try:
+            _record_evidence(config, kind="wal_upload", started=started, backup_id=None,
+                             prefix=prefix, outcome="failed", duration=time.monotonic() - began,
+                             byte_count=byte_count)
+        except Exception:
+            pass
+        raise
 
 
 def _free_port() -> int:
@@ -346,7 +354,8 @@ def _latest_backup(
     return prefix, response
 
 
-def _download_decrypt(config: OperationsConfig, key: str, destination: Path) -> None:
+def _download_decrypt(config: OperationsConfig, key: str, destination: Path,
+                      *, expected_sha256: str | None = None) -> None:
     encrypted = destination.with_suffix(destination.suffix + ".gpg")
     _aws(
         config,
@@ -360,6 +369,8 @@ def _download_decrypt(config: OperationsConfig, key: str, destination: Path) -> 
             str(encrypted),
         ],
     )
+    if expected_sha256 is not None and sha256(encrypted.read_bytes()).hexdigest() != expected_sha256:
+        raise RuntimeError("backup ciphertext hash mismatch")
     decrypt_file(encrypted, destination, config.secret_path("gpg-passphrase"))
 
 
@@ -441,12 +452,14 @@ def restore_drill(
         ):
             raise RuntimeError("backup compatibility mismatch")
         dump = staging / "ledger.dump"
-        dump_key = next(
-            item["key"]
+        dump_object = next(
+            item
             for item in payload["objects"]
             if item["key"].endswith("/ledger.dump.gpg")
         )
-        _download_decrypt(config, dump_key, dump)
+        if dump_object["key"] != f"{prefix}ledger.dump.gpg":
+            raise RuntimeError("backup artifact prefix mismatch")
+        _download_decrypt(config, dump_object["key"], dump)
         port = _free_port()
         password = config.read_secret("postgres")
         data_dir = staging / "pgdata"
@@ -527,7 +540,7 @@ def restore_drill(
             started=started,
             backup_id=backup_id,
             prefix=prefix,
-            outcome=f"passed:{reason}",
+            outcome=f"passed:logical_restore:{reason}",
             duration=time.monotonic() - began,
         )
     except Exception:
