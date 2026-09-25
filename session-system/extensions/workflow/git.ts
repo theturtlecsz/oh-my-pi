@@ -99,6 +99,27 @@ export async function executionPrimaryRoot(cwd: string): Promise<string> {
 	return realpath(primary);
 }
 
+/** Canonical remote execution ref (OMP-233).
+ * Format: refs/heads/execution/<primary key lowercased>-<grant id without dashes> */
+export function executionRemoteRef(key: string, grantId: string): string {
+	return `refs/heads/execution/${key.toLowerCase()}-${grantId.replaceAll("-", "")}`;
+}
+
+/** Validates a recorded remote ref against the canonical execution remote ref for a grant.
+ * Returns undefined if valid; else a message naming recorded and expected ref (or missing anchor key). */
+export function executionRemoteRefRefusal(
+	recordedRef: string | undefined,
+	anchorKey: string | undefined,
+	grantId: string,
+): string | undefined {
+	if (!anchorKey) {
+		return `execution remote ref refusal: missing anchor key (recorded ${recordedRef ?? "undefined"})`;
+	}
+	const expectedRef = executionRemoteRef(anchorKey, grantId);
+	if (recordedRef === expectedRef) return undefined;
+	return `execution remote ref refusal: recorded ${recordedRef ?? "undefined"}, expected ${expectedRef}`;
+}
+
 /** Provision or deterministically reuse an agent-managed execution worktree.
  * Grant identity—not work key—owns the path and local branch, so terminal WIP
  * from an older grant can never be rebound into a fresh authorization. */
@@ -113,9 +134,9 @@ export async function ensureExecutionWorkspace(
 	if (!/^[0-9a-f]{40,64}$/.test(baseline)) throw new Error(`invalid execution baseline: ${baseline}`);
 	if (!/^[0-9a-f-]{36}$/.test(grantId)) throw new Error(`invalid execution grant id: ${grantId}`);
 	const primaryRoot = await executionPrimaryRoot(cwd);
+	const branchRef = executionRemoteRef(key, grantId);
+	const branch = branchRef.slice("refs/heads/".length);
 	const grantSlug = grantId.replaceAll("-", "");
-	const branch = `execution/${key.toLowerCase()}-${grantSlug}`;
-	const branchRef = `refs/heads/${branch}`;
 	const stablePath = joinPath(
 		worktreesRoot,
 		`execute-${key.toLowerCase()}-${grantSlug}-${hashPath(primaryRoot)}`,
