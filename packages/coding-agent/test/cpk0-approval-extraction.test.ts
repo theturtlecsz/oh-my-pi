@@ -2,12 +2,6 @@ import { describe, expect, it } from "bun:test";
 import { Project, SyntaxKind } from "ts-morph";
 import { extractApprovalFromNode } from "../../../scripts/cpk0-inventory";
 
-declare global {
-	interface MapConstructor {
-		new (iterable?: any): Map<any, any>;
-	}
-}
-
 describe("CPK-0 approval extraction (OMP-204-s01)", () => {
 	it('extracts "write" as const property declaration to approval_tier "write", dynamic: false', () => {
 		const project = new Project({ useInMemoryFileSystem: true });
