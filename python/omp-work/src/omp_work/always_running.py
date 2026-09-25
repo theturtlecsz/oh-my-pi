@@ -4,9 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 import json
+import os
 import time
 
-ACTIVE = Path("/home/thetu/.codex/workflows/economy/ACTIVE")
+ACTIVE = Path(
+    os.environ.get("OMP_ECONOMY_ACTIVE_DIR") or (Path.home() / ".codex/workflows/economy/ACTIVE")
+)
 
 
 @dataclass(frozen=True)
@@ -25,9 +28,19 @@ class StallCheck:
         }
 
 
-def check_stall(*, max_idle_minutes: float = 20.0, now: float | None = None) -> StallCheck:
+def check_stall(
+    *,
+    max_idle_minutes: float = 20.0,
+    now: float | None = None,
+    active_dir: Path | str | None = None,
+) -> StallCheck:
     now = time.time() if now is None else now
-    qpath = ACTIVE / "UNIT-QUEUE.json"
+    active = (
+        Path(active_dir)
+        if active_dir is not None
+        else Path(os.environ.get("OMP_ECONOMY_ACTIVE_DIR") or ACTIVE)
+    )
+    qpath = active / "UNIT-QUEUE.json"
     if not qpath.is_file():
         return StallCheck(True, "missing UNIT-QUEUE", 0.0, None)
     q = json.loads(qpath.read_text())

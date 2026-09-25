@@ -4,18 +4,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 import json
+import os
 
 from omp_work.cognee_adapter import query_graph
 from omp_work.context_compile import compile_context, CompiledContext
 from omp_work.research_campaign import run_campaign, CampaignResult
 
+
+def _active_dir() -> Path:
+    val = os.environ.get("OMP_ECONOMY_ACTIVE_DIR")
+    if val:
+        return Path(val)
+    return Path.home() / ".codex/workflows/economy/ACTIVE"
+
+
 DEFAULT_INTAKE_BAR = 1200
-DEFAULT_COGNEE_STORE = Path(
-    "/home/thetu/.codex/workflows/economy/ACTIVE/cognee-store.json"
-)
-DEFAULT_ENOLA_STORE = Path(
-    "/home/thetu/.codex/workflows/economy/ACTIVE/enola-store.json"
-)
+DEFAULT_ACTIVE_DIR = _active_dir()
+DEFAULT_COGNEE_STORE = DEFAULT_ACTIVE_DIR / "cognee-store.json"
+DEFAULT_ENOLA_STORE = DEFAULT_ACTIVE_DIR / "enola-store.json"
+DEFAULT_BUDGET_CAPS = DEFAULT_ACTIVE_DIR / "BUDGET-CAPS.json"
 
 
 @dataclass(frozen=True)
@@ -58,9 +65,7 @@ def estimate_tokens(text: str) -> int:
 
 
 def read_budget_note(caps_path: Path | str | None = None) -> str:
-    path = Path(caps_path) if caps_path else Path(
-        "/home/thetu/.codex/workflows/economy/ACTIVE/BUDGET-CAPS.json"
-    )
+    path = Path(caps_path) if caps_path else (_active_dir() / "BUDGET-CAPS.json")
     if not path.is_file():
         return "budget_caps: missing — prefer E1; stop on quota"
     data = json.loads(path.read_text())
@@ -77,7 +82,7 @@ def read_budget_note(caps_path: Path | str | None = None) -> str:
 def _resolve_store(store, store_path):
     if store is not None:
         return store, None
-    path = Path(store_path) if store_path is not None else DEFAULT_COGNEE_STORE
+    path = Path(store_path) if store_path is not None else (_active_dir() / "cognee-store.json")
     if path.is_file():
         from omp_work.cognee_store import CogneeStore
         return CogneeStore.open(path).nodes, str(path)
@@ -121,7 +126,7 @@ def _fit_section(*, job_id, findings, objective, max_context_tokens):
 def _maybe_enola_trace(*, job_id, objective, findings, enola_store_path, enola_enabled):
     if not enola_enabled:
         return None, None
-    path = Path(enola_store_path) if enola_store_path is not None else DEFAULT_ENOLA_STORE
+    path = Path(enola_store_path) if enola_store_path is not None else (_active_dir() / "enola-store.json")
     from omp_work.enola_store import EnolaStore
     store = EnolaStore.open(path)
     result = store.record_trace(job_id=job_id, goal=objective, facts=list(findings)[:5])
