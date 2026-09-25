@@ -13133,6 +13133,37 @@
       "title": "WorkItemResult",
       "type": "object"
     },
+    "WorkItemSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "key",
+        "state",
+        "created_at"
+      ],
+      "title": "WorkItemSummary",
+      "type": "object"
+    },
     "WorkItemView": {
       "$defs": {
         "Candidate": {
@@ -13360,6 +13391,80 @@
         "revision"
       ],
       "title": "WorkItemView",
+      "type": "object"
+    },
+    "WorkItemsPage": {
+      "$defs": {
+        "WorkItemSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "key",
+            "state",
+            "created_at"
+          ],
+          "title": "WorkItemSummary",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkItemSummary"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "next_created_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Created At"
+        },
+        "next_work_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Work Id"
+        }
+      },
+      "title": "WorkItemsPage",
       "type": "object"
     },
     "WorkRevision": {

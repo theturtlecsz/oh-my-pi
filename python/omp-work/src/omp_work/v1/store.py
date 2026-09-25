@@ -248,6 +248,26 @@ class WorkStore(Protocol):
         project_id: UUID | None = None,
         limit: int = 8,
     ) -> dict[str, object]: ...
+    def revision(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        key: str,
+        selector: str | int | UUID,
+    ) -> dict[str, object]: ...
+    def receipt(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        receipt_id: UUID | str,
+    ) -> dict[str, object]: ...
+    def work_items(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]: ...
 
 
 class WorkStoreError(Exception):
@@ -5442,3 +5462,161 @@ class PostgresWorkStore:
                     }
                 )
             return {"workspace_id": str(workspace_id), "total": total, "events": events}
+
+    def revision(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        key: str,
+        selector: str | int | UUID,
+    ) -> dict[str, object]:
+        revision_id: UUID | None = None
+        revision_number: int | None = None
+        if isinstance(selector, UUID):
+            revision_id = selector
+        elif isinstance(selector, int) and not isinstance(selector, bool):
+            if selector >= 1:
+                revision_number = selector
+            else:
+                raise WorkStoreError("invalid_request")
+        elif isinstance(selector, str):
+            if selector.isdecimal():
+                n = int(selector)
+                if n >= 1:
+                    revision_number = n
+                else:
+                    raise WorkStoreError("invalid_request")
+            else:
+                try:
+                    revision_id = UUID(selector)
+                except ValueError:
+                    raise WorkStoreError("invalid_request")
+        else:
+            raise WorkStoreError("invalid_request")
+
+        with self._transaction(workspace_id, actor_id) as cur:
+            cur.execute(
+                "SELECT i.work_id FROM omp_work.work_items i "
+                "JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias "
+                "WHERE i.workspace_id=%s AND a.key=%s",
+                (workspace_id, key),
+            )
+            item_row = cur.fetchone()
+            if not item_row:
+                raise WorkStoreError("invalid_request")
+            work_id = item_row["work_id"]
+
+            if revision_id is not None:
+                cur.execute(
+                    "SELECT r.revision_id,r.work_id,r.revision_number,r.title,r.description,r.scope,r.content_sha256,r.created_by,r.supplied_at "
+                    "FROM omp_work.work_revisions r "
+                    "WHERE r.workspace_id=%s AND r.work_id=%s AND r.revision_id=%s",
+                    (workspace_id, work_id, revision_id),
+                )
+            else:
+                cur.execute(
+                    "SELECT r.revision_id,r.work_id,r.revision_number,r.title,r.description,r.scope,r.content_sha256,r.created_by,r.supplied_at "
+                    "FROM omp_work.work_revisions r "
+                    "WHERE r.workspace_id=%s AND r.work_id=%s AND r.revision_number=%s",
+                    (workspace_id, work_id, revision_number),
+                )
+            rev_row = cur.fetchone()
+            if not rev_row:
+                raise WorkStoreError("invalid_request")
+
+            cur.execute(
+                "SELECT criterion FROM omp_work.acceptance_criteria WHERE revision_id=%s ORDER BY position",
+                (rev_row["revision_id"],),
+            )
+            criteria = tuple(entry["criterion"] for entry in cur.fetchall())
+
+            return {
+                "revision_id": rev_row["revision_id"],
+                "work_id": rev_row["work_id"],
+                "revision_number": rev_row["revision_number"],
+                "title": rev_row["title"],
+                "description": rev_row["description"],
+                "scope": rev_row["scope"],
+                "acceptance_criteria": criteria,
+                "content_sha256": rev_row["content_sha256"],
+                "created_by": rev_row["created_by"],
+                "created_at": rev_row["supplied_at"],
+            }
+
+    def receipt(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        receipt_id: UUID | str,
+    ) -> dict[str, object]:
+        if isinstance(receipt_id, str):
+            try:
+                receipt_uuid = UUID(receipt_id)
+            except ValueError:
+                raise WorkStoreError("invalid_request")
+        elif isinstance(receipt_id, UUID):
+            receipt_uuid = receipt_id
+        else:
+            raise WorkStoreError("invalid_request")
+
+        with self._transaction(workspace_id, actor_id) as cur:
+            cur.execute(
+                f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND receipt_id=%s",
+                (workspace_id, receipt_uuid),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise WorkStoreError("invalid_request")
+            return dict(row)
+
+    def work_items(
+        self,
+        workspace_id: UUID,
+        actor_id: UUID,
+        after: tuple[datetime, UUID] | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        if not 1 <= limit <= 500:
+            raise WorkStoreError("invalid_request", ("limit must be between 1 and 500",))
+
+        with self._transaction(workspace_id, actor_id) as cur:
+            params: list[object] = [workspace_id]
+            after_clause = ""
+            if after is not None:
+                after_created_at, after_work_id = after
+                after_clause = " AND (i.created_at, i.work_id) > (%s, %s)"
+                params.extend([after_created_at, after_work_id])
+            params.append(limit + 1)
+            query = (
+                "SELECT i.work_id, a.key, i.state, i.created_at "
+                "FROM omp_work.work_items i "
+                "JOIN omp_work.work_aliases a ON a.work_id = i.work_id AND a.primary_alias "
+                f"WHERE i.workspace_id = %s{after_clause} "
+                "ORDER BY i.created_at, i.work_id "
+                "LIMIT %s"
+            )
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            has_extra = len(rows) > limit
+            page_rows = rows[:limit] if has_extra else rows
+            items = tuple(
+                {
+                    "work_id": r["work_id"],
+                    "key": r["key"],
+                    "state": r["state"],
+                    "created_at": r["created_at"],
+                }
+                for r in page_rows
+            )
+            next_created_at = (
+                page_rows[-1]["created_at"] if has_extra and page_rows else None
+            )
+            next_work_id = (
+                page_rows[-1]["work_id"] if has_extra and page_rows else None
+            )
+            return {
+                "items": items,
+                "next_created_at": next_created_at,
+                "next_work_id": next_work_id,
+            }
+

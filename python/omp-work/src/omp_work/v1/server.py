@@ -3,8 +3,10 @@ from __future__ import annotations
 import hmac
 import json
 import stat
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
+
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -238,7 +240,107 @@ def create_app(
     ) -> JSONResponse:
         return read_route(request, x_omp_workspace_id, "operation", str(operation_id))
 
+    @app.get("/v1/work-items/{key}/revisions/{selector}")
+    def work_item_revision(
+        request: Request,
+        key: str,
+        selector: str,
+        x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
+    ) -> JSONResponse:
+        try:
+            _require_contract(request, service_digest)
+            principal = _principal(request, capabilities_dir)
+            return JSONResponse(
+                jsonable_encoder(
+                    service.revision(principal, x_omp_workspace_id, key, selector)
+                )
+            )
+        except WorkError as error:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
+
+    @app.get("/v1/receipts/{receipt_id}")
+    def receipt(
+        request: Request,
+        receipt_id: str,
+        x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
+    ) -> JSONResponse:
+        try:
+            _require_contract(request, service_digest)
+            principal = _principal(request, capabilities_dir)
+            return JSONResponse(
+                jsonable_encoder(
+                    service.receipt(principal, x_omp_workspace_id, receipt_id)
+                )
+            )
+        except WorkError as error:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
+
+    @app.get("/v1/workspaces/{workspace_id}/work-items")
+    def work_items(
+        request: Request,
+        workspace_id: UUID,
+        after_created_at: datetime | None = None,
+        after_work_id: UUID | None = None,
+        limit: int = Query(100, ge=1, le=500),
+    ) -> JSONResponse:
+        try:
+            _require_contract(request, service_digest)
+            principal = _principal(request, capabilities_dir)
+            if (after_created_at is None) != (after_work_id is None):
+                raise WorkError(
+                    "invalid_request",
+                    status=400,
+                    diagnostics=(
+                        "after_created_at and after_work_id must be provided together",
+                    ),
+                )
+            after = (
+                (after_created_at, after_work_id)
+                if after_created_at is not None and after_work_id is not None
+                else None
+            )
+            return JSONResponse(
+                jsonable_encoder(
+                    service.work_items(
+                        principal, workspace_id, after=after, limit=limit
+                    )
+                )
+            )
+        except WorkError as error:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": error.code,
+                        "request_id": None,
+                        "correlation_id": None,
+                        "diagnostics": list(error.diagnostics[:8]),
+                    }
+                },
+                status_code=error.status,
+            )
+
     @app.post("/v1/commands")
+
     async def command(request: Request) -> JSONResponse:
         envelope: CommandEnvelope | None = None
         try:
