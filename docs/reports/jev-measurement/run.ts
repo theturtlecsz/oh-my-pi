@@ -8,7 +8,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type FakeSmolHandler, type MeasurementResults, runMeasurementHarness } from "./harness";
+import { type FakeSmolHandler, isMeasuredRobomp, type MeasurementResults, runMeasurementHarness } from "./harness";
 
 function formatPercent(value?: number): string {
 	if (value === undefined || Number.isNaN(value)) return "0.0%";
@@ -24,6 +24,28 @@ function formatCost(value?: number): string {
 	if (value === undefined || Number.isNaN(value)) return "$0.0000";
 	return `$${value.toFixed(4)}`;
 }
+
+/** Shown in every robomp table cell when the issues set is empty. */
+export const ROBOMP_NOT_MEASURED = "not measured: no robomp history on the measuring machine";
+
+const ROBOMP_PLACEHOLDERS = [
+	"{{robomp_current_confident_accuracy}}",
+	"{{robomp_jev_confident_accuracy}}",
+	"{{robomp_current_skip_share}}",
+	"{{robomp_jev_skip_share}}",
+	"{{robomp_current_accuracy}}",
+	"{{robomp_jev_accuracy}}",
+	"{{robomp_current_p50}}",
+	"{{robomp_jev_p50}}",
+	"{{robomp_current_p95}}",
+	"{{robomp_jev_p95}}",
+	"{{robomp_current_cost}}",
+	"{{robomp_jev_cost}}",
+	"{{robomp_current_unparseable}}",
+	"{{robomp_jev_unparseable}}",
+	"{{robomp_current_off_list}}",
+	"{{robomp_jev_off_list}}",
+] as const;
 
 export function renderReport(results: MeasurementResults, template: string): string {
 	const at = results.features.auto_thinking;
@@ -64,24 +86,33 @@ export function renderReport(results: MeasurementResults, template: string): str
 	rendered = rendered.replace("{{unexpected_stop_current_off_list}}", formatPercent(us.current.offListRate));
 	rendered = rendered.replace("{{unexpected_stop_jev_off_list}}", formatPercent(us.jev.offListRate));
 
-	// Robomp replacements
-	rendered = rendered.replace(
-		"{{robomp_jev_confident_accuracy}}",
-		formatPercent(ro.jev.confidentBucketAccuracy),
-	);
-	rendered = rendered.replace("{{robomp_jev_skip_share}}", formatPercent(ro.jev.skipSessionShare));
-	rendered = rendered.replace("{{robomp_current_accuracy}}", formatPercent(ro.current.accuracy));
-	rendered = rendered.replace("{{robomp_jev_accuracy}}", formatPercent(ro.jev.accuracy));
-	rendered = rendered.replace("{{robomp_current_p50}}", formatNumber(ro.current.p50LatencyMs, 1));
-	rendered = rendered.replace("{{robomp_jev_p50}}", formatNumber(ro.jev.p50LatencyMs, 1));
-	rendered = rendered.replace("{{robomp_current_p95}}", formatNumber(ro.current.p95LatencyMs, 1));
-	rendered = rendered.replace("{{robomp_jev_p95}}", formatNumber(ro.jev.p95LatencyMs, 1));
-	rendered = rendered.replace("{{robomp_current_cost}}", formatCost(ro.current.costPer1000));
-	rendered = rendered.replace("{{robomp_jev_cost}}", formatCost(ro.jev.costPer1000));
-	rendered = rendered.replace("{{robomp_current_unparseable}}", formatPercent(ro.current.unparseableRate));
-	rendered = rendered.replace("{{robomp_jev_unparseable}}", formatPercent(ro.jev.unparseableRate));
-	rendered = rendered.replace("{{robomp_current_off_list}}", formatPercent(ro.current.offListRate));
-	rendered = rendered.replace("{{robomp_jev_off_list}}", formatPercent(ro.jev.offListRate));
+	// An empty issues set leaves every robomp field null. Fill every robomp cell
+	// with the unmeasured sentence. A measured robomp keeps today's numbers.
+	if (!isMeasuredRobomp(ro)) {
+		for (const placeholder of ROBOMP_PLACEHOLDERS) {
+			rendered = rendered.replace(placeholder, ROBOMP_NOT_MEASURED);
+		}
+	} else {
+		rendered = rendered.replace("{{robomp_current_confident_accuracy}}", "-");
+		rendered = rendered.replace(
+			"{{robomp_jev_confident_accuracy}}",
+			formatPercent(ro.jev.confidentBucketAccuracy),
+		);
+		rendered = rendered.replace("{{robomp_current_skip_share}}", "0.0%");
+		rendered = rendered.replace("{{robomp_jev_skip_share}}", formatPercent(ro.jev.skipSessionShare));
+		rendered = rendered.replace("{{robomp_current_accuracy}}", formatPercent(ro.current.accuracy));
+		rendered = rendered.replace("{{robomp_jev_accuracy}}", formatPercent(ro.jev.accuracy));
+		rendered = rendered.replace("{{robomp_current_p50}}", formatNumber(ro.current.p50LatencyMs, 1));
+		rendered = rendered.replace("{{robomp_jev_p50}}", formatNumber(ro.jev.p50LatencyMs, 1));
+		rendered = rendered.replace("{{robomp_current_p95}}", formatNumber(ro.current.p95LatencyMs, 1));
+		rendered = rendered.replace("{{robomp_jev_p95}}", formatNumber(ro.jev.p95LatencyMs, 1));
+		rendered = rendered.replace("{{robomp_current_cost}}", formatCost(ro.current.costPer1000));
+		rendered = rendered.replace("{{robomp_jev_cost}}", formatCost(ro.jev.costPer1000));
+		rendered = rendered.replace("{{robomp_current_unparseable}}", formatPercent(ro.current.unparseableRate));
+		rendered = rendered.replace("{{robomp_jev_unparseable}}", formatPercent(ro.jev.unparseableRate));
+		rendered = rendered.replace("{{robomp_current_off_list}}", formatPercent(ro.current.offListRate));
+		rendered = rendered.replace("{{robomp_jev_off_list}}", formatPercent(ro.jev.offListRate));
+	}
 
 	// Verdict replacement
 	rendered = rendered.replace("{{verdict}}", results.verdict || "");

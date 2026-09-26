@@ -58,14 +58,60 @@ export interface FeatureComparison {
 	jev: FeatureMetricSummary;
 }
 
+/** Robomp metrics when the issues set is empty. Every field is null. */
+export interface UnmeasuredFeatureMetricSummary {
+	accuracy: null;
+	p50LatencyMs: null;
+	p95LatencyMs: null;
+	costPer1000: null;
+	unparseableRate: null;
+	offListRate: null;
+	precision?: null;
+	recall?: null;
+	confidentBucketAccuracy?: null;
+	skipSessionShare?: null;
+}
+
+export interface UnmeasuredFeatureComparison {
+	current: UnmeasuredFeatureMetricSummary;
+	jev: UnmeasuredFeatureMetricSummary;
+}
+
+export type RobompFeature = FeatureComparison | UnmeasuredFeatureComparison;
+
+const UNMEASURED_ROBOMP_METRICS: UnmeasuredFeatureMetricSummary = {
+	accuracy: null,
+	p50LatencyMs: null,
+	p95LatencyMs: null,
+	costPer1000: null,
+	unparseableRate: null,
+	offListRate: null,
+};
+
+export function unmeasuredRobomp(): UnmeasuredFeatureComparison {
+	return {
+		current: { ...UNMEASURED_ROBOMP_METRICS },
+		jev: {
+			...UNMEASURED_ROBOMP_METRICS,
+			confidentBucketAccuracy: null,
+			skipSessionShare: null,
+		},
+	};
+}
+
+export function isMeasuredRobomp(robomp: RobompFeature): robomp is FeatureComparison {
+	return robomp.current.accuracy !== null && robomp.jev.accuracy !== null;
+}
+
 export interface MeasurementResults {
 	features: {
 		auto_thinking: FeatureComparison;
 		unexpected_stop: FeatureComparison;
-		robomp: FeatureComparison;
+		robomp: RobompFeature;
 	};
 	verdict?: string;
-	robompSessionFlagsMissing?: boolean;
+	/** True when a measured robomp run lacked session cost/latency flags. Null when robomp was not measured. */
+	robompSessionFlagsMissing?: boolean | null;
 }
 
 export interface FakeSmolHandler {
@@ -110,7 +156,7 @@ export function verdict(results: MeasurementResults): string {
 	if (unexpected_stop && unexpected_stop.jev.accuracy < unexpected_stop.current.accuracy) {
 		accuracyFailed = true;
 	}
-	if (robomp && (robomp.jev.confidentBucketAccuracy ?? 0) < 0.95) {
+	if (isMeasuredRobomp(robomp) && (robomp.jev.confidentBucketAccuracy ?? 0) < 0.95) {
 		accuracyFailed = true;
 	}
 	if (accuracyFailed) {
@@ -129,7 +175,7 @@ export function verdict(results: MeasurementResults): string {
 			costFailed = true;
 		}
 	}
-	if (robomp && !results.robompSessionFlagsMissing && robomp.current.costPer1000 > 0) {
+	if (isMeasuredRobomp(robomp) && !results.robompSessionFlagsMissing && robomp.current.costPer1000 > 0) {
 		if (robomp.jev.costPer1000 > robomp.current.costPer1000 / 10) {
 			costFailed = true;
 		}
@@ -156,7 +202,7 @@ export function verdict(results: MeasurementResults): string {
 			latencyFailed = true;
 		}
 	}
-	if (robomp && !results.robompSessionFlagsMissing && robomp.current.p50LatencyMs > 0) {
+	if (isMeasuredRobomp(robomp) && !results.robompSessionFlagsMissing && robomp.current.p50LatencyMs > 0) {
 		if (
 			robomp.jev.p50LatencyMs > robomp.current.p50LatencyMs / 10 ||
 			robomp.jev.p95LatencyMs > robomp.current.p95LatencyMs / 10
@@ -649,6 +695,7 @@ export async function runMeasurementHarness(options: MeasurementRunOptions): Pro
 
 	const prompts = await loadJsonl<PromptSetItem>(promptsPath);
 	const turnEnds = await loadJsonl<TurnEndSetItem>(turnEndsPath);
+	const issues = await loadJsonl<IssueSetItem>(issuesPath);
 
 	const autoThinking = await evaluateAutoThinkingFeature(prompts, {
 		jevBaseUrl: options.jevBaseUrl,
@@ -662,13 +709,21 @@ export async function runMeasurementHarness(options: MeasurementRunOptions): Pro
 		fakeSmol: options.fakeSmol,
 	});
 
-	const { comparison: robomp, sessionFlagsMissing } = await evaluateRobompFeature(issuesPath, {
-		sessionCostUsd: options.robompSessionCostUsd,
-		sessionP50Ms: options.robompSessionP50Ms,
-		sessionP95Ms: options.robompSessionP95Ms,
-		jevBaseUrl: options.jevBaseUrl,
-		robompRunner: options.robompRunner,
-	});
+	// No issue rows means this machine has no robomp history. Null robomp fields
+	// stay out of the verdict, which then uses only the features that were measured.
+	let robomp: RobompFeature = unmeasuredRobomp();
+	let sessionFlagsMissing: boolean | null = null;
+	if (issues.length > 0) {
+		const evaluated = await evaluateRobompFeature(issuesPath, {
+			sessionCostUsd: options.robompSessionCostUsd,
+			sessionP50Ms: options.robompSessionP50Ms,
+			sessionP95Ms: options.robompSessionP95Ms,
+			jevBaseUrl: options.jevBaseUrl,
+			robompRunner: options.robompRunner,
+		});
+		robomp = evaluated.comparison;
+		sessionFlagsMissing = evaluated.sessionFlagsMissing;
+	}
 
 	const results: MeasurementResults = {
 		features: {

@@ -14,8 +14,34 @@ import {
 	verdict,
 	WP5_AMENDMENT,
 } from "../../../../docs/reports/jev-measurement/harness";
-import { run } from "../../../../docs/reports/jev-measurement/run";
+import { renderReport, run } from "../../../../docs/reports/jev-measurement/run";
 import { type StubJevServer, startStubJevServer } from "./stub-jev-server";
+
+const ROBOMP_NOT_MEASURED = "not measured: no robomp history on the measuring machine";
+const REPO_ROOT = path.resolve(import.meta.dir, "../../../..");
+
+function wp5VerdictLines(markdown: string): string[] {
+	return markdown
+		.split("\n")
+		.map(line => line.trim())
+		.filter(line => line === WP5_AMENDMENT || line.startsWith("WP5 unchanged:"));
+}
+
+function robompValueCells(markdown: string): string[] {
+	const start = markdown.indexOf("### 3. Robomp Issue Triage Prefilter");
+	const end = markdown.indexOf("## Verdict");
+	const section = markdown.slice(start, end);
+	const cells: string[] = [];
+	for (const line of section.split("\n")) {
+		if (!line.startsWith("|") || line.includes("---") || line.includes("Metric")) continue;
+		const parts = line
+			.split("|")
+			.slice(1, -1)
+			.map(cell => cell.trim());
+		cells.push(...parts.slice(1));
+	}
+	return cells;
+}
 
 describe("Jev measurement harness", () => {
 	let tempDir: TempDir;
@@ -207,6 +233,53 @@ describe("Jev measurement harness", () => {
 			expect(issues[1].key).toBe("owner/repo#2");
 			expect(issues[1].label).toBe("question");
 		});
+
+		it("build-sets --no-robomp writes prompts, turn ends, and an empty issues set", async () => {
+			const sessionsDir = path.join(tempDir.path(), "sessions");
+			const outDir = path.join(tempDir.path(), "sets");
+			await fs.mkdir(sessionsDir, { recursive: true });
+			const session = [
+				{
+					type: "message",
+					message: { role: "user", content: [{ type: "text", text: "Fix bug in parser" }] },
+				},
+				{ type: "thinking_level_change", thinkingLevel: "medium", configured: "auto" },
+				{
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "I will fix it." }],
+						stopReason: "stop",
+					},
+				},
+			];
+			await Bun.write(
+				path.join(sessionsDir, "session.jsonl"),
+				`${session.map(entry => JSON.stringify(entry)).join("\n")}\n`,
+			);
+
+			const script = path.join(REPO_ROOT, "docs/reports/jev-measurement/build-sets.ts");
+			const proc = Bun.spawn(["bun", script, "--sessions", sessionsDir, "--no-robomp", "--out", outDir], {
+				cwd: REPO_ROOT,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const [stdout, stderr, code] = await Promise.all([
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+				proc.exited,
+			]);
+			expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
+
+			const prompts = (await Bun.file(path.join(outDir, "prompts.jsonl")).text()).trim().split("\n");
+			const turnEnds = (await Bun.file(path.join(outDir, "turn-ends.jsonl")).text()).trim().split("\n");
+			const issuesText = await Bun.file(path.join(outDir, "issues.jsonl")).text();
+			expect(prompts).toHaveLength(1);
+			expect(JSON.parse(prompts[0]).effort).toBe("medium");
+			expect(turnEnds).toHaveLength(1);
+			expect(JSON.parse(turnEnds[0]).label).toBe("stop");
+			expect(issuesText).toBe("");
+		}, 30_000);
 	});
 
 	describe("verdict logic branches", () => {
@@ -312,6 +385,46 @@ describe("Jev measurement harness", () => {
 			const res = verdict(results);
 			expect(res).toContain("WP5 unchanged:");
 			expect(res).toContain("unknown robomp cost");
+		});
+
+		it("branch: null robomp fields stay out of the verdict", async () => {
+			const results: MeasurementResults = structuredClone(basePassingResults);
+			results.features.robomp = {
+				current: {
+					accuracy: null,
+					p50LatencyMs: null,
+					p95LatencyMs: null,
+					costPer1000: null,
+					unparseableRate: null,
+					offListRate: null,
+				},
+				jev: {
+					accuracy: null,
+					p50LatencyMs: null,
+					p95LatencyMs: null,
+					costPer1000: null,
+					unparseableRate: null,
+					offListRate: null,
+					confidentBucketAccuracy: null,
+					skipSessionShare: null,
+				},
+			};
+			results.robompSessionFlagsMissing = null;
+			expect(verdict(results)).toBe(WP5_AMENDMENT);
+
+			results.features.auto_thinking.jev.accuracy = 0.1;
+			expect(verdict(results)).toBe("WP5 unchanged: accuracy short");
+
+			const template = await Bun.file(
+				path.join(REPO_ROOT, "docs/reports/jev-measurement/report-template.md"),
+			).text();
+			const measured = renderReport({ ...basePassingResults, verdict: WP5_AMENDMENT }, template);
+			expect(measured).toContain("| Confident-Bucket Accuracy | - | 96.0% |");
+			expect(measured).toContain("| Skip-Session Share | 0.0% | 30.0% |");
+			expect(measured).toContain("| Overall Accuracy | 100.0% | 98.0% |");
+			expect(measured).not.toContain(ROBOMP_NOT_MEASURED);
+			expect(measured).not.toContain("{{");
+			expect(wp5VerdictLines(measured)).toEqual([WP5_AMENDMENT]);
 		});
 	});
 
@@ -432,6 +545,137 @@ describe("Jev measurement harness", () => {
 			expect(reportMarkdown).toContain("Robomp Issue Triage Prefilter");
 			expect(reportMarkdown).toContain("Verdict");
 			expect(reportMarkdown).toContain(WP5_AMENDMENT);
+		});
+
+		it("empty issues.jsonl leaves robomp unmeasured and keeps one WP5 verdict", async () => {
+			const setsDir = path.join(tempDir.path(), "sets-empty-issues");
+			const outDir = path.join(tempDir.path(), "out-empty-issues");
+			await fs.mkdir(setsDir, { recursive: true });
+
+			await Bun.write(
+				path.join(setsDir, "prompts.jsonl"),
+				`${JSON.stringify({ prompt: "Refactor user authentication service", effort: "medium" })}\n`,
+			);
+			await Bun.write(
+				path.join(setsDir, "turn-ends.jsonl"),
+				`${JSON.stringify({ text: "I will now edit the file.", label: "continue" })}\n`,
+			);
+			await Bun.write(path.join(setsDir, "issues.jsonl"), "");
+
+			const fakeSmol: FakeSmolHandler = {
+				classifyDifficulty: async () => ({
+					effort: "medium",
+					cost: 0.0005,
+					latencyMs: 1200,
+				}),
+				classifyUnexpectedStop: async () => ({
+					unexpectedStop: true,
+					cost: 0.0003,
+					latencyMs: 900,
+				}),
+			};
+
+			let robompCalls = 0;
+			const results = await run({
+				setsDir,
+				outDir,
+				jevBaseUrl: stub.baseUrl,
+				fakeSmol,
+				robompRunner: async () => {
+					robompCalls += 1;
+					return { accuracy: 1 };
+				},
+			});
+
+			expect(robompCalls).toBe(0);
+			expect(results.verdict).toBe(WP5_AMENDMENT);
+			expect(results.features.robomp.current.accuracy).toBeNull();
+			expect(results.features.robomp.current.p50LatencyMs).toBeNull();
+			expect(results.features.robomp.current.p95LatencyMs).toBeNull();
+			expect(results.features.robomp.current.costPer1000).toBeNull();
+			expect(results.features.robomp.current.unparseableRate).toBeNull();
+			expect(results.features.robomp.current.offListRate).toBeNull();
+			expect(results.features.robomp.jev.accuracy).toBeNull();
+			expect(results.features.robomp.jev.p50LatencyMs).toBeNull();
+			expect(results.features.robomp.jev.p95LatencyMs).toBeNull();
+			expect(results.features.robomp.jev.costPer1000).toBeNull();
+			expect(results.features.robomp.jev.unparseableRate).toBeNull();
+			expect(results.features.robomp.jev.offListRate).toBeNull();
+			expect(results.features.robomp.jev.confidentBucketAccuracy).toBeNull();
+			expect(results.features.robomp.jev.skipSessionShare).toBeNull();
+			expect(results.robompSessionFlagsMissing).toBeNull();
+			expect(results.features.auto_thinking.jev.accuracy).toBe(1);
+			expect(results.features.unexpected_stop.jev.accuracy).toBe(1);
+
+			const resultsJson = await Bun.file(path.join(outDir, "results.json")).json();
+			expect(resultsJson.features.robomp.current.accuracy).toBeNull();
+			expect(resultsJson.features.robomp.jev.confidentBucketAccuracy).toBeNull();
+			expect(resultsJson.features.robomp.jev.skipSessionShare).toBeNull();
+			expect(resultsJson.robompSessionFlagsMissing).toBeNull();
+			expect(resultsJson.verdict).toBe(WP5_AMENDMENT);
+
+			const reportMarkdown = await Bun.file(path.join(outDir, "jev-measurement-report.md")).text();
+			const cells = robompValueCells(reportMarkdown);
+			expect(cells.length).toBe(16);
+			for (const cell of cells) {
+				expect(cell).toBe(ROBOMP_NOT_MEASURED);
+			}
+			expect(reportMarkdown.split(ROBOMP_NOT_MEASURED).length - 1).toBe(16);
+			expect(wp5VerdictLines(reportMarkdown)).toEqual([WP5_AMENDMENT]);
+		});
+
+		it("non-empty issues.jsonl still measures robomp and keeps one WP5 verdict", async () => {
+			const setsDir = path.join(tempDir.path(), "sets-with-issues");
+			const outDir = path.join(tempDir.path(), "out-with-issues");
+			await fs.mkdir(setsDir, { recursive: true });
+			await Bun.write(path.join(setsDir, "prompts.jsonl"), "");
+			await Bun.write(path.join(setsDir, "turn-ends.jsonl"), "");
+			await Bun.write(
+				path.join(setsDir, "issues.jsonl"),
+				`${JSON.stringify({
+					key: "test/repo#1",
+					repo: "test/repo",
+					number: 1,
+					title: "Spam issue",
+					body: "Spam content",
+					label: "invalid",
+				})}\n`,
+			);
+
+			let robompCalls = 0;
+			const results = await run({
+				setsDir,
+				outDir,
+				robompSessionCostUsd: 0.5,
+				robompSessionP50Ms: 30000,
+				robompSessionP95Ms: 60000,
+				jevBaseUrl: stub.baseUrl,
+				robompRunner: async () => {
+					robompCalls += 1;
+					return {
+						accuracy: 1,
+						confidentBucketAccuracy: 0.98,
+						skipSessionShare: 0.25,
+						p50LatencyMs: 150,
+						p95LatencyMs: 300,
+						costPer1000: 0.005,
+						unparseableRate: 0,
+						offListRate: 0,
+					};
+				},
+			});
+
+			expect(robompCalls).toBe(1);
+			expect(results.features.robomp.current.accuracy).toBe(1);
+			expect(results.features.robomp.jev.confidentBucketAccuracy).toBe(0.98);
+			expect(results.robompSessionFlagsMissing).toBe(false);
+			expect(results.verdict).toBe(WP5_AMENDMENT);
+
+			const reportMarkdown = await Bun.file(path.join(outDir, "jev-measurement-report.md")).text();
+			expect(reportMarkdown).not.toContain(ROBOMP_NOT_MEASURED);
+			expect(reportMarkdown).toContain("| Confident-Bucket Accuracy | - | 98.0% |");
+			expect(reportMarkdown).toContain("| Skip-Session Share | 0.0% | 25.0% |");
+			expect(wp5VerdictLines(reportMarkdown)).toEqual([WP5_AMENDMENT]);
 		});
 	});
 });

@@ -2,10 +2,10 @@
 /**
  * build-sets.ts
  *
- * Extracts measurement datasets from session history and robomp sqlite DB:
+ * Extracts measurement datasets from session history and, when present, the robomp sqlite DB:
  * - prompts: prompt + its auto thinking_level_change effort; manual change overrides
  * - turn ends: stop candidates; continue if retry reminder or continue/go on/proceed follows, else stop
- * - issues: issue_index rows whose labels_json holds one primary label
+ * - issues: issue_index rows whose labels_json holds one primary label, or an empty set with --no-robomp
  */
 
 import { Database } from "bun:sqlite";
@@ -251,14 +251,20 @@ async function readJsonl(file: string): Promise<any[]> {
 
 export async function buildSets(options: {
 	sessionsDir: string;
-	dbPath: string;
 	outDir: string;
+	dbPath?: string;
+	noRobomp?: boolean;
 }): Promise<{ promptCount: number; turnEndCount: number; issueCount: number }> {
+	// Exactly one source: a robomp DB, or an explicit empty issues set.
+	if (Boolean(options.noRobomp) === Boolean(options.dbPath)) {
+		throw new Error("buildSets requires exactly one of dbPath or noRobomp");
+	}
+
 	await fs.mkdir(options.outDir, { recursive: true });
 
 	const prompts = await buildPromptsSet(options.sessionsDir);
 	const turnEnds = await buildTurnEndsSet(options.sessionsDir);
-	const issues = await buildIssuesSet(options.dbPath);
+	const issues = options.noRobomp ? [] : await buildIssuesSet(options.dbPath!);
 
 	const promptsFile = path.join(options.outDir, "prompts.jsonl");
 	const turnEndsFile = path.join(options.outDir, "turn-ends.jsonl");
@@ -283,6 +289,7 @@ async function main() {
 	let sessionsDir = "";
 	let dbPath = "";
 	let outDir = "";
+	let noRobomp = false;
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -294,6 +301,8 @@ async function main() {
 			dbPath = args[++i];
 		} else if (arg.startsWith("--robomp-db=")) {
 			dbPath = arg.slice("--robomp-db=".length);
+		} else if (arg === "--no-robomp") {
+			noRobomp = true;
 		} else if (arg === "--out" && i + 1 < args.length) {
 			outDir = args[++i];
 		} else if (arg.startsWith("--out=")) {
@@ -301,12 +310,12 @@ async function main() {
 		}
 	}
 
-	if (!sessionsDir || !dbPath || !outDir) {
-		console.error("Usage: build-sets.ts --sessions <dir> --robomp-db <sqlite> --out <dir>");
+	if (!sessionsDir || !outDir || noRobomp === Boolean(dbPath)) {
+		console.error("Usage: build-sets.ts --sessions <dir> (--robomp-db <sqlite> | --no-robomp) --out <dir>");
 		process.exit(1);
 	}
 
-	const counts = await buildSets({ sessionsDir, dbPath, outDir });
+	const counts = await buildSets(noRobomp ? { sessionsDir, outDir, noRobomp: true } : { sessionsDir, outDir, dbPath });
 	console.log(`Generated sets in ${outDir}:`);
 	console.log(`- prompts.jsonl: ${counts.promptCount} items`);
 	console.log(`- turn-ends.jsonl: ${counts.turnEndCount} items`);
