@@ -966,6 +966,11 @@ class ResearchStoreMixin:
             raise WorkStoreError("invalid_request", ("trial is not in proposed state",))
         if trial["candidate_digest"] != payload.candidate_digest:
             raise WorkStoreError("stale_evidence", ("trial candidate digest mismatch",))
+        if payload.native_candidate_id == payload.trial_id:
+            raise WorkStoreError(
+                "stale_evidence",
+                ("research trial id cannot bind as native candidate",),
+            )
 
         cur.execute(
             "SELECT work_id, revision_id, kind FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s",
