@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from omp_work.v1.client import WorkClient
 
-from .capture import NativeEvents, RunRecord, drain, retry
+from .capture import NativeEvents, NativeRecords, RunRecord, drain, retry
 from .corrections import CorrectionRecord, correct
 from .generation import LessonGenerator, LocalChatGenerator
 from .models import Attribution, Precondition, SourceIdentity
@@ -37,7 +37,15 @@ def _build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--generator-url", required=True)
         sub.add_argument("--model", required=True)
         sub.add_argument("--profile", required=True)
-        sub.add_argument("--limit", type=int, default=50)
+        sub.add_argument(
+            "--limit",
+            type=int,
+            default=50,
+            help=(
+                "maximum domain events scanned from the cursor in this drain; "
+                "not a unit count (most scanned events are not captured types)"
+            ),
+        )
         sub.add_argument("--json", action="store_true")
 
     supply_parser = subcommands.add_parser("supply")
@@ -157,6 +165,7 @@ def main(
     events: NativeEvents | None = None,
     receipts: NativeReceipts | None = None,
     generator: LessonGenerator | None = None,
+    records: NativeRecords | None = None,
 ) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -189,6 +198,7 @@ def main(
                     active_generator,
                     workspace_id=args.workspace,
                     limit=args.limit,
+                    records=records if records is not None else client,
                 )
             else:
                 record = retry(active_store, receipts, active_generator)

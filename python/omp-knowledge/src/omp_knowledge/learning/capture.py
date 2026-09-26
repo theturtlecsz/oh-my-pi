@@ -13,6 +13,7 @@ from .generation import GeneratorError, LessonGenerator
 from .models import Attribution, RunStatus, SourceIdentity, StrictModel, UnitState
 from .policy import NativeReceipts
 from .proposals import create_proposal
+from .record import NativeRecords, bounded_work_record
 from .store import LearningStore, compute_unit_id
 
 DEFAULT_CAPTURE_TYPES = frozenset({"complete_work"})
@@ -36,6 +37,9 @@ class UnitRecord(StrictModel):
     retryable: bool
     error_code: str | None = None
     proposal_ids: tuple[str, ...] = ()
+    model: str | None = None
+    profile: str | None = None
+    event_sequence: int | None = None
 
 
 class RunRecord(StrictModel):
@@ -85,6 +89,23 @@ def _read_cursor(store: LearningStore, workspace_id: str) -> int:
     return int(row["last_sequence"]) if row is not None else 0
 
 
+def _unit_event_sequence(row: Any) -> int | None:
+    """The source domain-event sequence recorded on a unit row, if readable.
+
+    Every queued unit writes ``source_json``, so a run that reports units which
+    never reached the generator (dropped leases) can still name the exact source
+    event it came from.
+    """
+    raw = row["source_json"]
+    if not raw:
+        return None
+    try:
+        source = SourceIdentity.model_validate_json(raw)
+    except ValueError:
+        return None
+    return source.event_sequence
+
+
 def _event_source(workspace_id: str, event: Any) -> SourceIdentity:
     return SourceIdentity(
         workspace_id=workspace_id,
@@ -94,7 +115,19 @@ def _event_source(workspace_id: str, event: Any) -> SourceIdentity:
     )
 
 
-def _event_trace(workspace_id: str, event: Any) -> dict[str, Any]:
+def _event_trace(
+    workspace_id: str,
+    event: Any,
+    work_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The trace one unit sends to the generator.
+
+    The event alone carries no execution evidence (a ``complete_work`` payload is
+    only ``work_id``/``state``/``row_version``), so the finished item's own
+    bounded WorkService record is attached when it could be read. ``work_record``
+    is present-but-``null`` when the read was unavailable: absence of evidence is
+    visible to the generator instead of silently looking like an empty trace.
+    """
     return {
         "workspace_id": workspace_id,
         "event_id": str(event.event_id),
@@ -106,7 +139,15 @@ def _event_trace(workspace_id: str, event: Any) -> dict[str, Any]:
         "actor_id": str(event.actor_id),
         "actor_kind": event.actor_kind,
         "payload": event.payload,
+        "work_record": work_record,
     }
+
+
+def _event_work_id(event: Any) -> str:
+    """The work item a captured event is about: payload ``work_id`` or the aggregate."""
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    work_id = payload.get("work_id")
+    return str(work_id) if work_id else str(event.aggregate_id)
 
 
 def _queue_events(
@@ -116,6 +157,7 @@ def _queue_events(
     capture_types: Collection[str],
     model: str,
     profile: str,
+    records: NativeRecords | None = None,
 ) -> None:
     now = _utcnow().isoformat()
     with store.transaction() as conn:
@@ -123,6 +165,11 @@ def _queue_events(
             if event.event_type not in capture_types:
                 continue
             source = _event_source(workspace_id, event)
+            work_record = (
+                bounded_work_record(records, _event_work_id(event))
+                if records is not None
+                else None
+            )
             conn.execute(
                 """
                 INSERT OR IGNORE INTO units (
@@ -135,7 +182,7 @@ def _queue_events(
                     compute_unit_id(workspace_id, event.event_id),
                     workspace_id,
                     str(event.event_id),
-                    canonical_json(_event_trace(workspace_id, event)),
+                    canonical_json(_event_trace(workspace_id, event, work_record)),
                     model,
                     profile,
                     source.model_dump_json(),
@@ -160,7 +207,8 @@ def _drop_expired_units(
 ) -> list[UnitRecord]:
     rows = store.execute(
         """
-        SELECT unit_id, event_id, attempts, lease_until FROM units
+        SELECT unit_id, event_id, attempts, lease_until, model, profile,
+               source_json FROM units
         WHERE workspace_id = ? AND state = 'running' AND lease_until IS NOT NULL
         """,
         (workspace_id,),
@@ -197,6 +245,9 @@ def _drop_expired_units(
                     attempts=int(row["attempts"]),
                     retryable=True,
                     error_code=DROPPED_ERROR_CODE,
+                    model=str(row["model"]),
+                    profile=str(row["profile"]),
+                    event_sequence=_unit_event_sequence(row),
                 )
             )
     return records
@@ -300,6 +351,16 @@ def _process_units(
         source = SourceIdentity.model_validate_json(unit["source_json"])
         event_id = str(unit["event_id"])
         attempts = int(unit["attempts"])
+        # The queued row's attribution is what the unit was captured under; a
+        # settled unit reports the attribution the generator answered with.
+        captured_model = str(unit["model"])
+        captured_profile = str(unit["profile"])
+        base = {
+            "unit_id": unit_id,
+            "event_id": event_id,
+            "attempts": attempts,
+            "event_sequence": source.event_sequence,
+        }
 
         try:
             result = generator.generate(trace)
@@ -315,12 +376,12 @@ def _process_units(
             )
             records.append(
                 UnitRecord(
-                    unit_id=unit_id,
-                    event_id=event_id,
+                    **base,
                     state="failed",
-                    attempts=attempts,
                     retryable=retryable,
                     error_code=error_code,
+                    model=captured_model,
+                    profile=captured_profile,
                 )
             )
             continue
@@ -336,11 +397,11 @@ def _process_units(
             )
             records.append(
                 UnitRecord(
-                    unit_id=unit_id,
-                    event_id=event_id,
+                    **base,
                     state="no_lesson",
-                    attempts=attempts,
                     retryable=False,
+                    model=result.model,
+                    profile=result.profile,
                 )
             )
             continue
@@ -373,12 +434,12 @@ def _process_units(
         )
         records.append(
             UnitRecord(
-                unit_id=unit_id,
-                event_id=event_id,
+                **base,
                 state="succeeded",
-                attempts=attempts,
                 retryable=False,
                 proposal_ids=tuple(proposal_ids),
+                model=result.model,
+                profile=result.profile,
             )
         )
 
@@ -462,10 +523,16 @@ def drain(
     capture_types: Collection[str] = DEFAULT_CAPTURE_TYPES,
     limit: int = DEFAULT_LIMIT,
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    records: NativeRecords | None = None,
 ) -> RunRecord:
     """Bounded capture: page native events from the cursor to the watermark,
     queue one unit per matching event, expire dropped leases, then turn each
     queued unit's lessons into proposals.
+
+    ``limit`` bounds the number of domain events scanned from the cursor in this
+    drain — it is not a unit count, because most scanned events are not of a
+    captured type. When ``records`` is supplied, each ``complete_work`` unit's
+    trace carries that item's own bounded execution record before generation.
     """
     workspace = str(workspace_id)
     started_at = _utcnow().isoformat()
@@ -473,19 +540,19 @@ def drain(
 
     after = _read_cursor(store, workspace)
     page = events.events(after, limit)
-    _queue_events(store, workspace, page, capture_types, model, profile)
-    records = _drop_expired_units(store, workspace, _utcnow())
+    _queue_events(store, workspace, page, capture_types, model, profile, records)
+    dropped = _drop_expired_units(store, workspace, _utcnow())
 
     rows = _queued_rows(store, workspace)
     processed, accepted, rejected = _process_units(
         store, receipts, generator, rows, lease_seconds=lease_seconds
     )
-    records.extend(processed)
+    dropped.extend(processed)
     return _finalize_run(
         store,
         workspace_id=workspace,
         started_at=started_at,
-        records=records,
+        records=dropped,
         proposals_accepted=accepted,
         proposals_rejected=rejected,
     )
@@ -570,6 +637,7 @@ __all__ = [
     "DEFAULT_LIMIT",
     "DROPPED_ERROR_CODE",
     "NativeEvents",
+    "NativeRecords",
     "RunRecord",
     "UnitRecord",
     "drain",
