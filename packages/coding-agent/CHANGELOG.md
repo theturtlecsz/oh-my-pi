@@ -35,6 +35,7 @@
 - Fixed `/skill:summary` bypassing the pre-stream closeout authorization used by `/summary`, which made candidate confirmation fail and then falsely reported that the owner had not entered `/summary`.
 - Subagent and tan sessions now record in their session init when a slow or failing SYSTEM.md / context-file / custom-prompt load forced the system prompt to fall back; timed-out decorative prompt steps no longer print warnings.
 - Work Ledger mutations whose response was lost now report the landed result instead of an error, never re-send the command, and report an unknown outcome only after the retry window.
+- Fixed Julia kernel startup failing on a cold package depot: the prelude now loads its HTTP client on the first `tool.*` call instead of while the kernel starts, so the interpreter's initial startup no longer times out.
 ## [18.0.6] - 2026-08-26
 
 ### Added
