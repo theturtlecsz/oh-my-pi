@@ -1135,6 +1135,97 @@ class PublishBoundedIntakeCommand(StrictModel):
     payload: PublishBoundedIntakePayload
 
 
+class ResearchComponentKind(StrEnum):
+    WORKER = "worker"
+    EVALUATOR = "evaluator"
+    POLICY = "policy"
+    AUDIT = "audit"
+    RELEASE = "release"
+    ENVIRONMENT = "environment"
+
+
+class ResearchRole(StrEnum):
+    CAMPAIGN_PLANNER = "campaign_planner"
+    RESEARCH_WORKER = "research_worker"
+    HYPOTHESIS_GENERATOR = "hypothesis_generator"
+    METHOD_CRITIC = "method_critic"
+    IMPLEMENTER = "implementer"
+    SELECTOR = "selector"
+    ANALYST = "analyst"
+    SCIENTIFIC_REVIEWER = "scientific_reviewer"
+    HARNESS_RESEARCHER = "harness_researcher"
+    NATIVE_AUDITOR = "native_auditor"
+    SYNTHESIZER = "synthesizer"
+
+
+ResearchCapability = Annotated[
+    str, Field(pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$", max_length=128)
+]
+Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+def _require_sorted_unique(values: tuple[Any, ...], label: str) -> None:
+    lst = list(values)
+    if len(lst) != len(set(lst)):
+        raise ValueError(f"{label} must contain unique values")
+    if lst != sorted(lst):
+        raise ValueError(f"{label} must be sorted")
+
+
+class ResearchComponentDescriptor(StrictModel):
+    """Canonical, hash-defining declaration. Field set IS the identity."""
+
+    contract_version: Literal["research-component.v1"]
+    kind: ResearchComponentKind
+    name: str = Field(min_length=1, max_length=128)
+    version: str = Field(min_length=1, max_length=64)
+    artifact_sha256: Sha256Hex
+    roles: tuple[ResearchRole, ...] = ()
+    capabilities: tuple[ResearchCapability, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_sorted_unique(self) -> ResearchComponentDescriptor:
+        _require_sorted_unique(self.roles, "roles")
+        _require_sorted_unique(self.capabilities, "capabilities")
+        return self
+
+
+class ResearchComponent(StrictModel):
+    component_sha256: Sha256Hex
+    workspace_id: UUID
+    kind: ResearchComponentKind
+    descriptor: ResearchComponentDescriptor
+    registered_at: datetime
+
+
+class ResearchCompatibilityManifest(StrictModel):
+    contract_version: Literal["research-compatibility.v1"]
+    workers: tuple[Sha256Hex, ...] = ()
+    evaluators: tuple[Sha256Hex, ...] = ()
+    audits: tuple[Sha256Hex, ...] = ()
+    releases: tuple[Sha256Hex, ...] = ()
+    environments: tuple[Sha256Hex, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_sorted_unique(self) -> ResearchCompatibilityManifest:
+        _require_sorted_unique(self.workers, "workers")
+        _require_sorted_unique(self.evaluators, "evaluators")
+        _require_sorted_unique(self.audits, "audits")
+        _require_sorted_unique(self.releases, "releases")
+        _require_sorted_unique(self.environments, "environments")
+        return self
+
+
+class RegisterResearchComponentPayload(StrictModel):
+    component_sha256: Sha256Hex
+    descriptor: ResearchComponentDescriptor
+
+
+class RegisterResearchComponentCommand(StrictModel):
+    type: Literal["register_research_component"]
+    payload: RegisterResearchComponentPayload
+
+
 class ResearchDomain(StrEnum):
     ENGINEERING = "engineering"
     OMP_HARNESS = "omp_harness"
@@ -1227,6 +1318,10 @@ class ResearchCampaign(StrictModel):
     blocked_from_state: (
         Literal["admitted", "running", "paused", "evaluating"] | None
     ) = None
+    compatibility: ResearchCompatibilityManifest | None = None
+    compatibility_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
 
 
 class ResearchTrial(StrictModel):
@@ -1302,6 +1397,8 @@ class AdmitResearchCampaignPayload(StrictModel):
     revision_id: UUID
     spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compatibility: ResearchCompatibilityManifest
+    compatibility_sha256: Sha256Hex
 
 
 class CancelResearchCampaignPayload(StrictModel):
@@ -1456,6 +1553,7 @@ Command = Annotated[
     | RecordFableAdviceCommand
     | AttestIntakeAdmissionCommand
     | PublishBoundedIntakeCommand
+    | RegisterResearchComponentCommand
     | CreateResearchCampaignCommand
     | AdmitResearchCampaignCommand
     | CancelResearchCampaignCommand

@@ -18,6 +18,7 @@ from .models import (
     OperationReceipt,
     RelationEdge,
     ResearchCampaign,
+    ResearchComponent,
     ResearchDeliverableBinding,
     ResearchObservation,
     ResearchTrial,
@@ -396,6 +397,12 @@ class SetResearchCampaignStateResult(StrictModel):
     campaign: ResearchCampaign
 
 
+class RegisterResearchComponentResult(StrictModel):
+    type: Literal["register_research_component"]
+    status: Literal["applied", "replayed"]
+    component: ResearchComponent
+
+
 class ConcludeResearchCampaignResult(StrictModel):
     type: Literal["conclude_research_campaign"]
     status: Literal["applied", "replayed"]
@@ -408,6 +415,7 @@ class ResearchView(StrictModel):
     trials: tuple[ResearchTrial, ...] = ()
     observations: tuple[ResearchObservation, ...] = ()
     deliverable_bindings: tuple[ResearchDeliverableBinding, ...] = ()
+    components: tuple[ResearchComponent, ...] = ()
 
 
 CommandResult = Annotated[
@@ -436,6 +444,7 @@ CommandResult = Annotated[
     | RecordExternalDeliveryResult
     | RecordFableAdviceResult
     | PublishBoundedIntakeResult
+    | RegisterResearchComponentResult
     | CreateResearchCampaignResult
     | AdmitResearchCampaignResult
     | CancelResearchCampaignResult

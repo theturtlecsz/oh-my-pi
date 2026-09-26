@@ -626,6 +626,30 @@
               "default": null,
               "title": "Cancelled At"
             },
+            "compatibility": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchCompatibilityManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "compatibility_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Compatibility Sha256"
+            },
             "concluded_at": {
               "anyOf": [
                 {
@@ -798,6 +822,66 @@
             "candidate_mapping_policy"
           ],
           "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
           "type": "object"
         },
         "ResearchDomain": {
@@ -2005,6 +2089,30 @@
               "default": null,
               "title": "Cancelled At"
             },
+            "compatibility": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchCompatibilityManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "compatibility_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Compatibility Sha256"
+            },
             "concluded_at": {
               "anyOf": [
                 {
@@ -2177,6 +2285,66 @@
             "candidate_mapping_policy"
           ],
           "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
           "type": "object"
         },
         "ResearchDomain": {
@@ -6430,6 +6598,34 @@
           "title": "RecordResearchObservationResult",
           "type": "object"
         },
+        "RegisterResearchComponentResult": {
+          "additionalProperties": false,
+          "properties": {
+            "component": {
+              "$ref": "#/$defs/ResearchComponent"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "register_research_component",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "component"
+          ],
+          "title": "RegisterResearchComponentResult",
+          "type": "object"
+        },
         "RelationResult": {
           "additionalProperties": false,
           "properties": {
@@ -6604,6 +6800,30 @@
               "default": null,
               "title": "Cancelled At"
             },
+            "compatibility": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchCompatibilityManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "compatibility_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Compatibility Sha256"
+            },
             "concluded_at": {
               "anyOf": [
                 {
@@ -6777,6 +6997,171 @@
           ],
           "title": "ResearchCampaignSpec",
           "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
+          "type": "object"
+        },
+        "ResearchComponent": {
+          "additionalProperties": false,
+          "properties": {
+            "component_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Component Sha256",
+              "type": "string"
+            },
+            "descriptor": {
+              "$ref": "#/$defs/ResearchComponentDescriptor"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "registered_at": {
+              "format": "date-time",
+              "title": "Registered At",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "component_sha256",
+            "workspace_id",
+            "kind",
+            "descriptor",
+            "registered_at"
+          ],
+          "title": "ResearchComponent",
+          "type": "object"
+        },
+        "ResearchComponentDescriptor": {
+          "additionalProperties": false,
+          "description": "Canonical, hash-defining declaration. Field set IS the identity.",
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "capabilities": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-component.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "roles": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ResearchRole"
+              },
+              "title": "Roles",
+              "type": "array"
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "kind",
+            "name",
+            "version",
+            "artifact_sha256"
+          ],
+          "title": "ResearchComponentDescriptor",
+          "type": "object"
+        },
+        "ResearchComponentKind": {
+          "enum": [
+            "worker",
+            "evaluator",
+            "policy",
+            "audit",
+            "release",
+            "environment"
+          ],
+          "title": "ResearchComponentKind",
+          "type": "string"
         },
         "ResearchDeliverableBinding": {
           "additionalProperties": false,
@@ -7067,6 +7452,23 @@
           },
           "title": "ResearchResourceVector",
           "type": "object"
+        },
+        "ResearchRole": {
+          "enum": [
+            "campaign_planner",
+            "research_worker",
+            "hypothesis_generator",
+            "method_critic",
+            "implementer",
+            "selector",
+            "analyst",
+            "scientific_reviewer",
+            "harness_researcher",
+            "native_auditor",
+            "synthesizer"
+          ],
+          "title": "ResearchRole",
+          "type": "string"
         },
         "ResearchTrial": {
           "additionalProperties": false,
@@ -7586,6 +7988,7 @@
               "record_fable_advice": "#/$defs/RecordFableAdviceResult",
               "record_project_health": "#/$defs/ProjectHealthResult",
               "record_research_observation": "#/$defs/RecordResearchObservationResult",
+              "register_research_component": "#/$defs/RegisterResearchComponentResult",
               "remove_relation": "#/$defs/RelationResult",
               "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
               "revise_work": "#/$defs/ReviseWorkResult",
@@ -7676,6 +8079,9 @@
             },
             {
               "$ref": "#/$defs/PublishBoundedIntakeResult"
+            },
+            {
+              "$ref": "#/$defs/RegisterResearchComponentResult"
             },
             {
               "$ref": "#/$defs/CreateResearchCampaignResult"
@@ -8670,6 +9076,30 @@
               "default": null,
               "title": "Cancelled At"
             },
+            "compatibility": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchCompatibilityManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "compatibility_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Compatibility Sha256"
+            },
             "concluded_at": {
               "anyOf": [
                 {
@@ -8842,6 +9272,66 @@
             "candidate_mapping_policy"
           ],
           "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
           "type": "object"
         },
         "ResearchDomain": {
@@ -9106,6 +9596,30 @@
               "default": null,
               "title": "Cancelled At"
             },
+            "compatibility": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchCompatibilityManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "compatibility_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Compatibility Sha256"
+            },
             "concluded_at": {
               "anyOf": [
                 {
@@ -9278,6 +9792,66 @@
             "candidate_mapping_policy"
           ],
           "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
           "type": "object"
         },
         "ResearchDomain": {
@@ -13455,6 +14029,158 @@
       "title": "RecordResearchObservationResult",
       "type": "object"
     },
+    "RegisterResearchComponentResult": {
+      "$defs": {
+        "ResearchComponent": {
+          "additionalProperties": false,
+          "properties": {
+            "component_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Component Sha256",
+              "type": "string"
+            },
+            "descriptor": {
+              "$ref": "#/$defs/ResearchComponentDescriptor"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "registered_at": {
+              "format": "date-time",
+              "title": "Registered At",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "component_sha256",
+            "workspace_id",
+            "kind",
+            "descriptor",
+            "registered_at"
+          ],
+          "title": "ResearchComponent",
+          "type": "object"
+        },
+        "ResearchComponentDescriptor": {
+          "additionalProperties": false,
+          "description": "Canonical, hash-defining declaration. Field set IS the identity.",
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "capabilities": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-component.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "roles": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ResearchRole"
+              },
+              "title": "Roles",
+              "type": "array"
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "kind",
+            "name",
+            "version",
+            "artifact_sha256"
+          ],
+          "title": "ResearchComponentDescriptor",
+          "type": "object"
+        },
+        "ResearchComponentKind": {
+          "enum": [
+            "worker",
+            "evaluator",
+            "policy",
+            "audit",
+            "release",
+            "environment"
+          ],
+          "title": "ResearchComponentKind",
+          "type": "string"
+        },
+        "ResearchRole": {
+          "enum": [
+            "campaign_planner",
+            "research_worker",
+            "hypothesis_generator",
+            "method_critic",
+            "implementer",
+            "selector",
+            "analyst",
+            "scientific_reviewer",
+            "harness_researcher",
+            "native_auditor",
+            "synthesizer"
+          ],
+          "title": "ResearchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/ResearchComponent"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "replayed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "register_research_component",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "component"
+      ],
+      "title": "RegisterResearchComponentResult",
+      "type": "object"
+    },
     "RelationEdge": {
       "$defs": {
         "RelationKind": {
@@ -13640,6 +14366,66 @@
             "candidate_mapping_policy"
           ],
           "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
           "type": "object"
         },
         "ResearchDomain": {
@@ -13840,6 +14626,30 @@
           "default": null,
           "title": "Cancelled At"
         },
+        "compatibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResearchCompatibilityManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "compatibility_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compatibility Sha256"
+        },
         "concluded_at": {
           "anyOf": [
             {
@@ -13955,6 +14765,130 @@
         "created_at"
       ],
       "title": "ResearchCampaign",
+      "type": "object"
+    },
+    "ResearchComponent": {
+      "$defs": {
+        "ResearchComponentDescriptor": {
+          "additionalProperties": false,
+          "description": "Canonical, hash-defining declaration. Field set IS the identity.",
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "capabilities": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-component.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "roles": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ResearchRole"
+              },
+              "title": "Roles",
+              "type": "array"
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "kind",
+            "name",
+            "version",
+            "artifact_sha256"
+          ],
+          "title": "ResearchComponentDescriptor",
+          "type": "object"
+        },
+        "ResearchComponentKind": {
+          "enum": [
+            "worker",
+            "evaluator",
+            "policy",
+            "audit",
+            "release",
+            "environment"
+          ],
+          "title": "ResearchComponentKind",
+          "type": "string"
+        },
+        "ResearchRole": {
+          "enum": [
+            "campaign_planner",
+            "research_worker",
+            "hypothesis_generator",
+            "method_critic",
+            "implementer",
+            "selector",
+            "analyst",
+            "scientific_reviewer",
+            "harness_researcher",
+            "native_auditor",
+            "synthesizer"
+          ],
+          "title": "ResearchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "component_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Component Sha256",
+          "type": "string"
+        },
+        "descriptor": {
+          "$ref": "#/$defs/ResearchComponentDescriptor"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResearchComponentKind"
+        },
+        "registered_at": {
+          "format": "date-time",
+          "title": "Registered At",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component_sha256",
+        "workspace_id",
+        "kind",
+        "descriptor",
+        "registered_at"
+      ],
+      "title": "ResearchComponent",
       "type": "object"
     },
     "ResearchDeliverableBinding": {
@@ -14450,6 +15384,30 @@
               "default": null,
               "title": "Cancelled At"
             },
+            "compatibility": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchCompatibilityManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "compatibility_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Compatibility Sha256"
+            },
             "concluded_at": {
               "anyOf": [
                 {
@@ -14623,6 +15581,171 @@
           ],
           "title": "ResearchCampaignSpec",
           "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
+          "type": "object"
+        },
+        "ResearchComponent": {
+          "additionalProperties": false,
+          "properties": {
+            "component_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Component Sha256",
+              "type": "string"
+            },
+            "descriptor": {
+              "$ref": "#/$defs/ResearchComponentDescriptor"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "registered_at": {
+              "format": "date-time",
+              "title": "Registered At",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "component_sha256",
+            "workspace_id",
+            "kind",
+            "descriptor",
+            "registered_at"
+          ],
+          "title": "ResearchComponent",
+          "type": "object"
+        },
+        "ResearchComponentDescriptor": {
+          "additionalProperties": false,
+          "description": "Canonical, hash-defining declaration. Field set IS the identity.",
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "capabilities": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-component.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "roles": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ResearchRole"
+              },
+              "title": "Roles",
+              "type": "array"
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "kind",
+            "name",
+            "version",
+            "artifact_sha256"
+          ],
+          "title": "ResearchComponentDescriptor",
+          "type": "object"
+        },
+        "ResearchComponentKind": {
+          "enum": [
+            "worker",
+            "evaluator",
+            "policy",
+            "audit",
+            "release",
+            "environment"
+          ],
+          "title": "ResearchComponentKind",
+          "type": "string"
         },
         "ResearchDeliverableBinding": {
           "additionalProperties": false,
@@ -14914,6 +16037,23 @@
           "title": "ResearchResourceVector",
           "type": "object"
         },
+        "ResearchRole": {
+          "enum": [
+            "campaign_planner",
+            "research_worker",
+            "hypothesis_generator",
+            "method_critic",
+            "implementer",
+            "selector",
+            "analyst",
+            "scientific_reviewer",
+            "harness_researcher",
+            "native_auditor",
+            "synthesizer"
+          ],
+          "title": "ResearchRole",
+          "type": "string"
+        },
         "ResearchTrial": {
           "additionalProperties": false,
           "properties": {
@@ -15098,6 +16238,14 @@
             "$ref": "#/$defs/ResearchCampaign"
           },
           "title": "Campaigns",
+          "type": "array"
+        },
+        "components": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResearchComponent"
+          },
+          "title": "Components",
           "type": "array"
         },
         "deliverable_bindings": {
@@ -15978,6 +17126,30 @@
               "default": null,
               "title": "Cancelled At"
             },
+            "compatibility": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchCompatibilityManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "compatibility_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Compatibility Sha256"
+            },
             "concluded_at": {
               "anyOf": [
                 {
@@ -16150,6 +17322,66 @@
             "candidate_mapping_policy"
           ],
           "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
           "type": "object"
         },
         "ResearchDomain": {
@@ -19874,6 +21106,34 @@
           "title": "RecordResearchObservationResult",
           "type": "object"
         },
+        "RegisterResearchComponentResult": {
+          "additionalProperties": false,
+          "properties": {
+            "component": {
+              "$ref": "#/$defs/ResearchComponent"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "register_research_component",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "component"
+          ],
+          "title": "RegisterResearchComponentResult",
+          "type": "object"
+        },
         "RelationResult": {
           "additionalProperties": false,
           "properties": {
@@ -20048,6 +21308,30 @@
               "default": null,
               "title": "Cancelled At"
             },
+            "compatibility": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchCompatibilityManifest"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "compatibility_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Compatibility Sha256"
+            },
             "concluded_at": {
               "anyOf": [
                 {
@@ -20221,6 +21505,171 @@
           ],
           "title": "ResearchCampaignSpec",
           "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
+          "type": "object"
+        },
+        "ResearchComponent": {
+          "additionalProperties": false,
+          "properties": {
+            "component_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Component Sha256",
+              "type": "string"
+            },
+            "descriptor": {
+              "$ref": "#/$defs/ResearchComponentDescriptor"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "registered_at": {
+              "format": "date-time",
+              "title": "Registered At",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "component_sha256",
+            "workspace_id",
+            "kind",
+            "descriptor",
+            "registered_at"
+          ],
+          "title": "ResearchComponent",
+          "type": "object"
+        },
+        "ResearchComponentDescriptor": {
+          "additionalProperties": false,
+          "description": "Canonical, hash-defining declaration. Field set IS the identity.",
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "capabilities": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-component.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "roles": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ResearchRole"
+              },
+              "title": "Roles",
+              "type": "array"
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "kind",
+            "name",
+            "version",
+            "artifact_sha256"
+          ],
+          "title": "ResearchComponentDescriptor",
+          "type": "object"
+        },
+        "ResearchComponentKind": {
+          "enum": [
+            "worker",
+            "evaluator",
+            "policy",
+            "audit",
+            "release",
+            "environment"
+          ],
+          "title": "ResearchComponentKind",
+          "type": "string"
         },
         "ResearchDeliverableBinding": {
           "additionalProperties": false,
@@ -20511,6 +21960,23 @@
           },
           "title": "ResearchResourceVector",
           "type": "object"
+        },
+        "ResearchRole": {
+          "enum": [
+            "campaign_planner",
+            "research_worker",
+            "hypothesis_generator",
+            "method_critic",
+            "implementer",
+            "selector",
+            "analyst",
+            "scientific_reviewer",
+            "harness_researcher",
+            "native_auditor",
+            "synthesizer"
+          ],
+          "title": "ResearchRole",
+          "type": "string"
         },
         "ResearchTrial": {
           "additionalProperties": false,
@@ -21046,6 +22512,7 @@
                   "record_fable_advice": "#/$defs/RecordFableAdviceResult",
                   "record_project_health": "#/$defs/ProjectHealthResult",
                   "record_research_observation": "#/$defs/RecordResearchObservationResult",
+                  "register_research_component": "#/$defs/RegisterResearchComponentResult",
                   "remove_relation": "#/$defs/RelationResult",
                   "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
                   "revise_work": "#/$defs/ReviseWorkResult",
@@ -21136,6 +22603,9 @@
                 },
                 {
                   "$ref": "#/$defs/PublishBoundedIntakeResult"
+                },
+                {
+                  "$ref": "#/$defs/RegisterResearchComponentResult"
                 },
                 {
                   "$ref": "#/$defs/CreateResearchCampaignResult"

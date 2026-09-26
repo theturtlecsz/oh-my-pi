@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
 	type ResearchCampaign,
+	type ResearchComponent,
 	type ResearchDeliverableBinding,
 	type ResearchObservation,
 	type ResearchTrial,
@@ -113,6 +114,42 @@ test("dispatches research commands, decodes results, and calls research view", a
 		},
 	);
 
+	// 0. register_research_component
+	const mockComponent: ResearchComponent = {
+		component_sha256: "2".repeat(64),
+		workspace_id: ENV.workspace_id,
+		kind: "policy",
+		descriptor: {
+			contract_version: "research-component.v1",
+			kind: "policy",
+			name: "test-policy",
+			version: "1",
+			artifact_sha256: "a".repeat(64),
+			roles: [],
+			capabilities: [],
+		},
+		registered_at: new Date().toISOString(),
+	};
+	nextResult = {
+		receipt: RECEIPT,
+		result: { type: "register_research_component", status: "applied", component: mockComponent },
+	};
+	const regRes = await client.execute({
+		...ENV,
+		command: {
+			type: "register_research_component",
+			payload: {
+				component_sha256: mockComponent.component_sha256,
+				descriptor: mockComponent.descriptor,
+			},
+		},
+	});
+	expect(regRes.result.type).toBe("register_research_component");
+	if (regRes.result.type === "register_research_component") {
+		expect(regRes.result.status).toBe("applied");
+		expect(regRes.result.component.component_sha256).toBe(mockComponent.component_sha256);
+	}
+
 	// 1. create_research_campaign
 	nextResult = {
 		receipt: RECEIPT,
@@ -153,6 +190,15 @@ test("dispatches research commands, decodes results, and calls research view", a
 				revision_id: revisionId,
 				spec_sha256: mockCampaign.spec_sha256,
 				policy_sha256: "2".repeat(64),
+				compatibility: {
+					contract_version: "research-compatibility.v1",
+					workers: [],
+					evaluators: ["5".repeat(64)],
+					audits: [],
+					releases: [],
+					environments: ["6".repeat(64)],
+				},
+				compatibility_sha256: "c".repeat(64),
 			},
 		},
 	});

@@ -111,6 +111,7 @@ _COMMAND_TYPES = frozenset(
         "record_fable_advice",
         "attest_intake_admission",
         "publish_bounded_intake",
+        "register_research_component",
         "create_research_campaign",
         "admit_research_campaign",
         "cancel_research_campaign",
