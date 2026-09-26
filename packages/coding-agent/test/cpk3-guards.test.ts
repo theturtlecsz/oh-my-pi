@@ -28,7 +28,9 @@ const full: CpkGuardState = {
 	fields: { token: "secret", path: "/tmp", secret: "hunter2" },
 };
 
-function orderedStages(overrides: Partial<Record<CpkGuardStage, (state: CpkGuardState) => CpkGuardState>>): CpkGuardStageSpec[] {
+function orderedStages(
+	overrides: Partial<Record<CpkGuardStage, (state: CpkGuardState) => CpkGuardState>>,
+): CpkGuardStageSpec[] {
 	return CPK_GUARD_STAGES.map(stage => ({ stage, apply: overrides[stage] ?? (state => state) }));
 }
 

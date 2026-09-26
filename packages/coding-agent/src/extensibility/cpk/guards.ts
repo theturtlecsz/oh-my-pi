@@ -14,8 +14,8 @@
  * This module is a pure library: it is not wired into any live execution path.
  */
 
-import { CpkSeamError } from "./seams";
 import { sortUnique } from "./manifest";
+import { CpkSeamError } from "./seams";
 
 /** Guard stages, ordered from the earliest (deny) to the last (validate). */
 export const CPK_GUARD_STAGES = ["deny", "narrow", "redact", "validate"] as const;

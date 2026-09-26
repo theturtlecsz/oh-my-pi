@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
+	assertNonAuthoritativeOnBus,
 	CPK3_SCHEMA,
 	CpkCapabilityRegistry,
 	CpkSeamError,
 	type CpkSeamErrorCode,
-	CpkTypedEventBus,
 	type CpkSeamEvent,
-	assertNonAuthoritativeOnBus,
+	CpkTypedEventBus,
 	parseCpkSeamEvent,
 	parseCpkTransition,
 	validateCapabilityTable,
