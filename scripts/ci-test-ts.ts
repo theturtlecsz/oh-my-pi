@@ -413,16 +413,17 @@ function isScrubbedEnvVar(key: string): boolean {
 	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
-async function runTestCommand(testCommand: TestCommand): Promise<void> {
+async function runTestCommand(testCommand: TestCommand): Promise<ChunkOutcome | null> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
 	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
 	console.log(`\n==> ${testCommand.label}`);
 	console.log(`$ ${renderedCommand}`);
 
 	if (isDryRun) {
-		return;
+		return null;
 	}
 
+	const startedAt = performance.now();
 	for (let attempt = 1; ; attempt++) {
 		const outcome = await withTempAgentDir(async (_agentDir, env) => {
 			const proc = Bun.spawn(testCommand.command, {
@@ -443,7 +444,14 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			return { exitCode, timedOut };
 		});
 		if (outcome.exitCode === 0) {
-			return;
+			return {
+				label: testCommand.label,
+				command: renderedCommand,
+				exitCode: 0,
+				seconds: (performance.now() - startedAt) / 1000,
+				output: "",
+				retries: attempt - 1,
+			};
 		}
 		if (!outcome.timedOut && BUN_CRASH_EXITS[outcome.exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
 			console.log(
@@ -692,7 +700,7 @@ const style = {
 // Outcome of one finished chunk. `output` is the chunk's combined stdout+stderr,
 // buffered so it can be withheld during a quiet run and replayed only on failure.
 // `retries` counts extra attempts spent on bun-crash exits (see BUN_CRASH_EXITS).
-interface ChunkOutcome {
+export interface ChunkOutcome {
 	label: string;
 	command: string;
 	exitCode: number;
@@ -739,6 +747,62 @@ export function formatSummaryFooter(passed: number, failed: number, totalSeconds
 		` ${failLine}`,
 		style.dim(`Ran ${passed + failed} test command(s) in ${formatDuration(totalSeconds)}.`),
 	].join("\n");
+}
+
+export interface ChunkTimingRecord {
+	label: string;
+	seconds: number;
+	ok: boolean;
+}
+
+export function buildTimingRecords(
+	outcomes: Array<{ label: string; seconds: number; exitCode?: number; ok?: boolean }>,
+): ChunkTimingRecord[] {
+	return outcomes
+		.map(outcome => ({
+			label: outcome.label,
+			seconds: Math.round(outcome.seconds * 100) / 100,
+			ok: outcome.ok ?? outcome.exitCode === 0,
+		}))
+		.sort((a, b) => b.seconds - a.seconds || a.label.localeCompare(b.label));
+}
+
+export function formatTimingTable(records: ChunkTimingRecord[]): string {
+	if (records.length === 0) {
+		return "";
+	}
+	const sorted = [...records].sort((a, b) => b.seconds - a.seconds || a.label.localeCompare(b.label));
+	const maxLabelLen = Math.max("Chunk".length, ...sorted.map(r => r.label.length));
+	const timeHeader = "Wall Time";
+	const maxTimeLen = Math.max(timeHeader.length, ...sorted.map(r => `${r.seconds.toFixed(2)}s`.length));
+	const statusHeader = "Status";
+
+	const lines: string[] = [
+		"",
+		style.bold("━━━ Chunk Timing (slowest first) ━━━"),
+		"",
+		`${"Chunk".padEnd(maxLabelLen)}  ${timeHeader.padStart(maxTimeLen)}  ${statusHeader}`,
+		`${"─".repeat(maxLabelLen)}  ${"─".repeat(maxTimeLen)}  ${"─".repeat(statusHeader.length)}`,
+	];
+
+	for (const record of sorted) {
+		const labelStr = record.label.padEnd(maxLabelLen);
+		const timeStr = `${record.seconds.toFixed(2)}s`.padStart(maxTimeLen);
+		const statusText = record.ok ? "pass" : "fail";
+		const statusStr = record.ok ? style.green(statusText) : style.red(statusText);
+		lines.push(`${labelStr}  ${timeStr}  ${statusStr}`);
+	}
+
+	return lines.join("\n");
+}
+
+export async function writeTimingJson(records: ChunkTimingRecord[], targetPath: string): Promise<void> {
+	const sorted = [...records].sort((a, b) => b.seconds - a.seconds || a.label.localeCompare(b.label));
+	await Bun.write(targetPath, `${JSON.stringify(sorted, null, 2)}\n`);
+}
+
+export function shouldPrintTimingTable(mode: string): boolean {
+	return mode === "local" || mode === "local-ts";
 }
 
 // A single failing test pulled from a chunk's captured bun output: its
@@ -839,8 +903,9 @@ export function formatFailureReport(failures: ChunkOutcome[], total: number, rep
 // at the end; `--full` streams every chunk's output inline as it completes. All
 // failures are collected and reported together instead of failing fast, so one
 // run surfaces every broken chunk and exits non-zero without a runner stack trace.
-export async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
+export async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<ChunkOutcome[]> {
 	const queue = [...commands];
+	const outcomes: ChunkOutcome[] = [];
 	const failures: ChunkOutcome[] = [];
 	let completed = 0;
 	const fileWidths = [...new Set(commands.map(c => c.parallel).filter(p => p !== undefined))].sort((a, b) => a - b);
@@ -969,6 +1034,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}`,
 				);
 			}
+			outcomes.push(outcome);
 			if (result.exitCode !== 0 || result.timedOut) {
 				failures.push(outcome);
 			}
@@ -989,6 +1055,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	if (failures.length > 0) {
 		process.exitCode = 1;
 	}
+	return outcomes;
 }
 
 // Skipped when imported (e.g. by the runner's own unit tests), where
@@ -1012,15 +1079,33 @@ if (import.meta.main) {
 	// The sequential path is a pool of one, so a lone chunk keeps the whole budget.
 	const poolWidth = pooled ? testConcurrency(requestedCommands.length) : 1;
 	const testCommands = applyChunkBudget(requestedCommands, poolWidth);
+	const outcomes: ChunkOutcome[] = [];
 	try {
 		if (pooled && !isDryRun) {
-			await runTestCommandsInParallel(testCommands, poolWidth);
+			outcomes.push(...(await runTestCommandsInParallel(testCommands, poolWidth)));
 		} else {
 			for (const testCommand of testCommands) {
-				await runTestCommand(testCommand);
+				const outcome = await runTestCommand(testCommand);
+				if (outcome) {
+					outcomes.push(outcome);
+				}
 			}
 		}
 	} finally {
+		if (outcomes.length > 0) {
+			try {
+				const timingRecords = buildTimingRecords(outcomes);
+				const timingJsonPath = Bun.env.CI_TEST_TIMING_JSON?.trim();
+				if (timingJsonPath) {
+					await writeTimingJson(timingRecords, timingJsonPath);
+				}
+				if (shouldPrintTimingTable(requestedMode)) {
+					process.stdout.write(`${formatTimingTable(timingRecords)}\n`);
+				}
+			} catch (err) {
+				process.stderr.write(`Failed to write timing summary: ${(err as Error).message}\n`);
+			}
+		}
 		if (!isDryRun) {
 			const finalHostPackageJson = await readHostPackageJson();
 			try {

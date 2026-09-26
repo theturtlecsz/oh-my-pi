@@ -1,0 +1,26 @@
+[
+	{
+		"scope": "install",
+		"effects": ["read", "write", "network", "exec"]
+	},
+	{
+		"scope": "project",
+		"parent": "install",
+		"effects": ["read", "write", "network"]
+	},
+	{
+		"scope": "work",
+		"parent": "project",
+		"effects": ["read", "write"]
+	},
+	{
+		"scope": "session",
+		"parent": "work",
+		"effects": ["read", "write"]
+	},
+	{
+		"scope": "agent",
+		"parent": "session",
+		"effects": ["read"]
+	}
+]

@@ -1,0 +1,38 @@
+[
+	{
+		"schema": "cpk1/v1",
+		"id": "writer",
+		"version": "0.3.0",
+		"provides": ["writer.tool"],
+		"requires": ["search", "core"],
+		"effects": ["write", "read"],
+		"scopes": ["session", "work"]
+	},
+	{
+		"schema": "cpk1/v1",
+		"id": "core",
+		"version": "1.0.0",
+		"provides": ["core.api"],
+		"requires": [],
+		"effects": ["read"],
+		"scopes": ["install", "project", "work", "session", "agent"]
+	},
+	{
+		"schema": "cpk1/v1",
+		"id": "audit",
+		"version": "2.0.0",
+		"provides": ["audit.log"],
+		"requires": ["core"],
+		"effects": ["read"],
+		"scopes": ["agent", "session"]
+	},
+	{
+		"schema": "cpk1/v1",
+		"id": "search",
+		"version": "1.2.0",
+		"provides": ["search.tool"],
+		"requires": ["core"],
+		"effects": ["network", "read"],
+		"scopes": ["project", "work", "session"]
+	}
+]

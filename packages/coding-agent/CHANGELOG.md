@@ -11,6 +11,7 @@
 - Added stable, read-only `InputEvent.originalText` so extensions can distinguish pipeline-ingress input from text rewritten by earlier input handlers.
 - Added owner `/execute skip <key> [reason]` to skip the active grant item and advance the queue (skipping the last item arms cleanup).
 - CPK-0 inventory now also lists bundled prompts and Advisor/Task Observer rule paths, and baseline startup latency, memory overhead and system-prompt token budgets are frozen in `docs/cpk0/baseline.json`.
+- Added CPK-1 canonical plugin manifests with deterministic content-addressed dependency graphs, CPK-2 closed effect scopes, and a default-off shadow composition mode that never alters live execution.
 
 ### Changed
 

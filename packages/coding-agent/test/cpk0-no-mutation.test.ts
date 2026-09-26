@@ -32,11 +32,35 @@ async function hashFile(filePath: string): Promise<string> {
 	}
 }
 
+const VOLATILE_GIT_FILES = new Set(["FETCH_HEAD", "ORIG_HEAD", "COMMIT_EDITMSG", "index", "gc.log"]);
+const VOLATILE_GIT_TREES = new Set(["logs", "worktrees"]);
+
+/**
+ * Whether a path relative to a git dir is rewritten by OTHER processes of the
+ * same clone. In a linked worktree, commonDir is the primary clone's `.git`:
+ * every sibling worktree's `git fetch`/`rebase`/`commit` rewrites FETCH_HEAD,
+ * ORIG_HEAD, COMMIT_EDITMSG, index, `logs/`, `worktrees/<name>/`, and `*.lock`.
+ * Discovery and baseline never touch those, so snapshotting them only makes the
+ * zero-mutation assertion flake when worktrees of one clone run git concurrently.
+ */
+function isVolatileGitPath(relPath: string): boolean {
+	const rel = relPath.replaceAll("\\", "/");
+	if (rel.endsWith(".lock")) return true;
+	const top = rel.split("/", 1)[0] ?? rel;
+	if (VOLATILE_GIT_TREES.has(top)) return true;
+	return !rel.includes("/") && VOLATILE_GIT_FILES.has(rel);
+}
+
 /**
  * Snapshot git directory metadata:
  * Walks gitDir and commonDir with Bun.Glob("**\/*") (dot: true), skipping objects/**,
  * recording sorted { path, size, mtimeMs }, counting objects/** entries separately,
  * and hashing surface-inventory.json and baseline.json.
+ *
+ * Volatile shared-clone paths (see {@link isVolatileGitPath}) are skipped so that
+ * concurrent worktrees of the same clone cannot change the snapshot. Stable shared
+ * state — HEAD, config, refs/, packed-refs, hooks/, info/ — stays in the snapshot,
+ * so a real mutation to a branch or HEAD is still detected.
  *
  * Does not invoke git status to prevent index refreshes or diffs.
  */
@@ -54,6 +78,7 @@ export async function snapshotGit(gitDir: string, commonDir: string, root: strin
 				objectsCount++;
 				continue;
 			}
+			if (isVolatileGitPath(normalizedRel)) continue;
 			const fullPath = path.resolve(dir, rel);
 			if (seen.has(fullPath)) continue;
 			seen.add(fullPath);
@@ -113,6 +138,54 @@ describe("CPK-0 zero mutation verification (OMP-204-s05)", () => {
 
 			await Bun.sleep(20);
 			await Bun.write(path.join(tempDir, "refs/heads/x"), "2222222222222222222222222222222222222222\n");
+
+			const snap2 = await snapshotGit(tempDir, tempDir);
+
+			expect(snap1).not.toEqual(snap2);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("ignores volatile paths a concurrent worktree of the same clone rewrites", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cpk0-no-mutation-volatile-"));
+		try {
+			await Bun.write(path.join(tempDir, "HEAD"), "ref: refs/heads/main\n");
+			await Bun.write(path.join(tempDir, "config"), "[core]\n\trepositoryformatversion = 0\n");
+			await Bun.write(path.join(tempDir, "refs/heads/main"), "1111111111111111111111111111111111111111\n");
+			await Bun.write(path.join(tempDir, "packed-refs"), "# pack-refs with: peeled\n");
+
+			const snap1 = await snapshotGit(tempDir, tempDir);
+
+			await Bun.sleep(20);
+			// Paths a concurrent fetch/rebase/commit in a sibling worktree rewrites.
+			await Bun.write(path.join(tempDir, "FETCH_HEAD"), "2222\t\tbranch 'main' of local\n");
+			await Bun.write(path.join(tempDir, "ORIG_HEAD"), "3333333333333333333333333333333333333333\n");
+			await Bun.write(path.join(tempDir, "COMMIT_EDITMSG"), "sibling commit\n");
+			await Bun.write(path.join(tempDir, "index"), "sibling index bytes");
+			await Bun.write(path.join(tempDir, "gc.log"), "sibling gc\n");
+			await Bun.write(path.join(tempDir, "index.lock"), "lock");
+			await Bun.write(path.join(tempDir, "logs/HEAD"), "sibling reflog\n");
+			await Bun.write(path.join(tempDir, "worktrees/x/index"), "sibling worktree index");
+
+			const snap2 = await snapshotGit(tempDir, tempDir);
+
+			expect(snap1).toEqual(snap2);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("negative control: detects a HEAD change in the snapshotted set", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cpk0-no-mutation-head-"));
+		try {
+			await Bun.write(path.join(tempDir, "HEAD"), "ref: refs/heads/main\n");
+			await Bun.write(path.join(tempDir, "refs/heads/main"), "1111111111111111111111111111111111111111\n");
+
+			const snap1 = await snapshotGit(tempDir, tempDir);
+
+			await Bun.sleep(20);
+			await Bun.write(path.join(tempDir, "HEAD"), "ref: refs/heads/other\n");
 
 			const snap2 = await snapshotGit(tempDir, tempDir);
 
