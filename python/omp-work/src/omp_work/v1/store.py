@@ -45,6 +45,7 @@ from .models import (
     EvidenceKind,
     EvidenceReceipt,
     FableAdvicePayload,
+    IntakeAdmissionReceiptPayload,
     OperationReceipt,
     OperationState,
     RelationEdge,
@@ -484,6 +485,8 @@ class PostgresWorkStore:
                     result = self._assess_bounded_intake(envelope)
                 elif command.type == "record_fable_advice":
                     result = self._record_fable_advice(cur, envelope)
+                elif command.type == "attest_intake_admission":
+                    result = self._attest_intake_admission(cur, envelope, actor_id)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -5557,6 +5560,173 @@ class PostgresWorkStore:
         return {
             "type": "record_fable_advice",
             "receipt": receipt.model_dump(mode="json"),
+        }
+
+    def _attest_intake_admission(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        envelope: CommandEnvelope,
+        actor_id: UUID,
+    ) -> dict[str, object]:
+        """Sole native admission gate: mint intake_admission evidence only from
+        OMP-249's authoritative current-lineage receipt set. Every fact is re-read
+        from stored evidence (issuer `service` is unforgeable), so no caller-supplied
+        flag can stand in for a missing or mismatched receipt."""
+        payload = envelope.command.payload
+        cur.execute(
+            "SELECT i.work_id,i.current_revision_id,i.current_candidate_id,c.candidate_sha256,c.commit_sha,c.kind FROM omp_work.work_items i JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.workspace_id=i.workspace_id JOIN omp_work.candidates c ON c.candidate_id=i.current_candidate_id AND c.workspace_id=i.workspace_id WHERE i.workspace_id=%s AND a.key='OMP-249' FOR UPDATE OF i",
+            (envelope.workspace_id,),
+        )
+        deployment = cur.fetchone()
+        if (
+            deployment is None
+            or deployment["work_id"] != payload.work_id
+            or deployment["current_revision_id"] != payload.revision_id
+            or deployment["kind"] != "final"
+        ):
+            raise WorkStoreError(
+                "intake_admission_blocked",
+                ("OMP-249 current revision and final candidate do not match",),
+            )
+
+        cur.execute(
+            f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND work_id=%s AND revision_id=%s AND candidate_id=%s",
+            (
+                envelope.workspace_id,
+                payload.work_id,
+                payload.revision_id,
+                deployment["current_candidate_id"],
+            ),
+        )
+        lineage = cur.fetchall()
+        by_id = {row["receipt_id"]: row for row in lineage}
+        for row in lineage:
+            if sha256(row["payload"]) != row["payload_sha256"]:
+                raise WorkStoreError(
+                    "intake_admission_blocked", ("lineage receipt payload hash mismatch",)
+                )
+
+        named_ids = (
+            payload.plan_receipt_id,
+            payload.fable_advice_receipt_id,
+            payload.native_acceptance_receipt_id,
+        )
+        if any(receipt_id not in by_id for receipt_id in named_ids):
+            raise WorkStoreError(
+                "intake_admission_blocked", ("admission lineage is incomplete",)
+            )
+
+        promotion = None
+        floor = None
+        for row in lineage:
+            if (
+                row["kind"] != EvidenceKind.VERIFICATION.value
+                or row["issuer"] != "service"
+            ):
+                continue
+            body = row["payload"] if isinstance(row["payload"], dict) else {}
+            if (
+                body.get("phase") == "initial_p11_promotion"
+                and body.get("qualified") is True
+                and body.get("natively_accepted") is True
+                and body.get("plan_receipt_id") == str(payload.plan_receipt_id)
+            ):
+                promotion = row
+            if (
+                body.get("deterministic_floor_passed") is True
+                and body.get("rule_bundle_sha256")
+                == BOUNDED_INTAKE_RULE_BUNDLE_SHA256
+            ):
+                floor = row
+        if promotion is None or floor is None:
+            raise WorkStoreError(
+                "intake_admission_blocked",
+                ("service qualification and deterministic floor receipts are required",),
+            )
+
+        advice = by_id[payload.fable_advice_receipt_id]
+        if (
+            advice["kind"] != EvidenceKind.VERIFICATION.value
+            or advice["issuer"] != "work-service/fable-advisor"
+        ):
+            raise WorkStoreError(
+                "intake_admission_blocked", ("fresh Fable advice is required",)
+            )
+        try:
+            advice_payload = FableAdvicePayload.model_validate(advice["payload"])
+        except Exception as error:
+            raise WorkStoreError(
+                "intake_admission_blocked", ("fresh Fable advice is required",)
+            ) from error
+        if advice_payload.rule_bundle_sha256 != BOUNDED_INTAKE_RULE_BUNDLE_SHA256:
+            raise WorkStoreError(
+                "intake_admission_blocked", ("Fable advice rule bundle mismatch",)
+            )
+
+        audit = by_id[payload.native_acceptance_receipt_id]
+        if (
+            audit["kind"] != EvidenceKind.AUDIT.value
+            or audit["issuer"] != "work-service/auditor-settle"
+            or audit["verdict"] != "PASS"
+            or audit["independent"] is not True
+        ):
+            raise WorkStoreError(
+                "intake_admission_blocked",
+                ("fresh independent native PASS is required",),
+            )
+
+        admission_payload = IntakeAdmissionReceiptPayload(
+            work_id=payload.work_id,
+            revision_id=payload.revision_id,
+            plan_receipt_id=payload.plan_receipt_id,
+            fable_advice_receipt_id=payload.fable_advice_receipt_id,
+            native_acceptance_receipt_id=payload.native_acceptance_receipt_id,
+            qualified=True,
+            natively_accepted=True,
+            deterministic_floor_passed=True,
+            rule_bundle_sha256=BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
+            operator_actor_id=actor_id,
+        )
+        body = admission_payload.model_dump(mode="json")
+        receipt = EvidenceReceipt(
+            receipt_id=uuid4(),
+            work_id=payload.work_id,
+            revision_id=payload.revision_id,
+            candidate_id=deployment["current_candidate_id"],
+            kind=EvidenceKind.INTAKE_ADMISSION,
+            payload=body,
+            payload_sha256=sha256(body),
+            issuer="work-service/intake-admission",
+            issued_at=datetime.now(UTC),
+            candidate_sha256=deployment["candidate_sha256"],
+            candidate_commit=deployment["commit_sha"],
+        )
+        cur.execute(
+            "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                receipt.receipt_id,
+                envelope.workspace_id,
+                receipt.work_id,
+                receipt.revision_id,
+                receipt.candidate_id,
+                receipt.kind.value,
+                canonical_json(receipt.payload),
+                receipt.payload_sha256,
+                receipt.artifact_sha256,
+                receipt.issuer,
+                receipt.issued_at,
+                receipt.candidate_sha256,
+                receipt.candidate_commit,
+                receipt.verdict,
+                receipt.independent,
+                receipt.remote_ref,
+                receipt.remote_commit,
+            ),
+        )
+        return {
+            "type": "attest_intake_admission",
+            "receipt": receipt.model_dump(mode="json"),
+            "operator_actor_id": str(actor_id),
         }
 
     def _item_view(

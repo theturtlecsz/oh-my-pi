@@ -1116,6 +1116,11 @@ class RecordFableAdviceCommand(StrictModel):
     payload: RecordFableAdvicePayload
 
 
+class AttestIntakeAdmissionCommand(StrictModel):
+    type: Literal["attest_intake_admission"]
+    payload: AttestIntakeAdmissionPayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -1149,7 +1154,8 @@ Command = Annotated[
     | CompleteExecutionItemCommand
     | SkipActiveItemCommand
     | AssessBoundedIntakeCommand
-    | RecordFableAdviceCommand,
+    | RecordFableAdviceCommand
+    | AttestIntakeAdmissionCommand,
     Field(discriminator="type"),
 ]
 
@@ -1529,6 +1535,22 @@ class RecordFableAdvicePayload(StrictModel):
     disposition: Literal["considered"]
     intake_semantic_sha256: hex64
     rule_bundle_sha256: hex64
+
+
+class AttestIntakeAdmissionPayload(StrictModel):
+    work_id: UUID
+    revision_id: UUID
+    plan_receipt_id: UUID
+    fable_advice_receipt_id: UUID
+    native_acceptance_receipt_id: UUID
+
+
+class IntakeAdmissionReceiptPayload(AttestIntakeAdmissionPayload):
+    qualified: Literal[True]
+    natively_accepted: Literal[True]
+    deterministic_floor_passed: Literal[True]
+    rule_bundle_sha256: hex64
+    operator_actor_id: UUID
 
 
 class IntakeBlockingQuestion(StrictModel):

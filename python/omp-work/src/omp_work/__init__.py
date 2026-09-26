@@ -56,6 +56,7 @@ _ERROR_CODES = frozenset(
         "execution_grant_inactive",
         "execution_no_progress",
         "execution_caps_exceeded",
+        "intake_admission_blocked",
     }
 )
 _SCOPES = frozenset(
@@ -105,6 +106,7 @@ _COMMAND_TYPES = frozenset(
         "skip_active_item",
         "assess_bounded_intake",
         "record_fable_advice",
+        "attest_intake_admission",
     }
 )
 
