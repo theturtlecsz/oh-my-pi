@@ -7,7 +7,6 @@ import * as path from "node:path";
 import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 import { executionRemoteRef, pushCandidate, validateExecutionPath } from "../extensions/workflow/git";
 import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
-import { grantRemoteRef } from "./fixtures/grant-remote-ref";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 
 if (process.env.OMP_WORK_POSTGRES_INTEGRATION !== "1") {
@@ -1729,7 +1728,7 @@ if (args[0] === "api") {
 	const nonMainJudgeSha = nonMainCase.startOut.exec?.grant?.judge_sha256;
 	const nonMainRepository = nonMainCase.startOut.exec?.grant?.repository;
 	assert.equal(nonMainRepository, canonicalRepository, "non-main grant retains the absolute primary repository");
-	assert.equal(nonMainCase.startOut.exec?.grant?.remote_ref, executionRemoteRef(nonMainCase.item.key, grantNonMainId), "grant binds non-main branch");
+	assert.equal(nonMainCase.startOut.exec?.grant?.remote_ref, executionRemoteRef(nonMainCase.item.key, grantNonMainId), "grant binds canonical execution ref");
 	// 1. Seal criteria
 	const sealNonMain = await (await fetch(`${baseUrl}/v1/commands`, {
 		method: "POST",
@@ -2020,13 +2019,13 @@ if (args[0] === "api") {
 			},
 		}),
 	})).json();
-	// 7. Positive probe: pushCandidate pushes to release/omp-180-smoke and verifies remote
-	const nonMainRef = grantRemoteRef(nonMainCase.startOut.exec);
+	// 7. Positive probe: pushCandidate pushes to the canonical execution ref and verifies remote
+	const nonMainRef = executionRemoteRef(nonMainCase.item.key, grantNonMainId);
 	const pushOutcome = pushCandidate(probe, headCommit, headCommit, nonMainRef);
 	assert.equal(pushOutcome.status === "pushed" || pushOutcome.status === "remote_commit", true, "pushCandidate succeeds on non-main branch");
-	assert.equal(pushOutcome.remoteRef, nonMainRef, "pushCandidate targeted release branch");
+	assert.equal(pushOutcome.remoteRef, nonMainRef, "pushCandidate targeted canonical execution ref");
 	const lsRemote = Bun.spawnSync(["git", "ls-remote", "origin", nonMainRef], { cwd: probe });
-	assert.ok(lsRemote.stdout.toString().includes(headCommit), "remote origin holds commit at release branch ref");
+	assert.ok(lsRemote.stdout.toString().includes(headCommit), "remote origin holds commit at canonical execution ref");
 
 	const makeEvidenceNonMain = (pushReceiptId: string, remoteRef: string | null = nonMainRef, pushPayloadSha = "0".repeat(64)) => ({
 		runner: {
