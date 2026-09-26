@@ -82,6 +82,10 @@ OMP-219 (`--queue orders umbrella items before child deliverables; skip_active_i
 - **OMP-219-s05 (host skip command)**: Implements owner `/execute skip <key> [reason]` in `host.ts` with ownership validation, clean-workspace assertions, and `execution-skip.test.ts`. Depends on `OMP-219-s04`.
 - **OMP-219-s06 (changelogs & inventory)**: Updates `python/omp-work/CHANGELOG.md` and `packages/coding-agent/CHANGELOG.md`. Depends on `OMP-219-s01` through `OMP-219-s05`.
 
+### OMP-281 lost-response skip recovery
+
+A lost `/execute skip` response is recovered at the next `session_start` by exact identity (grant, version transition, work ID, position, reason, and skipped phase), then the claim is removed; mismatches are refused and leave the claim for the owner.
+
 ### OMP-283 plan following the flow
 
 OMP-283 (`Record externally delivered work as DONE`) follows the staged digest flow:
