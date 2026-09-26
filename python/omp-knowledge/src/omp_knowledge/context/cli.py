@@ -12,7 +12,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import subprocess
+import shutil
+import subprocess  # nosec B404 - invokes git to resolve the workspace remote
 import sys
 from typing import Any, TextIO
 from uuid import UUID
@@ -119,9 +120,12 @@ def _parse_snapshot(value: str) -> tuple[UUID, UUID, str]:
 
 def _resolve_repository(cwd: str) -> str | None:
     """``git -C cwd remote get-url origin``, normalized, or None when git has no origin."""
+    git = shutil.which("git")
+    if git is None:
+        return None
     try:
-        result = subprocess.run(
-            ["git", "-C", cwd, "remote", "get-url", "origin"],
+        result = subprocess.run(  # nosec B603 - absolute git path, no shell, fixed argv
+            [git, "-C", cwd, "remote", "get-url", "origin"],
             capture_output=True,
             text=True,
             check=False,
