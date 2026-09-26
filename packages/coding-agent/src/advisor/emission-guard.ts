@@ -100,6 +100,9 @@ const SUPPRESSED_NORMALIZED_PHRASES: Record<string, true> = {
  */
 const DEFAULT_HISTORY_CAPACITY = 4096;
 
+/** Why {@link AdvisorEmissionGuard.classify} kept or dropped a note. */
+export type AdvisorEmissionClassification = "accepted" | "noise" | "duplicate" | "budget";
+
 /**
  * Decides whether an advisor `advise()` call should reach the primary agent.
  *
@@ -146,20 +149,20 @@ export class AdvisorEmissionGuard {
 	}
 
 	/**
-	 * Whether the proposed note should reach the primary. On `true` the gate
-	 * has already recorded the note (consumed the per-update budget and added
-	 * it to the dedupe history) — caller delivers the note. On `false` the
-	 * caller drops it.
+	 * Classify one note, applying the same side effects `accept` always has.
 	 *
-	 * Empty / whitespace-only notes are suppressed; the model's
-	 * tool-args contract still requires a non-empty string but defense-in-depth.
+	 * Order: empty / content-free filler (`noise`), normalized text already
+	 * delivered (`duplicate`), per-update slot already taken (`budget`), else
+	 * record the note and return `accepted`. Noise and duplicates do not
+	 * consume the budget. An accepted note is already in the dedupe history
+	 * when this returns.
 	 */
-	accept(note: string): boolean {
+	classify(note: string): AdvisorEmissionClassification {
 		const key = normalizeAdvisorNote(note);
-		if (!key) return false;
-		if (SUPPRESSED_NORMALIZED_PHRASES[key]) return false;
-		if (this.#seen.has(key)) return false;
-		if (this.#consumedThisUpdate) return false;
+		if (!key) return "noise";
+		if (SUPPRESSED_NORMALIZED_PHRASES[key]) return "noise";
+		if (this.#seen.has(key)) return "duplicate";
+		if (this.#consumedThisUpdate) return "budget";
 		this.#consumedThisUpdate = true;
 		this.#seen.add(key);
 		this.#seenOrder.push(key);
@@ -167,6 +170,16 @@ export class AdvisorEmissionGuard {
 			const stale = this.#seenOrder.shift();
 			if (stale !== undefined) this.#seen.delete(stale);
 		}
-		return true;
+		return "accepted";
+	}
+
+	/**
+	 * Whether the proposed note should reach the primary. On `true` the gate
+	 * has already recorded the note (consumed the per-update budget and added
+	 * it to the dedupe history) — caller delivers the note. On `false` the
+	 * caller drops it.
+	 */
+	accept(note: string): boolean {
+		return this.classify(note) === "accepted";
 	}
 }
