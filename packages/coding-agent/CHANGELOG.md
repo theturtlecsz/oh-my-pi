@@ -12,6 +12,7 @@
 - Added owner `/execute skip <key> [reason]` to skip the active grant item and advance the queue (skipping the last item arms cleanup).
 - CPK-0 inventory now also lists bundled prompts and Advisor/Task Observer rule paths, and baseline startup latency, memory overhead and system-prompt token budgets are frozen in `docs/cpk0/baseline.json`.
 - Added CPK-1 canonical plugin manifests with deterministic content-addressed dependency graphs, CPK-2 closed effect scopes, and a default-off shadow composition mode that never alters live execution.
+- Added CPK-3 typed event seams: authority-carrying committed facts cannot travel over the event bus, lifecycle transitions are validated as direct typed calls to native authorities, capability RPC is finite and single-provider, and effects pass a monotonic deny → narrow → redact → validate guard pipeline.
 
 ### Changed
 

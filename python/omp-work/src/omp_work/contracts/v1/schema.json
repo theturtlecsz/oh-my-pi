@@ -2396,6 +2396,105 @@
       "title": "AttestCutoverPlanPayload",
       "type": "object"
     },
+    "AttestIntakeAdmissionCommand": {
+      "$defs": {
+        "AttestIntakeAdmissionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "fable_advice_receipt_id": {
+              "format": "uuid",
+              "title": "Fable Advice Receipt Id",
+              "type": "string"
+            },
+            "native_acceptance_receipt_id": {
+              "format": "uuid",
+              "title": "Native Acceptance Receipt Id",
+              "type": "string"
+            },
+            "plan_receipt_id": {
+              "format": "uuid",
+              "title": "Plan Receipt Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "plan_receipt_id",
+            "fable_advice_receipt_id",
+            "native_acceptance_receipt_id"
+          ],
+          "title": "AttestIntakeAdmissionPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AttestIntakeAdmissionPayload"
+        },
+        "type": {
+          "const": "attest_intake_admission",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "AttestIntakeAdmissionCommand",
+      "type": "object"
+    },
+    "AttestIntakeAdmissionPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "fable_advice_receipt_id": {
+          "format": "uuid",
+          "title": "Fable Advice Receipt Id",
+          "type": "string"
+        },
+        "native_acceptance_receipt_id": {
+          "format": "uuid",
+          "title": "Native Acceptance Receipt Id",
+          "type": "string"
+        },
+        "plan_receipt_id": {
+          "format": "uuid",
+          "title": "Plan Receipt Id",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "plan_receipt_id",
+        "fable_advice_receipt_id",
+        "native_acceptance_receipt_id"
+      ],
+      "title": "AttestIntakeAdmissionPayload",
+      "type": "object"
+    },
     "AuditEvent": {
       "additionalProperties": false,
       "properties": {
@@ -5196,6 +5295,64 @@
             "plan_artifact"
           ],
           "title": "AttestCutoverPlanPayload",
+          "type": "object"
+        },
+        "AttestIntakeAdmissionCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/AttestIntakeAdmissionPayload"
+            },
+            "type": {
+              "const": "attest_intake_admission",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "AttestIntakeAdmissionCommand",
+          "type": "object"
+        },
+        "AttestIntakeAdmissionPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "fable_advice_receipt_id": {
+              "format": "uuid",
+              "title": "Fable Advice Receipt Id",
+              "type": "string"
+            },
+            "native_acceptance_receipt_id": {
+              "format": "uuid",
+              "title": "Native Acceptance Receipt Id",
+              "type": "string"
+            },
+            "plan_receipt_id": {
+              "format": "uuid",
+              "title": "Plan Receipt Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "work_id",
+            "revision_id",
+            "plan_receipt_id",
+            "fable_advice_receipt_id",
+            "native_acceptance_receipt_id"
+          ],
+          "title": "AttestIntakeAdmissionPayload",
           "type": "object"
         },
         "BeginCloseAttemptCommand": {
@@ -8445,6 +8602,7 @@
               "assess_bounded_intake": "#/$defs/AssessBoundedIntakeCommand",
               "attest_checkpoint_delivery": "#/$defs/AttestCheckpointDeliveryCommand",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanCommand",
+              "attest_intake_admission": "#/$defs/AttestIntakeAdmissionCommand",
               "begin_close_attempt": "#/$defs/BeginCloseAttemptCommand",
               "begin_execution": "#/$defs/BeginExecutionCommand",
               "cancel_auditor_launch": "#/$defs/CancelAuditorLaunchCommand",
@@ -8574,6 +8732,9 @@
             },
             {
               "$ref": "#/$defs/RecordFableAdviceCommand"
+            },
+            {
+              "$ref": "#/$defs/AttestIntakeAdmissionCommand"
             }
           ],
           "title": "Command"
@@ -13820,6 +13981,75 @@
         "observable_outcome"
       ],
       "title": "IntakeAcceptanceCriterion",
+      "type": "object"
+    },
+    "IntakeAdmissionReceiptPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "deterministic_floor_passed": {
+          "const": true,
+          "title": "Deterministic Floor Passed",
+          "type": "boolean"
+        },
+        "fable_advice_receipt_id": {
+          "format": "uuid",
+          "title": "Fable Advice Receipt Id",
+          "type": "string"
+        },
+        "native_acceptance_receipt_id": {
+          "format": "uuid",
+          "title": "Native Acceptance Receipt Id",
+          "type": "string"
+        },
+        "natively_accepted": {
+          "const": true,
+          "title": "Natively Accepted",
+          "type": "boolean"
+        },
+        "operator_actor_id": {
+          "format": "uuid",
+          "title": "Operator Actor Id",
+          "type": "string"
+        },
+        "plan_receipt_id": {
+          "format": "uuid",
+          "title": "Plan Receipt Id",
+          "type": "string"
+        },
+        "qualified": {
+          "const": true,
+          "title": "Qualified",
+          "type": "boolean"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "rule_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Rule Bundle Sha256",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id",
+        "revision_id",
+        "plan_receipt_id",
+        "fable_advice_receipt_id",
+        "native_acceptance_receipt_id",
+        "qualified",
+        "natively_accepted",
+        "deterministic_floor_passed",
+        "rule_bundle_sha256",
+        "operator_actor_id"
+      ],
+      "title": "IntakeAdmissionReceiptPayload",
       "type": "object"
     },
     "IntakeBlockingQuestion": {
