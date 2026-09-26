@@ -23,7 +23,7 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-omp_work = ["py.typed", "contracts/v1/*", "contracts/v1/decisions/*", "contracts/r02/*.json", "operations/sql/*.sql", "operations/migrations/*.sql", "operations/jobs_migrations/*.sql"]
+omp_work = ["py.typed", "contracts/v1/*", "contracts/v1/decisions/*", "contracts/r02/*.json", "operations/sql/*.sql", "operations/migrations/*.sql", "operations/jobs_migrations/*.sql", "prompts/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
