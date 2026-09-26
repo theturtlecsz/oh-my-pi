@@ -802,9 +802,6 @@ export async function writeTimingJson(records: ChunkTimingRecord[], targetPath: 
 }
 
 export function shouldPrintTimingTable(mode: string): boolean {
-	const override = Bun.env.CI_TEST_TIMING_TABLE?.trim().toLowerCase();
-	if (override === "1" || override === "true") return true;
-	if (override === "0" || override === "false") return false;
 	return mode === "local" || mode === "local-ts";
 }
 
@@ -1086,7 +1083,7 @@ if (import.meta.main) {
 	try {
 		if (pooled && !isDryRun) {
 			outcomes.push(...(await runTestCommandsInParallel(testCommands, poolWidth)));
-		} else if (!isDryRun) {
+		} else {
 			for (const testCommand of testCommands) {
 				const outcome = await runTestCommand(testCommand);
 				if (outcome) {

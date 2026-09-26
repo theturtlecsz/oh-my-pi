@@ -254,23 +254,11 @@ describe("chunk timing summary and JSON output", () => {
 		}
 	});
 
-	test("shouldPrintTimingTable enables timing table only for local and local-ts or when overridden", () => {
+	test("shouldPrintTimingTable enables the timing table only for local and local-ts", () => {
 		expect(shouldPrintTimingTable("local")).toBe(true);
 		expect(shouldPrintTimingTable("local-ts")).toBe(true);
 		expect(shouldPrintTimingTable("all")).toBe(false);
 		expect(shouldPrintTimingTable("workspace")).toBe(false);
 		expect(shouldPrintTimingTable("coding-agent-heavy")).toBe(false);
-
-		const prev = Bun.env.CI_TEST_TIMING_TABLE;
-		try {
-			Bun.env.CI_TEST_TIMING_TABLE = "1";
-			expect(shouldPrintTimingTable("workspace")).toBe(true);
-
-			Bun.env.CI_TEST_TIMING_TABLE = "0";
-			expect(shouldPrintTimingTable("local")).toBe(false);
-		} finally {
-			if (prev === undefined) delete Bun.env.CI_TEST_TIMING_TABLE;
-			else Bun.env.CI_TEST_TIMING_TABLE = prev;
-		}
 	});
 });
