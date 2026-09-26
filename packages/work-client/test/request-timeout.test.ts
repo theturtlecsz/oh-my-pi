@@ -1,6 +1,13 @@
 import { afterEach, expect, test, vi } from "bun:test";
 import * as os from "node:os";
-import { WORK_REQUEST_LOAD_CAP, WORK_REQUEST_TIMEOUT_MS, WorkClient, workRequestLoadScale } from "../src/index";
+import {
+	WORK_REQUEST_ATTEMPTS,
+	WORK_REQUEST_LOAD_CAP,
+	WORK_REQUEST_TIMEOUT_MS,
+	WorkClient,
+	WorkError,
+	workRequestLoadScale,
+} from "../src/index";
 
 const WORKSPACE_ID = "00000000-0000-0000-0000-000000000001";
 
@@ -43,4 +50,35 @@ test("load scaling is floored at one, grows with the queue, and never exceeds th
 	expect(workRequestLoadScale(8, 16)).toBe(1.5);
 	expect(workRequestLoadScale(16, 16)).toBe(2);
 	expect(workRequestLoadScale(10_000, 16)).toBe(WORK_REQUEST_LOAD_CAP);
+});
+
+/** A client whose first `failures` transports reject before any response. */
+function failingClient(failures: number): { client: WorkClient; attempts: () => number } {
+	let calls = 0;
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		WORKSPACE_ID,
+		() => "token",
+		async () => {
+			calls++;
+			if (calls <= failures) throw new Error("The socket connection was closed unexpectedly");
+			return Response.json({ workspace_id: WORKSPACE_ID, items: [], relations: [], projects: [] });
+		},
+	);
+	return { client, attempts: () => calls };
+}
+
+test("a closed pre-response socket is resent instead of failing the command", async () => {
+	// A pooled keep-alive connection the service already closed surfaces as an
+	// instant transport rejection, not an abort — the request must still reach a
+	// response rather than surfacing `unavailable`.
+	const { client, attempts } = failingClient(1);
+	await expect(client.tree()).resolves.toMatchObject({ workspace_id: WORKSPACE_ID });
+	expect(attempts()).toBe(2);
+});
+
+test("a transport that never comes back still fails after the bounded attempts", async () => {
+	const { client, attempts } = failingClient(WORK_REQUEST_ATTEMPTS);
+	await expect(client.tree()).rejects.toBeInstanceOf(WorkError);
+	expect(attempts()).toBe(WORK_REQUEST_ATTEMPTS);
 });

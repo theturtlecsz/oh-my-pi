@@ -84,6 +84,8 @@ RUN_TIMEOUT_SECONDS = 120.0
 RPC_RESPONSE_TIMEOUT_SECONDS = 90.0
 HEALTH_TIMEOUT_SECONDS = 90.0
 LINE_STABILIZE_SECONDS = 5.0
+PROXY_UPSTREAM_TIMEOUT_SECONDS = 30.0
+TEARDOWN_GRACE_SECONDS = 10.0
 LOAD_SCALE_CAP = 6.0
 
 
@@ -200,10 +202,10 @@ def _process(
             if child.poll() is None:
                 os.killpg(child.pid, signal.SIGTERM)
                 try:
-                    child.wait(timeout=10)
+                    child.wait(timeout=scaled_timeout(TEARDOWN_GRACE_SECONDS))
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
-                    child.wait(timeout=10)
+                    child.wait(timeout=scaled_timeout(TEARDOWN_GRACE_SECONDS))
             if child.stdin:
                 child.stdin.close()
             if child.stdout:
@@ -308,7 +310,9 @@ class AuthorityResponseProxy:
             "transfer-encoding",
             "upgrade",
         }
-        client = httpx.Client(trust_env=False, timeout=30)
+        client = httpx.Client(
+            trust_env=False, timeout=scaled_timeout(PROXY_UPSTREAM_TIMEOUT_SECONDS)
+        )
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, format: str, *args: object) -> None:
@@ -757,7 +761,9 @@ class RpcProcess:
         self._drained.clear()
         self._drain_requested.set()
         if not self._reader_finished.is_set():
-            assert self._drained.wait(5), "Stopped stdout did not drain"
+            assert self._drained.wait(scaled_timeout(TEARDOWN_GRACE_SECONDS)), (
+                "Stopped stdout did not drain"
+            )
         return self.byte_snapshot()
 
     def send(self, command: str, **fields: object) -> str:

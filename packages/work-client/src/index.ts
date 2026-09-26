@@ -37,6 +37,22 @@ export function workRequestTimeoutMs(base: number = WORK_REQUEST_TIMEOUT_MS, loa
 	return Math.round(base * workRequestLoadScale(load));
 }
 
+/**
+ * Attempts for one request when the transport fails before any bytes arrive.
+ * A loopback POST can be handed a pooled connection Keep-Alive closed a
+ * heartbeat earlier; write-then-RST surfaces as an instant `fetch` rejection,
+ * not an abort timeout, so stretching the window cannot prevent it. Every
+ * command is idempotent by `(workspace_id, operation_id)` — the service
+ * REPLAYS the stored result — so a bounded resend is safe and is what a
+ * standard HTTP client does for a closed pre-response socket.
+ */
+export const WORK_REQUEST_ATTEMPTS = 3;
+
+/** Bounded backoff (0, 100 ms) before a pre-response retry. */
+export function workRequestRetryDelayMs(attempt: number): number {
+	return Math.min(100, 10 * 2 ** Math.max(0, attempt - 1));
+}
+
 // ---- canonical encoding (mirrors v1/canonical.py byte-for-byte) ----
 
 /** json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).
@@ -1106,15 +1122,24 @@ export class WorkClient {
 	private async request(method: "GET" | "POST", path: string, body?: unknown, auth = true): Promise<unknown> {
 		const headers = auth ? this.headers() : {};
 		let response: Response;
-		try {
-			response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-				method,
-				headers,
-				...(body === undefined ? {} : { body: JSON.stringify(body) }),
-				signal: AbortSignal.timeout(workRequestTimeoutMs()),
-			});
-		} catch (cause) {
-			throw new WorkError("unavailable", 0, [redact(String(cause))]);
+		for (let attempt = 1; ; attempt++) {
+			try {
+				response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+					method,
+					headers,
+					...(body === undefined ? {} : { body: JSON.stringify(body) }),
+					signal: AbortSignal.timeout(workRequestTimeoutMs()),
+				});
+				break;
+			} catch (cause) {
+				// A rejection here is ALWAYS pre-response — the abort window only
+				// bounds headers (the body streams after). The mutation may not have
+				// reached the service, but even if it did the command replays by
+				// operation id, so a bounded resend is safe. A genuine host outage
+				// exhausts the attempts and still throws.
+				if (attempt >= WORK_REQUEST_ATTEMPTS) throw new WorkError("unavailable", 0, [redact(String(cause))]);
+				await Bun.sleep(workRequestRetryDelayMs(attempt));
+			}
 		}
 		const text = await response.text();
 		let parsed: unknown = {};

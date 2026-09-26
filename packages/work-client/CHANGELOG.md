@@ -9,3 +9,4 @@
 ### Fixed
 
 - Stretch the loopback request abort window with host load so a busy machine no longer cancels a valid Work Ledger command mid-flight (OMP-342).
+- Resend a command whose loopback connection was closed before any response, so a pooled keep-alive socket the service retired does not surface as an unavailable Work Ledger (OMP-342).

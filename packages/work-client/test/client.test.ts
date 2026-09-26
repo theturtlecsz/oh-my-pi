@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { payloadHash, WORK_CONTRACT_SHA256, WorkClient, WorkError } from "../src/index";
+import { payloadHash, WORK_CONTRACT_SHA256, WORK_REQUEST_ATTEMPTS, WorkClient, WorkError } from "../src/index";
 
 const ENV = {
 	api_version: "work.omp.dev/v1" as const,
@@ -180,7 +180,7 @@ test("tree rejects unauthenticated without calling fetch when the token provider
 	expect(fetchCalls).toBe(0);
 });
 
-test("tree maps a redacted fetch exception to unavailable", async () => {
+test("tree retries a transport failure and maps the persisted redacted exception to unavailable", async () => {
 	const secret = "fetch-exception-secret-4f2d9c7a";
 	let fetchCalls = 0;
 	const client = new WorkClient(
@@ -200,7 +200,7 @@ test("tree maps a redacted fetch exception to unavailable", async () => {
 		rejection = error;
 	}
 
-	expect(fetchCalls).toBe(1);
+	expect(fetchCalls).toBe(WORK_REQUEST_ATTEMPTS);
 	expect(rejection).toMatchObject({
 		code: "unavailable",
 		status: 0,

@@ -18,6 +18,7 @@ import installed_runtime_support as support
 import pytest
 from installed_runtime_support import (
     LOAD_SCALE_CAP,
+    PROXY_UPSTREAM_TIMEOUT_SECONDS,
     RpcProcess,
     _NewlineCompleteLog,
     _run,
@@ -174,6 +175,17 @@ def test_scale_is_floored_scaled_and_capped() -> None:
     assert load_scale_factor(10_000.0, 16) == LOAD_SCALE_CAP
     assert scaled_timeout(90.0, load=16.0, cores=16) == 180.0
     assert scaled_timeout(90.0, load=10_000.0, cores=16) == 90.0 * LOAD_SCALE_CAP
+
+
+def test_proxy_upstream_budget_scales_like_the_other_waits() -> None:
+    """The forwarding proxy's upstream deadline also stretches, so a loaded host
+    cannot abort a valid command the controller is still waiting on."""
+    assert scaled_timeout(PROXY_UPSTREAM_TIMEOUT_SECONDS, load=16.0, cores=16) == (
+        PROXY_UPSTREAM_TIMEOUT_SECONDS * 2
+    )
+    assert scaled_timeout(PROXY_UPSTREAM_TIMEOUT_SECONDS, load=10_000.0, cores=16) == (
+        PROXY_UPSTREAM_TIMEOUT_SECONDS * LOAD_SCALE_CAP
+    )
 
 
 def test_host_load_reports_a_runnable_queue_length(
