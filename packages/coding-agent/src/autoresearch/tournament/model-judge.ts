@@ -85,8 +85,25 @@ export interface ParsedJudgeAnswer {
 }
 
 /**
+ * Body of a response that is only one markdown fence opened by ``` or ```json.
+ * Any other shape returns undefined so the caller parses the original text and
+ * keeps today's invalid-JSON error.
+ */
+function singleJudgeFenceBody(trimmed: string): string | undefined {
+	if (!trimmed.startsWith("```") || !trimmed.endsWith("```")) return undefined;
+	const match = trimmed.match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/);
+	if (!match) return undefined;
+	const body = match[1] ?? "";
+	// An inner fence line means this is more than one block.
+	if (/(?:^|\n)```/.test(body)) return undefined;
+	return body;
+}
+
+/**
  * Strict parser for judge model responses. Requires exactly one JSON object with
  * a recognized winner (labelA -> "A", labelB -> "B", "tie" -> "tie").
+ * A response whose entire trimmed text is one ``` or ```json fence is read from
+ * that fence body; every other response is parsed as-is.
  * Throws on malformed JSON or missing/unknown winner.
  */
 export function parseJudgeAnswer(text: string, labelA: string, labelB: string): ParsedJudgeAnswer {
@@ -95,10 +112,11 @@ export function parseJudgeAnswer(text: string, labelA: string, labelB: string): 
 	}
 
 	const trimmed = text.trim();
+	const jsonText = singleJudgeFenceBody(trimmed) ?? trimmed;
 
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(trimmed);
+		parsed = JSON.parse(jsonText);
 	} catch (err) {
 		throw new Error(`Malformed judge response: invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
 	}

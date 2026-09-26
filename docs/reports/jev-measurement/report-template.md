@@ -37,8 +37,8 @@ Measurement results comparing current smol chat classifiers and session triage a
 
 | Metric | Current (Full Session) | Jev Prefilter |
 | --- | --- | --- |
-| Confident-Bucket Accuracy | - | {{robomp_jev_confident_accuracy}} |
-| Skip-Session Share | 0.0% | {{robomp_jev_skip_share}} |
+| Confident-Bucket Accuracy | {{robomp_current_confident_accuracy}} | {{robomp_jev_confident_accuracy}} |
+| Skip-Session Share | {{robomp_current_skip_share}} | {{robomp_jev_skip_share}} |
 | Overall Accuracy | {{robomp_current_accuracy}} | {{robomp_jev_accuracy}} |
 | p50 Latency (ms) | {{robomp_current_p50}} | {{robomp_jev_p50}} |
 | p95 Latency (ms) | {{robomp_current_p95}} | {{robomp_jev_p95}} |

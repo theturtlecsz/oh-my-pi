@@ -752,7 +752,62 @@ export type SkipActiveItemPayload = {
 	reason: string;
 };
 
-// ---- research entities (R02-S1) ----
+// ---- research entities (R02-S1 / R02-S3b) ----
+
+export type ResearchComponentKind = "worker" | "evaluator" | "policy" | "audit" | "release" | "environment";
+
+export type ResearchRole =
+	| "campaign_planner"
+	| "research_worker"
+	| "hypothesis_generator"
+	| "method_critic"
+	| "implementer"
+	| "selector"
+	| "analyst"
+	| "scientific_reviewer"
+	| "harness_researcher"
+	| "native_auditor"
+	| "synthesizer";
+
+export type ResearchCapability = string;
+
+export type ResearchComponentDescriptor = {
+	contract_version: "research-component.v1";
+	kind: ResearchComponentKind;
+	name: string;
+	version: string;
+	artifact_sha256: string;
+	roles?: ResearchRole[];
+	capabilities?: ResearchCapability[];
+};
+
+export type ResearchComponent = {
+	component_sha256: string;
+	workspace_id: UUID;
+	kind: ResearchComponentKind;
+	descriptor: ResearchComponentDescriptor;
+	registered_at: string;
+};
+
+export type ResearchCompatibilityManifest = {
+	contract_version: "research-compatibility.v1";
+	workers?: string[];
+	evaluators?: string[];
+	audits?: string[];
+	releases?: string[];
+	environments?: string[];
+};
+
+export type RegisterResearchComponentPayload = {
+	component_sha256: string;
+	descriptor: ResearchComponentDescriptor;
+};
+
+export type RegisterResearchComponentResult = {
+	type: "register_research_component";
+	status: "applied" | "replayed";
+	component: ResearchComponent;
+};
 
 export type ResearchDomain =
 	| "engineering"
@@ -840,6 +895,8 @@ export type ResearchCampaign = {
 	concluded_at?: string | null;
 	blocked_dependency?: ResearchBlockedDependency | null;
 	blocked_from_state?: "admitted" | "running" | "paused" | "evaluating" | null;
+	compatibility?: ResearchCompatibilityManifest | null;
+	compatibility_sha256?: string | null;
 };
 
 export type ResearchTrial = {
@@ -901,6 +958,7 @@ export type ResearchView = {
 	trials: ResearchTrial[];
 	observations: ResearchObservation[];
 	deliverable_bindings: ResearchDeliverableBinding[];
+	components?: ResearchComponent[];
 };
 
 export type CreateResearchCampaignPayload = {
@@ -918,6 +976,8 @@ export type AdmitResearchCampaignPayload = {
 	revision_id: UUID;
 	spec_sha256: string;
 	policy_sha256: string;
+	compatibility: ResearchCompatibilityManifest;
+	compatibility_sha256: string;
 };
 
 export type CancelResearchCampaignPayload = {
@@ -1012,6 +1072,7 @@ export type Command =
 	| { type: "set_execution_state"; payload: SetExecutionStatePayload }
 	| { type: "complete_execution_item"; payload: CompleteExecutionItemPayload }
 	| { type: "skip_active_item"; payload: SkipActiveItemPayload }
+	| { type: "register_research_component"; payload: RegisterResearchComponentPayload }
 	| { type: "create_research_campaign"; payload: CreateResearchCampaignPayload }
 	| { type: "admit_research_campaign"; payload: AdmitResearchCampaignPayload }
 	| { type: "cancel_research_campaign"; payload: CancelResearchCampaignPayload }
@@ -1167,6 +1228,7 @@ export type CommandResult =
 			item: ExecutionGrantItemView;
 			reason: string;
 	  }
+	| RegisterResearchComponentResult
 	| CreateResearchCampaignResult
 	| AdmitResearchCampaignResult
 	| CancelResearchCampaignResult

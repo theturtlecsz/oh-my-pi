@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import subprocess  # nosec B404 - runs the operator-configured token counter CLI
 from collections.abc import Sequence
 from typing import Any
 
@@ -62,7 +62,7 @@ class OmpTokenCounter:
         stdin_data = "\n".join(stdin_lines) + "\n"
 
         try:
-            proc = subprocess.run(
+            proc = subprocess.run(  # nosec B603 - cmd is fixed argv from --token-cmd, no shell
                 cmd,
                 input=stdin_data,
                 text=True,

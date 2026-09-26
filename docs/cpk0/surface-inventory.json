@@ -5426,6 +5426,7 @@
         "session-system/extensions/workflow/kind-description.md",
         "session-system/extensions/workflow/lock-refusal.md",
         "session-system/extensions/workflow/pending-ops.ts",
+        "session-system/extensions/workflow/procedures.ts",
         "session-system/extensions/workflow/rider-batch.ts",
         "session-system/extensions/workflow/sequence.md",
         "session-system/extensions/workflow/session-ledger-prompt.md",

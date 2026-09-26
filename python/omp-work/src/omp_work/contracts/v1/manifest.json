@@ -10,8 +10,11 @@
     "decisions/0006-batch-completion-rider-authority.md",
     "decisions/0007-omp-147-bookends-closure.md",
     "decisions/0008-execution-cycle-authority.md",
+    "decisions/0009-research-campaign-lifecycle-authority.md",
+    "decisions/0010-research-component-identity-and-compatibility.md",
     "examples.json",
     "manifest.json",
+    "research-component-hash.json",
     "schema.json"
   ]
 }

@@ -1008,6 +1008,14 @@
               "title": "Campaign Id",
               "type": "string"
             },
+            "compatibility": {
+              "$ref": "#/$defs/ResearchCompatibilityManifest"
+            },
+            "compatibility_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Compatibility Sha256",
+              "type": "string"
+            },
             "policy_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Policy Sha256",
@@ -1034,9 +1042,71 @@
             "work_id",
             "revision_id",
             "spec_sha256",
-            "policy_sha256"
+            "policy_sha256",
+            "compatibility",
+            "compatibility_sha256"
           ],
           "title": "AdmitResearchCampaignPayload",
+          "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
           "type": "object"
         }
       },
@@ -1059,11 +1129,81 @@
       "type": "object"
     },
     "AdmitResearchCampaignPayload": {
+      "$defs": {
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
+          "type": "object"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "campaign_id": {
           "format": "uuid",
           "title": "Campaign Id",
+          "type": "string"
+        },
+        "compatibility": {
+          "$ref": "#/$defs/ResearchCompatibilityManifest"
+        },
+        "compatibility_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Compatibility Sha256",
           "type": "string"
         },
         "policy_sha256": {
@@ -1092,7 +1232,9 @@
         "work_id",
         "revision_id",
         "spec_sha256",
-        "policy_sha256"
+        "policy_sha256",
+        "compatibility",
+        "compatibility_sha256"
       ],
       "title": "AdmitResearchCampaignPayload",
       "type": "object"
@@ -5399,6 +5541,14 @@
               "title": "Campaign Id",
               "type": "string"
             },
+            "compatibility": {
+              "$ref": "#/$defs/ResearchCompatibilityManifest"
+            },
+            "compatibility_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Compatibility Sha256",
+              "type": "string"
+            },
             "policy_sha256": {
               "pattern": "^[0-9a-f]{64}$",
               "title": "Policy Sha256",
@@ -5425,7 +5575,9 @@
             "work_id",
             "revision_id",
             "spec_sha256",
-            "policy_sha256"
+            "policy_sha256",
+            "compatibility",
+            "compatibility_sha256"
           ],
           "title": "AdmitResearchCampaignPayload",
           "type": "object"
@@ -6738,6 +6890,71 @@
           "title": "CompletionSubject",
           "type": "object"
         },
+        "ConcludeResearchCampaignCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ConcludeResearchCampaignPayload"
+            },
+            "type": {
+              "const": "conclude_research_campaign",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ConcludeResearchCampaignCommand",
+          "type": "object"
+        },
+        "ConcludeResearchCampaignPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "supported",
+                "refuted",
+                "inconclusive",
+                "resource_exhausted",
+                "externally_blocked"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Policy Sha256",
+              "type": "string"
+            },
+            "reason": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "work_id",
+            "policy_sha256",
+            "outcome",
+            "reason"
+          ],
+          "title": "ConcludeResearchCampaignPayload",
+          "type": "object"
+        },
         "CreateBatchRelation": {
           "additionalProperties": false,
           "properties": {
@@ -7958,6 +8175,9 @@
         "ProposeResearchTrialPayload": {
           "additionalProperties": false,
           "properties": {
+            "action": {
+              "$ref": "#/$defs/ResearchAction"
+            },
             "campaign_id": {
               "format": "uuid",
               "title": "Campaign Id",
@@ -8010,6 +8230,19 @@
               "title": "Policy Sha256",
               "type": "string"
             },
+            "reason": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
             "resource_request": {
               "anyOf": [
                 {
@@ -8051,6 +8284,7 @@
             "campaign_id",
             "work_id",
             "decision_id",
+            "action",
             "candidate_digest",
             "experiment_spec_sha256",
             "evaluator_sha256",
@@ -8602,6 +8836,44 @@
           "title": "RecordResearchObservationPayload",
           "type": "object"
         },
+        "RegisterResearchComponentCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RegisterResearchComponentPayload"
+            },
+            "type": {
+              "const": "register_research_component",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RegisterResearchComponentCommand",
+          "type": "object"
+        },
+        "RegisterResearchComponentPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "component_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Component Sha256",
+              "type": "string"
+            },
+            "descriptor": {
+              "$ref": "#/$defs/ResearchComponentDescriptor"
+            }
+          },
+          "required": [
+            "component_sha256",
+            "descriptor"
+          ],
+          "title": "RegisterResearchComponentPayload",
+          "type": "object"
+        },
         "RelationEdge": {
           "additionalProperties": false,
           "properties": {
@@ -8680,6 +8952,59 @@
           "title": "RemoveRelationPayload",
           "type": "object"
         },
+        "ResearchAction": {
+          "enum": [
+            "retrieve",
+            "draft",
+            "repair",
+            "refine",
+            "challenge",
+            "combine",
+            "evaluate",
+            "replicate",
+            "deepen",
+            "prune",
+            "synthesize",
+            "escalate",
+            "conclude"
+          ],
+          "title": "ResearchAction",
+          "type": "string"
+        },
+        "ResearchBlockedDependency": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "work_item",
+                "budget_scope",
+                "capability",
+                "external"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "reason": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "ref",
+            "reason"
+          ],
+          "title": "ResearchBlockedDependency",
+          "type": "object"
+        },
         "ResearchCampaignSpec": {
           "additionalProperties": false,
           "properties": {
@@ -8736,6 +9061,136 @@
           ],
           "title": "ResearchCampaignSpec",
           "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
+          "type": "object"
+        },
+        "ResearchComponentDescriptor": {
+          "additionalProperties": false,
+          "description": "Canonical, hash-defining declaration. Field set IS the identity.",
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "capabilities": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-component.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "roles": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ResearchRole"
+              },
+              "title": "Roles",
+              "type": "array"
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "kind",
+            "name",
+            "version",
+            "artifact_sha256"
+          ],
+          "title": "ResearchComponentDescriptor",
+          "type": "object"
+        },
+        "ResearchComponentKind": {
+          "enum": [
+            "worker",
+            "evaluator",
+            "policy",
+            "audit",
+            "release",
+            "environment"
+          ],
+          "title": "ResearchComponentKind",
+          "type": "string"
         },
         "ResearchDomain": {
           "enum": [
@@ -8859,6 +9314,23 @@
           },
           "title": "ResearchResourceVector",
           "type": "object"
+        },
+        "ResearchRole": {
+          "enum": [
+            "campaign_planner",
+            "research_worker",
+            "hypothesis_generator",
+            "method_critic",
+            "implementer",
+            "selector",
+            "analyst",
+            "scientific_reviewer",
+            "harness_researcher",
+            "native_auditor",
+            "synthesizer"
+          ],
+          "title": "ResearchRole",
+          "type": "string"
         },
         "ReserveAuditorLaunchCommand": {
           "additionalProperties": false,
@@ -9198,6 +9670,87 @@
             "expected_version"
           ],
           "title": "SetFocusPayload",
+          "type": "object"
+        },
+        "SetResearchCampaignStateCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/SetResearchCampaignStatePayload"
+            },
+            "type": {
+              "const": "set_research_campaign_state",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "SetResearchCampaignStateCommand",
+          "type": "object"
+        },
+        "SetResearchCampaignStatePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "blocked_dependency": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchBlockedDependency"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "expected_state": {
+              "enum": [
+                "admitted",
+                "running",
+                "paused",
+                "evaluating",
+                "blocked"
+              ],
+              "title": "Expected State",
+              "type": "string"
+            },
+            "policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Policy Sha256",
+              "type": "string"
+            },
+            "target_state": {
+              "enum": [
+                "admitted",
+                "running",
+                "paused",
+                "evaluating",
+                "blocked"
+              ],
+              "title": "Target State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "work_id",
+            "expected_state",
+            "target_state",
+            "policy_sha256"
+          ],
+          "title": "SetResearchCampaignStatePayload",
           "type": "object"
         },
         "SetWorkStateCommand": {
@@ -9622,6 +10175,7 @@
               "clear_focus": "#/$defs/ClearFocusCommand",
               "complete_execution_item": "#/$defs/CompleteExecutionItemCommand",
               "complete_work": "#/$defs/CompleteWorkCommand",
+              "conclude_research_campaign": "#/$defs/ConcludeResearchCampaignCommand",
               "create_research_campaign": "#/$defs/CreateResearchCampaignCommand",
               "create_same_session_child": "#/$defs/CreateSameSessionChildCommand",
               "create_work_batch": "#/$defs/CreateWorkBatchCommand",
@@ -9635,6 +10189,7 @@
               "record_fable_advice": "#/$defs/RecordFableAdviceCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
               "record_research_observation": "#/$defs/RecordResearchObservationCommand",
+              "register_research_component": "#/$defs/RegisterResearchComponentCommand",
               "remove_relation": "#/$defs/RemoveRelationCommand",
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
               "revise_work": "#/$defs/ReviseWorkCommand",
@@ -9642,6 +10197,7 @@
               "seal_execution_criteria": "#/$defs/SealExecutionCriteriaCommand",
               "set_execution_state": "#/$defs/SetExecutionStateCommand",
               "set_focus": "#/$defs/SetFocusCommand",
+              "set_research_campaign_state": "#/$defs/SetResearchCampaignStateCommand",
               "set_work_state": "#/$defs/SetWorkStateCommand",
               "settle_auditor_launch": "#/$defs/SettleAuditorLaunchCommand",
               "skip_active_item": "#/$defs/SkipActiveItemCommand",
@@ -9757,6 +10313,9 @@
               "$ref": "#/$defs/PublishBoundedIntakeCommand"
             },
             {
+              "$ref": "#/$defs/RegisterResearchComponentCommand"
+            },
+            {
               "$ref": "#/$defs/CreateResearchCampaignCommand"
             },
             {
@@ -9773,6 +10332,12 @@
             },
             {
               "$ref": "#/$defs/BindResearchDeliverableCommand"
+            },
+            {
+              "$ref": "#/$defs/SetResearchCampaignStateCommand"
+            },
+            {
+              "$ref": "#/$defs/ConcludeResearchCampaignCommand"
             }
           ],
           "title": "Command"
@@ -12420,6 +12985,119 @@
         "candidate_commit"
       ],
       "title": "CompletionSubject",
+      "type": "object"
+    },
+    "ConcludeResearchCampaignCommand": {
+      "$defs": {
+        "ConcludeResearchCampaignPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "supported",
+                "refuted",
+                "inconclusive",
+                "resource_exhausted",
+                "externally_blocked"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Policy Sha256",
+              "type": "string"
+            },
+            "reason": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "work_id",
+            "policy_sha256",
+            "outcome",
+            "reason"
+          ],
+          "title": "ConcludeResearchCampaignPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ConcludeResearchCampaignPayload"
+        },
+        "type": {
+          "const": "conclude_research_campaign",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ConcludeResearchCampaignCommand",
+      "type": "object"
+    },
+    "ConcludeResearchCampaignPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "campaign_id": {
+          "format": "uuid",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "supported",
+            "refuted",
+            "inconclusive",
+            "resource_exhausted",
+            "externally_blocked"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "work_id",
+        "policy_sha256",
+        "outcome",
+        "reason"
+      ],
+      "title": "ConcludeResearchCampaignPayload",
       "type": "object"
     },
     "Contract": {
@@ -16028,6 +16706,9 @@
         "ProposeResearchTrialPayload": {
           "additionalProperties": false,
           "properties": {
+            "action": {
+              "$ref": "#/$defs/ResearchAction"
+            },
             "campaign_id": {
               "format": "uuid",
               "title": "Campaign Id",
@@ -16080,6 +16761,19 @@
               "title": "Policy Sha256",
               "type": "string"
             },
+            "reason": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
             "resource_request": {
               "anyOf": [
                 {
@@ -16121,6 +16815,7 @@
             "campaign_id",
             "work_id",
             "decision_id",
+            "action",
             "candidate_digest",
             "experiment_spec_sha256",
             "evaluator_sha256",
@@ -16130,6 +16825,25 @@
           ],
           "title": "ProposeResearchTrialPayload",
           "type": "object"
+        },
+        "ResearchAction": {
+          "enum": [
+            "retrieve",
+            "draft",
+            "repair",
+            "refine",
+            "challenge",
+            "combine",
+            "evaluate",
+            "replicate",
+            "deepen",
+            "prune",
+            "synthesize",
+            "escalate",
+            "conclude"
+          ],
+          "title": "ResearchAction",
+          "type": "string"
         }
       },
       "additionalProperties": false,
@@ -16151,8 +16865,32 @@
       "type": "object"
     },
     "ProposeResearchTrialPayload": {
+      "$defs": {
+        "ResearchAction": {
+          "enum": [
+            "retrieve",
+            "draft",
+            "repair",
+            "refine",
+            "challenge",
+            "combine",
+            "evaluate",
+            "replicate",
+            "deepen",
+            "prune",
+            "synthesize",
+            "escalate",
+            "conclude"
+          ],
+          "title": "ResearchAction",
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "properties": {
+        "action": {
+          "$ref": "#/$defs/ResearchAction"
+        },
         "campaign_id": {
           "format": "uuid",
           "title": "Campaign Id",
@@ -16205,6 +16943,19 @@
           "title": "Policy Sha256",
           "type": "string"
         },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
         "resource_request": {
           "anyOf": [
             {
@@ -16246,6 +16997,7 @@
         "campaign_id",
         "work_id",
         "decision_id",
+        "action",
         "candidate_digest",
         "experiment_spec_sha256",
         "evaluator_sha256",
@@ -18206,6 +18958,241 @@
       "title": "RecordResearchObservationPayload",
       "type": "object"
     },
+    "RegisterResearchComponentCommand": {
+      "$defs": {
+        "RegisterResearchComponentPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "component_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Component Sha256",
+              "type": "string"
+            },
+            "descriptor": {
+              "$ref": "#/$defs/ResearchComponentDescriptor"
+            }
+          },
+          "required": [
+            "component_sha256",
+            "descriptor"
+          ],
+          "title": "RegisterResearchComponentPayload",
+          "type": "object"
+        },
+        "ResearchComponentDescriptor": {
+          "additionalProperties": false,
+          "description": "Canonical, hash-defining declaration. Field set IS the identity.",
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "capabilities": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-component.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "roles": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ResearchRole"
+              },
+              "title": "Roles",
+              "type": "array"
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "kind",
+            "name",
+            "version",
+            "artifact_sha256"
+          ],
+          "title": "ResearchComponentDescriptor",
+          "type": "object"
+        },
+        "ResearchComponentKind": {
+          "enum": [
+            "worker",
+            "evaluator",
+            "policy",
+            "audit",
+            "release",
+            "environment"
+          ],
+          "title": "ResearchComponentKind",
+          "type": "string"
+        },
+        "ResearchRole": {
+          "enum": [
+            "campaign_planner",
+            "research_worker",
+            "hypothesis_generator",
+            "method_critic",
+            "implementer",
+            "selector",
+            "analyst",
+            "scientific_reviewer",
+            "harness_researcher",
+            "native_auditor",
+            "synthesizer"
+          ],
+          "title": "ResearchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RegisterResearchComponentPayload"
+        },
+        "type": {
+          "const": "register_research_component",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RegisterResearchComponentCommand",
+      "type": "object"
+    },
+    "RegisterResearchComponentPayload": {
+      "$defs": {
+        "ResearchComponentDescriptor": {
+          "additionalProperties": false,
+          "description": "Canonical, hash-defining declaration. Field set IS the identity.",
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "capabilities": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-component.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "roles": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ResearchRole"
+              },
+              "title": "Roles",
+              "type": "array"
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "kind",
+            "name",
+            "version",
+            "artifact_sha256"
+          ],
+          "title": "ResearchComponentDescriptor",
+          "type": "object"
+        },
+        "ResearchComponentKind": {
+          "enum": [
+            "worker",
+            "evaluator",
+            "policy",
+            "audit",
+            "release",
+            "environment"
+          ],
+          "title": "ResearchComponentKind",
+          "type": "string"
+        },
+        "ResearchRole": {
+          "enum": [
+            "campaign_planner",
+            "research_worker",
+            "hypothesis_generator",
+            "method_critic",
+            "implementer",
+            "selector",
+            "analyst",
+            "scientific_reviewer",
+            "harness_researcher",
+            "native_auditor",
+            "synthesizer"
+          ],
+          "title": "ResearchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "component_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Component Sha256",
+          "type": "string"
+        },
+        "descriptor": {
+          "$ref": "#/$defs/ResearchComponentDescriptor"
+        }
+      },
+      "required": [
+        "component_sha256",
+        "descriptor"
+      ],
+      "title": "RegisterResearchComponentPayload",
+      "type": "object"
+    },
     "RelationCycleExample": {
       "additionalProperties": false,
       "properties": {
@@ -18429,8 +19416,76 @@
       "title": "RemoveRelationPayload",
       "type": "object"
     },
+    "ResearchBlockedDependency": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "work_item",
+            "budget_scope",
+            "capability",
+            "external"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "ref": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "ref",
+        "reason"
+      ],
+      "title": "ResearchBlockedDependency",
+      "type": "object"
+    },
     "ResearchCampaign": {
       "$defs": {
+        "ResearchBlockedDependency": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "work_item",
+                "budget_scope",
+                "capability",
+                "external"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "reason": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "ref",
+            "reason"
+          ],
+          "title": "ResearchBlockedDependency",
+          "type": "object"
+        },
         "ResearchCampaignSpec": {
           "additionalProperties": false,
           "properties": {
@@ -18486,6 +19541,66 @@
             "candidate_mapping_policy"
           ],
           "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchCompatibilityManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "audits": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Audits",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-compatibility.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "environments": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Environments",
+              "type": "array"
+            },
+            "evaluators": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Evaluators",
+              "type": "array"
+            },
+            "releases": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Releases",
+              "type": "array"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "contract_version"
+          ],
+          "title": "ResearchCompatibilityManifest",
           "type": "object"
         },
         "ResearchDomain": {
@@ -18627,6 +19742,35 @@
           "default": null,
           "title": "Admitted At"
         },
+        "blocked_dependency": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResearchBlockedDependency"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "blocked_from_state": {
+          "anyOf": [
+            {
+              "enum": [
+                "admitted",
+                "running",
+                "paused",
+                "evaluating"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blocked From State"
+        },
         "campaign_id": {
           "format": "uuid",
           "title": "Campaign Id",
@@ -18657,6 +19801,43 @@
           "default": null,
           "title": "Cancelled At"
         },
+        "compatibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResearchCompatibilityManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "compatibility_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compatibility Sha256"
+        },
+        "concluded_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Concluded At"
+        },
         "created_at": {
           "format": "date-time",
           "title": "Created At",
@@ -18664,6 +19845,37 @@
         },
         "domain": {
           "$ref": "#/$defs/ResearchDomain"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "enum": [
+                "supported",
+                "refuted",
+                "inconclusive",
+                "resource_exhausted",
+                "externally_blocked"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outcome"
+        },
+        "outcome_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outcome Reason"
         },
         "policy_sha256": {
           "anyOf": [
@@ -18695,6 +19907,11 @@
           "enum": [
             "draft",
             "admitted",
+            "running",
+            "paused",
+            "evaluating",
+            "blocked",
+            "concluded",
             "cancelled"
           ],
           "title": "State",
@@ -18893,6 +20110,279 @@
         "candidate_mapping_policy"
       ],
       "title": "ResearchCampaignSpec",
+      "type": "object"
+    },
+    "ResearchCompatibilityManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "audits": {
+          "default": [],
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Audits",
+          "type": "array"
+        },
+        "contract_version": {
+          "const": "research-compatibility.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "environments": {
+          "default": [],
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Environments",
+          "type": "array"
+        },
+        "evaluators": {
+          "default": [],
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Evaluators",
+          "type": "array"
+        },
+        "releases": {
+          "default": [],
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Releases",
+          "type": "array"
+        },
+        "workers": {
+          "default": [],
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Workers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "contract_version"
+      ],
+      "title": "ResearchCompatibilityManifest",
+      "type": "object"
+    },
+    "ResearchComponent": {
+      "$defs": {
+        "ResearchComponentDescriptor": {
+          "additionalProperties": false,
+          "description": "Canonical, hash-defining declaration. Field set IS the identity.",
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "capabilities": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+                "type": "string"
+              },
+              "title": "Capabilities",
+              "type": "array"
+            },
+            "contract_version": {
+              "const": "research-component.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ResearchComponentKind"
+            },
+            "name": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "roles": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ResearchRole"
+              },
+              "title": "Roles",
+              "type": "array"
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "kind",
+            "name",
+            "version",
+            "artifact_sha256"
+          ],
+          "title": "ResearchComponentDescriptor",
+          "type": "object"
+        },
+        "ResearchComponentKind": {
+          "enum": [
+            "worker",
+            "evaluator",
+            "policy",
+            "audit",
+            "release",
+            "environment"
+          ],
+          "title": "ResearchComponentKind",
+          "type": "string"
+        },
+        "ResearchRole": {
+          "enum": [
+            "campaign_planner",
+            "research_worker",
+            "hypothesis_generator",
+            "method_critic",
+            "implementer",
+            "selector",
+            "analyst",
+            "scientific_reviewer",
+            "harness_researcher",
+            "native_auditor",
+            "synthesizer"
+          ],
+          "title": "ResearchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "component_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Component Sha256",
+          "type": "string"
+        },
+        "descriptor": {
+          "$ref": "#/$defs/ResearchComponentDescriptor"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResearchComponentKind"
+        },
+        "registered_at": {
+          "format": "date-time",
+          "title": "Registered At",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component_sha256",
+        "workspace_id",
+        "kind",
+        "descriptor",
+        "registered_at"
+      ],
+      "title": "ResearchComponent",
+      "type": "object"
+    },
+    "ResearchComponentDescriptor": {
+      "$defs": {
+        "ResearchComponentKind": {
+          "enum": [
+            "worker",
+            "evaluator",
+            "policy",
+            "audit",
+            "release",
+            "environment"
+          ],
+          "title": "ResearchComponentKind",
+          "type": "string"
+        },
+        "ResearchRole": {
+          "enum": [
+            "campaign_planner",
+            "research_worker",
+            "hypothesis_generator",
+            "method_critic",
+            "implementer",
+            "selector",
+            "analyst",
+            "scientific_reviewer",
+            "harness_researcher",
+            "native_auditor",
+            "synthesizer"
+          ],
+          "title": "ResearchRole",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Canonical, hash-defining declaration. Field set IS the identity.",
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "capabilities": {
+          "default": [],
+          "items": {
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+            "type": "string"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "contract_version": {
+          "const": "research-component.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResearchComponentKind"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "roles": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResearchRole"
+          },
+          "title": "Roles",
+          "type": "array"
+        },
+        "version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_version",
+        "kind",
+        "name",
+        "version",
+        "artifact_sha256"
+      ],
+      "title": "ResearchComponentDescriptor",
       "type": "object"
     },
     "ResearchDeliverableBinding": {
@@ -19174,8 +20664,40 @@
       "type": "object"
     },
     "ResearchTrial": {
+      "$defs": {
+        "ResearchAction": {
+          "enum": [
+            "retrieve",
+            "draft",
+            "repair",
+            "refine",
+            "challenge",
+            "combine",
+            "evaluate",
+            "replicate",
+            "deepen",
+            "prune",
+            "synthesize",
+            "escalate",
+            "conclude"
+          ],
+          "title": "ResearchAction",
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResearchAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "archived_at": {
           "anyOf": [
             {
@@ -19257,6 +20779,18 @@
           "format": "date-time",
           "title": "Proposed At",
           "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
         },
         "resource_request": {
           "anyOf": [
@@ -20338,6 +21872,221 @@
         "expected_version"
       ],
       "title": "SetFocusPayload",
+      "type": "object"
+    },
+    "SetResearchCampaignStateCommand": {
+      "$defs": {
+        "ResearchBlockedDependency": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "work_item",
+                "budget_scope",
+                "capability",
+                "external"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "reason": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "ref",
+            "reason"
+          ],
+          "title": "ResearchBlockedDependency",
+          "type": "object"
+        },
+        "SetResearchCampaignStatePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "blocked_dependency": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchBlockedDependency"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "expected_state": {
+              "enum": [
+                "admitted",
+                "running",
+                "paused",
+                "evaluating",
+                "blocked"
+              ],
+              "title": "Expected State",
+              "type": "string"
+            },
+            "policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Policy Sha256",
+              "type": "string"
+            },
+            "target_state": {
+              "enum": [
+                "admitted",
+                "running",
+                "paused",
+                "evaluating",
+                "blocked"
+              ],
+              "title": "Target State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "work_id",
+            "expected_state",
+            "target_state",
+            "policy_sha256"
+          ],
+          "title": "SetResearchCampaignStatePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SetResearchCampaignStatePayload"
+        },
+        "type": {
+          "const": "set_research_campaign_state",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "SetResearchCampaignStateCommand",
+      "type": "object"
+    },
+    "SetResearchCampaignStatePayload": {
+      "$defs": {
+        "ResearchBlockedDependency": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "work_item",
+                "budget_scope",
+                "capability",
+                "external"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "reason": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            },
+            "ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "ref",
+            "reason"
+          ],
+          "title": "ResearchBlockedDependency",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "blocked_dependency": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResearchBlockedDependency"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "campaign_id": {
+          "format": "uuid",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "expected_state": {
+          "enum": [
+            "admitted",
+            "running",
+            "paused",
+            "evaluating",
+            "blocked"
+          ],
+          "title": "Expected State",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "target_state": {
+          "enum": [
+            "admitted",
+            "running",
+            "paused",
+            "evaluating",
+            "blocked"
+          ],
+          "title": "Target State",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "work_id",
+        "expected_state",
+        "target_state",
+        "policy_sha256"
+      ],
+      "title": "SetResearchCampaignStatePayload",
       "type": "object"
     },
     "SetWorkStateCommand": {

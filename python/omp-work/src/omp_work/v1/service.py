@@ -63,12 +63,15 @@ class WorkService:
         "set_execution_state": "work.execute",
         "complete_execution_item": "work.execute",
         "skip_active_item": "work.execute",
+        "register_research_component": "work.execute",
         "create_research_campaign": "work.execute",
         "admit_research_campaign": "work.approve",
         "cancel_research_campaign": "work.execute",
         "propose_research_trial": "work.execute",
         "record_research_observation": "work.execute",
         "bind_research_deliverable": "work.execute",
+        "set_research_campaign_state": "work.execute",
+        "conclude_research_campaign": "work.approve",
     }
 
     def __init__(self, store: WorkStore) -> None:

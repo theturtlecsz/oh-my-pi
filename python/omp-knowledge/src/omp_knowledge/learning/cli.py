@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
+import shutil
+import subprocess  # nosec B404 - invokes git to resolve the workspace remote
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -129,9 +130,12 @@ def _format_correction(record: CorrectionRecord) -> str:
 def _resolve_repository(cwd: str | Path | None) -> str | None:
     if not cwd:
         return None
+    git = shutil.which("git")
+    if git is None:
+        return None
     try:
-        res = subprocess.run(
-            ["git", "-C", str(cwd), "remote", "get-url", "origin"],
+        res = subprocess.run(  # nosec B603 - absolute git path, no shell, fixed argv
+            [git, "-C", str(cwd), "remote", "get-url", "origin"],
             capture_output=True,
             text=True,
             check=False,

@@ -435,15 +435,14 @@ def procedure_history(
         uses: list[UseRecord] = []
         use_ids: list[str] = []
         if supply_ids:
-            placeholders = ",".join("?" for _ in supply_ids)
             uses_rows = conn.execute(
-                f"""
+                """
                 SELECT use_id, supply_id, candidate_id, receipt_ids_json, used_at
                 FROM uses
-                WHERE supply_id IN ({placeholders})
+                WHERE supply_id IN (SELECT value FROM json_each(?))
                 ORDER BY used_at ASC, use_id ASC
                 """,
-                tuple(supply_ids),
+                (json.dumps(supply_ids),),
             ).fetchall()
             for r in uses_rows:
                 try:
@@ -463,15 +462,14 @@ def procedure_history(
 
         outcomes: list[OutcomeRecord] = []
         if use_ids:
-            placeholders = ",".join("?" for _ in use_ids)
             outcomes_rows = conn.execute(
-                f"""
+                """
                 SELECT outcome_id, use_id, receipt_id, candidate_id, verdict, recorded_at
                 FROM outcomes
-                WHERE use_id IN ({placeholders})
+                WHERE use_id IN (SELECT value FROM json_each(?))
                 ORDER BY recorded_at ASC, outcome_id ASC
                 """,
-                tuple(use_ids),
+                (json.dumps(use_ids),),
             ).fetchall()
             for r in outcomes_rows:
                 outcomes.append(

@@ -82,6 +82,7 @@ import {
 import { pendingOpsDir, type WorkClientConfig } from "./config";
 import { candidateDrift, type CandidateDriftShape, freezeCandidateCommit, headCommit, pushCandidate } from "./git";
 import { ackOps as ackClaimOps, claimPendingOp, dropPendingOp, intentFingerprint, readPendingClaims, resolvePendingOp } from "./pending-ops";
+import { procedureDigestLines, spawnRunner } from "./procedures";
 import { bounded, healthWord, oneRecovery, redactSecrets } from "./status";
 
 const DRAIN_MAX_QUEUE = 8;
@@ -1141,6 +1142,16 @@ export function createWorkBackend(
 						extraLines.push(`CLOSE ATTEMPT: ${terminal.state} (${terminal.terminal_reason ?? "terminal"}) — ${nextAction}`);
 					}
 				}
+				extraLines.push(
+					...(await procedureDigestLines(
+						{
+							workKey: inflight.alias.key,
+							projectId: inflight.project_id ?? undefined,
+							cwd,
+						},
+						{ env: process.env, run: spawnRunner },
+					)),
+				);
 			}
 			return extraLines;
 		},

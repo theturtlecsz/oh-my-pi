@@ -22,7 +22,6 @@ from .compiler import CompiledBundle, _sort_key, compile_bundle
 from .models import (
     CompileRequest,
     Exclusion,
-    Section,
     Stage,
     StageIdentity,
 )
