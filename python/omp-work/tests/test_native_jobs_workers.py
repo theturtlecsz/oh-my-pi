@@ -2,14 +2,18 @@
 
 Contract under test: research jobs are native ``omp_jobs.jobs`` rows beside the
 flood mirror on the same tables; the operation ledger makes a committed-but-
-unacknowledged retry replay instead of running twice; a worker binds to its
-registered R02 ``worker`` component and can only drain, never reactivate.
+unacknowledged retry replay instead of running twice, and never replays another
+workspace's result; a worker binds to its registered R02 ``worker`` component
+and can only drain, never reactivate; a job-less trial projects as queued and
+ineligible but still binds, while a trial with native jobs binds only once
+those jobs are settled; usage is written to omp_jobs and the file ledger once.
 """
 from __future__ import annotations
 
 import json
 import os
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import get_args
 from uuid import UUID, uuid4
 
@@ -22,9 +26,14 @@ from omp_work.jobs.store import (
     JobError,
     NativeJobStore,
     drain_worker,
+    project_trial,
+    record_usage,
     register_worker,
 )
+from omp_work.v1.canonical import sha256
 from native_jobs_support import native_jobs  # noqa: F401  (fixture)
+from test_research_contract import _plan_and_finalize, _trial_payload
+from test_workflow_service import _command
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
@@ -45,6 +54,63 @@ def _job_columns(service) -> set[str]:
     return {row[0] for row in rows}
 
 
+def _propose_trial(native_jobs, *, candidate_digest: str = "c" * 64) -> UUID:
+    trial_id = uuid4()
+    status, body = _command(
+        native_jobs.service,
+        native_jobs.workspace_id,
+        {
+            "type": "propose_research_trial",
+            "payload": _trial_payload(
+                native_jobs.campaign_id,
+                native_jobs.item["work_id"],
+                native_jobs.components["policy"],
+                native_jobs.components["evaluator"],
+                native_jobs.components["environment"],
+                trial_id=trial_id,
+                candidate_digest=candidate_digest,
+            ),
+        },
+    )
+    assert status == 200, body
+    return trial_id
+
+
+def _bind_deliverable(native_jobs, trial_id: UUID, candidate_id: UUID) -> tuple[int, dict]:
+    candidate_digest = "c" * 64
+    identity = {
+        "candidate_digest": candidate_digest,
+        "campaign_id": str(native_jobs.campaign_id),
+        "native_candidate_id": str(candidate_id),
+        "revision_id": native_jobs.item["revision_id"],
+        "trial_id": str(trial_id),
+        "work_id": native_jobs.item["work_id"],
+        "workspace_id": str(native_jobs.workspace_id),
+    }
+    return _command(
+        native_jobs.service,
+        native_jobs.workspace_id,
+        {
+            "type": "bind_research_deliverable",
+            "payload": {
+                "trial_id": str(trial_id),
+                "campaign_id": str(native_jobs.campaign_id),
+                "work_id": native_jobs.item["work_id"],
+                "revision_id": native_jobs.item["revision_id"],
+                "candidate_digest": candidate_digest,
+                "native_candidate_id": str(candidate_id),
+                "binding_sha256": sha256(identity),
+            },
+        },
+    )
+
+
+def _project(native_jobs, trial_id: UUID) -> dict[str, object]:
+    store = _store(native_jobs)
+    with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+        return project_trial(cur, native_jobs.workspace_id, trial_id)
+
+
 def _worker_columns(service) -> set[str]:
     with psycopg.connect(**service.config.connection_kwargs("postgres")) as conn:
         rows = conn.execute(
@@ -59,13 +125,14 @@ def _insert_native_job(
     job_id: str,
     kind: str = "compute",
     parent_job_id: str | None = None,
+    trial_id: UUID | None = None,
     **columns: object,
 ) -> None:
     fields = {
         "job_id": job_id,
         "workspace_id": native_jobs.workspace_id,
         "work_id": UUID(native_jobs.item["work_id"]),
-        "trial_id": native_jobs.trial_id,
+        "trial_id": native_jobs.trial_id if trial_id is None else trial_id,
         "parent_job_id": parent_job_id,
         "kind": kind,
         "status": "backlog",
@@ -489,3 +556,375 @@ def test_outbox_states_match_closeout_recovery_vocabulary(native_jobs) -> None:
         "acknowledged": "ack-1",
         "closed": "ack-1",
     }
+
+
+def test_run_operation_refuses_another_workspaces_operation(native_jobs) -> None:
+    """The same operation id in a second workspace is a conflict, not a replay."""
+    store = _store(native_jobs)
+    other = uuid4()
+    effects: list[str] = []
+
+    def apply() -> dict[str, object]:
+        effects.append("ran")
+        return {"status": "applied"}
+
+    with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+        first = store.run_operation(
+            cur, "op-ws", native_jobs.workspace_id, "job_cancel", {"reason": "stop"}, apply
+        )
+    assert first.state == "applied"
+    with store.transaction(other, native_jobs.actor_id) as cur:
+        with pytest.raises(JobError) as refused:
+            store.run_operation(
+                cur, "op-ws", other, "job_cancel", {"reason": "stop"}, apply
+            )
+    assert refused.value.code == "idempotency_conflict"
+    assert any("another workspace" in item for item in refused.value.diagnostics)
+    assert effects == ["ran"]
+    with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+        replay = store.run_operation(
+            cur, "op-ws", native_jobs.workspace_id, "job_cancel", {"reason": "stop"}, apply
+        )
+    assert replay.state == "replayed"
+    assert effects == ["ran"]
+
+
+def test_append_event_stays_inside_the_native_workspace(native_jobs) -> None:
+    """Events land only on a native job in the caller's workspace."""
+    _insert_native_job(native_jobs, job_id="events-home")
+    other = uuid4()
+    with psycopg.connect(
+        **native_jobs.service.config.connection_kwargs("omp_work_app"), autocommit=True
+    ) as conn:
+        conn.execute(
+            "INSERT INTO omp_jobs.jobs(job_id,status,source,kind,workspace_id) VALUES('events-other','backlog','native','compute',%s)",
+            (other,),
+        )
+        conn.execute(
+            "INSERT INTO omp_jobs.jobs(job_id,status,source) VALUES('events-flood','sealed','flood_import')"
+        )
+    store = _store(native_jobs)
+    with store.transaction(native_jobs.workspace_id, native_jobs.actor_id) as cur:
+        seq = store.append_event(
+            cur,
+            workspace_id=native_jobs.workspace_id,
+            job_id="events-home",
+            kind="queued",
+        )
+        for job_id in ("events-other", "events-flood", "events-missing"):
+            with pytest.raises(JobError) as refused:
+                store.append_event(
+                    cur,
+                    workspace_id=native_jobs.workspace_id,
+                    job_id=job_id,
+                    kind="queued",
+                )
+            assert refused.value.code == "invalid_request"
+            assert any("not a native job" in item for item in refused.value.diagnostics)
+        cur.execute(
+            "SELECT job_id FROM omp_jobs.job_events WHERE job_id IN ('events-home','events-other','events-flood','events-missing')"
+        )
+        written = {row["job_id"] for row in cur.fetchall()}
+    assert seq == 1
+    assert written == {"events-home"}
+
+
+def test_worker_handshake_does_not_replay_across_workspaces(native_jobs) -> None:
+    """A second workspace reusing the handshake operation id does not replay."""
+    store = _store(native_jobs)
+    other = uuid4()
+    component = native_jobs.components["worker"]
+    register_id = str(uuid4())
+    drain_id = str(uuid4())
+    registered = register_worker(
+        store,
+        operation_id=register_id,
+        workspace_id=native_jobs.workspace_id,
+        actor_id=native_jobs.actor_id,
+        worker_id="worker-iso",
+        component_sha256=component,
+        capabilities=["compute.gpu", "compute.cpu"],
+        capacity=2,
+    )
+    assert registered["status"] == "applied"
+    with psycopg.connect(**native_jobs.service.config.connection_kwargs("postgres")) as conn:
+        stored = conn.execute(
+            "SELECT request_sha256 FROM omp_jobs.operations WHERE operation_id=%s",
+            (register_id,),
+        ).fetchone()
+    assert stored[0] == sha256(
+        {
+            "workspace_id": str(native_jobs.workspace_id),
+            "worker_id": "worker-iso",
+            "component_sha256": component,
+            "capabilities": ["compute.cpu", "compute.gpu"],
+            "capacity": 2,
+        }
+    )
+    with pytest.raises(JobError) as refused:
+        register_worker(
+            store,
+            operation_id=register_id,
+            workspace_id=other,
+            actor_id=native_jobs.actor_id,
+            worker_id="worker-iso",
+            component_sha256=component,
+            capabilities=["compute.gpu", "compute.cpu"],
+            capacity=2,
+        )
+    assert refused.value.code == "idempotency_conflict"
+    assert any("another workspace" in item for item in refused.value.diagnostics)
+    with store.transaction(other, native_jobs.actor_id) as cur:
+        assert store.worker_view(cur, other, "worker-iso") is None
+
+    drained = drain_worker(
+        store,
+        operation_id=drain_id,
+        workspace_id=native_jobs.workspace_id,
+        actor_id=native_jobs.actor_id,
+        worker_id="worker-iso",
+    )
+    assert drained["status"] == "applied"
+    with psycopg.connect(**native_jobs.service.config.connection_kwargs("postgres")) as conn:
+        drain_hash = conn.execute(
+            "SELECT request_sha256 FROM omp_jobs.operations WHERE operation_id=%s",
+            (drain_id,),
+        ).fetchone()
+    assert drain_hash[0] == sha256(
+        {"workspace_id": str(native_jobs.workspace_id), "worker_id": "worker-iso"}
+    )
+    with pytest.raises(JobError) as drain_refused:
+        drain_worker(
+            store,
+            operation_id=drain_id,
+            workspace_id=other,
+            actor_id=native_jobs.actor_id,
+            worker_id="worker-iso",
+        )
+    assert drain_refused.value.code == "idempotency_conflict"
+    assert any("another workspace" in item for item in drain_refused.value.diagnostics)
+    replay = drain_worker(
+        store,
+        operation_id=drain_id,
+        workspace_id=native_jobs.workspace_id,
+        actor_id=native_jobs.actor_id,
+        worker_id="worker-iso",
+    )
+    assert replay["status"] == "replayed"
+    assert replay["worker"]["state"] == "draining"
+
+
+def test_jobless_trial_projects_queued_and_ineligible(native_jobs) -> None:
+    """A trial with no native jobs is queued and ineligible.
+
+    A native job for the same trial in another workspace does not count.
+    """
+    trial = _propose_trial(native_jobs)
+    other = uuid4()
+    with psycopg.connect(
+        **native_jobs.service.config.connection_kwargs("omp_work_app"), autocommit=True
+    ) as conn:
+        conn.execute(
+            "INSERT INTO omp_jobs.jobs(job_id,status,source,kind,workspace_id,trial_id) VALUES('proj-foreign','sealed','native','model',%s,%s)",
+            (other, trial),
+        )
+    view = _project(native_jobs, trial)
+    assert view == {
+        "trial_id": str(trial),
+        "status": "queued",
+        "eligible": False,
+        "job_count": 0,
+    }
+
+
+def test_trial_projection_maps_job_status_and_settlement(native_jobs) -> None:
+    """Projection reuses the omp_jobs vocabulary and settles only a sealed job
+    that has both settlement and settled_at."""
+    trial = _propose_trial(native_jobs)
+    _insert_native_job(native_jobs, job_id="proj-1", trial_id=trial, status="backlog")
+    assert _project(native_jobs, trial)["status"] == "queued"
+    assert _project(native_jobs, trial)["eligible"] is False
+
+    with psycopg.connect(
+        **native_jobs.service.config.connection_kwargs("omp_work_app"), autocommit=True
+    ) as conn:
+        for status, projected in (
+            ("admitted", "leased"),
+            ("in_flight", "leased"),
+            ("returned", "leased"),
+            ("checking", "leased"),
+            ("failed", "failed"),
+        ):
+            conn.execute("UPDATE omp_jobs.jobs SET status=%s WHERE job_id='proj-1'", (status,))
+            view = _project(native_jobs, trial)
+            assert view["status"] == projected
+            assert view["eligible"] is False
+
+        conn.execute(
+            "UPDATE omp_jobs.jobs SET status='sealed', settlement=NULL, settled_at=NULL WHERE job_id='proj-1'"
+        )
+        sealed = _project(native_jobs, trial)
+        assert sealed["status"] == "succeeded"
+        assert sealed["eligible"] is False
+
+        conn.execute(
+            "UPDATE omp_jobs.jobs SET settlement=%s WHERE job_id='proj-1'",
+            (Jsonb({"outcome": "succeeded"}),),
+        )
+        assert _project(native_jobs, trial)["eligible"] is False
+
+        conn.execute(
+            "UPDATE omp_jobs.jobs SET settled_at=%s WHERE job_id='proj-1'",
+            (datetime.now(UTC),),
+        )
+        settled = _project(native_jobs, trial)
+        assert settled["status"] == "succeeded"
+        assert settled["eligible"] is True
+        assert settled["job_count"] == 1
+
+        conn.execute(
+            "INSERT INTO omp_jobs.jobs(job_id,status,source,kind,workspace_id,trial_id) VALUES('proj-2','failed','native','compute',%s,%s)",
+            (native_jobs.workspace_id, trial),
+        )
+        mixed = _project(native_jobs, trial)
+        assert mixed["status"] == "failed"
+        assert mixed["eligible"] is False
+        assert mixed["job_count"] == 2
+
+        conn.execute("UPDATE omp_jobs.jobs SET status='cancelled' WHERE job_id='proj-2'")
+        assert _project(native_jobs, trial)["status"] == "cancelled"
+
+        conn.execute("UPDATE omp_jobs.jobs SET status='backlog' WHERE job_id='proj-2'")
+        queued = _project(native_jobs, trial)
+        assert queued["status"] == "queued"
+        assert queued["eligible"] is False
+
+
+def test_binding_requires_settled_native_jobs_and_keeps_jobless_trials(native_jobs) -> None:
+    """Trials with native jobs bind only when those jobs are settled.
+
+    A job-less trial still projects as queued and ineligible, and still binds
+    through the current R02 path.
+    """
+    jobless = _propose_trial(native_jobs)
+    gated = _propose_trial(native_jobs)
+    _insert_native_job(native_jobs, job_id="bind-open", trial_id=gated, status="sealed")
+    assert _project(native_jobs, jobless)["status"] == "queued"
+    assert _project(native_jobs, jobless)["eligible"] is False
+    opened = _project(native_jobs, gated)
+    assert opened["status"] == "succeeded"
+    assert opened["eligible"] is False
+
+    candidate_id = _plan_and_finalize(
+        native_jobs.service, native_jobs.workspace_id, native_jobs.item
+    )
+    status, body = _bind_deliverable(native_jobs, gated, candidate_id)
+    assert status == 400, body
+    assert body["error"]["code"] == "invalid_request"
+    assert any("not settled" in item for item in body["error"]["diagnostics"])
+    with psycopg.connect(**native_jobs.service.config.connection_kwargs("postgres")) as conn:
+        bound = conn.execute(
+            "SELECT trial_id FROM omp_research.deliverable_bindings WHERE trial_id=%s",
+            (gated,),
+        ).fetchone()
+    assert bound is None
+
+    status, body = _bind_deliverable(native_jobs, jobless, candidate_id)
+    assert status == 200, body
+    assert body["result"]["status"] == "applied"
+
+    with psycopg.connect(
+        **native_jobs.service.config.connection_kwargs("omp_work_app"), autocommit=True
+    ) as conn:
+        conn.execute(
+            "UPDATE omp_jobs.jobs SET settlement=%s, settled_at=%s WHERE job_id='bind-open'",
+            (Jsonb({"outcome": "succeeded"}), datetime.now(UTC)),
+        )
+    settled = _project(native_jobs, gated)
+    assert settled["status"] == "succeeded"
+    assert settled["eligible"] is True
+    status, body = _bind_deliverable(native_jobs, gated, candidate_id)
+    assert status == 200, body
+    assert body["result"]["status"] == "applied"
+    assert body["result"]["deliverable_binding"]["trial_id"] == str(gated)
+
+
+def test_record_usage_writes_the_db_and_file_ledger_once(native_jobs, tmp_path) -> None:
+    """WP5 accounting appends omp_jobs.usage_events and the file ledger together.
+
+    Replaying the operation does not write either a second time. Another
+    workspace reusing the operation id conflicts.
+    """
+    ledger = tmp_path / "usage" / "ledger.json"
+    store = _store(native_jobs)
+    kwargs = {
+        "operation_id": "usage-op-1",
+        "workspace_id": native_jobs.workspace_id,
+        "actor_id": native_jobs.actor_id,
+        "ledger_path": ledger,
+        "usage_id": "usage-native-1",
+        "work_id": UUID(native_jobs.item["work_id"]),
+        "request_id": "req-usage-1",
+        "model": "gemini",
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "cache_tokens": 5,
+        "measurement": "measured",
+        "price_usd": Decimal("0.0125"),
+        "price_version": "v1",
+        "conversation_id": "conv-usage-1",
+        "step_index": 1,
+        "source_file": "usage.json",
+    }
+    first = record_usage(store, **kwargs)
+    assert first["status"] == "applied"
+    replay = record_usage(store, **kwargs)
+    assert replay["status"] == "replayed"
+    events = json.loads(ledger.read_text())["events"]
+    assert len(events) == 1
+    assert events[0]["kind"] == "native_job_usage"
+    assert events[0]["usage_id"] == "usage-native-1"
+    assert events[0]["input_tokens"] == 10
+    assert events[0]["workspace_id"] == str(native_jobs.workspace_id)
+
+    with psycopg.connect(**native_jobs.service.config.connection_kwargs("postgres")) as conn:
+        row = conn.execute(
+            """
+            SELECT workspace_id, work_id, model, input_tokens, output_tokens, cache_tokens,
+                   measurement, price_usd, price_version
+            FROM omp_jobs.usage_events WHERE usage_id='usage-native-1'
+            """
+        ).fetchone()
+    assert row[0] == native_jobs.workspace_id
+    assert row[1] == UUID(native_jobs.item["work_id"])
+    assert row[2:] == ("gemini", 10, 20, 5, "measured", Decimal("0.0125"), "v1")
+
+    changed = dict(kwargs)
+    changed["price_usd"] = Decimal("9")
+    with pytest.raises(JobError) as refused:
+        record_usage(store, **changed)
+    assert refused.value.code == "idempotency_conflict"
+    assert len(json.loads(ledger.read_text())["events"]) == 1
+
+    other = dict(kwargs)
+    other["workspace_id"] = uuid4()
+    with pytest.raises(JobError) as cross:
+        record_usage(store, **other)
+    assert cross.value.code == "idempotency_conflict"
+    assert any("another workspace" in item for item in cross.value.diagnostics)
+    assert len(json.loads(ledger.read_text())["events"]) == 1
+
+    second = dict(kwargs)
+    second["operation_id"] = "usage-op-2"
+    second["usage_id"] = "usage-native-2"
+    second["step_index"] = 2
+    assert record_usage(store, **second)["status"] == "applied"
+    assert len(json.loads(ledger.read_text())["events"]) == 2
+
+    duplicate = dict(second)
+    duplicate["operation_id"] = "usage-op-3"
+    duplicate["step_index"] = 3
+    with pytest.raises(JobError) as dup:
+        record_usage(store, **duplicate)
+    assert dup.value.code == "idempotency_conflict"
+    assert len(json.loads(ledger.read_text())["events"]) == 2
