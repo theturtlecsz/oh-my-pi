@@ -208,6 +208,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.tokenHelp,
 	},
 	{
+		name: "tokens",
+		load: () => import("./commands/tokens").then(m => m.default),
+		help: commandHelp.tokensHelp,
+	},
+	{
 		name: "ttsr",
 		load: () => import("./commands/ttsr").then(m => m.default),
 		help: commandHelp.ttsrHelp,
