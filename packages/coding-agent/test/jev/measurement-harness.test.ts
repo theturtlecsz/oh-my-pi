@@ -715,6 +715,9 @@ describe("Jev measurement harness", () => {
 
 			const reportMarkdown = await Bun.file(path.join(outDir, "jev-measurement-report.md")).text();
 			expect(reportMarkdown).toContain("--fake-smol test handler (verdict allowed)");
+			expect(reportMarkdown).toContain("Sample size: 1 prompts");
+			expect(reportMarkdown).toContain("Sample size: 1 turn ends");
+			expect(reportMarkdown).toContain("Sample size: 0 issues");
 			expect(wp5VerdictLines(reportMarkdown)).toEqual([WP5_AMENDMENT]);
 		});
 
