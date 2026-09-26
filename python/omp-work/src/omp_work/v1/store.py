@@ -44,6 +44,7 @@ from .models import (
     CreateWorkBatchPayload,
     EvidenceKind,
     EvidenceReceipt,
+    FableAdvicePayload,
     OperationReceipt,
     OperationState,
     RelationEdge,
@@ -481,6 +482,8 @@ class PostgresWorkStore:
                     result = self._skip_active_item(cur, envelope)
                 elif command.type == "assess_bounded_intake":
                     result = self._assess_bounded_intake(envelope)
+                elif command.type == "record_fable_advice":
+                    result = self._record_fable_advice(cur, envelope)
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -5473,6 +5476,87 @@ class PostgresWorkStore:
             "ready_for_ratification": issue_count == 0,
             "issue_count": issue_count,
             "questions": [q.model_dump(mode="json") for q in questions],
+        }
+
+    def _record_fable_advice(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute(
+            "SELECT current_revision_id,current_candidate_id FROM omp_work.work_items WHERE workspace_id=%s AND work_id=%s FOR UPDATE",
+            (envelope.workspace_id, payload.work_id),
+        )
+        item = cur.fetchone()
+        if not item or item["current_revision_id"] != payload.revision_id:
+            raise WorkStoreError("stale_evidence")
+        if item["current_candidate_id"] is None:
+            raise WorkStoreError("invalid_request", ("item has no active candidate",))
+        if payload.rule_bundle_sha256 != BOUNDED_INTAKE_RULE_BUNDLE_SHA256:
+            raise WorkStoreError("invalid_request", ("rule_bundle_sha256 mismatch",))
+
+        cur.execute(
+            "SELECT candidate_sha256,commit_sha FROM omp_work.candidates WHERE candidate_id=%s",
+            (item["current_candidate_id"],),
+        )
+        candidate = cur.fetchone()
+        if candidate is None:
+            raise WorkStoreError("invalid_request", ("candidate not found",))
+
+        advice_payload = FableAdvicePayload(
+            advisor_model_family="fable",
+            advice_sha256=payload.advice_sha256,
+            disposition=payload.disposition,
+            intake_semantic_sha256=payload.intake_semantic_sha256,
+            rule_bundle_sha256=payload.rule_bundle_sha256,
+        ).model_dump(mode="json")
+        payload_hash = sha256(advice_payload)
+        receipt_id = uuid4()
+        now = datetime.now(UTC)
+
+        receipt = EvidenceReceipt(
+            receipt_id=receipt_id,
+            work_id=payload.work_id,
+            revision_id=payload.revision_id,
+            candidate_id=item["current_candidate_id"],
+            kind=EvidenceKind.VERIFICATION,
+            payload=advice_payload,
+            payload_sha256=payload_hash,
+            artifact_sha256=None,
+            issuer="work-service/fable-advisor",
+            issued_at=now,
+            candidate_sha256=candidate["candidate_sha256"],
+            candidate_commit=candidate["commit_sha"],
+            verdict=None,
+            independent=False,
+            remote_ref=None,
+            remote_commit=None,
+        )
+
+        cur.execute(
+            "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                receipt.receipt_id,
+                envelope.workspace_id,
+                receipt.work_id,
+                receipt.revision_id,
+                receipt.candidate_id,
+                receipt.kind.value,
+                canonical_json(receipt.payload),
+                receipt.payload_sha256,
+                receipt.artifact_sha256,
+                receipt.issuer,
+                receipt.issued_at,
+                receipt.candidate_sha256,
+                receipt.candidate_commit,
+                receipt.verdict,
+                receipt.independent,
+                receipt.remote_ref,
+                receipt.remote_commit,
+            ),
+        )
+        return {
+            "type": "record_fable_advice",
+            "receipt": receipt.model_dump(mode="json"),
         }
 
     def _item_view(

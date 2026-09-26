@@ -23,6 +23,7 @@
 - Versioned structural code graph with candidate snapshot isolation: engine-neutral Enola extraction (`facts.jsonl`/`receipt.json`), a repository/snapshot namespace adapter over the complete `(repository, enola_repo, kind, name, file)` fact identity, staged publication with retained active snapshots, and a per-snapshot coverage manifest of extracted and skipped files (OMP-309).
 - Claim-support evidence matrix (`report_evidence.py`): extracts material claims from a report draft with stable ids and locations, links each claim to top-k passages from the sources it cites, classifies every pair as supports/contradicts/neither through a stub or batched chat-model classifier, and stores a digest-verified matrix the report and its auditor read (OMP-300).
 - Added record_external_delivery command closing externally delivered work with an evidence receipt (OMP-283).
+- `record_fable_advice` command (`work.approve`) records advisor verification evidence bound to candidate and bounded intake semantic and rule bundle hashes (OMP-266).
 
 ### Changed
 
@@ -42,3 +43,4 @@
 - Cutover status now reports the persisted first-mutation request, the database rejects unpaired first-mutation stamps on every write path, and the recovery runbook covers deadline overruns and failed Linear credential revocation.
 - OMP-123: Normalized `{"raw": report}` as a direct auditor transport envelope at the WorkService settle boundary, supporting task tool terminal yield payloads without loosening validation rules.
 - `execution_grant_inactive` refusals are treated as not applied, so clients release the pending operation instead of reporting an unknown outcome.
+- Generic `append_evidence` rejects reserved service issuers (`service`, `work-service/*`) before receipt lookup to prevent forged replays (OMP-266).

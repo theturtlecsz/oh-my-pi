@@ -387,3 +387,285 @@ def test_record_fable_advice_rejects_non_hex_advice_sha256() -> None:
     data["payload"]["advice_sha256"] = "z" * 64  # type: ignore[index]
     with pytest.raises(ValidationError):
         TypeAdapter(Command).validate_python(data)
+
+
+from omp_work.v1.models import RecordFableAdvicePayload
+from omp_work.v1.semantics import BOUNDED_INTAKE_RULE_BUNDLE_SHA256
+
+
+@pytest.mark.skipif(
+    os.environ.get("OMP_WORK_POSTGRES_INTEGRATION") != "1",
+    reason="set OMP_WORK_POSTGRES_INTEGRATION=1",
+)
+def test_record_fable_advice_store_integration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    with native_postgres(tmp_path, config.port):
+        monkeypatch.setattr(
+            "omp_work.operations.database.validate_bundle", lambda **kw: None
+        )
+        bootstrap(config)
+        workspace_id, actor_id = uuid4(), uuid4()
+        seed_authority(config.connection_kwargs("postgres"), workspace_id, actor_id)
+        with psycopg.connect(
+            **config.connection_kwargs("postgres"), autocommit=True
+        ) as conn:
+            conn.execute(
+                "INSERT INTO omp_control.workspaces(workspace_id) VALUES(%s) ON CONFLICT DO NOTHING",
+                (workspace_id,),
+            )
+        capabilities = tmp_path / "capabilities"
+        capabilities.mkdir(mode=0o700)
+        (capabilities / "owner.json").write_text(
+            json.dumps(
+                {
+                    "token": "owner-token",
+                    "actor_id": str(actor_id),
+                    "actor_kind": "owner",
+                    "workspaces": [str(workspace_id)],
+                    "scopes": ["work.read", "work.mutate", "work.approve", "work.close"],
+                }
+            )
+        )
+        (capabilities / "owner.json").chmod(0o600)
+
+        client = TestClient(create_app(config, capabilities_dir=capabilities))
+        headers = {
+            "Authorization": "Bearer owner-token",
+            "X-OMP-Workspace-ID": str(workspace_id),
+            "X-OMP-Contract-SHA256": contract_sha256(),
+        }
+
+        # 1. Create two work items: one will have a candidate, one will not.
+        create_envelope = CommandEnvelope(
+            api_version="work.omp.dev/v1",
+            workspace_id=workspace_id,
+            operation_id=uuid4(),
+            request_id=uuid4(),
+            correlation_id=uuid4(),
+            command=CreateWorkBatchCommand(
+                type="create_work_batch",
+                payload=CreateWorkBatchPayload(
+                    items=(
+                        CreateWorkInput(
+                            client_ref="ref-cand",
+                            title="Item with candidate",
+                        ),
+                        CreateWorkInput(
+                            client_ref="ref-no-cand",
+                            title="Item without candidate",
+                        ),
+                    )
+                ),
+            ),
+        )
+        create_resp = client.post(
+            "/v1/commands",
+            headers=headers,
+            json=create_envelope.model_dump(mode="json"),
+        )
+        assert create_resp.status_code == 200
+        items_data = create_resp.json()["result"]["items"]
+        work_id = items_data[0]["work_id"]
+        revision_id = items_data[0]["revision_id"]
+        work_id_no_cand = items_data[1]["work_id"]
+        revision_id_no_cand = items_data[1]["revision_id"]
+
+        # 2. Seed a candidate on item 1 via plan evidence
+        candidate_id = uuid4()
+        candidate_sha = "3" * 64
+        candidate_commit = "4" * 40
+        plan_payload = {"body": "initial plan"}
+        plan_receipt = EvidenceReceipt(
+            receipt_id=uuid4(),
+            work_id=work_id,
+            revision_id=revision_id,
+            candidate_id=candidate_id,
+            kind=EvidenceKind.PLAN,
+            payload=plan_payload,
+            payload_sha256=sha256(plan_payload),
+            issuer="owner",
+            issued_at="2026-09-25T10:00:00Z",
+            candidate_sha256=candidate_sha,
+            candidate_commit=candidate_commit,
+        )
+        plan_env = CommandEnvelope(
+            api_version="work.omp.dev/v1",
+            workspace_id=workspace_id,
+            operation_id=uuid4(),
+            request_id=uuid4(),
+            correlation_id=uuid4(),
+            command=AppendEvidenceCommand(
+                type="append_evidence",
+                payload=AppendEvidencePayload(receipt=plan_receipt),
+            ),
+        )
+        plan_resp = client.post(
+            "/v1/commands",
+            headers=headers,
+            json=plan_env.model_dump(mode="json"),
+        )
+        assert plan_resp.status_code == 200
+
+        # 3. Minted receipt has issuer "work-service/fable-advisor", kind verification,
+        # payload intake_semantic_sha256 and rule_bundle_sha256 equal inputs.
+        advice_sha = "a" * 64
+        intake_semantic_sha = "b" * 64
+        fable_op_id = uuid4()
+        fable_env = CommandEnvelope(
+            api_version="work.omp.dev/v1",
+            workspace_id=workspace_id,
+            operation_id=fable_op_id,
+            request_id=uuid4(),
+            correlation_id=uuid4(),
+            command=RecordFableAdviceCommand(
+                type="record_fable_advice",
+                payload=RecordFableAdvicePayload(
+                    work_id=work_id,
+                    revision_id=revision_id,
+                    advice_sha256=advice_sha,
+                    disposition="considered",
+                    intake_semantic_sha256=intake_semantic_sha,
+                    rule_bundle_sha256=BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
+                ),
+            ),
+        )
+        fable_resp = client.post(
+            "/v1/commands",
+            headers=headers,
+            json=fable_env.model_dump(mode="json"),
+        )
+        assert fable_resp.status_code == 200
+        fable_data = fable_resp.json()
+        assert fable_data["receipt"]["state"] == "applied"
+        assert fable_data["result"]["type"] == "record_fable_advice"
+        receipt = fable_data["result"]["receipt"]
+        assert receipt["issuer"] == "work-service/fable-advisor"
+        assert receipt["kind"] == "verification"
+        assert receipt["payload"]["intake_semantic_sha256"] == intake_semantic_sha
+        assert receipt["payload"]["rule_bundle_sha256"] == BOUNDED_INTAKE_RULE_BUNDLE_SHA256
+        assert receipt["payload"]["advice_sha256"] == advice_sha
+        assert receipt["payload"]["disposition"] == "considered"
+        assert receipt["payload"]["advisor_model_family"] == "fable"
+        assert receipt["candidate_id"] == str(candidate_id)
+        assert receipt["candidate_sha256"] == candidate_sha
+        assert receipt["candidate_commit"] == candidate_commit
+        assert receipt["payload_sha256"] == sha256(receipt["payload"])
+        minted_receipt_id = receipt["receipt_id"]
+
+        # Exactly one receipt row in DB
+        conn_kwargs = config.connection_kwargs("postgres")
+        with psycopg.connect(**conn_kwargs, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM omp_evidence.receipts WHERE workspace_id=%s AND receipt_id=%s",
+                    (workspace_id, minted_receipt_id),
+                )
+                rows = cur.fetchall()
+                assert len(rows) == 1
+                db_row = rows[0]
+                assert db_row["issuer"] == "work-service/fable-advisor"
+                assert db_row["kind"] == "verification"
+
+        # 4. Replaying the same envelope returns the same receipt_id; exactly one receipt row.
+        replay_resp = client.post(
+            "/v1/commands",
+            headers=headers,
+            json=fable_env.model_dump(mode="json"),
+        )
+        assert replay_resp.status_code == 200
+        replay_data = replay_resp.json()
+        assert replay_data["receipt"]["state"] == "replayed"
+        assert replay_data["result"]["type"] == "record_fable_advice"
+        assert replay_data["result"]["receipt"]["receipt_id"] == minted_receipt_id
+
+        with psycopg.connect(**conn_kwargs, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) as count FROM omp_evidence.receipts WHERE workspace_id=%s AND issuer='work-service/fable-advisor'",
+                    (workspace_id,),
+                )
+                assert cur.fetchone()["count"] == 1
+
+        # 5. Stale revision_id -> stale_evidence
+        stale_env = CommandEnvelope(
+            api_version="work.omp.dev/v1",
+            workspace_id=workspace_id,
+            operation_id=uuid4(),
+            request_id=uuid4(),
+            correlation_id=uuid4(),
+            command=RecordFableAdviceCommand(
+                type="record_fable_advice",
+                payload=RecordFableAdvicePayload(
+                    work_id=work_id,
+                    revision_id=uuid4(),
+                    advice_sha256=advice_sha,
+                    disposition="considered",
+                    intake_semantic_sha256=intake_semantic_sha,
+                    rule_bundle_sha256=BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
+                ),
+            ),
+        )
+        stale_resp = client.post(
+            "/v1/commands",
+            headers=headers,
+            json=stale_env.model_dump(mode="json"),
+        )
+        assert stale_resp.status_code == 409
+        assert stale_resp.json()["error"]["code"] == "stale_evidence"
+
+        # 6. Wrong rule_bundle_sha256 -> invalid_request
+        bad_rule_env = CommandEnvelope(
+            api_version="work.omp.dev/v1",
+            workspace_id=workspace_id,
+            operation_id=uuid4(),
+            request_id=uuid4(),
+            correlation_id=uuid4(),
+            command=RecordFableAdviceCommand(
+                type="record_fable_advice",
+                payload=RecordFableAdvicePayload(
+                    work_id=work_id,
+                    revision_id=revision_id,
+                    advice_sha256=advice_sha,
+                    disposition="considered",
+                    intake_semantic_sha256=intake_semantic_sha,
+                    rule_bundle_sha256="f" * 64,
+                ),
+            ),
+        )
+        bad_rule_resp = client.post(
+            "/v1/commands",
+            headers=headers,
+            json=bad_rule_env.model_dump(mode="json"),
+        )
+        assert bad_rule_resp.status_code == 400
+        assert bad_rule_resp.json()["error"]["code"] == "invalid_request"
+
+        # 7. Item without candidate -> invalid_request
+        no_cand_env = CommandEnvelope(
+            api_version="work.omp.dev/v1",
+            workspace_id=workspace_id,
+            operation_id=uuid4(),
+            request_id=uuid4(),
+            correlation_id=uuid4(),
+            command=RecordFableAdviceCommand(
+                type="record_fable_advice",
+                payload=RecordFableAdvicePayload(
+                    work_id=work_id_no_cand,
+                    revision_id=revision_id_no_cand,
+                    advice_sha256=advice_sha,
+                    disposition="considered",
+                    intake_semantic_sha256=intake_semantic_sha,
+                    rule_bundle_sha256=BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
+                ),
+            ),
+        )
+        no_cand_resp = client.post(
+            "/v1/commands",
+            headers=headers,
+            json=no_cand_env.model_dump(mode="json"),
+        )
+        assert no_cand_resp.status_code == 400
+        assert no_cand_resp.json()["error"]["code"] == "invalid_request"
