@@ -354,7 +354,7 @@ packages/work-client/test/knowledge-contracts.test.ts	fork-only	added	cf909d2c96
 packages/work-client/test/skip-active-item.test.ts	fork-only	added	2831567460eb	OMP-219: test skip_active_item payload transport, result narrowing, and 409 service rejection mapping	retained
 packages/work-client/tsconfig.json	fork-only	added	2961962453c4	feat(work-ledger): interactive OMP workflow on WorkService (HOME-146, HOME-147); feat(work-ledger): PostgreSQL Work Ledger with Linear export and import (HOME-143, HOME-144, HOME-145, HOME-146)	retained
 python/omp-knowledge/README.md	fork-only	added	193a9162f8bb	OMP-288: Fleet Knowledge service foundation package overview	retained
-python/omp-knowledge/pyproject.toml	fork-only	added	aba04366e82c	OMP-288: package configuration pinning cognee==1.5.4, ladybug==0.19.0, lancedb, and dev dependencies	retained
+python/omp-knowledge/pyproject.toml	fork-only	added	d7be53a6ea45	OMP-288: package configuration pinning cognee==1.5.4, ladybug==0.19.0, lancedb, and dev dependencies; OMP-310: ships the learning generation prompt as package data	retained
 python/omp-knowledge/src/omp_knowledge/__init__.py	fork-only	added	f6d1654e5acc	OMP-288: package exports for RealCogneeAdapter, PublicationManager, protocol models, and error taxonomy	retained
 python/omp-knowledge/src/omp_knowledge/config.py	fork-only	added	e41afedd05da	OMP-288: KnowledgeConfig Pydantic model and loader for fleet knowledge service and storage directories	retained
 python/omp-knowledge/src/omp_knowledge/engine/__init__.py	fork-only	added	042743e0bd8c	OMP-288: engine package exports for RealCogneeAdapter and protocol results	retained
@@ -362,6 +362,8 @@ python/omp-knowledge/src/omp_knowledge/engine/cognee_adapter.py	fork-only	added	
 python/omp-knowledge/src/omp_knowledge/engine/protocol.py	fork-only	added	bf041fa415fe	OMP-288: KnowledgeEngine protocol and result models for ingestion, query, lookup, correct, and status	retained
 python/omp-knowledge/src/omp_knowledge/errors.py	fork-only	added	21786b2d042c	OMP-288: explicit error taxonomy covering the 10 failure codes with status codes and details	retained
 python/omp-knowledge/src/omp_knowledge/learning/__init__.py	fork-only	added	30d97387888a	OMP-310: learning package initialization	retained
+python/omp-knowledge/src/omp_knowledge/learning/generation.py	fork-only	added	81d9525a70d3	OMP-310: trace-to-lesson generator seam — GenerationResult plus LessonGenerator protocol; LocalChatGenerator POSTs the packaged prompt and canonical trace JSON to a loopback-only OpenAI-compatible endpoint, mapping connect/timeout/5xx to GeneratorUnavailable and unusable content to MalformedGeneratorOutput; rejects non-loopback base_url	retained
+python/omp-knowledge/src/omp_knowledge/learning/generation_prompt.md	fork-only	added	0b4c2d70c9b5	OMP-310: static trace-to-lesson prompt requiring the strict lessons/no_lesson_reason JSON envelope, loaded via importlib.resources	retained
 python/omp-knowledge/src/omp_knowledge/learning/models.py	fork-only	added	942145df12da	OMP-310: strict frozen data models for learning attribution, claims, lessons, and preconditions	retained
 python/omp-knowledge/src/omp_knowledge/learning/store.py	fork-only	added	011e21659d7d	OMP-310: SQLite LearningStore managing tables, constraints, and immediate transactions	retained
 python/omp-knowledge/src/omp_knowledge/publication.py	fork-only	added	4976302ef675	OMP-288: SQLite PublicationManager tracking snapshot publication, abortion, and retirement	retained
@@ -373,11 +375,13 @@ python/omp-knowledge/tests/fixtures/A/receipt.json	fork-only	added	df616022f2f7	
 python/omp-knowledge/tests/fixtures/B/facts.jsonl	fork-only	added	b26977ca71d5	OMP-288: Enola snapshot B facts fixture with symbol and module declarations	retained
 python/omp-knowledge/tests/fixtures/B/insights.json	fork-only	added	0637a088a01e	OMP-288: Enola snapshot B insights fixture with empty explainer findings	retained
 python/omp-knowledge/tests/fixtures/B/receipt.json	fork-only	added	c252e50afe85	OMP-288: Enola snapshot B receipt fixture with metadata and quality census	retained
-python/omp-knowledge/tests/support/__init__.py	fork-only	added	85af92765c20	OMP-288: test support package exports for null engine and test fixtures	retained
+python/omp-knowledge/tests/support/__init__.py	fork-only	added	e9f775a3d3c0	OMP-288: test support package exports for null engine and test fixtures; OMP-310: adds the StubGenerator export	retained
 python/omp-knowledge/tests/support/fixtures.py	fork-only	added	ececcb56451d	OMP-288: helpers to load Enola staged fixtures and generate synthetic collision fixtures	retained
 python/omp-knowledge/tests/support/null_engine.py	fork-only	added	988f06cd29c0	OMP-288: NullEngine test double strictly located under tests/support/ for offline unit testing	retained
+python/omp-knowledge/tests/support/stub_generator.py	fork-only	added	998089c0fed6	OMP-310: StubGenerator scripted LessonGenerator double returning scripted results or raising scripted errors per call, recording received traces	retained
 python/omp-knowledge/tests/test_cognee_adapter.py	fork-only	added	7fea2bb27949	OMP-288: tests for RealCogneeAdapter operations lifecycle and NullEngine parity	retained
 python/omp-knowledge/tests/test_error_taxonomy.py	fork-only	added	371e7c5e3a50	OMP-288: tests for explicit error taxonomy status codes, details, no_lesson state, and no null engine under src	retained
+python/omp-knowledge/tests/test_learning_generation.py	fork-only	added	ad347480599a	OMP-310: MockTransport tests for the trace-to-lesson seam — valid attribution and hashes, no_lesson_reason versus empty lessons, malformed and oversize output, connect/timeout/5xx unavailability, non-loopback rejection, and the StubGenerator contract	retained
 python/omp-knowledge/tests/test_learning_store.py	fork-only	added	2e8e81aba15a	OMP-310: tests for LearningStore schema constraints, persistence, and model validation boundaries	retained
 python/omp-knowledge/tests/test_snapshot_isolation.py	fork-only	added	b562ff0e6e18	OMP-288: real-engine snapshot A/B isolation, published/aborted verification, and symbol disambiguation tests	retained
 python/omp-knowledge/uv.lock	fork-only	added	ca0495d547dc	OMP-288: locked dependency graph for omp-knowledge environment	retained
