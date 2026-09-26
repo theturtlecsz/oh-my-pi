@@ -208,12 +208,14 @@ def _queued_rows(
     if unit_ids is not None:
         if not unit_ids:
             return []
-        placeholders = ",".join("?" for _ in unit_ids)
         return list(
             store.execute(
-                f"SELECT * FROM units WHERE state = 'queued' AND unit_id IN ({placeholders})"
-                " ORDER BY created_at, unit_id",
-                tuple(unit_ids),
+                """
+                SELECT * FROM units
+                WHERE state = 'queued' AND unit_id IN (SELECT value FROM json_each(?))
+                ORDER BY created_at, unit_id
+                """,
+                (json.dumps([str(u) for u in unit_ids]),),
             ).fetchall()
         )
     return list(
@@ -515,16 +517,15 @@ def retry(
         if not ids:
             candidates = []
         else:
-            placeholders = ",".join("?" for _ in ids)
             candidates = list(
                 store.execute(
-                    f"""
+                    """
                     SELECT * FROM units
                     WHERE state = 'failed' AND retryable = 1
-                        AND unit_id IN ({placeholders})
+                        AND unit_id IN (SELECT value FROM json_each(?))
                     ORDER BY created_at, unit_id
                     """,
-                    tuple(ids),
+                    (json.dumps(ids),),
                 ).fetchall()
             )
 

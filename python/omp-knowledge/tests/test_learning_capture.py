@@ -442,3 +442,34 @@ def test_cli_main_exits_nonzero_on_failed_run(tmp_path) -> None:
         generator=ok,
     )
     assert ok_code == 0
+
+
+def test_retry_selective_unit_ids() -> None:
+    """Selective retry only requeues and executes the requested failed retryable unit IDs."""
+    store = LearningStore(":memory:")
+    receipt = make_receipt()
+    reader = DictReceiptReader({receipt.receipt_id: receipt})
+    ev1 = make_event(sequence=1)
+    ev2 = make_event(sequence=2)
+    events = FakeEvents([ev1, ev2])
+
+    failing = StubGenerator([GeneratorUnavailable("fail"), GeneratorUnavailable("fail")], model="m", profile="p")
+    run1 = drain(store, events, reader, failing, workspace_id=WORKSPACE)
+    assert run1.status == "failed"
+    assert len(run1.units) == 2
+    u1, u2 = run1.units[0].unit_id, run1.units[1].unit_id
+
+    recovered = StubGenerator(
+        [make_result(make_lesson("Recovered", receipt.receipt_id), model="m2", profile="p2")],
+        model="m2",
+        profile="p2",
+    )
+    run2 = retry(store, reader, recovered, unit_ids=[u1])
+    assert run2.status == "succeeded"
+    assert len(run2.units) == 1
+    assert run2.units[0].unit_id == u1
+
+    # u2 remains in failed state
+    u2_row = store.execute("SELECT state, retryable FROM units WHERE unit_id = ?", (u2,)).fetchone()
+    assert u2_row["state"] == "failed"
+    assert u2_row["retryable"] == 1

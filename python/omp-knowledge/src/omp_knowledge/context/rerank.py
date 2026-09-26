@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
@@ -50,8 +51,12 @@ class HttpReranker:
 
     def __init__(self, url: str, model: str, timeout_s: float = 10.0) -> None:
         self.url = url.rstrip("/")
+        parsed = urllib.parse.urlsplit(self.url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"HttpReranker URL must use http or https scheme, got {url!r}")
         self.model = model
         self.timeout_s = timeout_s
+        self._opener = urllib.request.build_opener()
 
     def rerank(self, query: str, items: Sequence[ContextItem]) -> list[ContextItem]:
         if not items:
@@ -72,7 +77,7 @@ class HttpReranker:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+            with self._opener.open(req, timeout=self.timeout_s) as resp:
                 resp_bytes = resp.read()
         except urllib.error.HTTPError as exc:
             raise RerankerUnavailable(f"reranker HTTP error {exc.code}: {exc.reason}") from exc
