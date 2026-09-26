@@ -36,12 +36,14 @@ from .models import (
     MAX_AUDITOR_LAUNCHES,
     AuditManifest,
     AuditorLaunch,
+    BoundedIntakeDraft,
     Candidate,
     CloseAttempt,
     CommandEnvelope,
     CompletionEvidence,
     CompletionInput,
     CreateWorkBatchPayload,
+    CreateWorkInput,
     EvidenceKind,
     EvidenceReceipt,
     FableAdvicePayload,
@@ -49,6 +51,7 @@ from .models import (
     OperationReceipt,
     OperationState,
     RelationEdge,
+    RelationKind,
     RiderProof,
     SameSessionFoundFixedPayload,
 )
@@ -352,6 +355,7 @@ class PostgresWorkStore:
         command = envelope.command
         serializable = command.type in {
             "create_work_batch",
+            "publish_bounded_intake",
             "create_same_session_child",
             "put_relation",
             "remove_relation",
@@ -487,6 +491,10 @@ class PostgresWorkStore:
                     result = self._record_fable_advice(cur, envelope)
                 elif command.type == "attest_intake_admission":
                     result = self._attest_intake_admission(cur, envelope, actor_id)
+                elif command.type == "publish_bounded_intake":
+                    result = self._publish_bounded_intake(
+                        cur, envelope, actor_id, actor_kind
+                    )
                 else:
                     raise WorkStoreError("unavailable")
                 result_hash = sha256(result)
@@ -5728,6 +5736,295 @@ class PostgresWorkStore:
             "receipt": receipt.model_dump(mode="json"),
             "operator_actor_id": str(actor_id),
         }
+
+    def _publish_bounded_intake(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        envelope: CommandEnvelope,
+        actor_id: UUID,
+        actor_kind: str,
+    ) -> dict[str, object]:
+        """OMP-266 s06: the sole native publication path. Ratifies one ready
+        bounded intake draft into an ordinary work item — item, related OMP-249
+        edge, planned candidate, and intake_publication receipt — in the same
+        serializable transaction. Every admission fact is re-read from stored
+        OMP-249 lineage; no caller-supplied flag stands in for a missing or
+        mismatched receipt."""
+        payload = envelope.command.payload
+        if actor_kind != "owner":
+            raise WorkStoreError(
+                "forbidden", ("bounded intake publication requires owner",)
+            )
+
+        semantic_sha256 = bounded_intake_semantic_sha256(payload.draft)
+        if payload.ratified_semantic_sha256 != semantic_sha256:
+            raise WorkStoreError(
+                "stale_intake",
+                ("owner ratification does not match current typed semantics",),
+            )
+
+        questions, issue_count = evaluate_bounded_intake(payload.draft)
+        if issue_count:
+            raise WorkStoreError(
+                "intake_not_ready",
+                tuple(
+                    f"{question.rule_class}:{question.deduplication_key}"
+                    for question in questions
+                ),
+            )
+
+        cur.execute(
+            "SELECT command_type,response FROM omp_control.idempotent_commands WHERE workspace_id=%s AND operation_id=%s AND state='applied' FOR SHARE",
+            (envelope.workspace_id, payload.assessment_operation_id),
+        )
+        assessment = cur.fetchone()
+        assessment_result = dict(assessment["response"] or {}) if assessment else {}
+        if (
+            assessment is None
+            or assessment["command_type"] != "assess_bounded_intake"
+            or assessment_result.get("semantic_sha256") != semantic_sha256
+            or assessment_result.get("ready_for_ratification") is not True
+        ):
+            raise WorkStoreError(
+                "stale_intake", ("current positive intake assessment is required",)
+            )
+
+        cur.execute(
+            "SELECT i.work_id,i.current_revision_id,i.current_candidate_id,c.candidate_sha256,c.commit_sha,c.kind FROM omp_work.work_items i JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.workspace_id=i.workspace_id JOIN omp_work.candidates c ON c.candidate_id=i.current_candidate_id AND c.workspace_id=i.workspace_id WHERE i.workspace_id=%s AND a.key='OMP-249' FOR UPDATE OF i",
+            (envelope.workspace_id,),
+        )
+        deployment = cur.fetchone()
+        if (
+            deployment is None
+            or deployment["work_id"] != payload.admission_work_id
+            or deployment["current_revision_id"] != payload.admission_revision_id
+            or deployment["kind"] != "final"
+        ):
+            raise WorkStoreError(
+                "intake_admission_blocked",
+                ("OMP-249 current revision and final candidate do not match",),
+            )
+
+        cur.execute(
+            f"SELECT {_RECEIPT_FIELDS} FROM omp_evidence.receipts WHERE workspace_id=%s AND work_id=%s AND revision_id=%s AND candidate_id=%s",
+            (
+                envelope.workspace_id,
+                payload.admission_work_id,
+                payload.admission_revision_id,
+                deployment["current_candidate_id"],
+            ),
+        )
+        lineage = cur.fetchall()
+        by_id = {row["receipt_id"]: row for row in lineage}
+        for row in lineage:
+            if sha256(row["payload"]) != row["payload_sha256"]:
+                raise WorkStoreError(
+                    "intake_admission_blocked", ("lineage receipt payload hash mismatch",)
+                )
+
+        admission = by_id.get(payload.admission_receipt_id)
+        if admission is None:
+            raise WorkStoreError(
+                "intake_admission_blocked", ("admission receipt is not on the lineage",)
+            )
+        try:
+            admission_payload = IntakeAdmissionReceiptPayload.model_validate(
+                admission["payload"]
+            )
+        except Exception as error:
+            raise WorkStoreError(
+                "intake_admission_blocked", ("native admission receipt is malformed",)
+            ) from error
+        if (
+            admission["kind"] != EvidenceKind.INTAKE_ADMISSION.value
+            or admission["issuer"] != "work-service/intake-admission"
+            or admission["work_id"] != payload.admission_work_id
+            or admission["revision_id"] != payload.admission_revision_id
+            or admission["candidate_id"] != deployment["current_candidate_id"]
+            or admission_payload.plan_receipt_id not in by_id
+            or admission_payload.native_acceptance_receipt_id not in by_id
+            or admission_payload.rule_bundle_sha256
+            != BOUNDED_INTAKE_RULE_BUNDLE_SHA256
+        ):
+            raise WorkStoreError(
+                "intake_admission_blocked",
+                ("qualified initial P11 admission lineage is required",),
+            )
+
+        plan = by_id[admission_payload.plan_receipt_id]
+        if plan["kind"] != EvidenceKind.PLAN.value:
+            raise WorkStoreError(
+                "intake_admission_blocked", ("admission plan receipt is required",)
+            )
+
+        advice = by_id.get(admission_payload.fable_advice_receipt_id)
+        if advice is None:
+            raise WorkStoreError(
+                "intake_admission_blocked", ("fresh Fable advice is required",)
+            )
+        try:
+            advice_payload = FableAdvicePayload.model_validate(advice["payload"])
+        except Exception as error:
+            raise WorkStoreError(
+                "intake_admission_blocked", ("fresh Fable advice is required",)
+            ) from error
+        if (
+            advice["kind"] != EvidenceKind.VERIFICATION.value
+            or advice["issuer"] != "work-service/fable-advisor"
+            or advice_payload.rule_bundle_sha256
+            != BOUNDED_INTAKE_RULE_BUNDLE_SHA256
+            or advice_payload.intake_semantic_sha256 != semantic_sha256
+        ):
+            raise WorkStoreError(
+                "intake_admission_blocked",
+                ("Fable advice is bound to a different intake semantics",),
+            )
+
+        audit = by_id[admission_payload.native_acceptance_receipt_id]
+        if (
+            audit["kind"] != EvidenceKind.AUDIT.value
+            or audit["issuer"] != "work-service/auditor-settle"
+            or audit["verdict"] != "PASS"
+            or audit["independent"] is not True
+        ):
+            raise WorkStoreError(
+                "intake_admission_blocked",
+                ("fresh independent native PASS is required",),
+            )
+
+        item = self._create_items(
+            cur,
+            envelope.workspace_id,
+            CreateWorkBatchPayload(
+                items=(
+                    CreateWorkInput(
+                        client_ref="bounded-intake",
+                        title=payload.draft.goal.statement,
+                        description=payload.draft.source.text,
+                        scope=payload.draft.archetype,
+                        acceptance_criteria=tuple(
+                            criterion.observable_outcome
+                            for criterion in payload.draft.acceptance_criteria
+                        ),
+                    ),
+                )
+            ),
+        )[0]
+        intake_work_id = UUID(str(item["work_id"]))
+        intake_revision_id = UUID(str(item["revision_id"]))
+
+        source, target = sorted((intake_work_id, payload.admission_work_id), key=str)
+        edge = RelationEdge(
+            workspace_id=envelope.workspace_id,
+            source_work_id=source,
+            target_work_id=target,
+            kind=RelationKind.RELATED,
+        )
+        if would_create_cycle((), edge):
+            raise WorkStoreError("relation_cycle")
+        cur.execute(
+            "INSERT INTO omp_work.work_relations(relation_id,workspace_id,source_work_id,target_work_id,kind) VALUES(%s,%s,%s,%s,'related')",
+            (uuid4(), envelope.workspace_id, source, target),
+        )
+
+        candidate_id = uuid4()
+        now = datetime.now(UTC)
+        cur.execute(
+            "INSERT INTO omp_work.candidates(candidate_id,workspace_id,work_id,revision_id,candidate_sha256,commit_sha,kind,allocated_at) VALUES(%s,%s,%s,%s,%s,NULL,'planned',%s)",
+            (
+                candidate_id,
+                envelope.workspace_id,
+                intake_work_id,
+                intake_revision_id,
+                semantic_sha256,
+                now,
+            ),
+        )
+        cur.execute(
+            "UPDATE omp_work.work_items SET current_candidate_id=%s WHERE workspace_id=%s AND work_id=%s",
+            (candidate_id, envelope.workspace_id, intake_work_id),
+        )
+
+        receipt = self._mint_intake_publication_receipt(
+            cur,
+            envelope,
+            actor_id=actor_id,
+            draft=payload.draft,
+            semantic_sha256=semantic_sha256,
+            assessment_operation_id=payload.assessment_operation_id,
+            admission_receipt_id=payload.admission_receipt_id,
+            work_id=intake_work_id,
+            revision_id=intake_revision_id,
+            candidate_id=candidate_id,
+        )
+        return {
+            "type": "publish_bounded_intake",
+            "item": item,
+            "receipt": receipt.model_dump(mode="json"),
+        }
+
+    def _mint_intake_publication_receipt(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        envelope: CommandEnvelope,
+        *,
+        actor_id: UUID,
+        draft: BoundedIntakeDraft,
+        semantic_sha256: str,
+        assessment_operation_id: UUID,
+        admission_receipt_id: UUID,
+        work_id: UUID,
+        revision_id: UUID,
+        candidate_id: UUID,
+    ) -> EvidenceReceipt:
+        """Direct INSERT mirroring the settle-mint: the intake_publication receipt
+        binds the canonical draft bytes, its semantic and rule-bundle hashes, the
+        owner principal, and the assessment/admission operations it ratified."""
+        body = {
+            "draft": draft.model_dump(mode="json"),
+            "semantic_sha256": semantic_sha256,
+            "rule_bundle_sha256": BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
+            "ratified_by": str(actor_id),
+            "assessment_operation_id": str(assessment_operation_id),
+            "admission_receipt_id": str(admission_receipt_id),
+        }
+        receipt = EvidenceReceipt(
+            receipt_id=uuid4(),
+            work_id=work_id,
+            revision_id=revision_id,
+            candidate_id=candidate_id,
+            kind=EvidenceKind.INTAKE_PUBLICATION,
+            payload=body,
+            payload_sha256=sha256(body),
+            artifact_sha256=draft.source.sha256,
+            issuer="work-service/bounded-intake",
+            issued_at=datetime.now(UTC),
+            candidate_sha256=semantic_sha256,
+            candidate_commit=None,
+        )
+        cur.execute(
+            "INSERT INTO omp_evidence.receipts(receipt_id,workspace_id,work_id,revision_id,candidate_id,kind,payload,payload_sha256,artifact_sha256,issuer,issued_at,candidate_sha256,candidate_commit,verdict,independent,remote_ref,remote_commit) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                receipt.receipt_id,
+                envelope.workspace_id,
+                receipt.work_id,
+                receipt.revision_id,
+                receipt.candidate_id,
+                receipt.kind.value,
+                canonical_json(receipt.payload),
+                receipt.payload_sha256,
+                receipt.artifact_sha256,
+                receipt.issuer,
+                receipt.issued_at,
+                receipt.candidate_sha256,
+                receipt.candidate_commit,
+                receipt.verdict,
+                receipt.independent,
+                receipt.remote_ref,
+                receipt.remote_commit,
+            ),
+        )
+        return receipt
 
     def _item_view(
         self,

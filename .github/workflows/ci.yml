@@ -214,6 +214,19 @@ jobs:
       steps:
          - uses: actions/checkout@v4
          - uses: ./.github/actions/bun-install
+         # Owner approval provenance (OMP-295): the Work contract approval
+         # (approval.json) may only be introduced or changed by owner approval
+         # commits (flood-owner + owner marker). Unshallows the base branch so
+         # the check can walk base..head.
+         - name: Approval provenance (approval.json only in owner approval commits)
+           if: github.event_name == 'pull_request'
+           shell: bash
+           env:
+              BASE_REF: ${{ github.base_ref }}
+           run: |
+              set -euo pipefail
+              git fetch --no-tags --unshallow origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+              bun scripts/approval-provenance.ts --base "origin/${BASE_REF}"
          # Standing upstream-compatibility guardrail (OMP-229).
          # Every PR: the fork-behavior inventory must account for every path
          # diverging from the accepted upstream baseline — fork behavior cannot

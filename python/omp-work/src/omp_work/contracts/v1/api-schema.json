@@ -5138,6 +5138,29 @@
           "title": "ProjectHealthView",
           "type": "object"
         },
+        "PublishBoundedIntakeResult": {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/CreatedWorkItem"
+            },
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "publish_bounded_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "item",
+            "receipt"
+          ],
+          "title": "PublishBoundedIntakeResult",
+          "type": "object"
+        },
         "RecordCloseoutReviewResult": {
           "additionalProperties": false,
           "properties": {
@@ -5594,6 +5617,7 @@
               "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
               "finalize_candidate": "#/$defs/FinalizeCandidateResult",
+              "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
               "put_relation": "#/$defs/RelationResult",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
               "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
@@ -5685,6 +5709,9 @@
             },
             {
               "$ref": "#/$defs/RecordFableAdviceResult"
+            },
+            {
+              "$ref": "#/$defs/PublishBoundedIntakeResult"
             }
           ],
           "title": "Result"
@@ -8994,6 +9021,240 @@
         "name"
       ],
       "title": "ProjectView",
+      "type": "object"
+    },
+    "PublishBoundedIntakeResult": {
+      "$defs": {
+        "CreatedWorkItem": {
+          "additionalProperties": false,
+          "properties": {
+            "client_ref": {
+              "title": "Client Ref",
+              "type": "string"
+            },
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "row_version": {
+              "title": "Row Version",
+              "type": "integer"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "client_ref",
+            "work_id",
+            "revision_id",
+            "key",
+            "state",
+            "row_version"
+          ],
+          "title": "CreatedWorkItem",
+          "type": "object"
+        },
+        "EvidenceKind": {
+          "enum": [
+            "plan",
+            "verification",
+            "audit",
+            "push",
+            "closeout",
+            "handoff",
+            "same_session_found_fixed",
+            "intake_publication",
+            "intake_admission",
+            "external_delivery"
+          ],
+          "title": "EvidenceKind",
+          "type": "string"
+        },
+        "EvidenceReceipt": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "candidate_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Commit"
+            },
+            "candidate_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Id"
+            },
+            "candidate_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Candidate Sha256"
+            },
+            "independent": {
+              "default": false,
+              "title": "Independent",
+              "type": "boolean"
+            },
+            "issued_at": {
+              "format": "date-time",
+              "title": "Issued At",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EvidenceKind"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            },
+            "remote_commit": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Commit"
+            },
+            "remote_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Remote Ref"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "verdict": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PASS",
+                    "NEEDS_FIX",
+                    "BLOCKED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Verdict"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "work_id",
+            "revision_id",
+            "kind",
+            "payload_sha256",
+            "issuer",
+            "issued_at"
+          ],
+          "title": "EvidenceReceipt",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "$ref": "#/$defs/CreatedWorkItem"
+        },
+        "receipt": {
+          "$ref": "#/$defs/EvidenceReceipt"
+        },
+        "type": {
+          "const": "publish_bounded_intake",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "item",
+        "receipt"
+      ],
+      "title": "PublishBoundedIntakeResult",
       "type": "object"
     },
     "RecordCloseoutReviewResult": {
@@ -14045,6 +14306,29 @@
           "title": "ProjectHealthView",
           "type": "object"
         },
+        "PublishBoundedIntakeResult": {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/CreatedWorkItem"
+            },
+            "receipt": {
+              "$ref": "#/$defs/EvidenceReceipt"
+            },
+            "type": {
+              "const": "publish_bounded_intake",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "item",
+            "receipt"
+          ],
+          "title": "PublishBoundedIntakeResult",
+          "type": "object"
+        },
         "RecordCloseoutReviewResult": {
           "additionalProperties": false,
           "properties": {
@@ -14517,6 +14801,7 @@
                   "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
                   "finalize_candidate": "#/$defs/FinalizeCandidateResult",
+                  "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
                   "put_relation": "#/$defs/RelationResult",
                   "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
                   "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
@@ -14608,6 +14893,9 @@
                 },
                 {
                   "$ref": "#/$defs/RecordFableAdviceResult"
+                },
+                {
+                  "$ref": "#/$defs/PublishBoundedIntakeResult"
                 }
               ]
             },
