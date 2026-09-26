@@ -570,12 +570,8 @@ describe("CPK-6 supervision historical replay (OMP-208-s02-s01)", () => {
 		// Legacy caught in session 1, missed in session 2; candidate missed both
 		expect(report.classes["gate-defect"].legacy.caught).toBe(1);
 		expect(report.classes["gate-defect"].legacy.missed).toBe(1);
-		expect(report.regressions).toEqual([
-			{ sessionId: "dup", ruleClass: "gate-defect", transcriptIndex: 0 },
-		]);
-		expect(report.uncaught).toEqual([
-			{ sessionId: "dup", ruleClass: "gate-defect", transcriptIndex: 0 },
-		]);
+		expect(report.regressions).toEqual([{ sessionId: "dup", ruleClass: "gate-defect", transcriptIndex: 0 }]);
+		expect(report.uncaught).toEqual([{ sessionId: "dup", ruleClass: "gate-defect", transcriptIndex: 0 }]);
 	});
 
 	it("keys invocations by role only, never by arm.name, even when both arms share the same name", async () => {
@@ -593,7 +589,8 @@ describe("CPK-6 supervision historical replay (OMP-208-s02-s01)", () => {
 		});
 
 		expect(report.invocations).toEqual({ legacy: 2, candidate: 2 });
-		expect((report.invocations as Record<string, unknown>).same).toBeUndefined();
+		expect(Object.keys(report.invocations).sort()).toEqual(["candidate", "legacy"]);
+		expect("same" in report.invocations).toBe(false);
 	});
 
 	it("handles invalid output attribution across tracked, canonical untracked, and non-canonical classes", async () => {
