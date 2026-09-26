@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
-import { pushCandidate, validateExecutionPath } from "../extensions/workflow/git";
+import { executionRemoteRef, pushCandidate, validateExecutionPath } from "../extensions/workflow/git";
 import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
 import { grantRemoteRef } from "./fixtures/grant-remote-ref";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
@@ -1729,7 +1729,7 @@ if (args[0] === "api") {
 	const nonMainJudgeSha = nonMainCase.startOut.exec?.grant?.judge_sha256;
 	const nonMainRepository = nonMainCase.startOut.exec?.grant?.repository;
 	assert.equal(nonMainRepository, canonicalRepository, "non-main grant retains the absolute primary repository");
-	assert.equal(nonMainCase.startOut.exec?.grant?.remote_ref, "refs/heads/release/omp-180-smoke", "grant binds non-main branch");
+	assert.equal(nonMainCase.startOut.exec?.grant?.remote_ref, executionRemoteRef(nonMainCase.item.key, grantNonMainId), "grant binds non-main branch");
 	// 1. Seal criteria
 	const sealNonMain = await (await fetch(`${baseUrl}/v1/commands`, {
 		method: "POST",

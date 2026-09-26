@@ -1,6 +1,8 @@
 name: CI
 
 on:
+   schedule:
+      - cron: "17 3 * * *"
    push:
       branches: [main]
       tags: ["v*"]
@@ -89,9 +91,10 @@ on:
 # tag-ref run, and manual dispatch in a per-sha group without cancellation so
 # adjacent release events cannot cancel each other (#2564). Manual dispatch
 # release metadata is resolved after checkout. Other events keep branch-wide
-# cancellation for PR/main churn.
+# cancellation for PR/main churn. Scheduled nightly runs use their own
+# `nightly-<ref>` group so a main push cannot cancel a nightly (and vice versa).
 concurrency:
-   group: "${{ github.workflow }}-${{ (startsWith(github.event.head_commit.message, 'chore: bump version to ') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && format('release-{0}', github.sha) || github.ref }}"
+   group: "${{ github.workflow }}-${{ github.event_name == 'schedule' && format('nightly-{0}', github.ref) || (startsWith(github.event.head_commit.message, 'chore: bump version to ') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && format('release-{0}', github.sha) || github.ref }}"
    cancel-in-progress: "${{ !(startsWith(github.event.head_commit.message, 'chore: bump version to ') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}"
 
 env:
@@ -183,7 +186,7 @@ jobs:
                     release_tag="$candidate_tag"
                     ;;
                   refs/heads/main)
-                    if [ "$EVENT_NAME" != "pull_request" ]; then
+                    if [ "$EVENT_NAME" != "pull_request" ] && [ "$EVENT_NAME" != "schedule" ]; then
                       raw_tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1 || true)
                       if [ -n "$raw_tag" ] && [[ ! "$raw_tag" =~ [$'\r\n'] ]] && [[ "$raw_tag" =~ $tag_pattern ]]; then
                         release_tag="$raw_tag"
@@ -1075,7 +1078,7 @@ jobs:
    work_ledger_postgres:
       name: Work Ledger PostgreSQL integration
       runs-on: ubuntu-22.04
-      needs: [native_addons]
+      needs: [native_addons, release_metadata]
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       steps:
          - uses: actions/checkout@v4
@@ -1113,6 +1116,46 @@ jobs:
                 --uv "$(command -v uv)" --python "$installed_python" \
                 --native "$GITHUB_WORKSPACE/packages/natives/native/pi_natives.linux-x64-baseline.node" \
                 --native "$GITHUB_WORKSPACE/packages/natives/native/pi_natives.linux-x64-modern.node"
+         - name: Resolve installed qualification mode
+           id: qualification_mode
+           shell: bash
+           env:
+              GH_TOKEN: ${{ github.token }}
+              EVENT_NAME: ${{ github.event_name }}
+              IS_RELEASE: ${{ needs.release_metadata.outputs.is-release }}
+              PR_NUMBER: ${{ github.event.pull_request.number }}
+              BEFORE: ${{ github.event.before }}
+           run: |
+              set -euo pipefail
+              changed_files_file="$RUNNER_TEMP/omp-installed-changed-files.txt"
+              : > "$changed_files_file"
+              # Only a non-release PR or an incremental push needs a changed-file
+              # list; schedule/dispatch/release and all-zero-BEFORE pushes select
+              # full mode from the event alone (scripts/installed-qualification-mode.ts).
+              diff_failed=""
+              if [ "$IS_RELEASE" != "true" ] && [ "$EVENT_NAME" = "pull_request" ]; then
+                if ! changed_files="$(gh pr diff "$PR_NUMBER" --name-only 2>&1)"; then
+                  diff_failed="gh pr diff failed: $(printf '%s' "$changed_files" | tr '\n' ' ')"
+                else
+                  printf '%s\n' "$changed_files" > "$changed_files_file"
+                fi
+              elif [ "$EVENT_NAME" = "push" ] && [ -n "$BEFORE" ] && [[ ! "$BEFORE" =~ ^0+$ ]]; then
+                if ! fetch_err="$(git fetch --no-tags --depth=1 origin "$BEFORE" 2>&1)"; then
+                  diff_failed="git fetch origin $BEFORE failed: $(printf '%s' "$fetch_err" | tr '\n' ' ')"
+                elif ! diff_out="$(git diff --name-only "$BEFORE" "$GITHUB_SHA" 2>&1)"; then
+                  diff_failed="git diff $BEFORE $GITHUB_SHA failed: $(printf '%s' "$diff_out" | tr '\n' ' ')"
+                else
+                  printf '%s\n' "$diff_out" > "$changed_files_file"
+                fi
+              fi
+              if [ -n "$diff_failed" ]; then
+                targets="python/omp-work/tests/test_installed_runtime_isolation.py python/omp-work/tests/test_installed_execution_recovery.py"
+                echo "installed qualification mode: full (changed files unavailable: $diff_failed)"
+                echo "mode=full" >> "$GITHUB_OUTPUT"
+                echo "targets=$targets" >> "$GITHUB_OUTPUT"
+              else
+                CHANGED_FILES_FILE="$changed_files_file" bun scripts/installed-qualification-mode.ts
+              fi
          - name: Qualify installed isolation and controller recovery
            run: |
               ulimit -c 0
@@ -1120,9 +1163,8 @@ jobs:
               manifest_sha=$(sha256sum "$RUNNER_TEMP/omp-installed-runtime/manifest.json")
               OMP_INSTALLED_RELEASE="$RUNNER_TEMP/omp-installed-runtime" \
               OMP_INSTALLED_MANIFEST_SHA256="${manifest_sha%% *}" \
-              uv run --project python/omp-work --extra dev pytest \
-                python/omp-work/tests/test_installed_runtime_isolation.py \
-                python/omp-work/tests/test_installed_execution_recovery.py \
+              uv run --project python/omp-work --extra dev pytest -n 3 \
+                ${{ steps.qualification_mode.outputs.targets }} \
                 --basetemp="$RUNNER_TEMP/omp-installed-runtime-test-state" \
                 --junitxml="$RUNNER_TEMP/omp-installed-runtime-tests.xml"
          - name: Preserve installed qualification evidence
@@ -1133,6 +1175,17 @@ jobs:
               path: |
                  ${{ runner.temp }}/omp-installed-runtime/manifest.json
                  ${{ runner.temp }}/omp-installed-runtime-tests.xml
+              include-hidden-files: true
+              if-no-files-found: warn
+         # Controller fault/effect journals are large; keep them out of the
+         # every-run manifest artifact and collect them only when they carry
+         # signal: a failed run or a run that exercised full qualification mode.
+         - name: Preserve installed controller evidence
+           if: ${{ always() && (failure() || steps.qualification_mode.outputs.mode == 'full') }}
+           uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+           with:
+              name: installed-runtime-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+              path: |
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/recovery-evidence.json
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/recovery-refusals.json
                  ${{ runner.temp }}/omp-installed-runtime-test-state/**/before-execution.json

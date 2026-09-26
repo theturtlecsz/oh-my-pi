@@ -76,6 +76,8 @@ import {
 	defaultExecutionWorkspaceManager,
 	dirtyPaths,
 	ensureUpToDateWithDefault,
+	executionRemoteRef,
+	executionRemoteRefRefusal,
 	type ExecutionWorkspace,
 	type ExecutionWorkspaceManager,
 	freezeCandidateCommit,
@@ -3394,8 +3396,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 					return;
 				}
 				const defaultBranch = resolveDefaultBranch(sourceCwd);
-				const isDefaultBranch = currentRef === defaultBranch || currentRef === "refs/heads/main" || currentRef === "refs/heads/master";
-				const remoteRef = isDefaultBranch ? `refs/heads/execution/${issue.key.toLowerCase()}` : currentRef;
+				const grantId = randomUUID();
+				const remoteRef = executionRemoteRef(issue.key, grantId);
 				const upToDate = ensureUpToDateWithDefault(sourceCwd, defaultBranch, issue.key);
 				if (!upToDate.ok) {
 					ctx.ui.notify(`Cannot begin execution: ${upToDate.detail}`, "error");
@@ -3421,7 +3423,6 @@ export function createWorkflowHost(cfg: HostConfig) {
 					issued_at: new Date().toISOString(),
 				};
 				const expectedFocusVersion = await backend.getFocusVersion();
-				const grantId = randomUUID();
 				const begun = await backend.beginExecution({
 					grantId,
 					provenance,
@@ -3436,6 +3437,13 @@ export function createWorkflowHost(cfg: HostConfig) {
 				let workspace: ExecutionWorkspace | undefined;
 				let activeCtx = ctx;
 				try {
+					if (begun.grant.grant_id !== grantId) {
+						throw new Error(`execution grant id mismatch: expected ${grantId}, got ${begun.grant.grant_id}`);
+					}
+					const remoteRefRefusal = executionRemoteRefRefusal(begun.grant.remote_ref, issue.key, grantId);
+					if (remoteRefRefusal) {
+						throw new Error(remoteRefRefusal);
+					}
 					workspace = await executionWorkspaceManager.ensure(
 						sourceCwd,
 						issue.key,
@@ -3443,6 +3451,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 						head,
 						{ create: true },
 					);
+					if (`refs/heads/${workspace.branch}` !== begun.grant.remote_ref) {
+						throw new Error(`execution workspace branch mismatch: expected ${begun.grant.remote_ref}, got refs/heads/${workspace.branch}`);
+					}
 					if (headCommit(workspace.path) !== head) {
 						throw new Error(`execution workspace HEAD does not match sealed baseline ${head.slice(0, 12)}`);
 					}
