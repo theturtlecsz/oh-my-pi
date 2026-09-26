@@ -1,6 +1,6 @@
 import type { Server } from "bun";
 
-export type StubJevMode = "ok" | "delay" | "500" | "malformed" | "off-list";
+export type StubJevMode = "ok" | "delay" | "500" | "401" | "403" | "malformed" | "off-list";
 
 export interface RecordedRequest {
 	method: string;
@@ -62,6 +62,14 @@ export class StubJevServer {
 
 				if (currentMode === "500") {
 					return new Response("Internal Server Error", { status: 500 });
+				}
+
+				if (currentMode === "401") {
+					return new Response("Unauthorized", { status: 401 });
+				}
+
+				if (currentMode === "403") {
+					return new Response("Forbidden", { status: 403 });
 				}
 
 				if (currentMode === "malformed") {

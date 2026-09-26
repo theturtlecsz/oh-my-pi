@@ -166,6 +166,7 @@ function formatRobompSampleSize(value?: number | null): string {
 export async function run(options: {
 	setsDir: string;
 	outDir: string;
+	apiKey?: string;
 	robompSessionCostUsd?: number;
 	robompSessionP50Ms?: number;
 	robompSessionP95Ms?: number;
@@ -201,6 +202,7 @@ async function main() {
 	const args = process.argv.slice(2);
 	let setsDir = "";
 	let outDir = "docs/reports";
+	let apiKey: string | undefined;
 	let robompSessionCostUsd: number | undefined;
 	let robompSessionP50Ms: number | undefined;
 	let robompSessionP95Ms: number | undefined;
@@ -218,6 +220,10 @@ async function main() {
 			outDir = args[++i];
 		} else if (arg.startsWith("--out=")) {
 			outDir = arg.slice("--out=".length);
+		} else if (arg === "--api-key" && i + 1 < args.length) {
+			apiKey = args[++i];
+		} else if (arg.startsWith("--api-key=")) {
+			apiKey = arg.slice("--api-key=".length);
 		} else if (arg === "--robomp-session-cost-usd" && i + 1 < args.length) {
 			robompSessionCostUsd = parseFloat(args[++i]);
 		} else if (arg.startsWith("--robomp-session-cost-usd=")) {
@@ -254,21 +260,27 @@ async function main() {
 		fakeSmol = mod.fakeSmol ?? mod.default ?? mod;
 	}
 
-	const results = await run({
-		setsDir,
-		outDir,
-		robompSessionCostUsd,
-		robompSessionP50Ms,
-		robompSessionP95Ms,
-		jevBaseUrl,
-		fakeSmol,
-		mockedBaseline,
-	});
+	try {
+		const results = await run({
+			setsDir,
+			outDir,
+			apiKey,
+			robompSessionCostUsd,
+			robompSessionP50Ms,
+			robompSessionP95Ms,
+			jevBaseUrl,
+			fakeSmol,
+			mockedBaseline,
+		});
 
-	// Name the baseline, then print the verdict line (which is withheld text for
-	// a mocked baseline).
-	console.log(`baseline: ${results.currentBaseline ?? "unknown"} (${baselineLabel(results.currentBaseline)})`);
-	console.log(results.verdict);
+		// Name the baseline, then print the verdict line (which is withheld text for
+		// a mocked baseline).
+		console.log(`baseline: ${results.currentBaseline ?? "unknown"} (${baselineLabel(results.currentBaseline)})`);
+		console.log(results.verdict);
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exit(1);
+	}
 }
 
 if (import.meta.main) {

@@ -1,10 +1,11 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { $ } from "bun";
 import {
 	buildIssuesSet,
 	extractPromptsFromSession,
@@ -13,6 +14,7 @@ import {
 import {
 	type CurrentSmolHarness,
 	type FakeSmolHandler,
+	JevTransportError,
 	type MeasurementResults,
 	verdict,
 	WP5_AMENDMENT,
@@ -819,6 +821,143 @@ describe("Jev measurement harness", () => {
 				);
 			} finally {
 				unregisterCustomApis("measurement-harness-test");
+			}
+		});
+
+		it("a mocked Jev endpoint answering 401 makes run() reject, run.ts exit non-zero, and leaves no report", async () => {
+			stub.setMode("401");
+			const setsDir = path.join(tempDir.path(), "sets-401");
+			const outDir = path.join(tempDir.path(), "out-401");
+			await fs.mkdir(setsDir, { recursive: true });
+
+			await Bun.write(
+				path.join(setsDir, "prompts.jsonl"),
+				`${JSON.stringify({ prompt: "Refactor user authentication service", effort: "medium" })}\n`,
+			);
+			await Bun.write(
+				path.join(setsDir, "turn-ends.jsonl"),
+				`${JSON.stringify({ text: "I will now edit the file.", label: "continue" })}\n`,
+			);
+
+			const fakeSmol: FakeSmolHandler = {
+				classifyDifficulty: async () => ({ effort: "medium", cost: 0.0005, latencyMs: 1200 }),
+				classifyUnexpectedStop: async () => ({ unexpectedStop: true, cost: 0.0003, latencyMs: 900 }),
+			};
+
+			// 1. run() rejects with JevTransportError
+			await expect(
+				run({
+					setsDir,
+					outDir,
+					jevBaseUrl: stub.baseUrl,
+					fakeSmol,
+				}),
+			).rejects.toThrow(JevTransportError);
+
+			// 2. Neither results.json nor report was written
+			const resultsFile = path.join(outDir, "results.json");
+			const reportFile = path.join(outDir, "jev-measurement-report.md");
+			expect(await Bun.file(resultsFile).exists()).toBe(false);
+			expect(await Bun.file(reportFile).exists()).toBe(false);
+
+			// 3. run.ts CLI exits non-zero
+			const cliOutDir = path.join(tempDir.path(), "cli-out-401");
+			const runScriptPath = path.resolve(REPO_ROOT, "docs/reports/jev-measurement/run.ts");
+			const proc = await $`bun ${runScriptPath} --sets ${setsDir} --out ${cliOutDir} --jev-base-url ${stub.baseUrl}`
+				.quiet()
+				.nothrow();
+			expect(proc.exitCode).not.toBe(0);
+			expect(await Bun.file(path.join(cliOutDir, "results.json")).exists()).toBe(false);
+			expect(await Bun.file(path.join(cliOutDir, "jev-measurement-report.md")).exists()).toBe(false);
+		});
+
+		it("Jev transport failures are counted apart from unparseable and off-list, and above 5 % of calls they stop the run", async () => {
+			const setsDir = path.join(tempDir.path(), "sets-transport-failures");
+			const outDirPass = path.join(tempDir.path(), "out-transport-pass");
+			const outDirFail = path.join(tempDir.path(), "out-transport-fail");
+			await fs.mkdir(setsDir, { recursive: true });
+
+			// 20 items: 1 failure = 5.0% (passes), 2 failures = 10.0% (fails)
+			const promptsLines = Array.from({ length: 20 }, (_, i) =>
+				JSON.stringify({ prompt: `Task prompt ${i}`, effort: "medium" }),
+			).join("\n");
+			await Bun.write(path.join(setsDir, "prompts.jsonl"), `${promptsLines}\n`);
+			await Bun.write(path.join(setsDir, "turn-ends.jsonl"), "");
+
+			const fakeSmol: FakeSmolHandler = {
+				classifyDifficulty: async () => ({ effort: "medium", cost: 0.0005, latencyMs: 1200 }),
+			};
+
+			// Case 1: 1 failure out of 20 = 5% (not > 5%), completes successfully.
+			// Each failed call retries once on 500, so 1 failed call consumes two 500 responses.
+			stub.setSequence(["500", "500", ...Array(19).fill("ok")]);
+			const results = await run({
+				setsDir,
+				outDir: outDirPass,
+				jevBaseUrl: stub.baseUrl,
+				fakeSmol,
+			});
+
+			expect(results.features.auto_thinking.jev.httpErrorRate).toBeCloseTo(0.05, 4);
+			expect(results.features.auto_thinking.jev.unparseableRate).toBe(0);
+			expect(results.features.auto_thinking.jev.offListRate).toBe(0);
+			expect(await Bun.file(path.join(outDirPass, "results.json")).exists()).toBe(true);
+			expect(await Bun.file(path.join(outDirPass, "jev-measurement-report.md")).exists()).toBe(true);
+
+			// Case 2: 2 failures out of 20 = 10% (> 5%), stops the run and rejects.
+			// Two failed calls consume four 500 responses (two attempts each).
+			stub.setSequence(["500", "500", "500", "500", ...Array(18).fill("ok")]);
+			await expect(
+				run({
+					setsDir,
+					outDir: outDirFail,
+					jevBaseUrl: stub.baseUrl,
+					fakeSmol,
+				}),
+			).rejects.toThrow(/exceeded 5% limit/i);
+
+			expect(await Bun.file(path.join(outDirFail, "results.json")).exists()).toBe(false);
+			expect(await Bun.file(path.join(outDirFail, "jev-measurement-report.md")).exists()).toBe(false);
+		});
+
+		it("a Jev side run with a failing endpoint makes no request to any host other than the Jev base URL", async () => {
+			stub.setMode("500");
+			const setsDir = path.join(tempDir.path(), "sets-network-isolation");
+			const outDir = path.join(tempDir.path(), "out-network-isolation");
+			await fs.mkdir(setsDir, { recursive: true });
+
+			await Bun.write(
+				path.join(setsDir, "prompts.jsonl"),
+				`${JSON.stringify({ prompt: "Refactor user authentication service", effort: "medium" })}\n`,
+			);
+			await Bun.write(
+				path.join(setsDir, "turn-ends.jsonl"),
+				`${JSON.stringify({ text: "I will now edit the file.", label: "continue" })}\n`,
+			);
+
+			const fetchSpy = spyOn(globalThis, "fetch");
+			try {
+				await expect(
+					run({
+						setsDir,
+						outDir,
+						jevBaseUrl: stub.baseUrl,
+						fakeSmol: {
+							classifyDifficulty: async () => ({ effort: "medium" }),
+							classifyUnexpectedStop: async () => ({ unexpectedStop: true }),
+						},
+					}),
+				).rejects.toThrow();
+
+				expect(fetchSpy.mock.calls.length).toBeGreaterThan(0);
+				for (const call of fetchSpy.mock.calls) {
+					const targetUrl = typeof call[0] === "string" ? call[0] : (call[0] as Request).url;
+					expect(targetUrl.startsWith(stub.baseUrl)).toBe(true);
+					expect(targetUrl).not.toContain("anthropic");
+					expect(targetUrl).not.toContain("openai");
+				}
+			} finally {
+				fetchSpy.mockRestore();
 			}
 		});
 	});
