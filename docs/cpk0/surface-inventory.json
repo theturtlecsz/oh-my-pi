@@ -5165,6 +5165,8 @@
     "packages/coding-agent/src/autoresearch/prompt-setup.md",
     "packages/coding-agent/src/autoresearch/prompt.md",
     "packages/coding-agent/src/autoresearch/resume-message.md",
+    "packages/coding-agent/src/autoresearch/tournament/judge-prompt.md",
+    "packages/coding-agent/src/autoresearch/tournament/summarize-prompt.md",
     "packages/coding-agent/src/cleanse/prompts/assignment.md",
     "packages/coding-agent/src/cleanse/prompts/discovery.md",
     "packages/coding-agent/src/cleanse/prompts/follow-up.md",
