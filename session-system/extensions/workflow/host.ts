@@ -460,6 +460,14 @@ async function executionPlanningRefusal(backend: WorkflowBackend, exec: Executio
 	return `execution grant is ${exec.grant.state}; no active execution grant`;
 }
 
+/** Position-0 claim key for the grant's canonical execution ref (OMP-233 AC6). */
+async function executionPositionZeroKey(backend: WorkflowBackend, exec: ExecutionSnapshot): Promise<string | undefined> {
+	const anchor = exec.items.find(item => item.position === 0);
+	if (!anchor) return undefined;
+	if (/^[A-Z]+-\d+$/.test(anchor.work_id)) return anchor.work_id;
+	return (await backend.findIssue(anchor.work_id)).key;
+}
+
 export function computeExecutionNoticeDetails(
 	exec: ExecutionSnapshot,
 	reason?: string | null,
@@ -4339,6 +4347,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const exec = await backend.getExecution(params.work);
 							const refusal = await executionPlanningRefusal(backend, exec, params.work);
 							if (refusal || !exec) return deny(refusal ?? "no active execution grant");
+							const remoteRefRefusal = executionRemoteRefRefusal(
+								exec.grant.remote_ref,
+								await executionPositionZeroKey(backend, exec),
+								exec.grant.grant_id,
+							);
+							if (remoteRefRefusal) return deny(remoteRefRefusal);
 							if (!exec.activeItem || exec.activeItem.phase !== "criteria_pending") {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected criteria_pending`);
 							}
@@ -4366,6 +4380,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 							const exec = await backend.getExecution(params.work);
 							const refusal = await executionPlanningRefusal(backend, exec, params.work);
 							if (refusal || !exec) return deny(refusal ?? "no active execution grant");
+							const remoteRefRefusal = executionRemoteRefRefusal(
+								exec.grant.remote_ref,
+								await executionPositionZeroKey(backend, exec),
+								exec.grant.grant_id,
+							);
+							if (remoteRefRefusal) return deny(remoteRefRefusal);
 							const isExecutingReplan = exec.activeItem?.phase === "executing" && (exec.activeItem.close_attempts_started ?? 0) === 0;
 							if (!exec.activeItem || (!["planning", "remediating"].includes(exec.activeItem.phase) && !isExecutingReplan)) {
 								return deny(`active item is in phase "${exec.activeItem?.phase ?? "none"}", expected planning or remediating`);

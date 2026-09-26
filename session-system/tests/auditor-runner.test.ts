@@ -334,7 +334,7 @@ const makeSnapshot = (
 			workspace_id: "ws-1",
 			owner_id: "owner-1",
 			repository: "/tmp/oh-my-pi",
-			remote_ref: "refs/heads/main",
+			remote_ref: executionRemoteRef("OMP-176", "ad5c45a7-1234-5678-9abc-def012345678"),
 			state,
 			mode,
 			grant_version: 1,
