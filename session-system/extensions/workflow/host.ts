@@ -1906,6 +1906,153 @@ export function createWorkflowHost(cfg: HostConfig) {
 			return true;
 		}
 
+		async function continueAfterSkip(
+			ctx: ExtensionContext,
+			witness: OwnExecutionWitness,
+			skipped: ExecutionSnapshot,
+			activeKey: string,
+		): Promise<void> {
+			state.executingIssue = undefined;
+			state.approvedPlan = undefined;
+			state.obligationHandoff = undefined;
+			state.obligationReview = undefined;
+			state.carrier = undefined;
+			planTarget = undefined;
+
+			const nextPending = skipped.items.find(i => i.phase === "pending");
+			if (!nextPending) {
+				localClear(ctx, false);
+				const currentWs = ownExecutionWitness(ctx)?.workspace ?? state.executionWorkspace ?? witness.workspace;
+				persistSession(ctx, { ...currentWs, cleanupReady: true });
+				await saveCache();
+				footer(ctx);
+				ctx.ui.notify(`Skipped ${activeKey}. Execution grant completed.`, "info");
+				return;
+			}
+
+			const handlePostSkipFailure = async (causeReason: string) => {
+				const current = await backend.getExecution(witness.workspace.grantId);
+				let postExec: ExecutionSnapshot;
+				let terminalReason = causeReason;
+				if (current && current.grant.state === "active") {
+					try {
+						const updated = await backend.setExecutionState({
+							grantId: current.grant.grant_id,
+							expectedGrantVersion: current.grant.grant_version,
+							targetState: "stopped",
+							reason: causeReason,
+							judgeSha256: current.grant.judge_sha256,
+						});
+						terminalReason = updated.grant.terminal_reason ?? causeReason;
+						postExec = {
+							grant: updated.grant,
+							items: current.items,
+							activeItem: null,
+						};
+					} catch {
+						const reRead = await backend.getExecution(witness.workspace.grantId);
+						postExec = reRead ?? {
+							grant: { ...current.grant, state: "stopped", terminal_reason: causeReason },
+							items: current.items,
+							activeItem: null,
+						};
+						terminalReason = postExec.grant.terminal_reason ?? causeReason;
+					}
+				} else if (current) {
+					terminalReason = current.grant.terminal_reason ?? causeReason;
+					postExec = {
+						grant: current.grant,
+						items: current.items,
+						activeItem: current.activeItem ?? null,
+					};
+				} else {
+					postExec = {
+						grant: { ...skipped.grant, state: "stopped", terminal_reason: causeReason },
+						items: skipped.items,
+						activeItem: null,
+					};
+				}
+				const anchorKey = (await resolveAnchorKey(backend, postExec, activeKey)) ?? activeKey;
+				const notice = await resolveExecutionNoticeDetails(backend, postExec, terminalReason, anchorKey);
+				state.terminalExecution = {
+					grantId: postExec.grant.grant_id,
+					state: "stopped",
+					reason: terminalReason,
+					tally: notice.tallyLine.replace(/^Items:\s*/, ""),
+					nextCommand: notice.nextCommandLine,
+					at: Date.now(),
+				};
+				await saveCache();
+				footer(ctx);
+				ctx.ui.notify(`Execution grant stopped: ${terminalReason} · ${notice.tallyLine} · ${notice.nextCommandLine}`, "warning");
+				pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
+			};
+
+			const postDirt = dirtyPaths(witness.workspace.path);
+			if (postDirt.length > 0) {
+				await handlePostSkipFailure("execution_worktree_not_clean");
+				return;
+			}
+
+			const postHead = headCommit(witness.workspace.path);
+			if (!postHead) {
+				await handlePostSkipFailure("no_head_commit");
+				return;
+			}
+
+			let activatedSnapshot: ExecutionSnapshot;
+			try {
+				const currentFocusVersion = typeof backend.getFocusVersion === "function" ? await backend.getFocusVersion() : 0;
+				activatedSnapshot = await backend.activateExecutionItem({
+					grantId: skipped.grant.grant_id,
+					expectedGrantVersion: skipped.grant.grant_version,
+					position: nextPending.position,
+					workId: nextPending.work_id,
+					expectedRevisionId: nextPending.claimed_revision_id,
+					gitBaseline: postHead,
+					judgeSha256: skipped.grant.judge_sha256,
+					expectedFocusVersion: currentFocusVersion,
+					expectedProjectId: nextPending.project_id ?? undefined,
+					expectedBlockerIds: nextPending.active_blocker_ids ?? [],
+				});
+			} catch {
+				await handlePostSkipFailure("activation_handshake_failed");
+				return;
+			}
+
+			const headAfter = headCommit(witness.workspace.path);
+			if (headAfter !== postHead) {
+				await handlePostSkipFailure("git_baseline_moved");
+				return;
+			}
+
+			const nextIssue = await backend.findIssue(nextPending.work_id);
+			const nextKey = nextIssue?.key ?? nextPending.work_id;
+			state.identifier = nextKey;
+			state.issueId = nextIssue?.id ?? nextPending.work_id;
+			state.title = nextIssue?.title;
+			state.project = nextIssue?.project;
+			state.setAt = Date.now();
+
+			const nextWorkspace = {
+				...witness.workspace,
+				key: nextKey,
+				baseline: postHead,
+			};
+			persistSession(ctx, nextWorkspace);
+			await saveCache();
+			footer(ctx);
+			ctx.ui.notify(`Skipped ${activeKey}. Advanced to next queue item ${nextKey}.`, "info");
+
+			await deliverExecutionMessage(
+				skipped.grant.grant_id,
+				skipped.grant.grant_version,
+				activatedSnapshot.grant.grant_version,
+				nextKey,
+				ctx,
+			);
+		}
+
 		async function validateExecutionRecoveryPreflight(
 			ctx: ExtensionContext,
 			backend: WorkflowBackend,
@@ -3191,145 +3338,7 @@ export function createWorkflowHost(cfg: HostConfig) {
 						reason,
 					});
 
-					state.executingIssue = undefined;
-					state.approvedPlan = undefined;
-					state.obligationHandoff = undefined;
-					state.obligationReview = undefined;
-					state.carrier = undefined;
-					planTarget = undefined;
-
-					const nextPending = skipped.items.find(i => i.phase === "pending");
-					if (!nextPending) {
-						localClear(ctx, false);
-						const currentWs = ownExecutionWitness(ctx)?.workspace ?? state.executionWorkspace ?? witness.workspace;
-						persistSession(ctx, { ...currentWs, cleanupReady: true });
-						await saveCache();
-						footer(ctx);
-						ctx.ui.notify(`Skipped ${activeKey}. Execution grant completed.`, "info");
-						return;
-					}
-
-					const handlePostSkipFailure = async (causeReason: string) => {
-						const current = await backend.getExecution(witness.workspace.grantId);
-						let postExec: ExecutionSnapshot;
-						let terminalReason = causeReason;
-						if (current && current.grant.state === "active") {
-							try {
-								const updated = await backend.setExecutionState({
-									grantId: current.grant.grant_id,
-									expectedGrantVersion: current.grant.grant_version,
-									targetState: "stopped",
-									reason: causeReason,
-									judgeSha256: current.grant.judge_sha256,
-								});
-								terminalReason = updated.grant.terminal_reason ?? causeReason;
-								postExec = {
-									grant: updated.grant,
-									items: current.items,
-									activeItem: null,
-								};
-							} catch {
-								const reRead = await backend.getExecution(witness.workspace.grantId);
-								postExec = reRead ?? {
-									grant: { ...current.grant, state: "stopped", terminal_reason: causeReason },
-									items: current.items,
-									activeItem: null,
-								};
-								terminalReason = postExec.grant.terminal_reason ?? causeReason;
-							}
-						} else if (current) {
-							terminalReason = current.grant.terminal_reason ?? causeReason;
-							postExec = {
-								grant: current.grant,
-								items: current.items,
-								activeItem: current.activeItem ?? null,
-							};
-						} else {
-							postExec = {
-								grant: { ...skipped.grant, state: "stopped", terminal_reason: causeReason },
-								items: skipped.items,
-								activeItem: null,
-							};
-						}
-						const anchorKey = (await resolveAnchorKey(backend, postExec, activeKey)) ?? activeKey;
-						const notice = await resolveExecutionNoticeDetails(backend, postExec, terminalReason, anchorKey);
-						state.terminalExecution = {
-							grantId: postExec.grant.grant_id,
-							state: "stopped",
-							reason: terminalReason,
-							tally: notice.tallyLine.replace(/^Items:\s*/, ""),
-							nextCommand: notice.nextCommandLine,
-							at: Date.now(),
-						};
-						await saveCache();
-						footer(ctx);
-						ctx.ui.notify(`Execution grant stopped: ${terminalReason} · ${notice.tallyLine} · ${notice.nextCommandLine}`, "warning");
-						pi.sendMessage({ customType: `${TOOL_NAME}-execution-status`, content: notice.fullNotice }, { deliverAs: "nextTurn" });
-					};
-
-					const postDirt = dirtyPaths(witness.workspace.path);
-					if (postDirt.length > 0) {
-						await handlePostSkipFailure("execution_worktree_not_clean");
-						return;
-					}
-
-					const postHead = headCommit(witness.workspace.path);
-					if (!postHead) {
-						await handlePostSkipFailure("no_head_commit");
-						return;
-					}
-
-					let activatedSnapshot: ExecutionSnapshot;
-					try {
-						const currentFocusVersion = typeof backend.getFocusVersion === "function" ? await backend.getFocusVersion() : 0;
-						activatedSnapshot = await backend.activateExecutionItem({
-							grantId: skipped.grant.grant_id,
-							expectedGrantVersion: skipped.grant.grant_version,
-							position: nextPending.position,
-							workId: nextPending.work_id,
-							expectedRevisionId: nextPending.claimed_revision_id,
-							gitBaseline: postHead,
-							judgeSha256: skipped.grant.judge_sha256,
-							expectedFocusVersion: currentFocusVersion,
-							expectedProjectId: nextPending.project_id ?? undefined,
-							expectedBlockerIds: nextPending.active_blocker_ids ?? [],
-						});
-					} catch {
-						await handlePostSkipFailure("activation_handshake_failed");
-						return;
-					}
-
-					const headAfter = headCommit(witness.workspace.path);
-					if (headAfter !== postHead) {
-						await handlePostSkipFailure("git_baseline_moved");
-						return;
-					}
-
-					const nextIssue = await backend.findIssue(nextPending.work_id);
-					const nextKey = nextIssue?.key ?? nextPending.work_id;
-					state.identifier = nextKey;
-					state.issueId = nextIssue?.id ?? nextPending.work_id;
-					state.title = nextIssue?.title;
-					state.project = nextIssue?.project;
-					state.setAt = Date.now();
-
-					const nextWorkspace = {
-						...witness.workspace,
-						key: nextKey,
-						baseline: postHead,
-					};
-					persistSession(ctx, nextWorkspace);
-					await saveCache();
-					footer(ctx);
-					ctx.ui.notify(`Skipped ${activeKey}. Advanced to next queue item ${nextKey}.`, "info");
-
-					await deliverExecutionMessage(
-						skipped.grant.grant_id,
-						skipped.grant.grant_version,
-						activatedSnapshot.grant.grant_version,
-						nextKey,
-						ctx,
-					);
+					await continueAfterSkip(ctx, witness, skipped, activeKey);
 					return;
 				}
 
