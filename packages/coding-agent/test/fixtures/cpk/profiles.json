@@ -1,0 +1,68 @@
+[
+	{
+		"schema": "cpk4/v1",
+		"mode": "interactive",
+		"version": "1.0.0",
+		"requiredPlugins": ["core"],
+		"optionalPlugins": ["search", "writer"],
+		"allowedEffects": ["read", "write", "network"],
+		"maxContextTokens": 8000,
+		"maxTools": 10,
+		"cosmeticReloadable": true
+	},
+	{
+		"schema": "cpk4/v1",
+		"mode": "plan",
+		"version": "1.0.0",
+		"requiredPlugins": ["core"],
+		"optionalPlugins": ["search"],
+		"allowedEffects": ["read", "network"],
+		"maxContextTokens": 4000,
+		"maxTools": 4,
+		"cosmeticReloadable": false
+	},
+	{
+		"schema": "cpk4/v1",
+		"mode": "implementation",
+		"version": "1.0.0",
+		"requiredPlugins": ["core", "writer"],
+		"optionalPlugins": ["search"],
+		"allowedEffects": ["read", "write", "network"],
+		"maxContextTokens": 10000,
+		"maxTools": 12,
+		"cosmeticReloadable": true
+	},
+	{
+		"schema": "cpk4/v1",
+		"mode": "audit",
+		"version": "1.0.0",
+		"requiredPlugins": ["core", "audit"],
+		"optionalPlugins": [],
+		"allowedEffects": ["read"],
+		"maxContextTokens": 3000,
+		"maxTools": 3,
+		"cosmeticReloadable": false
+	},
+	{
+		"schema": "cpk4/v1",
+		"mode": "fleet",
+		"version": "1.0.0",
+		"requiredPlugins": ["core"],
+		"optionalPlugins": ["search", "audit"],
+		"allowedEffects": ["read", "network"],
+		"maxContextTokens": 5000,
+		"maxTools": 6,
+		"cosmeticReloadable": true
+	},
+	{
+		"schema": "cpk4/v1",
+		"mode": "diagnostic",
+		"version": "1.0.0",
+		"requiredPlugins": ["core", "audit"],
+		"optionalPlugins": [],
+		"allowedEffects": ["read"],
+		"maxContextTokens": 2000,
+		"maxTools": 2,
+		"cosmeticReloadable": false
+	}
+]
