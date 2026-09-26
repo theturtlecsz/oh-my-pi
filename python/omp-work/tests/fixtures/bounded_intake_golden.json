@@ -1,0 +1,1068 @@
+[
+  {
+    "id": "01-valid-ready",
+    "level": "unit",
+    "description": "A small code-change draft with an oracle, non-conflicting constraints, and only routine choices.",
+    "adjudication": "No contradictory constraint, missing oracle, or material authority unknown, so the draft is ready and asks nothing.",
+    "input": {
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Pin the stats export to JSON. Keep the human table. An automated test must pass.",
+          "sha256": "b33440d95077c02b6fbb53631ef913d10b3ddfd7ab52f6882879c67449e44357",
+          "spans": [
+            {
+              "id": "span-export",
+              "start": 0,
+              "end": 28,
+              "exact_text_sha256": "3e8259abdfb0897b6b1862df705eaf6318798da75b2ef76b75e4a406b12d9cb7"
+            },
+            {
+              "id": "span-table",
+              "start": 30,
+              "end": 50,
+              "exact_text_sha256": "d5edecae85a023758ad31f514adb9eb2f8b56020f22fed9553a519b3815209f8"
+            },
+            {
+              "id": "span-test",
+              "start": 52,
+              "end": 79,
+              "exact_text_sha256": "948cd53fc7ee1aad090f96efd21ee7636ef00a9fd5f8dad0773408452d2f71d9"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-ready",
+          "statement": "Pin the stats export to JSON",
+          "source_span_ids": [
+            "span-export",
+            "span-table"
+          ]
+        },
+        "constraints": [
+          {
+            "id": "c-json",
+            "statement": "The export encoding is JSON",
+            "source_span_ids": [
+              "span-export"
+            ],
+            "key": "output_encoding",
+            "value": {
+              "kind": "known",
+              "value": "json"
+            },
+            "polarity": "positive"
+          },
+          {
+            "id": "c-table",
+            "statement": "The human table stays",
+            "source_span_ids": [
+              "span-table",
+              "span-test"
+            ],
+            "key": "human_table",
+            "value": {
+              "kind": "known",
+              "value": "unchanged"
+            },
+            "polarity": "positive"
+          }
+        ],
+        "unknowns": [
+          {
+            "id": "choice-name",
+            "statement": "Whether the flag is named --json or --format",
+            "source_span_ids": [
+              "span-export"
+            ],
+            "kind": "routine_choice",
+            "material": false
+          },
+          {
+            "id": "choice-sort",
+            "statement": "Whether model rows are sorted by name",
+            "source_span_ids": [],
+            "kind": "routine_choice",
+            "material": false
+          }
+        ],
+        "acceptance_criteria": [
+          {
+            "id": "ac-export",
+            "statement": "JSON export is checked by a test",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the stats export test exits zero",
+            "oracle": "automated_test"
+          },
+          {
+            "id": "ac-table",
+            "statement": "The human table is still present",
+            "source_span_ids": [
+              "span-table",
+              "span-test"
+            ],
+            "observable_outcome": "the human table heading is still rendered",
+            "oracle": "static_check"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "valid": true,
+      "ready": true,
+      "issue_count": 0,
+      "questions": []
+    }
+  },
+  {
+    "id": "02-material-authority",
+    "level": "unit",
+    "description": "Two material authority_or_dependency unknowns, plus a routine choice that must not be asked.",
+    "adjudication": "Each material authority or dependency unknown is its own blocking question. A routine choice is not.",
+    "input": {
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Release needs an owner decision on the deploy window and a dependency on the billing service. An automated test covers the happy path.",
+          "sha256": "06ecda01eb34296bffd7cf9f2f812776ca7efefdc50fa0d3fb483b9b8ca88689",
+          "spans": [
+            {
+              "id": "span-test",
+              "start": 94,
+              "end": 133,
+              "exact_text_sha256": "00813d38934b56c550015d7752d45461c41af0196da01f61e2fda899211fb477"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-auth",
+          "statement": "Ship the release once authority is settled",
+          "source_span_ids": [
+            "span-test"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [
+          {
+            "id": "auth-alpha",
+            "statement": "Owner must decide the deploy window",
+            "source_span_ids": [],
+            "kind": "authority_or_dependency",
+            "material": true
+          },
+          {
+            "id": "auth-beta",
+            "statement": "Billing service dependency is unresolved",
+            "source_span_ids": [],
+            "kind": "authority_or_dependency",
+            "material": true
+          },
+          {
+            "id": "choice-label",
+            "statement": "Which adjective to use in the changelog",
+            "source_span_ids": [],
+            "kind": "routine_choice",
+            "material": false
+          }
+        ],
+        "acceptance_criteria": [
+          {
+            "id": "ac-happy",
+            "statement": "Happy path is tested",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the happy-path test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "valid": true,
+      "ready": false,
+      "issue_count": 2,
+      "questions": [
+        {
+          "rule_class": "missing_consequential_authority_or_dependency",
+          "deduplication_key": "authority:auth-alpha",
+          "statement": "missing_consequential_authority_or_dependency:authority:auth-alpha",
+          "priority": 2,
+          "claim_ids": [
+            "auth-alpha"
+          ]
+        },
+        {
+          "rule_class": "missing_consequential_authority_or_dependency",
+          "deduplication_key": "authority:auth-beta",
+          "statement": "missing_consequential_authority_or_dependency:authority:auth-beta",
+          "priority": 2,
+          "claim_ids": [
+            "auth-beta"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "03-conflicting-positives",
+    "level": "unit",
+    "description": "Two positive constraints on max_latency_ms with different known values.",
+    "adjudication": "Two different known positive values for one key are a contradictory-constraint block.",
+    "input": {
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Bound request latency. An automated test checks the bound.",
+          "sha256": "a4634552b610272ef4274e24c406c369b3006baa14e04dfe069a33410b1aa833",
+          "spans": [
+            {
+              "id": "span-test",
+              "start": 23,
+              "end": 57,
+              "exact_text_sha256": "6ceabfad7ed79ec55155f58b881caf49a61fb887f9f3613764db1038e7fa3a5b"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-latency",
+          "statement": "Bound request latency",
+          "source_span_ids": [
+            "span-test"
+          ]
+        },
+        "constraints": [
+          {
+            "id": "c-five",
+            "statement": "Latency budget is 5 ms",
+            "source_span_ids": [],
+            "key": "max_latency_ms",
+            "value": {
+              "kind": "known",
+              "value": 5
+            },
+            "polarity": "positive"
+          },
+          {
+            "id": "c-ten",
+            "statement": "Latency budget is 10 ms",
+            "source_span_ids": [],
+            "key": "max_latency_ms",
+            "value": {
+              "kind": "known",
+              "value": 10
+            },
+            "polarity": "positive"
+          }
+        ],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-latency",
+            "statement": "The bound is tested",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the latency test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "valid": true,
+      "ready": false,
+      "issue_count": 1,
+      "questions": [
+        {
+          "rule_class": "contradictory_constraints",
+          "deduplication_key": "constraint:max_latency_ms",
+          "statement": "contradictory_constraints:constraint:max_latency_ms",
+          "priority": 0,
+          "claim_ids": [
+            "c-five",
+            "c-ten"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "04-reordered-ready",
+    "level": "unit",
+    "description": "Fixture 01 with claims, spans, and span refs reversed.",
+    "adjudication": "Semantic hash and blocking questions follow claim and span identity, not list order.",
+    "input": {
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Pin the stats export to JSON. Keep the human table. An automated test must pass.",
+          "sha256": "b33440d95077c02b6fbb53631ef913d10b3ddfd7ab52f6882879c67449e44357",
+          "spans": [
+            {
+              "id": "span-test",
+              "start": 52,
+              "end": 79,
+              "exact_text_sha256": "948cd53fc7ee1aad090f96efd21ee7636ef00a9fd5f8dad0773408452d2f71d9"
+            },
+            {
+              "id": "span-table",
+              "start": 30,
+              "end": 50,
+              "exact_text_sha256": "d5edecae85a023758ad31f514adb9eb2f8b56020f22fed9553a519b3815209f8"
+            },
+            {
+              "id": "span-export",
+              "start": 0,
+              "end": 28,
+              "exact_text_sha256": "3e8259abdfb0897b6b1862df705eaf6318798da75b2ef76b75e4a406b12d9cb7"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-ready",
+          "statement": "Pin the stats export to JSON",
+          "source_span_ids": [
+            "span-table",
+            "span-export"
+          ]
+        },
+        "constraints": [
+          {
+            "id": "c-table",
+            "statement": "The human table stays",
+            "source_span_ids": [
+              "span-test",
+              "span-table"
+            ],
+            "key": "human_table",
+            "value": {
+              "kind": "known",
+              "value": "unchanged"
+            },
+            "polarity": "positive"
+          },
+          {
+            "id": "c-json",
+            "statement": "The export encoding is JSON",
+            "source_span_ids": [
+              "span-export"
+            ],
+            "key": "output_encoding",
+            "value": {
+              "kind": "known",
+              "value": "json"
+            },
+            "polarity": "positive"
+          }
+        ],
+        "unknowns": [
+          {
+            "id": "choice-sort",
+            "statement": "Whether model rows are sorted by name",
+            "source_span_ids": [],
+            "kind": "routine_choice",
+            "material": false
+          },
+          {
+            "id": "choice-name",
+            "statement": "Whether the flag is named --json or --format",
+            "source_span_ids": [
+              "span-export"
+            ],
+            "kind": "routine_choice",
+            "material": false
+          }
+        ],
+        "acceptance_criteria": [
+          {
+            "id": "ac-table",
+            "statement": "The human table is still present",
+            "source_span_ids": [
+              "span-test",
+              "span-table"
+            ],
+            "observable_outcome": "the human table heading is still rendered",
+            "oracle": "static_check"
+          },
+          {
+            "id": "ac-export",
+            "statement": "JSON export is checked by a test",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the stats export test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "valid": true,
+      "ready": true,
+      "issue_count": 0,
+      "questions": [],
+      "semantic_hash_equals": "01-valid-ready",
+      "questions_equal": "01-valid-ready"
+    }
+  },
+  {
+    "id": "05-true-versus-one",
+    "level": "unit",
+    "description": "Positive constraints on enabled whose known values are true and 1.",
+    "adjudication": "Typed equality treats boolean true and integer 1 as different values, so the key conflicts.",
+    "input": {
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Record whether the flag is on. An automated test checks the flag.",
+          "sha256": "6a4b80778476edd5558e3994c7e933f5d7187813113ab57884983fff8a606915",
+          "spans": [
+            {
+              "id": "span-test",
+              "start": 31,
+              "end": 64,
+              "exact_text_sha256": "8ef9c0e0d994d2d6cfc0a76a37c47dfa853063f0f475b42b03250b53208b6951"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-flag",
+          "statement": "Record whether the flag is on",
+          "source_span_ids": [
+            "span-test"
+          ]
+        },
+        "constraints": [
+          {
+            "id": "c-bool",
+            "statement": "The flag is true",
+            "source_span_ids": [],
+            "key": "enabled",
+            "value": {
+              "kind": "known",
+              "value": true
+            },
+            "polarity": "positive"
+          },
+          {
+            "id": "c-int",
+            "statement": "The flag is 1",
+            "source_span_ids": [],
+            "key": "enabled",
+            "value": {
+              "kind": "known",
+              "value": 1
+            },
+            "polarity": "positive"
+          }
+        ],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-flag",
+            "statement": "The flag is tested",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the flag test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "valid": true,
+      "ready": false,
+      "issue_count": 1,
+      "questions": [
+        {
+          "rule_class": "contradictory_constraints",
+          "deduplication_key": "constraint:enabled",
+          "statement": "contradictory_constraints:constraint:enabled",
+          "priority": 0,
+          "claim_ids": [
+            "c-bool",
+            "c-int"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "06-unknown-versus-false",
+    "level": "unit",
+    "description": "The same key holds an unknown value and KnownIntakeValue false.",
+    "adjudication": "Unknown is not a known false, so the pair is not a contradictory constraint and the draft stays ready.",
+    "input": {
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Leave the cache enabled. An automated test checks the cache.",
+          "sha256": "6cc7c84454b160e7c9584d0f0877ae929fedff08cae404900b71a90595aa6806",
+          "spans": [
+            {
+              "id": "span-test",
+              "start": 25,
+              "end": 59,
+              "exact_text_sha256": "ab8ab7ac826492c6d2453739a9b78c88cb5cde1b6d3525ed022c37ed7b32ac25"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-cache",
+          "statement": "Leave the cache enabled",
+          "source_span_ids": [
+            "span-test"
+          ]
+        },
+        "constraints": [
+          {
+            "id": "c-unknown",
+            "statement": "Whether the cache is disabled is not known",
+            "source_span_ids": [],
+            "key": "cache_disabled",
+            "value": {
+              "kind": "unknown"
+            },
+            "polarity": "positive"
+          },
+          {
+            "id": "c-false",
+            "statement": "The cache is not disabled",
+            "source_span_ids": [],
+            "key": "cache_disabled",
+            "value": {
+              "kind": "known",
+              "value": false
+            },
+            "polarity": "positive"
+          }
+        ],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-cache",
+            "statement": "The cache is tested",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the cache test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "valid": true,
+      "ready": true,
+      "issue_count": 0,
+      "questions": []
+    }
+  },
+  {
+    "id": "07-missing-oracle",
+    "level": "unit",
+    "description": "One acceptance criterion with no oracle.",
+    "adjudication": "A criterion without an oracle is a missing-verification-oracle block.",
+    "input": {
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Document the migration. Someone should look at the result.",
+          "sha256": "da30665351ff16c8efde78e2100de32379002d4861b4ca26eca8ef2715d1010c",
+          "spans": [
+            {
+              "id": "span-doc",
+              "start": 0,
+              "end": 22,
+              "exact_text_sha256": "cdc2b6ed9ccf520ee3d3dd7f7d2d0450639ad3845cf083644889b061620111dd"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-doc",
+          "statement": "Document the migration",
+          "source_span_ids": [
+            "span-doc"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-none",
+            "statement": "Someone looks at the migration note",
+            "source_span_ids": [
+              "span-doc"
+            ],
+            "observable_outcome": "the migration note exists",
+            "oracle": null
+          }
+        ]
+      }
+    },
+    "expected": {
+      "valid": true,
+      "ready": false,
+      "issue_count": 1,
+      "questions": [
+        {
+          "rule_class": "missing_verification_oracle",
+          "deduplication_key": "oracle:ac-none",
+          "statement": "missing_verification_oracle:oracle:ac-none",
+          "priority": 1,
+          "claim_ids": [
+            "ac-none"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "08-altered-source",
+    "level": "service",
+    "description": "Altered source text changes the semantic hash, and publish under the old ratification is stale_intake.",
+    "adjudication": "Source text is part of the semantic hash. Ratifying the unaltered draft does not ratify the edited source.",
+    "input": {
+      "scenario": "stale_ratification",
+      "ratify": "original",
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Keep the cache flag false. Verify with an automated test.",
+          "sha256": "a6660e445908ff04bf079d95a96709bf5793b77ec5d621bed5424b51814d8660",
+          "spans": [
+            {
+              "id": "span-flag",
+              "start": 0,
+              "end": 25,
+              "exact_text_sha256": "88e1ed1f004da45346e1258506fa666f6b2397758af1eede507e6c61c4af0615"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-flag",
+          "statement": "Keep the cache flag false",
+          "source_span_ids": [
+            "span-flag"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-flag",
+            "statement": "An automated test verifies the flag",
+            "source_span_ids": [
+              "span-flag"
+            ],
+            "observable_outcome": "the cache-flag test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      },
+      "publish_draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Keep the cache flag false. Verify with an automated test now.",
+          "sha256": "816dbc4e92f266168b893e3581257abc00001e8fa8282b0392a3a9f3dddd62c9",
+          "spans": [
+            {
+              "id": "span-flag",
+              "start": 0,
+              "end": 25,
+              "exact_text_sha256": "88e1ed1f004da45346e1258506fa666f6b2397758af1eede507e6c61c4af0615"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-flag",
+          "statement": "Keep the cache flag false",
+          "source_span_ids": [
+            "span-flag"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-flag",
+            "statement": "An automated test verifies the flag",
+            "source_span_ids": [
+              "span-flag"
+            ],
+            "observable_outcome": "the cache-flag test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "semantic_hash_differs": true,
+      "status": 409,
+      "error_code": "stale_intake",
+      "published_work_items": 0
+    }
+  },
+  {
+    "id": "09-tampered-span",
+    "level": "unit",
+    "description": "A span whose exact_text_sha256 does not match the source slice.",
+    "adjudication": "Model validation rejects a span hash that is not the hash of the addressed source bytes.",
+    "input": {
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Hash the span exactly. An automated test checks the hash.",
+          "sha256": "b6c8ea293371a70435256b5fe1e46464e6d0530177ac6a24050ebbce31041889",
+          "spans": [
+            {
+              "id": "span-hash",
+              "start": 0,
+              "end": 21,
+              "exact_text_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-hash",
+          "statement": "Hash the span exactly",
+          "source_span_ids": [
+            "span-hash"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-hash",
+            "statement": "The hash is tested",
+            "source_span_ids": [
+              "span-hash"
+            ],
+            "observable_outcome": "the span-hash test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "valid": false,
+      "validation_error": "exact_text_sha256 mismatch"
+    }
+  },
+  {
+    "id": "10-pre-edit-assessment",
+    "level": "service",
+    "description": "Publish an edited draft citing the assessment response of the pre-edit draft.",
+    "adjudication": "A positive assessment applies only to the draft that was assessed. An edit makes that assessment stale_intake.",
+    "input": {
+      "scenario": "stale_assessment",
+      "ratify": "publish_draft",
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Set the cache flag. An automated test checks the value.",
+          "sha256": "bc9b117b0581d55be4ba84db77aab53b7edfb4739b7a39d813cc7ca67296c22d",
+          "spans": [
+            {
+              "id": "span-test",
+              "start": 20,
+              "end": 54,
+              "exact_text_sha256": "0b0fc3f0939b22130aa4a7d40ca9320d64a70601377d8dc337e7d8eaaf80a94a"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-set",
+          "statement": "Set the cache flag",
+          "source_span_ids": [
+            "span-test"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-set",
+            "statement": "The value is tested",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the cache-flag test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      },
+      "publish_draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Set the cache flag. An automated test checks the value.",
+          "sha256": "bc9b117b0581d55be4ba84db77aab53b7edfb4739b7a39d813cc7ca67296c22d",
+          "spans": [
+            {
+              "id": "span-test",
+              "start": 20,
+              "end": 54,
+              "exact_text_sha256": "0b0fc3f0939b22130aa4a7d40ca9320d64a70601377d8dc337e7d8eaaf80a94a"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-set",
+          "statement": "Set the cache flag this week",
+          "source_span_ids": [
+            "span-test"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-set",
+            "statement": "The value is tested",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the cache-flag test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "semantic_hash_differs": true,
+      "status": 409,
+      "error_code": "stale_intake",
+      "published_work_items": 0
+    }
+  },
+  {
+    "id": "11-foreign-workspace",
+    "level": "service",
+    "description": "A capability token whose workspace is not the request workspace.",
+    "adjudication": "Authenticated server context supplies the principal. A token for another workspace is forbidden.",
+    "input": {
+      "scenario": "foreign_workspace",
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Expose the health route. An automated test requests it.",
+          "sha256": "006c524ed419769e93b5ab1d1b2cc567fe5190395b9fad09a1a3b50199d71a99",
+          "spans": [
+            {
+              "id": "span-test",
+              "start": 25,
+              "end": 54,
+              "exact_text_sha256": "79b257df5ac99bfa3285913e1c2584958af4cb15cab69c3c52a1826779f013ba"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-health",
+          "statement": "Expose the health route",
+          "source_span_ids": [
+            "span-test"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-health",
+            "statement": "The route is tested",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the health-route test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "status": 403,
+      "error_code": "forbidden",
+      "published_work_items": 0
+    }
+  },
+  {
+    "id": "12-restart-replay",
+    "level": "service",
+    "description": "Dispose the TestClient, recreate the app on the same data dir, and replay publish.",
+    "adjudication": "Publication is idempotent across a new app process on the same data. Replay returns the stored result and does not mint a second work item.",
+    "input": {
+      "scenario": "restart_replay",
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Add a dry-run switch to the backup command. An automated test covers it.",
+          "sha256": "288abb565c07275795f3a6fb3b544191d6b756d1b423a03ab1e6f3f3c17889d2",
+          "spans": [
+            {
+              "id": "span-test",
+              "start": 44,
+              "end": 71,
+              "exact_text_sha256": "1d288a4696dcb30e4d1f5d12c50b5bdd6c4e2fc4988a636a57493545414f84d4"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-dry",
+          "statement": "Add a dry-run switch to the backup command",
+          "source_span_ids": [
+            "span-test"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-dry",
+            "statement": "Dry-run is tested",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the dry-run test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "first_state": "applied",
+      "replay_state": "replayed",
+      "published_work_items": 1,
+      "intake_publication_receipts": 1
+    }
+  },
+  {
+    "id": "13-receipt-mint-fault",
+    "level": "service",
+    "description": "A fault at the receipt-mint seam during publish.",
+    "adjudication": "The publication transaction rolls back. The fault leaves zero new item, relation, candidate, and receipt rows.",
+    "input": {
+      "scenario": "receipt_mint_fault",
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Count the open items in the status line. An automated test covers the count.",
+          "sha256": "56576568a02a52ba48b34d2e39cc100a31585a556bba0d602f42d4f13b151b1e",
+          "spans": [
+            {
+              "id": "span-test",
+              "start": 41,
+              "end": 75,
+              "exact_text_sha256": "1432e997c794e2fa4592d1a638bf8454c01ab218c9a3b51c4b7bea5cc7525ea6"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-count",
+          "statement": "Count the open items in the status line",
+          "source_span_ids": [
+            "span-test"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-count",
+            "statement": "The count is tested",
+            "source_span_ids": [
+              "span-test"
+            ],
+            "observable_outcome": "the status-count test exits zero",
+            "oracle": "automated_test"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "persisted_delta": {
+        "items": 0,
+        "relations": 0,
+        "candidates": 0,
+        "receipts": 0
+      }
+    }
+  },
+  {
+    "id": "14-stats-json-flag",
+    "level": "service",
+    "description": "One real small code change: add a --json flag to the stats CLI, through assess, fable, admit, and publish.",
+    "adjudication": "The published title is the goal statement, acceptance criteria are the observable outcomes verbatim, and the publication receipt keeps the exact source text and spans.",
+    "input": {
+      "scenario": "full_path",
+      "draft": {
+        "archetype": "small_code_change",
+        "source": {
+          "text": "Add a --json flag to the stats CLI so scripted callers can read dashboard totals without scraping the human table. omp stats --json prints one JSON object on stdout and exits 0. omp stats without --json still prints the human table.",
+          "sha256": "216eb07db9c15bc9fd9ee2ace43e2f7ca3e2ea6a398943d0ab90ed83c9d26aa9",
+          "spans": [
+            {
+              "id": "span-goal",
+              "start": 0,
+              "end": 34,
+              "exact_text_sha256": "45b03925984af44f506222a40d78cf652cb76fc6b107440b9c8e64f29bcaac14"
+            },
+            {
+              "id": "span-json",
+              "start": 115,
+              "end": 176,
+              "exact_text_sha256": "a12c4cc0ba59e41526e21a8e64a68f4ed1f418af2b205ab44bda270995b51ded"
+            },
+            {
+              "id": "span-table",
+              "start": 178,
+              "end": 231,
+              "exact_text_sha256": "1c59f9d9a07801cbc0d88b7b2e8c3fa2fc29df1d8b4dcd91d22d7e2e8aefa91f"
+            }
+          ]
+        },
+        "goal": {
+          "id": "goal-json",
+          "statement": "Add a --json flag to the stats CLI",
+          "source_span_ids": [
+            "span-goal"
+          ]
+        },
+        "constraints": [],
+        "unknowns": [],
+        "acceptance_criteria": [
+          {
+            "id": "ac-json",
+            "statement": "The JSON flag is covered by an automated test",
+            "source_span_ids": [
+              "span-json"
+            ],
+            "observable_outcome": "omp stats --json prints one JSON object on stdout and exits 0",
+            "oracle": "automated_test"
+          },
+          {
+            "id": "ac-table",
+            "statement": "The human table remains the default",
+            "source_span_ids": [
+              "span-table"
+            ],
+            "observable_outcome": "omp stats without --json still prints the human table",
+            "oracle": "static_check"
+          }
+        ]
+      },
+      "advice_text": "Considered. Add --json to the stats CLI and keep the human table as the default."
+    },
+    "expected": {
+      "status": 200,
+      "receipt_state": "applied",
+      "title_equals_goal_statement": true,
+      "acceptance_criteria_are_observable_outcomes": true,
+      "receipt_source_text_equals_input": true,
+      "receipt_source_spans_equal_input": true
+    }
+  }
+]
