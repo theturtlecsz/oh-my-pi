@@ -20,6 +20,7 @@
 - Domain event cursor: `GET /v1/workspaces/{workspace_id}/events` pages `omp_audit.domain_events` by `sequence` under a per-workspace advisory-lock commit watermark, returning `watermark_sequence`, `next_after_sequence`, `has_more`; candidate-scoped principals refused (OMP-279).
 - Knowledge contracts: strict `knowledge_contracts.py` models plus canonical code-snapshot and child-fact hash preimages, with golden vectors in `fixtures/knowledge_vectors.json` (OMP-279).
 - Repository identity and manifest capture: read-only resolution of a checkout to an existing `omp_work.repositories` row (normalized URL, verified root commits) and capture of base/modified/untracked/deleted file bytes as a code snapshot manifest (OMP-279).
+- Versioned structural code graph with candidate snapshot isolation: engine-neutral Enola extraction (`facts.jsonl`/`receipt.json`), a repository/snapshot namespace adapter over the complete `(repository, enola_repo, kind, name, file)` fact identity, staged publication with retained active snapshots, and a per-snapshot coverage manifest of extracted and skipped files (OMP-309).
 
 ### Changed
 

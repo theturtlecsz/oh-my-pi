@@ -1381,7 +1381,9 @@ class Approval(StrictModel):
         "OMP-266",
         "OMP-279",
         "OMP-283",
+        "OMP-295",
     ]
+    attestation: hex64 | None = None
 
 
 class IntakeSourceSpan(StrictModel):

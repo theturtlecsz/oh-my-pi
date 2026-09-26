@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256 } from "@oh-my-pi/pi-work-client";
 import { pushCandidate, validateExecutionPath } from "../extensions/workflow/git";
 import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
+import { grantRemoteRef } from "./fixtures/grant-remote-ref";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 
 if (process.env.OMP_WORK_POSTGRES_INTEGRATION !== "1") {
@@ -2020,13 +2021,14 @@ if (args[0] === "api") {
 		}),
 	})).json();
 	// 7. Positive probe: pushCandidate pushes to release/omp-180-smoke and verifies remote
-	const pushOutcome = pushCandidate(probe, headCommit, headCommit);
+	const nonMainRef = grantRemoteRef(nonMainCase.startOut.exec);
+	const pushOutcome = pushCandidate(probe, headCommit, headCommit, nonMainRef);
 	assert.equal(pushOutcome.status === "pushed" || pushOutcome.status === "remote_commit", true, "pushCandidate succeeds on non-main branch");
-	assert.equal(pushOutcome.remoteRef, "refs/heads/release/omp-180-smoke", "pushCandidate targeted release branch");
-	const lsRemote = Bun.spawnSync(["git", "ls-remote", "origin", "refs/heads/release/omp-180-smoke"], { cwd: probe });
+	assert.equal(pushOutcome.remoteRef, nonMainRef, "pushCandidate targeted release branch");
+	const lsRemote = Bun.spawnSync(["git", "ls-remote", "origin", nonMainRef], { cwd: probe });
 	assert.ok(lsRemote.stdout.toString().includes(headCommit), "remote origin holds commit at release branch ref");
 
-	const makeEvidenceNonMain = (pushReceiptId: string, remoteRef: string | null = "refs/heads/release/omp-180-smoke", pushPayloadSha = "0".repeat(64)) => ({
+	const makeEvidenceNonMain = (pushReceiptId: string, remoteRef: string | null = nonMainRef, pushPayloadSha = "0".repeat(64)) => ({
 		runner: {
 			issuer: "work-service/auditor-settle" as const,
 			launch_id: launchNonMain.result.launch.launch_id,
@@ -2071,7 +2073,7 @@ if (args[0] === "api") {
 		delivery: {
 			repository: nonMainRepository,
 			remote_url: pushOutcome.remoteUrl ?? remote,
-			remote_ref: remoteRef ?? "refs/heads/release/omp-180-smoke",
+			remote_ref: remoteRef ?? nonMainRef,
 			candidate_commit: headCommit,
 			remote_commit: headCommit,
 		},
@@ -2133,7 +2135,7 @@ if (args[0] === "api") {
 						issuer: "test",
 						issued_at: new Date().toISOString(),
 						independent: false,
-						remote_ref: "refs/heads/release/omp-180-smoke",
+						remote_ref: nonMainRef,
 						remote_commit: headCommit,
 						candidate_commit: headCommit,
 						candidate_sha256: finalTreeShaNonMain,
