@@ -12,8 +12,8 @@ Candidate {{labelB}}:
 Evaluate which candidate hypothesis is stronger, more plausible, and better addresses the research question. If both candidates are equally strong or equally flawed, declare a tie.
 
 You must respond with ONLY a single valid JSON object and no other text, markdown formatting, or preamble:
-{"winner": "<labelA>"|"<labelB>"|"tie", "probabilities"?: {"<labelA>": number, "<labelB>": number, "tie"?: number}}
+{"winner": "{{labelA}}"|"{{labelB}}"|"tie", "probabilities"?: {"{{labelA}}": number, "{{labelB}}": number, "tie"?: number}}
 
 Where:
 - "winner" must be exactly "{{labelA}}", "{{labelB}}", or "tie".
-- "probabilities" is optional. If provided, values must be numbers in [0, 1].
+- "probabilities" is optional. If provided, keys must be "{{labelA}}", "{{labelB}}", and optionally "tie", with values as numbers in [0, 1].

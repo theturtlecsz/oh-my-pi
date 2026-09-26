@@ -67,12 +67,24 @@ describe("parseJudgeAnswer", () => {
 		expect(resB.outcome).toBe("B");
 	});
 
-	it("maps case-insensitive tie to tie", () => {
+	it("maps exact tie to tie", () => {
 		const resLower = parseJudgeAnswer(JSON.stringify({ winner: "tie" }), "Emerald", "Sapphire");
 		expect(resLower.outcome).toBe("tie");
+	});
 
-		const resTitle = parseJudgeAnswer(JSON.stringify({ winner: "Tie" }), "Emerald", "Sapphire");
-		expect(resTitle.outcome).toBe("tie");
+	it("throws on non-exact case or untrimmed winner string", () => {
+		expect(() => parseJudgeAnswer(JSON.stringify({ winner: "Tie" }), "Emerald", "Sapphire")).toThrow(
+			/Unknown judge winner/,
+		);
+		expect(() => parseJudgeAnswer(JSON.stringify({ winner: "TIE" }), "Emerald", "Sapphire")).toThrow(
+			/Unknown judge winner/,
+		);
+		expect(() => parseJudgeAnswer(JSON.stringify({ winner: "emerald" }), "Emerald", "Sapphire")).toThrow(
+			/Unknown judge winner/,
+		);
+		expect(() => parseJudgeAnswer(JSON.stringify({ winner: " Sapphire " }), "Emerald", "Sapphire")).toThrow(
+			/Unknown judge winner/,
+		);
 	});
 
 	it("re-keys valid probabilities from labels to A and B, including tie", () => {
@@ -102,10 +114,22 @@ describe("parseJudgeAnswer", () => {
 		expect(res.probabilities).toBeUndefined();
 	});
 
-	it("parses JSON wrapped in markdown code fence", () => {
+	it("omits probabilities if keys are not the drawn labels (e.g. fallback A and B)", () => {
+		const fallbackPayload = {
+			winner: "Emerald",
+			probabilities: {
+				A: 0.9,
+				B: 0.1,
+			},
+		};
+		const res = parseJudgeAnswer(JSON.stringify(fallbackPayload), "Emerald", "Sapphire");
+		expect(res.outcome).toBe("A");
+		expect(res.probabilities).toBeUndefined();
+	});
+
+	it("throws on JSON wrapped in markdown code fence", () => {
 		const markdownText = '```json\n{"winner": "Sapphire"}\n```';
-		const res = parseJudgeAnswer(markdownText, "Emerald", "Sapphire");
-		expect(res.outcome).toBe("B");
+		expect(() => parseJudgeAnswer(markdownText, "Emerald", "Sapphire")).toThrow(/Malformed judge response/);
 	});
 
 	it("throws on unknown winner label", () => {
@@ -139,10 +163,9 @@ describe("parseJudgeAnswer", () => {
 		);
 	});
 
-	it("throws when response indicates stopReason error", () => {
-		expect(() =>
-			parseJudgeAnswer(JSON.stringify({ stopReason: "error", errorMessage: "Failed" }), "Emerald", "Sapphire"),
-		).toThrow(/stopReason error/);
+	it("does not reject stopReason inside valid judge JSON payload", () => {
+		const res = parseJudgeAnswer(JSON.stringify({ winner: "Emerald", stopReason: "error" }), "Emerald", "Sapphire");
+		expect(res.outcome).toBe("A");
 	});
 
 	it("throws when labels are not two distinct strings", () => {
@@ -165,6 +188,10 @@ describe("createModelJudge", () => {
 			const labelA = matchA?.[1] ?? "";
 			const labelB = matchB?.[2] ?? "";
 			recordedLabels.push([labelA, labelB]);
+
+			expect(promptContent).toContain(`{"winner": "${labelA}"|"${labelB}"|"tie"`);
+			expect(promptContent).not.toContain("<labelA>");
+			expect(promptContent).not.toContain("<labelB>");
 
 			// Vote for labelB
 			return makeAssistantMessage(JSON.stringify({ winner: labelB }));

@@ -82,25 +82,14 @@ export interface ParsedJudgeAnswer {
 /**
  * Strict parser for judge model responses. Requires exactly one JSON object with
  * a recognized winner (labelA -> "A", labelB -> "B", "tie" -> "tie").
- * Throws on malformed JSON, missing/unknown winner, or stopReason error.
+ * Throws on malformed JSON or missing/unknown winner.
  */
 export function parseJudgeAnswer(text: string, labelA: string, labelB: string): ParsedJudgeAnswer {
 	if (!labelA || !labelB || labelA === labelB) {
 		throw new Error("parseJudgeAnswer requires two distinct labels");
 	}
 
-	let trimmed = text.trim();
-	if (trimmed.startsWith("```json")) {
-		trimmed = trimmed
-			.replace(/^```json\s*/i, "")
-			.replace(/\s*```$/, "")
-			.trim();
-	} else if (trimmed.startsWith("```")) {
-		trimmed = trimmed
-			.replace(/^```\s*/, "")
-			.replace(/\s*```$/, "")
-			.trim();
-	}
+	const trimmed = text.trim();
 
 	let parsed: unknown;
 	try {
@@ -115,43 +104,40 @@ export function parseJudgeAnswer(text: string, labelA: string, labelB: string): 
 
 	const record = parsed as Record<string, unknown>;
 
-	if (record.stopReason === "error") {
-		throw new Error(`Judge response indicated stopReason error: ${String(record.errorMessage ?? "unknown error")}`);
-	}
-
 	if (typeof record.winner !== "string") {
 		throw new Error(`Malformed judge response: missing or invalid "winner" field`);
 	}
 
-	const winner = record.winner.trim();
 	let outcome: JudgeOutcome;
-
-	if (winner.toLowerCase() === labelA.toLowerCase()) {
+	if (record.winner === labelA) {
 		outcome = "A";
-	} else if (winner.toLowerCase() === labelB.toLowerCase()) {
+	} else if (record.winner === labelB) {
 		outcome = "B";
-	} else if (winner.toLowerCase() === "tie") {
+	} else if (record.winner === "tie") {
 		outcome = "tie";
 	} else {
-		throw new Error(`Unknown judge winner "${winner}"; expected "${labelA}", "${labelB}", or "tie"`);
+		throw new Error(`Unknown judge winner "${record.winner}"; expected "${labelA}", "${labelB}", or "tie"`);
 	}
 
 	let probabilities: JudgeProbabilities | undefined;
 	if (record.probabilities && typeof record.probabilities === "object" && !Array.isArray(record.probabilities)) {
 		const probRecord = record.probabilities as Record<string, unknown>;
-		const rawA = probRecord[labelA] ?? probRecord[labelA.toLowerCase()] ?? probRecord.A ?? probRecord.a;
-		const rawB = probRecord[labelB] ?? probRecord[labelB.toLowerCase()] ?? probRecord.B ?? probRecord.b;
-		const hasTie = "tie" in probRecord || "Tie" in probRecord || "TIE" in probRecord;
-		const rawTie = probRecord.tie ?? probRecord.Tie ?? probRecord.TIE;
+		const rawA = probRecord[labelA];
+		const rawB = probRecord[labelB];
+		const hasTie = "tie" in probRecord;
+		const rawTie = probRecord.tie;
+
+		const allowedKeys = new Set(hasTie ? [labelA, labelB, "tie"] : [labelA, labelB]);
+		const allKeysValid = Object.keys(probRecord).every(k => allowedKeys.has(k));
 
 		const validA = typeof rawA === "number" && !Number.isNaN(rawA) && rawA >= 0 && rawA <= 1;
 		const validB = typeof rawB === "number" && !Number.isNaN(rawB) && rawB >= 0 && rawB <= 1;
 		const validTie = !hasTie || (typeof rawTie === "number" && !Number.isNaN(rawTie) && rawTie >= 0 && rawTie <= 1);
 
-		if (validA && validB && validTie) {
-			probabilities = { A: rawA as number, B: rawB as number };
-			if (hasTie && typeof rawTie === "number") {
-				probabilities.tie = rawTie;
+		if (allKeysValid && validA && validB && validTie) {
+			probabilities = { A: rawA, B: rawB };
+			if (hasTie) {
+				probabilities.tie = rawTie as number;
 			}
 		}
 	}
