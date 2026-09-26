@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
+from functools import cache
+from importlib import resources
 from typing import Any, TypeVar
 
 from robomp import persona
@@ -20,6 +22,8 @@ from robomp.github_client import (
     RepoInfo,
     parse_issue_payload,
 )
+from robomp.jev_client import JevClient
+from robomp.prefilter import run_prefilter
 from robomp.sandbox import GitTransport, SandboxManager
 from robomp.worker import DirectiveInfo, ReleaseTaskContext, TaskInputs, ThreadMessage, run_task
 
@@ -470,6 +474,13 @@ async def handle_release_ci(
     log.info("release conclusion ignored", extra={"key": key, "conclusion": conclusion})
 
 
+@cache
+def _load_prefilter_answer(label: str) -> str:
+    slug = label.replace("-", "_")
+    name = f"prefilter_answer_{slug}.md"
+    return resources.files("robomp.prompts").joinpath(name).read_text(encoding="utf-8").strip()
+
+
 async def triage_issue(
     *,
     settings: Settings,
@@ -481,6 +492,7 @@ async def triage_issue(
     delivery_id: str,
     attempts: int = 0,
     slot_uid: int | None = None,
+    jev_client: JevClient | None = None,
 ) -> None:
     repo, issue = await _resolve_repo_and_issue(github, payload)
     if issue.is_pull_request:
@@ -510,6 +522,61 @@ async def triage_issue(
                 extra={"key": key, "prs": list(closing_prs)},
             )
             return
+
+        # Pre-gate: Jev typed decision prefilter before spinning workspace/session
+        if settings.jev_enabled and settings.prefilter_enabled and db.get_issue_prefilter(key) is None:
+            client = jev_client
+            if client is None:
+                client = JevClient(
+                    base_url=settings.jev_base_url,
+                    api_key=settings.typesafe_api_key,
+                    db=db,
+                )
+            try:
+                prefilter_result = await run_prefilter(
+                    settings=settings,
+                    db=db,
+                    client=client,
+                    key=key,
+                    title=issue.title,
+                    body=issue.body or "",
+                )
+            except Exception as exc:
+                log.warning(
+                    "prefilter execution failed; failing open to full session",
+                    extra={"key": key, "err": str(exc)},
+                )
+                prefilter_result = None
+
+            if prefilter_result is not None and prefilter_result.route == "answered" and prefilter_result.label:
+                log.info(
+                    "prefilter answered issue",
+                    extra={"key": key, "label": prefilter_result.label},
+                )
+                try:
+                    await github.add_issue_labels(
+                        repo.full_name,
+                        issue.number,
+                        [f"provisional:{prefilter_result.label}"],
+                    )
+                except GitHubError as exc:
+                    log.warning(
+                        "prefilter provisional label application failed",
+                        extra={"key": key, "err": str(exc)},
+                    )
+                try:
+                    comment_body = _load_prefilter_answer(prefilter_result.label)
+                    await github.post_comment(
+                        repo.full_name,
+                        issue.number,
+                        comment_body,
+                    )
+                except GitHubError as exc:
+                    log.warning(
+                        "prefilter answer comment posting failed",
+                        extra={"key": key, "err": str(exc)},
+                    )
+                return
     elif existing.state in ("merged", "closed", "abandoned"):
         # Reopen of a finalized issue (issues.reopened): the prior branch is
         # stale (merged/deleted), so tear the workspace down and branch afresh

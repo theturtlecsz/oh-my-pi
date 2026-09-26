@@ -2512,6 +2512,44 @@ def _build_classify_issue(bindings: ToolBindings) -> HostTool[Any, Any]:
             _audit(bindings, "classify_issue", args, error=str(exc))
             _raise_command(f"GitHub rejected labels: {exc.status} {exc.message}")
 
+        # Once the final labels are applied, remove any provisional:* label via remove_issue_label.
+        # Log failures; don't raise. That removal is the session's confirmation.
+        provisional_labels: set[str] = set()
+        for lbl in applied:
+            if isinstance(lbl, str) and lbl.startswith("provisional:"):
+                provisional_labels.add(lbl)
+        if bindings.issue is not None and bindings.issue.labels:
+            for lbl in bindings.issue.labels:
+                if isinstance(lbl, str) and lbl.startswith("provisional:"):
+                    provisional_labels.add(lbl)
+        prefilter_row = bindings.db.get_issue_prefilter(bindings.issue_key)
+        if prefilter_row is not None and prefilter_row.label:
+            provisional_labels.add(f"provisional:{prefilter_row.label}")
+
+        target_number = _require_issue(bindings).number
+        for prov_label in sorted(provisional_labels):
+            try:
+                if hasattr(bindings.github, "remove_issue_label"):
+                    _run_coro(
+                        bindings.loop,
+                        bindings.github.remove_issue_label(
+                            bindings.repo.full_name,
+                            target_number,
+                            prov_label,
+                        ),
+                    )
+            except GitHubError as exc:
+                if exc.status != 404:
+                    log.warning(
+                        "provisional label cleanup failed",
+                        extra={"issue": bindings.issue_key, "label": prov_label, "err": str(exc)},
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "provisional label cleanup failed",
+                    extra={"issue": bindings.issue_key, "label": prov_label, "err": str(exc)},
+                )
+
         bindings.db.set_issue_classification(bindings.issue_key, primary)
         _audit(
             bindings,

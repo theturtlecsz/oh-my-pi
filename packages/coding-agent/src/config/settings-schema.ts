@@ -478,6 +478,18 @@ export const SETTINGS_SCHEMA = {
 	"auth.broker.url": { type: "string", default: undefined },
 	"auth.broker.token": { type: "string", default: undefined, credential: true },
 
+	// Jev (typesafe) decision service — hidden from the UI; populate via
+	// config.yml or the TYPESAFE_API_KEY env var. `jev.enabled` gates every
+	// call; the autoThinking/unexpectedStop flags are consumed by their
+	// respective features (deferred), not by the client itself.
+	"jev.enabled": { type: "boolean", default: false },
+	"jev.baseUrl": { type: "string", default: "https://api.typesafe.ai" },
+	"jev.autoThinking": { type: "boolean", default: false },
+	"jev.autoThinkingConfidence": { type: "number", default: 0.5 },
+	"jev.autoThinkingMaxSignal": { type: "number", default: 0.7 },
+	"jev.unexpectedStop": { type: "boolean", default: false },
+	"jev.unexpectedStopThreshold": { type: "number", default: 0.7 },
+
 	autoResume: {
 		type: "boolean",
 		default: false,
