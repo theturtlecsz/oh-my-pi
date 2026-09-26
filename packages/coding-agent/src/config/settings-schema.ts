@@ -601,7 +601,7 @@ export const SETTINGS_SCHEMA = {
 	"advisor.supervisionPath": {
 		type: "enum",
 		values: ADVISOR_SUPERVISION_PATHS,
-		default: "legacy",
+		default: "structured",
 	},
 	"advisor.supervisionCanaryMaxDivergences": {
 		type: "number",

@@ -18,6 +18,7 @@
 ### Changed
 
 - `--queue` now orders items dependency-first so umbrella items run after their queued children instead of ahead of them.
+- Advisors now run on the structured CPK-6 supervisor by default, so no second legacy dedupe dispatcher runs; set `advisor.supervisionPath` to `legacy` to restore the previous behavior.
 
 ### Fixed
 
