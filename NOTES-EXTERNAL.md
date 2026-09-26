@@ -1,5 +1,66 @@
 # External WorkService mutations
 
+## Pending: OMP-270 description correction
+
+Status: **PENDING — no WorkService credentials available in this worktree**.
+
+- Work UUID: `b00e8c27-107e-479d-a92b-51c71ac13e3b`
+- Expected current revision: r2, UUID `a6014b0d-6886-57a5-82ab-405a5e04bd5c`
+- Requested mutation: create one description-only successor using the exact target below and explicit `expected_revision_id="a6014b0d-6886-57a5-82ab-405a5e04bd5c"`.
+- Target description is 8,412 UTF-8 bytes including its final LF; SHA-256 `8761f3faabf16701155b948bbc80248ac71014d568537c8b7ad561f05cfbb20e`.
+- Preserve title, scope, structured criteria, state (`BACKLOG`), candidate, relations, NOW, focus, grants and effects. Preserve r2 as history.
+- After mutation, read back the successor and record revision number/UUID, SHA-256 of exact UTF-8 description bytes, and per-field equality evidence. Do not stamp a plan, admit runtime, claim qualification, close work or activate any effect.
+- If current revision differs from r2, refuse instead of rebasing this request silently.
+
+### Exact target `revision.description`
+
+<!-- BEGIN_OMP_270_TARGET_DESCRIPTION -->
+# 03B NSI-E4: focused posture, frame and breadth qualification
+
+E4 follows the separately owned implemented and qualified E3 plus NSI-6 under the exact archived chain NSI-1+2+3→E1; E1+NSI-4→E2; E2+NSI-5→E3. The bounded P12 item is not full NSI-1–6 qualification. P12→E4 is an added local programme sequencing edge because this programme evaluates the deployed P12 baseline; it is necessary but not sufficient and is not claimed as an archived §17 edge. E4 proof precedes N4; N4/OWEB-7 are not E4 entry prerequisites. Preserve the archived X-A/X-B/X-C0/X-C/X-D experiment; add only missing focused contrasts and pre/post concept coverage. OMP-252 remains Harbor model-comparison ownership; it does not own this NSI-E4 experiment. WorkService is the sole workflow authority. This prospective filing is neither execution admission nor acceptance. Fable advice and fresh exact-candidate audit remain hard gates; zero GitHub approval votes. No paid trial, production routing change, live effect, native receipt, or terminal-grant revival follows from filing. Frozen initial plan remains immutable; later bounded plans bind current revisions and exact paths.
+
+## Acceptance criteria
+
+- Preregister separate generation-posture, reviewed structural-frame and candidate-breadth contrasts; hold other variables fixed and link each contrast to the existing framed/unframed/equal-compute E4 controls.
+- Preserve X-A no alternatives, X-B one alternatives pass, X-C0 unframed branches, X-C framed branches and X-D randomized deepening offer; report intention-to-treat separately from self-selected use, with no unsupported model/default benefit claim.
+- Freeze both branch count and per-branch candidate targets/caps, realized returned/valid/duplicate counts and shortfall handling. A 4x4 pilot remains inside accepted caps and separately authorized finite cost, never a reason to pad or automatically spend.
+- Measure material distinct concepts in the retained valid pre-synthesis pool and prominent final options using an independent operational rubric for materiality, viability, distinctness and traps; identify useful concept loss without making a sole LLM novelty score the oracle.
+- Predeclare matching basis and record realized calls/tokens/currency or resource use; equal caps or tokens across models do not imply equal compute or cost. Preserve frozen inputs, routes, blinded/normalized presentation, repeats, missing-run handling, pilot/holdout separation and existing safety/non-inferiority gates.
+- Metered runs require exact owner-approved run plan and budget. Runtime evaluation entry requires qualified E3 plus NSI-6 and retained original local E4 gates; qualified P12 is a bounded prerequisite only and does not prove the full NSI-1–6 chain; filing and documentation alone authorize no trial or live adoption.
+
+## Accepted 03B scope — description contract v2 (2026-09-09)
+
+This versioned successor makes the already accepted, owner-applicable behavior explicit in revision.description, which native execution binds as original_request. The acceptance-criteria bullets above are verbatim copies of the unchanged structured array. The following A–D clauses explain their role-specific applicability; they do not admit runtime implementation, alter dependencies or claim any completed criterion.
+
+### A. Generation and comparative judgment
+
+E4 preregisters generation-posture contrasts that compare otherwise controlled generator candidate/mechanism/assumption/reference output against the relevant prior evaluative posture. In the selected contract, required comparison/ranking/tradeoffs belongs to the existing later isolated synthesis/critic call over the entire valid pool; noncomparative risk/failure ideation remains allowed and deterministic constraints/screening stay fixed. Do not add a new critic call while calling the compute condition unchanged, and do not use generator ranking/pruning or model scores as readiness authority.
+
+### B. Reviewed structural slot and immutable inputs
+
+Preregister a separate structural-frame contrast for the reviewed inversion/assumption-challenge/wildcard-family cross-domain operator occupying one existing slot when eligible. Freeze eligibility, selector/operator identity and fallback; no automatic added branches. Keep original immutable input/constraints and labeled counterfactual assumption relaxations distinct. Hold other variables fixed and compare against the existing unframed/framed controls; family labels alone do not prove conceptual diversity.
+
+### C. Bounded breadth and raw-pool preservation
+
+Freeze both branch count and positive targetCandidatesPerBranch within accepted maxima. Record ingress returnedCount=invalidCount+quarantinedCount+validCount, duplicateCount as a valid subset, distinctValidCount=validCount-duplicateCount and shortfall=max(0,targetCandidatesPerBranch-distinctValidCount). Unknown counts stay unknown, never zero; retain the raw valid pool and predeclare shortfall/missing-run handling without padding or automatic retry/spend. A 4x4 study is only a finite separately authorized pilot inside compiled/accepted caps, not a universal default. Treat breadth as its own contrast, not a hidden framing/compute confound.
+
+### D. Focused qualification and concept coverage
+
+Run focused, separate posture/frame/breadth comparisons and measure material distinct concepts in the retained valid pre-synthesis pool versus prominent final options. Connect them to the existing X-A no alternatives, X-B single alternatives pass, X-C0 unframed branches, X-C framed branches and X-D randomized deepening-offer controls; report intention-to-treat separately from self-selected use. Use an independent materiality/viability/distinctness/trap rubric, realized calls/tokens/currency-or-resource matching, frozen route/input identities, blinded normalized presentation, repeats, missing-run handling and separate pilot/holdout qualification with existing safety/non-inferiority gates. Equal caps alone do not establish equal compute. No new mandatory huge evaluation, unbounded refinement loop, paid trial without exact budget approval, production adoption or B0/B1 cohort change is admitted by this correction.
+
+Historical descriptions, structured criteria, native dependency edges and authority boundaries remain. This correction changes only this description under an expected-revision successor; no new keys, runtime/source implementation, paid/live/canary effect, NOW/focus/grant change, plan stamp, native audit/acceptance, closure or relation removal occurs.
+
+Scope: Focused local exploration qualification, separate from Harbor H5 OMP-252 and M2 adapter OMP-250; no paid run or production policy adoption without exact budget/plan ratification.
+
+Acceptance:
+- [ ] Preregister separate generation-posture, reviewed structural-frame and candidate-breadth contrasts; hold other variables fixed and link each contrast to the existing framed/unframed/equal-compute E4 controls.
+- [ ] Preserve X-A no alternatives, X-B one alternatives pass, X-C0 unframed branches, X-C framed branches and X-D randomized deepening offer; report intention-to-treat separately from self-selected use, with no unsupported model/default benefit claim.
+- [ ] Freeze both branch count and per-branch candidate targets/caps, realized returned/valid/duplicate counts and shortfall handling. A 4x4 pilot remains inside accepted caps and separately authorized finite cost, never a reason to pad or automatically spend.
+- [ ] Measure material distinct concepts in the retained valid pre-synthesis pool and prominent final options using an independent operational rubric for materiality, viability, distinctness and traps; identify useful concept loss without making a sole LLM novelty score the oracle.
+- [ ] Predeclare matching basis and record realized calls/tokens/currency or resource use; equal caps or tokens across models do not imply equal compute or cost. Preserve frozen inputs, routes, blinded/normalized presentation, repeats, missing-run handling, pilot/holdout separation and existing safety/non-inferiority gates.
+- [ ] Metered runs require exact owner-approved run plan and budget. Runtime evaluation entry requires qualified E3 plus NSI-6 and retained original local E4 gates; qualified P12 is a bounded prerequisite only and does not prove the full NSI-1–6 chain; filing and documentation alone authorize no trial or live adoption.
+<!-- END_OMP_270_TARGET_DESCRIPTION -->
+
 ## Pending: OMP-269 description correction
 
 Status: **PENDING — no WorkService credentials available in this worktree**.
