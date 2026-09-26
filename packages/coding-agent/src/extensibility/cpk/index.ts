@@ -7,3 +7,4 @@ export * from "./scopes";
 export * from "./seams";
 export * from "./shadow";
 export * from "./supervision-proposal";
+export * from "./supervision-replay";
