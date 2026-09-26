@@ -5,7 +5,7 @@ describe("autoresearch tournament settings", () => {
 	it("exposes the judge defaults the tournament runner consumes", () => {
 		const settings = Settings.isolated();
 
-		expect(settings.get("autoresearch.tournament.judgeModel")).toBe(" @smol");
+		expect(settings.get("autoresearch.tournament.judgeModel")).toBe("@smol");
 		expect(settings.get("autoresearch.tournament.secondJudgeModel")).toBeUndefined();
 		expect(settings.get("autoresearch.tournament.swissRoundCap")).toBe(5);
 		expect(settings.get("autoresearch.tournament.maxJudgeChars")).toBe(6000);
