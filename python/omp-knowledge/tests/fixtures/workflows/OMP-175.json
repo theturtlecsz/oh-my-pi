@@ -1,0 +1,465 @@
+{
+  "at": "2026-09-12T12:12:44.943Z",
+  "key": "OMP-175",
+  "workflow": {
+    "item": {
+      "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+      "workspace_id": "d95ce294-57f9-42fe-9485-e2eec6eb0272",
+      "alias": {
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "key": "OMP-175",
+        "primary": true,
+        "origin": "local"
+      },
+      "state": "DONE",
+      "revision": {
+        "revision_id": "461c8c5a-48e9-4505-815d-b9e7fff0feea",
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "revision_number": 2,
+        "title": "Fix TypeScript compilation error in work.ts candidateDrift call",
+        "description": "## Problem\n\n`bunx tsc --noEmit -p session-system/tsconfig.json` fails with:\n`session-system/extensions/workflow/work.ts(710,41): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'. Type 'null' is not assignable to type 'string'.`\n\nLine 710 calls `candidateDrift(cwd, terminal.candidate_commit);`. `terminal` is `CloseAttempt`, whose `candidate_commit` property is typed as `string | null` in `@oh-my-pi/pi-work-client`. `candidateDrift` in `session-system/extensions/workflow/git.ts` requires `candidateCommit: string`.\n\n## Provenance\nIntroduced in commit `a8de1881a8e` (OMP-174) during terminal attempt drift handling.\n\n## Proposed Fix\nIn `session-system/extensions/workflow/work.ts` (or `git.ts`), guard or handle null `candidate_commit` before passing to `candidateDrift`.",
+        "scope": "",
+        "acceptance_criteria": [
+          "bunx tsc --noEmit -p session-system/tsconfig.json passes cleanly without error TS2345 on candidateDrift calls",
+          "candidate_commit being string | null is handled in candidateDrift or work.ts"
+        ],
+        "content_sha256": "b200c8e10a4e226274edc43ef73f1e1c6dfe6922945d9d8bcc910c112ebb0f87",
+        "created_by": "execution/criteria-seal",
+        "created_at": "2026-08-31T12:35:24.822198+00:00"
+      },
+      "candidate": {
+        "candidate_id": "c7341389-67c9-4041-8629-e9dd8673d20e",
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "revision_id": "461c8c5a-48e9-4505-815d-b9e7fff0feea",
+        "candidate_sha256": "0ed351d691337d9af115124e960d8f7945c6ec8b73e18806bf799cbfbb73bf4c",
+        "commit_sha": "806185dc66417df2e0ee0f97ca0321d4332111df",
+        "kind": "final",
+        "allocated_at": "2026-08-31T12:35:45.012048+00:00"
+      },
+      "project_id": "01a011eb-d41b-7f64-9404-751f87207d42",
+      "archived": false
+    },
+    "relations": [],
+    "receipts": [
+      {
+        "receipt_id": "8d9a6273-db1e-4d12-b18e-912477002e26",
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "revision_id": "461c8c5a-48e9-4505-815d-b9e7fff0feea",
+        "candidate_id": "bbabbc19-6d43-4536-aeac-abeb15353340",
+        "kind": "plan",
+        "payload": {
+          "body": "# Plan for OMP-175 (candidateDrift null candidate_commit handling)\n\n## Approach\n1. Verify that `candidateDrift` in `session-system/extensions/workflow/git.ts` accepts `candidateCommit: string | null | undefined` and handles null values cleanly.\n2. Confirm no source changes needed as the fix and regression test were delivered in commit `76fc77cd85` at the current baseline.\n3. Keep the worktree clean to adopt baseline HEAD commit for verification.\n\n## Verification\n1. Run `bunx tsc --noEmit -p session-system/tsconfig.json` to confirm type check passes with no TS2345 errors.\n2. Run `bun test session-system/tests/commit-step.test.ts` to confirm all candidateDrift tests pass (including null/undefined cases).\n3. Confirm clean worktree via `git status --porcelain`.\n",
+          "paths": [
+            "session-system/extensions/workflow/git.ts",
+            "session-system/tests/commit-step.test.ts"
+          ],
+          "approach": [
+            "Verify that `candidateDrift` in `session-system/extensions/workflow/git.ts` accepts `candidateCommit: string | null | undefined` and handles null values cleanly.",
+            "Confirm no source changes needed as the fix and regression test were delivered in commit `76fc77cd85` at the current baseline.",
+            "Keep the worktree clean to adopt baseline HEAD commit for verification."
+          ],
+          "plan_file": "local://execute-omp-175-plan.md",
+          "plan_stamp": {
+            "paths": [
+              "session-system/extensions/workflow/git.ts",
+              "session-system/tests/commit-step.test.ts"
+            ],
+            "approach": [
+              "Verify that `candidateDrift` in `session-system/extensions/workflow/git.ts` accepts `candidateCommit: string | null | undefined` and handles null values cleanly.",
+              "Confirm no source changes needed as the fix and regression test were delivered in commit `76fc77cd85` at the current baseline.",
+              "Keep the worktree clean to adopt baseline HEAD commit for verification."
+            ],
+            "plan_body": "# Plan for OMP-175 (candidateDrift null candidate_commit handling)\n\n## Approach\n1. Verify that `candidateDrift` in `session-system/extensions/workflow/git.ts` accepts `candidateCommit: string | null | undefined` and handles null values cleanly.\n2. Confirm no source changes needed as the fix and regression test were delivered in commit `76fc77cd85` at the current baseline.\n3. Keep the worktree clean to adopt baseline HEAD commit for verification.\n\n## Verification\n1. Run `bunx tsc --noEmit -p session-system/tsconfig.json` to confirm type check passes with no TS2345 errors.\n2. Run `bun test session-system/tests/commit-step.test.ts` to confirm all candidateDrift tests pass (including null/undefined cases).\n3. Confirm clean worktree via `git status --porcelain`.\n",
+            "plan_file": "local://execute-omp-175-plan.md",
+            "plan_sha256": "b249c2b6ae9a44f85edf481f83700194cbc2737142d613d3f858554bbd60681d",
+            "candidate_id": "bbabbc19-6d43-4536-aeac-abeb15353340",
+            "verification": [
+              "Run `bunx tsc --noEmit -p session-system/tsconfig.json` to confirm type check passes with no TS2345 errors.",
+              "Run `bun test session-system/tests/commit-step.test.ts` to confirm all candidateDrift tests pass (including null/undefined cases).",
+              "Confirm clean worktree via `git status --porcelain`."
+            ],
+            "initial_paths": [
+              "session-system/extensions/workflow/git.ts",
+              "session-system/tests/commit-step.test.ts"
+            ],
+            "criteria_sha256": "4afa244203d63179691531fbf25807aadff3eb4ec11ca1cf420e7c2b7e9d4feb",
+            "plan_receipt_id": "8d9a6273-db1e-4d12-b18e-912477002e26",
+            "original_request_sha256": "f6115b4317789d806a0f22a61959cc1f1a331f3ebf2935448b20f73a2cf2f0fd"
+          },
+          "verification": [
+            "Run `bunx tsc --noEmit -p session-system/tsconfig.json` to confirm type check passes with no TS2345 errors.",
+            "Run `bun test session-system/tests/commit-step.test.ts` to confirm all candidateDrift tests pass (including null/undefined cases).",
+            "Confirm clean worktree via `git status --porcelain`."
+          ]
+        },
+        "payload_sha256": "b1b4ec79a17132f5b1369d9851e47dc6ee54729a5324696830b318ceef24dbab",
+        "artifact_sha256": null,
+        "issuer": "execution/plan-stamp",
+        "issued_at": "2026-08-31T12:35:33.493907+00:00",
+        "candidate_sha256": "59d83745b62a178e92b283b32dd2e8f9b3a4af0fc21523e0a9b0fd0ed9e65fe3",
+        "candidate_commit": null,
+        "verdict": null,
+        "independent": false,
+        "remote_ref": null,
+        "remote_commit": null
+      },
+      {
+        "receipt_id": "fdcdca73-80e8-4e3d-ad17-f9e18c0dd4ac",
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "revision_id": "461c8c5a-48e9-4505-815d-b9e7fff0feea",
+        "candidate_id": "c7341389-67c9-4041-8629-e9dd8673d20e",
+        "kind": "plan",
+        "payload": {
+          "body": "# Plan for OMP-175 (candidateDrift null candidate_commit handling)\n\n## Approach\n1. Verify that `candidateDrift` in `session-system/extensions/workflow/git.ts` accepts `candidateCommit: string | null | undefined` and handles null values cleanly.\n2. Confirm no source changes needed as the fix and regression test were delivered in commit `76fc77cd85` at the current baseline.\n3. Keep the worktree clean to adopt baseline HEAD commit for verification.\n\n## Verification\n1. Run `bunx tsc --noEmit -p session-system/tsconfig.json` to confirm type check passes with no TS2345 errors.\n2. Run `bun test session-system/tests/commit-step.test.ts` to confirm all candidateDrift tests pass (including null/undefined cases).\n3. Confirm clean worktree via `git status --porcelain`.\n",
+          "paths": [
+            "session-system/extensions/workflow/git.ts",
+            "session-system/tests/commit-step.test.ts"
+          ],
+          "approach": [
+            "Verify that `candidateDrift` in `session-system/extensions/workflow/git.ts` accepts `candidateCommit: string | null | undefined` and handles null values cleanly.",
+            "Confirm no source changes needed as the fix and regression test were delivered in commit `76fc77cd85` at the current baseline.",
+            "Keep the worktree clean to adopt baseline HEAD commit for verification."
+          ],
+          "plan_file": "local://execute-omp-175-plan.md",
+          "plan_stamp": {
+            "paths": [
+              "session-system/extensions/workflow/git.ts",
+              "session-system/tests/commit-step.test.ts"
+            ],
+            "approach": [
+              "Verify that `candidateDrift` in `session-system/extensions/workflow/git.ts` accepts `candidateCommit: string | null | undefined` and handles null values cleanly.",
+              "Confirm no source changes needed as the fix and regression test were delivered in commit `76fc77cd85` at the current baseline.",
+              "Keep the worktree clean to adopt baseline HEAD commit for verification."
+            ],
+            "plan_body": "# Plan for OMP-175 (candidateDrift null candidate_commit handling)\n\n## Approach\n1. Verify that `candidateDrift` in `session-system/extensions/workflow/git.ts` accepts `candidateCommit: string | null | undefined` and handles null values cleanly.\n2. Confirm no source changes needed as the fix and regression test were delivered in commit `76fc77cd85` at the current baseline.\n3. Keep the worktree clean to adopt baseline HEAD commit for verification.\n\n## Verification\n1. Run `bunx tsc --noEmit -p session-system/tsconfig.json` to confirm type check passes with no TS2345 errors.\n2. Run `bun test session-system/tests/commit-step.test.ts` to confirm all candidateDrift tests pass (including null/undefined cases).\n3. Confirm clean worktree via `git status --porcelain`.\n",
+            "plan_file": "local://execute-omp-175-plan.md",
+            "plan_sha256": "b249c2b6ae9a44f85edf481f83700194cbc2737142d613d3f858554bbd60681d",
+            "candidate_id": "bbabbc19-6d43-4536-aeac-abeb15353340",
+            "verification": [
+              "Run `bunx tsc --noEmit -p session-system/tsconfig.json` to confirm type check passes with no TS2345 errors.",
+              "Run `bun test session-system/tests/commit-step.test.ts` to confirm all candidateDrift tests pass (including null/undefined cases).",
+              "Confirm clean worktree via `git status --porcelain`."
+            ],
+            "initial_paths": [
+              "session-system/extensions/workflow/git.ts",
+              "session-system/tests/commit-step.test.ts"
+            ],
+            "criteria_sha256": "4afa244203d63179691531fbf25807aadff3eb4ec11ca1cf420e7c2b7e9d4feb",
+            "plan_receipt_id": "8d9a6273-db1e-4d12-b18e-912477002e26",
+            "original_request_sha256": "f6115b4317789d806a0f22a61959cc1f1a331f3ebf2935448b20f73a2cf2f0fd"
+          },
+          "verification": [
+            "Run `bunx tsc --noEmit -p session-system/tsconfig.json` to confirm type check passes with no TS2345 errors.",
+            "Run `bun test session-system/tests/commit-step.test.ts` to confirm all candidateDrift tests pass (including null/undefined cases).",
+            "Confirm clean worktree via `git status --porcelain`."
+          ]
+        },
+        "payload_sha256": "b1b4ec79a17132f5b1369d9851e47dc6ee54729a5324696830b318ceef24dbab",
+        "artifact_sha256": null,
+        "issuer": "execution/plan-stamp",
+        "issued_at": "2026-08-31T12:35:45.012048+00:00",
+        "candidate_sha256": "0ed351d691337d9af115124e960d8f7945c6ec8b73e18806bf799cbfbb73bf4c",
+        "candidate_commit": "806185dc66417df2e0ee0f97ca0321d4332111df",
+        "verdict": null,
+        "independent": false,
+        "remote_ref": null,
+        "remote_commit": null
+      },
+      {
+        "receipt_id": "cad9b660-137e-5ae3-8de1-5786cb0d2845",
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "revision_id": "461c8c5a-48e9-4505-815d-b9e7fff0feea",
+        "candidate_id": "c7341389-67c9-4041-8629-e9dd8673d20e",
+        "kind": "verification",
+        "payload": {
+          "body": "## Verification Evidence for OMP-175\n\n### 1. TypeScript Compilation Check\nCommand:\n`bunx tsc --noEmit -p session-system/tsconfig.json`\nOutput:\n```\n(no output)\n```\nExit code: 0 (`tsc_exit=0`)\n\n### 2. Full Test Module Suite\nCommand:\n`bun test session-system/tests/commit-step.test.ts > /tmp/commit-step-test.log 2>&1; echo test_exit=$?`\nOutput:\n```\ntest_exit=0\n35 pass, 0 fail across 1 file, 126 expect() calls\n```\nIncludes unit tests covering `candidateDrift(repo, null)` and `candidateDrift(repo, undefined)` resolving to `{ shape: \"unrelated\", head }`.\n\n### 3. Worktree Cleanliness\nCommand:\n`git status --porcelain`\nOutput:\n```\n(no output)\n```\nExit code: 0\n\nAll sealed criteria verified at baseline (delivered by commit `76fc77cd85`)."
+        },
+        "payload_sha256": "50806b0c68bee095edf5c451b9fa7dd2f1979c99b91423a5821e9232d1046ba6",
+        "artifact_sha256": null,
+        "issuer": "session-system/work-now",
+        "issued_at": "2026-08-31T12:35:45.028000+00:00",
+        "candidate_sha256": "0ed351d691337d9af115124e960d8f7945c6ec8b73e18806bf799cbfbb73bf4c",
+        "candidate_commit": "806185dc66417df2e0ee0f97ca0321d4332111df",
+        "verdict": null,
+        "independent": false,
+        "remote_ref": null,
+        "remote_commit": null
+      },
+      {
+        "receipt_id": "a948691c-170f-5f30-8e9b-96ff5c45bf9b",
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "revision_id": "461c8c5a-48e9-4505-815d-b9e7fff0feea",
+        "candidate_id": "c7341389-67c9-4041-8629-e9dd8673d20e",
+        "kind": "push",
+        "payload": {
+          "detail": "remote push verified",
+          "prior_tip": "806185dc66417df2e0ee0f97ca0321d4332111df",
+          "remote_ref": "refs/heads/main",
+          "remote_url": "git@github.com:owner/oh-my-pi.git",
+          "repository": "oh-my-pi",
+          "result_tip": "806185dc66417df2e0ee0f97ca0321d4332111df",
+          "candidate_commit": "806185dc66417df2e0ee0f97ca0321d4332111df"
+        },
+        "payload_sha256": "97c7766384565800e9446997c2a1dc1ef0d8efacb5b6f870bfd0adf69df5d65a",
+        "artifact_sha256": null,
+        "issuer": "session-system/work-now",
+        "issued_at": "2026-08-31T12:35:45.631000+00:00",
+        "candidate_sha256": "0ed351d691337d9af115124e960d8f7945c6ec8b73e18806bf799cbfbb73bf4c",
+        "candidate_commit": "806185dc66417df2e0ee0f97ca0321d4332111df",
+        "verdict": null,
+        "independent": false,
+        "remote_ref": "refs/heads/main",
+        "remote_commit": "806185dc66417df2e0ee0f97ca0321d4332111df"
+      },
+      {
+        "receipt_id": "1a790be0-ba99-4be8-bf3b-b11806383a1b",
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "revision_id": "461c8c5a-48e9-4505-815d-b9e7fff0feea",
+        "candidate_id": "c7341389-67c9-4041-8629-e9dd8673d20e",
+        "kind": "audit",
+        "payload": {
+          "report": "VERDICT: PASS\n\nFINDINGS\n- none\n\nACCEPTANCE COVERAGE\n| AC-ID | status (met / not met / unverifiable) | evidence |\n| AC-1 | met | `bunx tsc --noEmit -p session-system/tsconfig.json` exited 0 with no output; the `candidateDrift` call at session-system/extensions/workflow/work.ts:772 accepts `terminal.candidate_commit` under the widened function signature. |\n| AC-2 | met | session-system/extensions/workflow/git.ts:91 accepts `string | null | undefined`; lines 92-95 return `{ shape: \"unrelated\", head }` when the candidate is absent. session-system/tests/commit-step.test.ts:613-615 directly covers both null and undefined. Targeted test module passed 35 tests with 126 assertions. |\n\nOUT OF SCOPE\n- none; verified range contains no changed paths, matching the approved baseline-adoption plan\n\nCHECKS RUN\n- `git -C /home/thetu/oh-my-pi cat-file -e '806185dc66417df2e0ee0f97ca0321d4332111df^{commit}'` → exit 0, no output (run for both manifest start and final)\n- `git -C /home/thetu/oh-my-pi diff --binary --full-index 806185dc66417df2e0ee0f97ca0321d4332111df..806185dc66417df2e0ee0f97ca0321d4332111df -- | sha256sum` → `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  -`, matching manifest\n- `git -C /home/thetu/oh-my-pi diff --name-status 806185dc66417df2e0ee0f97ca0321d4332111df..806185dc66417df2e0ee0f97ca0321d4332111df --` → exit 0, no changed paths\n- `git rev-parse '76fc77cd85^{commit}' && git merge-base --is-ancestor '76fc77cd85^{commit}' 806185dc66417df2e0ee0f97ca0321d4332111df` → resolved `76fc77cd8521a9fd4c08cd5ace2d4934b17151b2`; exit 0 confirms delivered fix is an ancestor of baseline\n- LSP references for `candidateDrift` → unavailable: no language server found; fallback text search found implementation, callsites, and targeted tests\n- `bunx tsc --noEmit -p session-system/tsconfig.json` → exit 0, no output\n- `bun test session-system/tests/commit-step.test.ts` → exit 0; 35 pass, 0 fail, 126 expect() calls\n- `git status --porcelain` → exit 0, no output\n\nREMAINING QUESTIONS\n- none",
+          "launch_id": "2d864919-15da-42c2-8423-7eb520908fcb",
+          "manifest_id": "ad603f14-acbe-4eef-b050-6b473a5f9eed",
+          "criteria_sha256": "4afa244203d63179691531fbf25807aadff3eb4ec11ca1cf420e7c2b7e9d4feb"
+        },
+        "payload_sha256": "9b74d55ce2cef34638904d764eae15569be4eaa41a03591bb9beef346ccf42ee",
+        "artifact_sha256": "23d5c78a3ebbd7f818716672f456e5a8301a0fe83259721a88c02f7621df7ad4",
+        "issuer": "work-service/auditor-settle",
+        "issued_at": "2026-08-31T12:38:02.713985+00:00",
+        "candidate_sha256": "0ed351d691337d9af115124e960d8f7945c6ec8b73e18806bf799cbfbb73bf4c",
+        "candidate_commit": "806185dc66417df2e0ee0f97ca0321d4332111df",
+        "verdict": "PASS",
+        "independent": true,
+        "remote_ref": null,
+        "remote_commit": null
+      },
+      {
+        "receipt_id": "213cc124-7df1-4b4f-a852-648b3490252a",
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "revision_id": "461c8c5a-48e9-4505-815d-b9e7fff0feea",
+        "candidate_id": "c7341389-67c9-4041-8629-e9dd8673d20e",
+        "kind": "closeout",
+        "payload": {
+          "grant_id": "ad5c45a7-ba7d-442a-8265-60b78c1b1bef",
+          "attempt_id": "2bb9eb04-5f15-5f5b-be7c-c0711a1fa8d0",
+          "push_receipt_id": "a948691c-170f-5f30-8e9b-96ff5c45bf9b",
+          "audit_receipt_id": "1a790be0-ba99-4be8-bf3b-b11806383a1b"
+        },
+        "payload_sha256": "b5941a40754be91ee5d59ac10069555e0773065103aeaf904be3aa6729b86288",
+        "artifact_sha256": null,
+        "issuer": "work-service/execution-complete",
+        "issued_at": "2026-08-31T12:38:05.552605+00:00",
+        "candidate_sha256": "0ed351d691337d9af115124e960d8f7945c6ec8b73e18806bf799cbfbb73bf4c",
+        "candidate_commit": "806185dc66417df2e0ee0f97ca0321d4332111df",
+        "verdict": null,
+        "independent": false,
+        "remote_ref": null,
+        "remote_commit": null
+      }
+    ],
+    "close_attempts": [
+      {
+        "attempt_id": "2bb9eb04-5f15-5f5b-be7c-c0711a1fa8d0",
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "revision_id": "461c8c5a-48e9-4505-815d-b9e7fff0feea",
+        "candidate_id": "c7341389-67c9-4041-8629-e9dd8673d20e",
+        "plan_receipt_id": "fdcdca73-80e8-4e3d-ad17-f9e18c0dd4ac",
+        "candidate_sha256": "0ed351d691337d9af115124e960d8f7945c6ec8b73e18806bf799cbfbb73bf4c",
+        "candidate_commit": "806185dc66417df2e0ee0f97ca0321d4332111df",
+        "owner_session_id": "b9075dccee36622fd36e82043572eb6c059ce020232092e8a99927984614b2c5",
+        "owner_session_started_at": "2026-08-31T12:30:42.352918+00:00",
+        "owner_session_start_commit": "806185dc66417df2e0ee0f97ca0321d4332111df",
+        "repository": "/home/thetu/oh-my-pi",
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "starting_dirty_paths": [],
+        "authorization_kind": "execution",
+        "authorization_ref": "execution:ad5c45a7-ba7d-442a-8265-60b78c1b1bef:1:1",
+        "launch_count": 1,
+        "cancelled_launch_count": 0,
+        "accepted_report_count": 1,
+        "in_flight_launch_id": null,
+        "state": "completed",
+        "terminal_reason": null,
+        "requested_at": "2026-08-31T12:35:45.664857+00:00",
+        "closeout_requested_at": "2026-08-31T12:38:05.552605+00:00",
+        "completed_at": "2026-08-31T12:38:05.552605+00:00",
+        "completion_authorization_ref": "execution:ad5c45a7-ba7d-442a-8265-60b78c1b1bef:5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "riders": [],
+        "execution_grant_id": "ad5c45a7-ba7d-442a-8265-60b78c1b1bef",
+        "candidate_tree_sha": "0ed351d691337d9af115124e960d8f7945c6ec8b73e18806bf799cbfbb73bf4c",
+        "original_request_sha256": "f6115b4317789d806a0f22a61959cc1f1a331f3ebf2935448b20f73a2cf2f0fd",
+        "criteria_sha256": "4afa244203d63179691531fbf25807aadff3eb4ec11ca1cf420e7c2b7e9d4feb",
+        "plan_stamp_sha256": "1c474cc013476ff5f7dfdcd1b497ca0319e4df40a0f873171c279df8ae2b8d53",
+        "judge_sha256": "5261ac5bc05b7ffb5940ba77e2aca93a8f87bbe65bbc14ce56a78dc721afe77b"
+      }
+    ],
+    "audit_manifest": null,
+    "auditor_launches": [
+      {
+        "launch_id": "2d864919-15da-42c2-8423-7eb520908fcb",
+        "attempt_id": "2bb9eb04-5f15-5f5b-be7c-c0711a1fa8d0",
+        "manifest_id": "ad603f14-acbe-4eef-b050-6b473a5f9eed",
+        "launch_number": 1,
+        "task_sha256": "61aada860de54830a60c3a0a92941b6456e5986a34823593db2241a031c3f2ed",
+        "tool_call_id": "call_1611462",
+        "reserved_at": "2026-08-31T12:35:48.313533+00:00"
+      }
+    ],
+    "close_attempt_events": [
+      {
+        "event_id": "f60ab294-f470-4ef5-b0e7-b5049ac4f409",
+        "sequence": 782,
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "attempt_id": "2bb9eb04-5f15-5f5b-be7c-c0711a1fa8d0",
+        "launch_id": null,
+        "event_type": "attempt_begun",
+        "reason_code": "attempt_begun",
+        "reason": "close attempt bound to the finalized candidate and plan receipt",
+        "legal_next_actions": [
+          "append verification evidence",
+          "seal_audit_manifest"
+        ],
+        "remaining_launches": 3,
+        "remaining_reports": 2,
+        "requires_fresh_authorization": false,
+        "rendered_text": "CLOSE ATTEMPT — attempt_begun\nattempt_begun: close attempt bound to the finalized candidate and plan receipt\nnext: append verification evidence; seal_audit_manifest\nbudget: 3 launch(es), 2 accepted report(s) remain",
+        "rendered_sha256": "bbaa25e8a1d1a1eca87e034829459698a920dd7a1ed8e1561dc2a8d6756b4759",
+        "requires_delivery": true,
+        "created_at": "2026-08-31T12:35:45.665903+00:00"
+      },
+      {
+        "event_id": "aa57dc6a-16c3-4da3-af85-52cd0f532801",
+        "sequence": 783,
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "attempt_id": "2bb9eb04-5f15-5f5b-be7c-c0711a1fa8d0",
+        "launch_id": null,
+        "event_type": "checkpoint_delivery_recorded",
+        "reason_code": "delivery_delivered",
+        "reason": "delivery of event attempt_begun recorded as delivered",
+        "legal_next_actions": [
+          "continue"
+        ],
+        "remaining_launches": 3,
+        "remaining_reports": 2,
+        "requires_fresh_authorization": false,
+        "rendered_text": "CLOSE ATTEMPT — checkpoint_delivery_recorded\ndelivery_delivered: delivery of event attempt_begun recorded as delivered\nnext: continue\nbudget: 3 launch(es), 2 accepted report(s) remain",
+        "rendered_sha256": "30044576d5c8a1ff86dd9cc9f13b7e5971c9922728daab91d72ae205d191935d",
+        "requires_delivery": false,
+        "created_at": "2026-08-31T12:35:45.721143+00:00"
+      },
+      {
+        "event_id": "d18160b1-0b9e-4ef9-927b-d6f3880de4e0",
+        "sequence": 784,
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "attempt_id": "2bb9eb04-5f15-5f5b-be7c-c0711a1fa8d0",
+        "launch_id": null,
+        "event_type": "manifest_sealed",
+        "reason_code": "manifest_sealed",
+        "reason": "the audit manifest is sealed; work get_work now renders the exact auditor task",
+        "legal_next_actions": [
+          "spawn ONE auditor task with the sealed body"
+        ],
+        "remaining_launches": 3,
+        "remaining_reports": 2,
+        "requires_fresh_authorization": false,
+        "rendered_text": "CLOSE ATTEMPT — manifest_sealed\nmanifest_sealed: the audit manifest is sealed; work get_work now renders the exact auditor task\nnext: spawn ONE auditor task with the sealed body\nbudget: 3 launch(es), 2 accepted report(s) remain",
+        "rendered_sha256": "c7b5f4ad0ab015bcd15ae4b210d9941eaef9132332b2adfd4baa431e412d2700",
+        "requires_delivery": false,
+        "created_at": "2026-08-31T12:35:48.258719+00:00"
+      },
+      {
+        "event_id": "4f4e6d5b-2357-4988-9ef0-156cfb0a470d",
+        "sequence": 785,
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "attempt_id": "2bb9eb04-5f15-5f5b-be7c-c0711a1fa8d0",
+        "launch_id": "2d864919-15da-42c2-8423-7eb520908fcb",
+        "event_type": "auditor_launch_reserved",
+        "reason_code": "auditor_launch_reserved",
+        "reason": "auditor launch slot 1 of 3 reserved against the sealed manifest",
+        "legal_next_actions": [
+          "run the auditor task",
+          "settle_auditor_launch with its untouched transport payload"
+        ],
+        "remaining_launches": 2,
+        "remaining_reports": 2,
+        "requires_fresh_authorization": false,
+        "rendered_text": "CLOSE ATTEMPT — auditor_launch_reserved\nauditor_launch_reserved: auditor launch slot 1 of 3 reserved against the sealed manifest\nnext: run the auditor task; settle_auditor_launch with its untouched transport payload\nbudget: 2 launch(es), 2 accepted report(s) remain",
+        "rendered_sha256": "21e2fd48a177fff4196a6b677e7b5bc16a5239d845010447bcb12d25c64d4567",
+        "requires_delivery": false,
+        "created_at": "2026-08-31T12:35:48.316042+00:00"
+      },
+      {
+        "event_id": "11ec1078-3271-40c0-9f8c-9dcd0187c5d1",
+        "sequence": 786,
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "attempt_id": "2bb9eb04-5f15-5f5b-be7c-c0711a1fa8d0",
+        "launch_id": "2d864919-15da-42c2-8423-7eb520908fcb",
+        "event_type": "auditor_launch_settled",
+        "reason_code": "verdict_pass",
+        "reason": "the auditor reported PASS; the exact report is the attempt's audit receipt",
+        "legal_next_actions": [
+          "record the closeout review",
+          "owner /done closes"
+        ],
+        "remaining_launches": 2,
+        "remaining_reports": 1,
+        "requires_fresh_authorization": false,
+        "rendered_text": "CLOSE ATTEMPT — auditor_launch_settled\nverdict_pass: the auditor reported PASS; the exact report is the attempt's audit receipt\nnext: record the closeout review; owner /done closes\nbudget: 2 launch(es), 1 accepted report(s) remain",
+        "rendered_sha256": "970071ec49ae612504695c56516481ae213c33d0833c77a893adff17844d6e76",
+        "requires_delivery": true,
+        "created_at": "2026-08-31T12:38:02.716630+00:00"
+      },
+      {
+        "event_id": "453e54b5-ab59-4fb8-8183-8290c83fabb8",
+        "sequence": 787,
+        "work_id": "5a4122fe-86fe-4143-b87d-853c20a6e85d",
+        "attempt_id": "2bb9eb04-5f15-5f5b-be7c-c0711a1fa8d0",
+        "launch_id": null,
+        "event_type": "checkpoint_delivery_recorded",
+        "reason_code": "delivery_delivered",
+        "reason": "delivery of event auditor_launch_settled recorded as delivered",
+        "legal_next_actions": [
+          "continue"
+        ],
+        "remaining_launches": 2,
+        "remaining_reports": 1,
+        "requires_fresh_authorization": false,
+        "rendered_text": "CLOSE ATTEMPT — checkpoint_delivery_recorded\ndelivery_delivered: delivery of event auditor_launch_settled recorded as delivered\nnext: continue\nbudget: 2 launch(es), 1 accepted report(s) remain",
+        "rendered_sha256": "a5d2039968d9d244a2844bbbefb307ec51eda2bb2017bd8422ced857c714942e",
+        "requires_delivery": false,
+        "created_at": "2026-08-31T12:38:02.790791+00:00"
+      }
+    ],
+    "checkpoint_deliveries": [
+      {
+        "delivery_id": "ff2abdaa-4373-420f-8a0c-36b6a72076e4",
+        "event_id": "f60ab294-f470-4ef5-b0e7-b5049ac4f409",
+        "delivery_sequence": 1,
+        "owner_session_id": "01a057cc-d42a-7000-afea-9a094c722332",
+        "rendered_sha256": "bbaa25e8a1d1a1eca87e034829459698a920dd7a1ed8e1561dc2a8d6756b4759",
+        "status": "delivered",
+        "authorization_ref": null,
+        "created_at": "2026-08-31T12:35:45.720524+00:00"
+      },
+      {
+        "delivery_id": "1ae1ba3d-0591-4ecb-9563-98c40bc9005c",
+        "event_id": "11ec1078-3271-40c0-9f8c-9dcd0187c5d1",
+        "delivery_sequence": 1,
+        "owner_session_id": "01a057cc-d42a-7000-afea-9a094c722332",
+        "rendered_sha256": "970071ec49ae612504695c56516481ae213c33d0833c77a893adff17844d6e76",
+        "status": "delivered",
+        "authorization_ref": null,
+        "created_at": "2026-08-31T12:38:02.790416+00:00"
+      }
+    ],
+    "project": {
+      "project_id": "01a011eb-d41b-7f64-9404-751f87207d42",
+      "workspace_id": "d95ce294-57f9-42fe-9485-e2eec6eb0272",
+      "key": null,
+      "name": "The Bookends",
+      "health": "onTrack",
+      "health_updated_at": "2026-09-07T15:49:53.264487+00:00"
+    }
+  }
+}

@@ -224,6 +224,10 @@ class RealCogneeAdapter(KnowledgeEngine):
         data_points: list[DataPoint] = [repo_node]
         node_ids: list[str] = [str(repo_node.id)]
         fact_id_to_node_id: dict[str, UUID] = {}
+        # Name -> the fact ids that became graph nodes, built once per snapshot
+        # so name-only relation targets resolve in O(1) instead of rescanning
+        # every fact (and re-extracting its fields) per relation.
+        name_to_fact_ids: dict[str, list[str]] = {}
 
         # 2. Map facts to DataPoints preserving full fact.id
         for fact in facts:
@@ -237,6 +241,7 @@ class RealCogneeAdapter(KnowledgeEngine):
 
             node_id = snapshot_fact_node_id(snapshot_label, fact_id)
             fact_id_to_node_id[fact_id] = node_id
+            name_to_fact_ids.setdefault(name, []).append(fact_id)
             node_ids.append(str(node_id))
 
             fields: dict[str, Any] = {
@@ -279,12 +284,7 @@ class RealCogneeAdapter(KnowledgeEngine):
                 else:
                     target_name = relation.get("target")
                     if target_name:
-                        matching_fact_ids = [
-                            f_id
-                            for other_fact in facts
-                            for _, other_name, f_id, _, _, _, _, _ in [self._extract_fact_fields(other_fact)]
-                            if other_name == target_name and f_id in fact_id_to_node_id
-                        ]
+                        matching_fact_ids = name_to_fact_ids.get(target_name, ())
                         if len(matching_fact_ids) == 1:
                             target_node_id = fact_id_to_node_id[matching_fact_ids[0]]
 
