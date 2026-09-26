@@ -59,7 +59,7 @@ To allow contract-changing slices to reach `main` cleanly with owner hash-attest
 7. **Approval commit**: The owner creates the approval commit on the detached tree:
    ```sh
    git add python/omp-work/src/omp_work/contracts/v1/approval.json packages/work-client/src/contract.ts docs/upstream-fork-inventory.tsv
-   git commit --author="flood-owner <flood @localhost>" -m "chore(contract): owner step by flood — approve v1 digest <D> (<issue>)"
+   git commit --author="flood-owner <flood@localhost>" -m "chore(contract): owner step by flood — approve v1 digest <D> (<issue>)"
    ```
    The `--author` and the `owner step by flood` subject marker are what `bun scripts/approval-provenance.ts` accepts; without them CI's `check` job fails the PR.
 8. **Fast-forward task branch**: The owner records the commit SHA, returns to the primary repo, fast-forwards the flood branch with the approval commit, and removes the temporary worktree:
