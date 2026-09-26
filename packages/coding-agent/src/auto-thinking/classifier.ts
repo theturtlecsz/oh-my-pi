@@ -16,14 +16,26 @@
  */
 import { type AssistantMessage, completeSimple, Effort, type Model, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { type FetchImpl, prompt } from "@oh-my-pi/pi-utils";
 
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
-import type { Settings } from "../config/settings";
+import type { SettingPath, Settings } from "../config/settings";
+import difficultyPrompt from "../prompts/jev/difficulty.md" with { type: "text" };
+import irreversiblePrompt from "../prompts/jev/irreversible.md" with { type: "text" };
+import liveCutoverPrompt from "../prompts/jev/live_cutover.md" with { type: "text" };
+import noReproPrompt from "../prompts/jev/no_repro.md" with { type: "text" };
 import difficultySystemPrompt from "../prompts/system/auto-thinking-difficulty.md" with { type: "text" };
 import difficultyLocalPrompt from "../prompts/system/auto-thinking-difficulty-local.md" with { type: "text" };
 import { clampAutoThinkingEffort } from "../thinking";
+import {
+	decide,
+	JEV_PROVIDER,
+	type JevChoiceAnswer,
+	type JevNoulAnswer,
+	type JevQuestions,
+	type JevUsageEntry,
+} from "../tiny/jev-client";
 import { preprocessTinyMessage } from "../tiny/message-preproc";
 import {
 	isTinyMemoryLocalModelKey,
@@ -86,6 +98,101 @@ export interface ClassifyDifficultyDeps {
 	sessionId?: string;
 	signal?: AbortSignal;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
+	recordJevUsage?: (entry: JevUsageEntry) => void;
+	fetch?: FetchImpl;
+}
+
+const JEV_QUESTIONS: JevQuestions = {
+	difficulty: {
+		type: "choice",
+		instructions: difficultyPrompt.trim(),
+		options: ["low", "medium", "high", "xhigh"],
+	},
+	no_repro: {
+		type: "noul",
+		instructions: noReproPrompt.trim(),
+	},
+	irreversible: {
+		type: "noul",
+		instructions: irreversiblePrompt.trim(),
+	},
+	live_cutover: {
+		type: "noul",
+		instructions: liveCutoverPrompt.trim(),
+	},
+};
+
+const JEV_EFFORT_BY_CHOICE: Record<string, Effort> = {
+	low: Effort.Low,
+	medium: Effort.Medium,
+	high: Effort.High,
+	xhigh: Effort.XHigh,
+};
+
+async function classifyJev(
+	input: string,
+	deps: ClassifyDifficultyDeps,
+): Promise<{ handled: boolean; effort?: Effort }> {
+	const answers = await decide(input, JEV_QUESTIONS, {
+		feature: "auto_thinking",
+		recordUsage: entry => deps.recordJevUsage?.(entry),
+		getSetting: <P extends SettingPath>(path: P) => deps.settings.get(path),
+		getApiKey: async (provider?: string) => {
+			try {
+				return await deps.registry?.getApiKeyForProvider?.(provider ?? JEV_PROVIDER, deps.sessionId);
+			} catch {
+				return undefined;
+			}
+		},
+		fetch: deps.fetch,
+	});
+
+	if (!answers) {
+		return { handled: false };
+	}
+
+	const difficultyAnswer = answers.difficulty as JevChoiceAnswer | undefined;
+	let topChoice: string | undefined;
+	let topProb = -1;
+	if (difficultyAnswer?.probabilities) {
+		for (const [opt, prob] of Object.entries(difficultyAnswer.probabilities)) {
+			if (prob > topProb) {
+				topProb = prob;
+				topChoice = opt;
+			}
+		}
+	}
+
+	const minConfidence = deps.settings.get("jev.autoThinkingConfidence");
+	if (topProb < minConfidence || !topChoice) {
+		return { handled: true, effort: undefined };
+	}
+
+	const ceiling = autoEffortCeiling(deps);
+	const maxSignalThreshold = deps.settings.get("jev.autoThinkingMaxSignal");
+	const noReproProb = (answers.no_repro as JevNoulAnswer | undefined)?.probability ?? 0;
+	const irreversibleProb = (answers.irreversible as JevNoulAnswer | undefined)?.probability ?? 0;
+	const liveCutoverProb = (answers.live_cutover as JevNoulAnswer | undefined)?.probability ?? 0;
+	const hasMaxSignal =
+		noReproProb >= maxSignalThreshold ||
+		irreversibleProb >= maxSignalThreshold ||
+		liveCutoverProb >= maxSignalThreshold;
+
+	let effort: Effort;
+	if (topChoice === "xhigh" && ceiling === Effort.Max && hasMaxSignal) {
+		effort = Effort.Max;
+	} else {
+		const mapped = JEV_EFFORT_BY_CHOICE[topChoice];
+		if (!mapped) {
+			return { handled: true, effort: undefined };
+		}
+		effort = mapped;
+	}
+
+	return {
+		handled: true,
+		effort: clampAutoThinkingEffort(deps.model, effort, ceiling),
+	};
 }
 
 /**
@@ -98,8 +205,16 @@ export async function classifyDifficulty(
 	promptText: string,
 	deps: ClassifyDifficultyDeps,
 ): Promise<Effort | undefined> {
-	const backend = deps.settings.get("providers.autoThinkingModel");
 	const input = preprocessTinyMessage(promptText);
+
+	if (deps.settings.get("jev.enabled") && deps.settings.get("jev.autoThinking")) {
+		const jevResult = await classifyJev(input, deps);
+		if (jevResult.handled) {
+			return jevResult.effort;
+		}
+	}
+
+	const backend = deps.settings.get("providers.autoThinkingModel");
 	const online = backend === ONLINE_AUTO_THINKING_MODEL_KEY;
 	// The 3-bucket local classifier cannot select `max`, so its ceiling stays at
 	// XHigh whatever the setting says — otherwise a sparse ladder would snap its

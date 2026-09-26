@@ -620,6 +620,7 @@ export class ModelControls {
 					sessionId: this.#host.sessionId(),
 					signal: controller.signal,
 					metadataResolver: provider => this.#host.agent.metadataForProvider(provider),
+					recordJevUsage: entry => this.#host.sessionManager.appendCustomEntry("jev_usage", entry),
 				});
 			} catch (error) {
 				logger.debug("auto-thinking: classification failed; using fallback level", {
