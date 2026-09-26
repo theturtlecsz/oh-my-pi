@@ -77,6 +77,49 @@ def installed_release() -> InstalledRelease:
     return release
 
 
+# Fixed budgets are the floor. A host running above its core count (the flood
+# gate runs several suites at once) stretches every wait instead of failing on
+# a deadline that only holds on an idle machine.
+RUN_TIMEOUT_SECONDS = 120.0
+RPC_RESPONSE_TIMEOUT_SECONDS = 90.0
+HEALTH_TIMEOUT_SECONDS = 90.0
+LINE_STABILIZE_SECONDS = 5.0
+PROXY_UPSTREAM_TIMEOUT_SECONDS = 30.0
+TEARDOWN_GRACE_SECONDS = 10.0
+LOAD_SCALE_CAP = 6.0
+
+
+def host_load() -> float:
+    """One-minute run-queue length; 0.0 when the platform cannot report it."""
+    try:
+        return os.getloadavg()[0]
+    except OSError:
+        return 0.0
+
+
+def load_scale_factor(load: float | None = None, cores: int | None = None) -> float:
+    """1.0 at or below one runnable task per core, growing with the queue after that."""
+    cores = cores or os.cpu_count() or 1
+    if load is None:
+        load = host_load()
+    return min(LOAD_SCALE_CAP, max(1.0, 1.0 + max(0.0, load) / cores))
+
+
+def scaled_timeout(
+    base_seconds: float, *, load: float | None = None, cores: int | None = None
+) -> float:
+    """Scale a fixed harness budget by current host load."""
+    return base_seconds * load_scale_factor(load, cores)
+
+
+def step_label(predicate: Callable[[dict[str, object]], bool] | None) -> str:
+    """Name the source location a wait predicate came from when no label was supplied."""
+    code = getattr(predicate, "__code__", None)
+    if code is None:
+        return "unnamed wait"
+    return f"{Path(code.co_filename).name}:{code.co_firstlineno}"
+
+
 def _free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -94,7 +137,13 @@ def _set_pdeathsig(signum: int) -> None:
         raise OSError(ctypes.get_errno(), "prctl(PR_SET_PDEATHSIG)")
 
 
-def _run(arguments: list[str], cwd: Path, env: dict[str, str]) -> str:
+def _run(
+    arguments: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    *,
+    timeout: float | None = None,
+) -> str:
     parent_pid = os.getpid()
 
     def _preexec() -> None:
@@ -102,16 +151,23 @@ def _run(arguments: list[str], cwd: Path, env: dict[str, str]) -> str:
         if os.getppid() != parent_pid:
             os.kill(os.getpid(), signal.SIGKILL)
 
-    result = subprocess.run(
-        check=False,
-        args=arguments,
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        preexec_fn=_preexec,
-    )
+    budget = scaled_timeout(RUN_TIMEOUT_SECONDS) if timeout is None else timeout
+    try:
+        result = subprocess.run(
+            check=False,
+            args=arguments,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=budget,
+            preexec_fn=_preexec,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"installed command step {' '.join(arguments)!r} timed out after "
+            f"{budget:.1f}s (host load {host_load():.2f}/{os.cpu_count() or 1} cores)"
+        )
     assert result.returncode == 0, result.stderr[-6000:]
     return result.stdout
 
@@ -146,10 +202,10 @@ def _process(
             if child.poll() is None:
                 os.killpg(child.pid, signal.SIGTERM)
                 try:
-                    child.wait(timeout=10)
+                    child.wait(timeout=scaled_timeout(TEARDOWN_GRACE_SECONDS))
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
-                    child.wait(timeout=10)
+                    child.wait(timeout=scaled_timeout(TEARDOWN_GRACE_SECONDS))
             if child.stdin:
                 child.stdin.close()
             if child.stdout:
@@ -254,7 +310,9 @@ class AuthorityResponseProxy:
             "transfer-encoding",
             "upgrade",
         }
-        client = httpx.Client(trust_env=False, timeout=30)
+        client = httpx.Client(
+            trust_env=False, timeout=scaled_timeout(PROXY_UPSTREAM_TIMEOUT_SECONDS)
+        )
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, format: str, *args: object) -> None:
@@ -477,13 +535,54 @@ class AuthorityResponseProxy:
             client.close()
 
 
+class _NewlineCompleteLog(Path):
+    """An RPC stdout log whose text reads stop at the last complete newline.
+
+    The installed controller streams JSONL while the suite reads it, so a plain
+    `read_text()` can return a torn final record and a caller that parses every
+    line then dies on `JSONDecodeError: Unterminated string`. A read here waits,
+    briefly and boundedly, for an in-flight record to finish, then returns only
+    the newline-complete prefix — a short read is observed again on the next call
+    instead of being parsed. `read_bytes()` stays raw: tests that witness the
+    terminal byte tail after a kill must still see any partial bytes.
+    """
+
+    _alive: Callable[[], bool] | None = None
+
+    def __init__(self, *args: object, alive: Callable[[], bool] | None = None) -> None:
+        super().__init__(*args)
+        self._alive = alive
+
+    def read_text(self, encoding: str | None = None, errors: str | None = None) -> str:
+        alive = self._alive
+        deadline = time.monotonic() + scaled_timeout(LINE_STABILIZE_SECONDS)
+        while True:
+            raw = super().read_bytes()
+            # An empty log has no in-flight record to wait for, and the caller
+            # re-reads on the next poll; settling would only stall that poll.
+            if (
+                not raw
+                or raw.endswith(b"\n")
+                or (alive is not None and not alive())
+                or time.monotonic() >= deadline
+            ):
+                break
+            time.sleep(0.02)
+        complete, separator, _tail = raw.rpartition(b"\n")
+        if not separator:
+            return ""
+        return complete.decode(encoding or "utf-8", errors or "strict") + "\n"
+
+
 class RpcProcess:
     def __init__(
         self, child: subprocess.Popen[str], log: Path, *, completion_stop: bool = False
     ):
         self.child = child
         self.log = log
-        self.stdout_log = log.with_suffix(".rpc.jsonl")
+        self.stdout_log = _NewlineCompleteLog(
+            log.with_suffix(".rpc.jsonl"), alive=lambda: child.poll() is None
+        )
         self.events: queue.Queue[str | None] = queue.Queue()
         self._completion_stop = completion_stop
         self._stop_lock = threading.Lock()
@@ -665,7 +764,9 @@ class RpcProcess:
         self._drained.clear()
         self._drain_requested.set()
         if not self._reader_finished.is_set():
-            assert self._drained.wait(5), "Stopped stdout did not drain"
+            assert self._drained.wait(scaled_timeout(TEARDOWN_GRACE_SECONDS)), (
+                "Stopped stdout did not drain"
+            )
         return self.byte_snapshot()
 
     def send(self, command: str, **fields: object) -> str:
@@ -678,9 +779,14 @@ class RpcProcess:
         return request_id
 
     def until(
-        self, predicate: Callable[[dict[str, object]], bool]
+        self,
+        predicate: Callable[[dict[str, object]], bool],
+        *,
+        step: str | None = None,
     ) -> dict[str, object]:
-        deadline = time.monotonic() + 90
+        label = step or step_label(predicate)
+        budget = scaled_timeout(RPC_RESPONSE_TIMEOUT_SECONDS)
+        deadline = time.monotonic() + budget
         while time.monotonic() < deadline:
             try:
                 line = self.events.get(timeout=max(0.01, deadline - time.monotonic()))
@@ -688,25 +794,33 @@ class RpcProcess:
                 break
             if line is None:
                 pytest.fail(
-                    f"installed RPC process exited: {self.log.read_text()[-6000:]}"
+                    f"installed RPC process exited while waiting on step {label}: "
+                    f"{self.log.read_text()[-6000:]}"
                 )
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                pytest.fail(f"installed RPC emitted non-JSON stdout: {line[:400]}")
+                pytest.fail(
+                    f"installed RPC emitted non-JSON stdout on step {label}: {line[:400]}"
+                )
             assert isinstance(event, dict)
             if event.get("type") == "response" and event.get("success") is False:
-                pytest.fail(f"installed RPC refused request: {event}")
+                pytest.fail(f"installed RPC refused request on step {label}: {event}")
             if predicate(event):
                 return event
-        pytest.fail(f"installed RPC response timed out: {self.log.read_text()[-6000:]}")
+        pytest.fail(
+            f"installed RPC response timed out on step {label} after {budget:.1f}s "
+            f"(host load {host_load():.2f}/{os.cpu_count() or 1} cores): "
+            f"{self.log.read_text()[-6000:]}"
+        )
 
     def request(self, command: str, **fields: object) -> dict[str, object]:
         request_id = self.send(command, **fields)
         response = self.until(
             lambda event: (
                 event.get("type") == "response" and event.get("id") == request_id
-            )
+            ),
+            step=f"request {command}",
         )
         assert response["success"] is True
         return cast(dict[str, object], response.get("data", {}))
@@ -718,7 +832,8 @@ class RpcProcess:
                 event.get("type") == "extension_ui_request"
                 and event.get("method") == "notify"
                 and "service:" in str(event.get("message", ""))
-            )
+            ),
+            step="work status notice",
         )
         message = str(notice["message"])
         assert "service: ready" in message, message
@@ -726,7 +841,8 @@ class RpcProcess:
         result = self.until(
             lambda event: (
                 event.get("type") == "prompt_result" and event.get("id") == request_id
-            )
+            ),
+            step="work status result",
         )
         assert result["agentInvoked"] is False, "read-only work command invoked a model"
 
@@ -734,7 +850,8 @@ class RpcProcess:
 def _health(
     base_url: str, child: subprocess.Popen[str], log: Path
 ) -> dict[str, object]:
-    deadline = time.monotonic() + 90
+    budget = scaled_timeout(HEALTH_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + budget
     with httpx.Client(timeout=2, trust_env=False) as client:
         while time.monotonic() < deadline:
             assert child.poll() is None, log.read_text()[-6000:]
@@ -754,4 +871,8 @@ def _health(
             except (httpx.HTTPError, ValueError):
                 pass
             time.sleep(0.1)
-    pytest.fail(f"installed service did not become ready: {log.read_text()[-6000:]}")
+    pytest.fail(
+        f"installed service did not become ready on step /v1/health/ready after "
+        f"{budget:.1f}s (host load {host_load():.2f}/{os.cpu_count() or 1} cores): "
+        f"{log.read_text()[-6000:]}"
+    )

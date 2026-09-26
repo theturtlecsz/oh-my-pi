@@ -3,11 +3,55 @@
  * service (work.omp.dev/v1). Types mirror python/omp-work/src/omp_work/v1/
  * models.py + api_models.py one-for-one; the service is the authority.
  */
+import * as os from "node:os";
 import { WORK_CONTRACT_SHA256 } from "./contract";
 
 export { WORK_CONTRACT_SHA256 } from "./contract";
 
 export type UUID = string;
+
+/**
+ * Per-request abort window. A local WorkService answers in single-digit
+ * milliseconds, but the service, its Postgres and the controller all share the
+ * host with the rest of the build/test load. A fixed 8 s abort then lands
+ * mid-command on a machine running well above its core count: the POST is
+ * cancelled, reconciliation only finds the stored row if the commit beat the
+ * abort, and a still-planning item refuses the next tool call. Scale the window
+ * with the run queue so a loaded host stretches the deadline instead of
+ * cancelling a valid command.
+ */
+export const WORK_REQUEST_TIMEOUT_MS = 8_000;
+export const WORK_REQUEST_LOAD_CAP = 8;
+
+/** 1 at or below one runnable task per core; grows with the 1-minute run queue. */
+export function workRequestLoadScale(
+	load: number = os.loadavg()[0],
+	cores: number = os.availableParallelism?.() ?? os.cpus().length ?? 1,
+): number {
+	const budget = Math.max(1, cores);
+	return Math.min(WORK_REQUEST_LOAD_CAP, Math.max(1, 1 + Math.max(0, load) / budget));
+}
+
+/** Abort window for one loopback request, stretched by current host load. */
+export function workRequestTimeoutMs(base: number = WORK_REQUEST_TIMEOUT_MS, load?: number): number {
+	return Math.round(base * workRequestLoadScale(load));
+}
+
+/**
+ * Attempts for one request when the transport fails before any bytes arrive.
+ * A loopback POST can be handed a pooled connection Keep-Alive closed a
+ * heartbeat earlier; write-then-RST surfaces as an instant `fetch` rejection,
+ * not an abort timeout, so stretching the window cannot prevent it. Every
+ * command is idempotent by `(workspace_id, operation_id)` — the service
+ * REPLAYS the stored result — so a bounded resend is safe and is what a
+ * standard HTTP client does for a closed pre-response socket.
+ */
+export const WORK_REQUEST_ATTEMPTS = 3;
+
+/** Bounded backoff (0, 100 ms) before a pre-response retry. */
+export function workRequestRetryDelayMs(attempt: number): number {
+	return Math.min(100, 10 * 2 ** Math.max(0, attempt - 1));
+}
 
 // ---- canonical encoding (mirrors v1/canonical.py byte-for-byte) ----
 
@@ -708,6 +752,238 @@ export type SkipActiveItemPayload = {
 	reason: string;
 };
 
+// ---- research entities (R02-S1) ----
+
+export type ResearchDomain =
+	| "engineering"
+	| "omp_harness"
+	| "machine_learning"
+	| "literature"
+	| "simulation"
+	| "external_instrument";
+
+export type ResearchResourceVector = {
+	cpu_seconds?: number | null;
+	gpu_seconds?: number | null;
+	max_wall_seconds?: number | null;
+	memory_mib?: number | null;
+	model_calls?: number | null;
+	input_tokens?: number | null;
+	output_tokens?: number | null;
+	retrieval_requests?: number | null;
+};
+
+export type ResearchCampaignSpec = {
+	objective: string;
+	evaluation_protocol_id: string;
+	evaluation_protocol_sha256: string;
+	resource_policy_ref: string;
+	resource_vector?: ResearchResourceVector | null;
+	authorized_data_classification?: string[];
+	candidate_mapping_policy: string;
+};
+
+export type ResearchCampaignState =
+	| "draft"
+	| "admitted"
+	| "running"
+	| "paused"
+	| "evaluating"
+	| "blocked"
+	| "concluded"
+	| "cancelled";
+
+export type ResearchCampaignOutcome =
+	| "supported"
+	| "refuted"
+	| "inconclusive"
+	| "resource_exhausted"
+	| "externally_blocked";
+
+export type ResearchAction =
+	| "retrieve"
+	| "draft"
+	| "repair"
+	| "refine"
+	| "challenge"
+	| "combine"
+	| "evaluate"
+	| "replicate"
+	| "deepen"
+	| "prune"
+	| "synthesize"
+	| "escalate"
+	| "conclude";
+
+export type ResearchBlockedDependency = {
+	kind: "work_item" | "budget_scope" | "capability" | "external";
+	ref: string;
+	reason: string;
+};
+
+export type ResearchCampaign = {
+	campaign_id: UUID;
+	workspace_id: UUID;
+	work_id: UUID;
+	revision_id: UUID;
+	domain: ResearchDomain;
+	spec: ResearchCampaignSpec;
+	spec_sha256: string;
+	policy_sha256?: string | null;
+	state: ResearchCampaignState;
+	cancel_reason?: string | null;
+	created_at: string;
+	admitted_at?: string | null;
+	cancelled_at?: string | null;
+	outcome?: ResearchCampaignOutcome | null;
+	outcome_reason?: string | null;
+	concluded_at?: string | null;
+	blocked_dependency?: ResearchBlockedDependency | null;
+	blocked_from_state?: "admitted" | "running" | "paused" | "evaluating" | null;
+};
+
+export type ResearchTrial = {
+	trial_id: UUID;
+	workspace_id: UUID;
+	campaign_id: UUID;
+	work_id: UUID;
+	decision_id: UUID;
+	candidate_digest: string;
+	experiment_spec_sha256: string;
+	evaluator_sha256: string;
+	environment_sha256: string;
+	input_manifest_sha256: string;
+	seed?: number | null;
+	hardware_class?: string | null;
+	resource_request?: Record<string, unknown> | null;
+	policy_sha256: string;
+	state: "proposed" | "archived";
+	archived_reason?: string | null;
+	proposed_at: string;
+	archived_at?: string | null;
+	action?: ResearchAction | null;
+	reason?: string | null;
+};
+
+export type ResearchIssuerKind = "legacy_autoresearch" | "candidate_authored";
+export type ResearchExecutionStatus = "completed" | "crashed" | "timed_out" | "canceled" | "unknown";
+
+export type ResearchObservation = {
+	observation_id: UUID;
+	workspace_id: UUID;
+	campaign_id: UUID;
+	trial_id?: UUID | null;
+	issuer_kind: ResearchIssuerKind;
+	source_ref: string;
+	execution_status: ResearchExecutionStatus;
+	commit_sha?: string | null;
+	payload: Record<string, unknown>;
+	payload_sha256: string;
+	observed_at: string;
+	recorded_at: string;
+};
+
+export type ResearchDeliverableBinding = {
+	trial_id: UUID;
+	workspace_id: UUID;
+	campaign_id: UUID;
+	work_id: UUID;
+	revision_id: UUID;
+	candidate_digest: string;
+	native_candidate_id: UUID;
+	binding_sha256: string;
+	bound_at: string;
+};
+
+export type ResearchView = {
+	work_id: UUID;
+	campaigns: ResearchCampaign[];
+	trials: ResearchTrial[];
+	observations: ResearchObservation[];
+	deliverable_bindings: ResearchDeliverableBinding[];
+};
+
+export type CreateResearchCampaignPayload = {
+	campaign_id: UUID;
+	work_id: UUID;
+	revision_id: UUID;
+	domain: ResearchDomain;
+	spec: ResearchCampaignSpec;
+	spec_sha256: string;
+};
+
+export type AdmitResearchCampaignPayload = {
+	campaign_id: UUID;
+	work_id: UUID;
+	revision_id: UUID;
+	spec_sha256: string;
+	policy_sha256: string;
+};
+
+export type CancelResearchCampaignPayload = {
+	campaign_id: UUID;
+	work_id: UUID;
+	reason: string;
+};
+
+export type ProposeResearchTrialPayload = {
+	trial_id: UUID;
+	campaign_id: UUID;
+	work_id: UUID;
+	decision_id: UUID;
+	action: ResearchAction;
+	reason?: string | null;
+	candidate_digest: string;
+	experiment_spec_sha256: string;
+	evaluator_sha256: string;
+	environment_sha256: string;
+	input_manifest_sha256: string;
+	seed?: number | null;
+	hardware_class?: string | null;
+	resource_request?: Record<string, unknown> | null;
+	policy_sha256: string;
+};
+
+export type SetResearchCampaignStatePayload = {
+	campaign_id: UUID;
+	work_id: UUID;
+	expected_state: "admitted" | "running" | "paused" | "evaluating" | "blocked";
+	target_state: "admitted" | "running" | "paused" | "evaluating" | "blocked";
+	policy_sha256: string;
+	blocked_dependency?: ResearchBlockedDependency | null;
+};
+
+export type ConcludeResearchCampaignPayload = {
+	campaign_id: UUID;
+	work_id: UUID;
+	policy_sha256: string;
+	outcome: ResearchCampaignOutcome;
+	reason: string;
+};
+
+export type RecordResearchObservationPayload = {
+	observation_id: UUID;
+	campaign_id: UUID;
+	trial_id?: UUID | null;
+	issuer_kind: ResearchIssuerKind;
+	source_ref: string;
+	execution_status: ResearchExecutionStatus;
+	commit_sha?: string | null;
+	payload: Record<string, unknown>;
+	payload_sha256: string;
+	observed_at: string;
+};
+
+export type BindResearchDeliverablePayload = {
+	trial_id: UUID;
+	campaign_id: UUID;
+	work_id: UUID;
+	revision_id: UUID;
+	candidate_digest: string;
+	native_candidate_id: UUID;
+	binding_sha256: string;
+};
+
 export type Command =
 	| { type: "create_work_batch"; payload: CreateWorkBatchPayload }
 	| { type: "create_same_session_child"; payload: CreateSameSessionChildPayload }
@@ -735,7 +1011,15 @@ export type Command =
 	| { type: "stamp_execution_plan"; payload: StampExecutionPlanPayload }
 	| { type: "set_execution_state"; payload: SetExecutionStatePayload }
 	| { type: "complete_execution_item"; payload: CompleteExecutionItemPayload }
-	| { type: "skip_active_item"; payload: SkipActiveItemPayload };
+	| { type: "skip_active_item"; payload: SkipActiveItemPayload }
+	| { type: "create_research_campaign"; payload: CreateResearchCampaignPayload }
+	| { type: "admit_research_campaign"; payload: AdmitResearchCampaignPayload }
+	| { type: "cancel_research_campaign"; payload: CancelResearchCampaignPayload }
+	| { type: "propose_research_trial"; payload: ProposeResearchTrialPayload }
+	| { type: "record_research_observation"; payload: RecordResearchObservationPayload }
+	| { type: "bind_research_deliverable"; payload: BindResearchDeliverablePayload }
+	| { type: "set_research_campaign_state"; payload: SetResearchCampaignStatePayload }
+	| { type: "conclude_research_campaign"; payload: ConcludeResearchCampaignPayload };
 
 // ---- command results ----
 
@@ -747,6 +1031,55 @@ export type CreatedWorkItem = {
 	state: string;
 	row_version: number;
 };
+
+export type CreateResearchCampaignResult = {
+	type: "create_research_campaign";
+	status: "applied" | "replayed";
+	campaign: ResearchCampaign;
+};
+
+export type AdmitResearchCampaignResult = {
+	type: "admit_research_campaign";
+	status: "applied" | "replayed";
+	campaign: ResearchCampaign;
+};
+
+export type CancelResearchCampaignResult = {
+	type: "cancel_research_campaign";
+	status: "applied" | "replayed";
+	campaign: ResearchCampaign;
+};
+
+export type ProposeResearchTrialResult = {
+	type: "propose_research_trial";
+	status: "applied" | "replayed";
+	trial: ResearchTrial;
+};
+
+export type RecordResearchObservationResult = {
+	type: "record_research_observation";
+	status: "applied" | "replayed";
+	observation: ResearchObservation;
+};
+
+export type BindResearchDeliverableResult = {
+	type: "bind_research_deliverable";
+	status: "applied" | "replayed";
+	deliverable_binding: ResearchDeliverableBinding;
+};
+
+export type SetResearchCampaignStateResult = {
+	type: "set_research_campaign_state";
+	status: "applied" | "replayed";
+	campaign: ResearchCampaign;
+};
+
+export type ConcludeResearchCampaignResult = {
+	type: "conclude_research_campaign";
+	status: "applied" | "replayed";
+	campaign: ResearchCampaign;
+};
+
 export type CommandResult =
 	| { type: "create_work_batch"; items: CreatedWorkItem[] }
 	| { type: "create_same_session_child"; item: CreatedWorkItem; receipt: EvidenceReceipt }
@@ -833,7 +1166,15 @@ export type CommandResult =
 			grant: ExecutionGrantView;
 			item: ExecutionGrantItemView;
 			reason: string;
-	  };
+	  }
+	| CreateResearchCampaignResult
+	| AdmitResearchCampaignResult
+	| CancelResearchCampaignResult
+	| ProposeResearchTrialResult
+	| RecordResearchObservationResult
+	| BindResearchDeliverableResult
+	| SetResearchCampaignStateResult
+	| ConcludeResearchCampaignResult;
 
 export type ExecutionGrantView = {
 	grant_id: UUID;
@@ -1077,29 +1418,41 @@ export class WorkClient {
 
 	private async request(method: "GET" | "POST", path: string, body?: unknown, auth = true): Promise<unknown> {
 		const headers = auth ? this.headers() : {};
-		let response: Response;
-		try {
-			response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-				method,
-				headers,
-				...(body === undefined ? {} : { body: JSON.stringify(body) }),
-				signal: AbortSignal.timeout(8000),
-			});
-		} catch (cause) {
-			throw new WorkError("unavailable", 0, [redact(String(cause))]);
+		let text = "";
+		let status = 0;
+		for (let attempt = 1; ; attempt++) {
+			try {
+				const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+					method,
+					headers,
+					...(body === undefined ? {} : { body: JSON.stringify(body) }),
+					signal: AbortSignal.timeout(workRequestTimeoutMs()),
+				});
+				// Read the body inside the attempt: the abort window covers the whole
+				// exchange, so a slow response on a loaded host can tear the body read
+				// after the headers arrived. Every command is idempotent by
+				// `(workspace_id, operation_id)` and the service REPLAYS the stored
+				// result, so re-sending an interrupted exchange is safe and is what a
+				// standard HTTP client does for a closed pre-response socket.
+				text = await response.text();
+				status = response.status;
+				break;
+			} catch (cause) {
+				if (attempt >= WORK_REQUEST_ATTEMPTS) throw new WorkError("unavailable", 0, [redact(String(cause))]);
+				await Bun.sleep(workRequestRetryDelayMs(attempt));
+			}
 		}
-		const text = await response.text();
 		let parsed: unknown = {};
 		try {
 			parsed = text ? JSON.parse(text) : {};
 		} catch {
 			/* a non-JSON body is a service fault — fall through to the status check */
 		}
-		if (!response.ok) {
+		if (status < 200 || status >= 300) {
 			const error = (parsed as Partial<WorkErrorBody>).error;
 			throw new WorkError(
 				error?.code ?? "invalid_request",
-				response.status,
+				status,
 				(error?.diagnostics ?? []).map(redact),
 				error?.request_id ?? null,
 			);
@@ -1117,6 +1470,10 @@ export class WorkClient {
 
 	workflow(key: string): Promise<WorkflowView> {
 		return this.request("GET", `/v1/work-items/${encodeURIComponent(key)}/workflow`) as Promise<WorkflowView>;
+	}
+
+	research(key: string): Promise<ResearchView> {
+		return this.request("GET", `/v1/work-items/${encodeURIComponent(key)}/research`) as Promise<ResearchView>;
 	}
 
 	tree(): Promise<WorkspaceTree> {

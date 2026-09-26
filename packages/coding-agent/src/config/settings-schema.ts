@@ -490,6 +490,12 @@ export const SETTINGS_SCHEMA = {
 	"jev.unexpectedStop": { type: "boolean", default: false },
 	"jev.unexpectedStopThreshold": { type: "number", default: 0.7 },
 
+	// Autoresearch tournament judging — hidden from the UI; consumed by the tournament runner.
+	"autoresearch.tournament.judgeModel": { type: "string", default: "@smol" },
+	"autoresearch.tournament.secondJudgeModel": { type: "string", default: undefined },
+	"autoresearch.tournament.swissRoundCap": { type: "number", default: 5 },
+	"autoresearch.tournament.maxJudgeChars": { type: "number", default: 6000 },
+
 	autoResume: {
 		type: "boolean",
 		default: false,
