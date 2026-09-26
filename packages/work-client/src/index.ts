@@ -1121,38 +1121,41 @@ export class WorkClient {
 
 	private async request(method: "GET" | "POST", path: string, body?: unknown, auth = true): Promise<unknown> {
 		const headers = auth ? this.headers() : {};
-		let response: Response;
+		let text = "";
+		let status = 0;
 		for (let attempt = 1; ; attempt++) {
 			try {
-				response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+				const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
 					method,
 					headers,
 					...(body === undefined ? {} : { body: JSON.stringify(body) }),
 					signal: AbortSignal.timeout(workRequestTimeoutMs()),
 				});
+				// Read the body inside the attempt: the abort window covers the whole
+				// exchange, so a slow response on a loaded host can tear the body read
+				// after the headers arrived. Every command is idempotent by
+				// `(workspace_id, operation_id)` and the service REPLAYS the stored
+				// result, so re-sending an interrupted exchange is safe and is what a
+				// standard HTTP client does for a closed pre-response socket.
+				text = await response.text();
+				status = response.status;
 				break;
 			} catch (cause) {
-				// A rejection here is ALWAYS pre-response — the abort window only
-				// bounds headers (the body streams after). The mutation may not have
-				// reached the service, but even if it did the command replays by
-				// operation id, so a bounded resend is safe. A genuine host outage
-				// exhausts the attempts and still throws.
 				if (attempt >= WORK_REQUEST_ATTEMPTS) throw new WorkError("unavailable", 0, [redact(String(cause))]);
 				await Bun.sleep(workRequestRetryDelayMs(attempt));
 			}
 		}
-		const text = await response.text();
 		let parsed: unknown = {};
 		try {
 			parsed = text ? JSON.parse(text) : {};
 		} catch {
 			/* a non-JSON body is a service fault — fall through to the status check */
 		}
-		if (!response.ok) {
+		if (status < 200 || status >= 300) {
 			const error = (parsed as Partial<WorkErrorBody>).error;
 			throw new WorkError(
 				error?.code ?? "invalid_request",
-				response.status,
+				status,
 				(error?.diagnostics ?? []).map(redact),
 				error?.request_id ?? null,
 			);

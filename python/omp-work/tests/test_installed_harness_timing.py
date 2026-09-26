@@ -166,6 +166,16 @@ def test_a_log_without_a_complete_line_reads_empty(
     assert _NewlineCompleteLog(log).read_text() == ""
 
 
+def test_an_empty_log_reads_immediately(tmp_path: Path) -> None:
+    """A log with no bytes has nothing in flight; a poll must not stall the window."""
+    log = tmp_path / "rpc.jsonl"
+    log.write_bytes(b"")
+
+    started = time.monotonic()
+    assert _NewlineCompleteLog(log, alive=lambda: True).read_text() == ""
+    assert time.monotonic() - started < support.LINE_STABILIZE_SECONDS
+
+
 def test_scale_is_floored_scaled_and_capped() -> None:
     """Budgets stretch with the run queue, so a loaded host is not failed on an idle deadline."""
     assert load_scale_factor(0.0, 16) == 1.0

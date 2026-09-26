@@ -558,8 +558,11 @@ class _NewlineCompleteLog(Path):
         deadline = time.monotonic() + scaled_timeout(LINE_STABILIZE_SECONDS)
         while True:
             raw = super().read_bytes()
+            # An empty log has no in-flight record to wait for, and the caller
+            # re-reads on the next poll; settling would only stall that poll.
             if (
-                raw.endswith(b"\n")
+                not raw
+                or raw.endswith(b"\n")
                 or (alive is not None and not alive())
                 or time.monotonic() >= deadline
             ):

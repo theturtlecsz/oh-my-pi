@@ -82,3 +82,30 @@ test("a transport that never comes back still fails after the bounded attempts",
 	await expect(client.tree()).rejects.toBeInstanceOf(WorkError);
 	expect(attempts()).toBe(WORK_REQUEST_ATTEMPTS);
 });
+
+test("a body read torn after the headers is resent instead of failing the command", async () => {
+	// The abort window bounds the whole exchange, so a slow response can tear the
+	// body read after a 200 arrived. The stored result replays by operation id —
+	// the resent attempt must deliver it rather than surfacing `unavailable`.
+	let calls = 0;
+	const client = new WorkClient(
+		"http://127.0.0.1:54322",
+		WORKSPACE_ID,
+		() => "token",
+		async () => {
+			calls++;
+			if (calls === 1) {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => {
+						throw new Error("The operation was aborted");
+					},
+				} as unknown as Response;
+			}
+			return Response.json({ workspace_id: WORKSPACE_ID, items: [], relations: [], projects: [] });
+		},
+	);
+	await expect(client.tree()).resolves.toMatchObject({ workspace_id: WORKSPACE_ID });
+	expect(calls).toBe(2);
+});
