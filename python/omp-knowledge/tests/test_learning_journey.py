@@ -231,17 +231,19 @@ def test_full_learning_journey(tmp_path: Path, capsys: pytest.CaptureFixture[str
         capture_output=True,
     )
 
+    # Mirrors the argv the session digest hook builds: the supply subcommand and its own flags
+    # precede --state-dir/--workspace, which argparse only accepts on the supply subparser.
     supply_argv = [
         "supply",
-        "--state-dir",
-        str(state_dir),
-        "--workspace",
-        WORKSPACE,
         "--work-key",
         "TASK-B",
         "--cwd",
         str(repo_b),
         "--json",
+        "--state-dir",
+        str(state_dir),
+        "--workspace",
+        WORKSPACE,
     ]
     rc = cli_main(supply_argv, store=store)
     assert rc == EXIT_OK
@@ -334,15 +336,15 @@ def test_full_learning_journey(tmp_path: Path, capsys: pytest.CaptureFixture[str
     # Next supply for B's repository is now empty
     supply_argv_after_narrow = [
         "supply",
-        "--state-dir",
-        str(state_dir),
-        "--workspace",
-        WORKSPACE,
         "--work-key",
         "TASK-B-LATER",
         "--cwd",
         str(repo_b),
         "--json",
+        "--state-dir",
+        str(state_dir),
+        "--workspace",
+        WORKSPACE,
     ]
     rc = cli_main(supply_argv_after_narrow, store=store)
     assert rc == EXIT_OK

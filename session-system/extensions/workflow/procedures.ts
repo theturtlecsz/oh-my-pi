@@ -50,6 +50,34 @@ export const spawnRunner: ProcedureRunner = (command, options) => {
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const ENV_VAR_NAME = "OMP_KNOWLEDGE_LEARNING_CMD";
+const MODULE_TOKEN = "omp_knowledge.learning";
+const SUPPLY_FLAGS = new Set(["--state-dir", "--workspace", "--work-key", "--project-id", "--cwd", "--limit", "--json"]);
+
+// The learning CLI is `python -m omp_knowledge.learning <subcommand> ...`; argparse only accepts
+// `--state-dir`/`--workspace` on the `supply` subparser, so the subcommand must be spliced in ahead
+// of whichever flags the operator folded into OMP_KNOWLEDGE_LEARNING_CMD — not appended after them.
+function buildSupplyCommand(baseCmd: string[], input: ProcedureInput): string[] {
+	const args = ["--work-key", input.workKey];
+	if (input.projectId && input.projectId.trim() !== "") {
+		args.push("--project-id", input.projectId);
+	}
+	args.push("--cwd", input.cwd, "--json");
+
+	const existingSupply = baseCmd.indexOf("supply");
+	if (existingSupply >= 0) {
+		return [...baseCmd.slice(0, existingSupply + 1), ...args, ...baseCmd.slice(existingSupply + 1)];
+	}
+
+	const moduleIndex = baseCmd.findIndex(token => token === MODULE_TOKEN || token.endsWith(`/${MODULE_TOKEN}`));
+	let insertAt = moduleIndex >= 0 ? moduleIndex + 1 : baseCmd.length;
+	if (moduleIndex < 0) {
+		const flagIndex = baseCmd.findIndex(token => SUPPLY_FLAGS.has(token));
+		if (flagIndex >= 0) {
+			insertAt = flagIndex;
+		}
+	}
+	return [...baseCmd.slice(0, insertAt), "supply", ...args, ...baseCmd.slice(insertAt)];
+}
 
 export async function procedureDigestLines(
 	input: ProcedureInput,
@@ -73,11 +101,7 @@ export async function procedureDigestLines(
 			return ["PROCEDURES: unavailable (invalid OMP_KNOWLEDGE_LEARNING_CMD)"];
 		}
 
-		const fullCommand = [...baseCmd, "supply", "--work-key", input.workKey];
-		if (input.projectId && input.projectId.trim() !== "") {
-			fullCommand.push("--project-id", input.projectId);
-		}
-		fullCommand.push("--cwd", input.cwd, "--json");
+		const fullCommand = buildSupplyCommand(baseCmd, input);
 
 		const runner = deps?.run ?? spawnRunner;
 
