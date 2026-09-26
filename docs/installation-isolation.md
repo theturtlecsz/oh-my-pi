@@ -131,10 +131,13 @@ disposable PostgreSQL. It compares resident and fresh CLI behavior after
 candidate edits and configuration poisoning, and rejects an altered artifact.
 Missing installation inputs produce explicit pytest skips; skips do not qualify
 a release. Required promotion automation must supply both inputs and reject skips.
-CI retains the full installation manifest, installed-test JUnit report, and
-controller fault/effect evidence in its
-`installed-runtime-qualification` artifact, including available evidence on failed
-runs. A manifest alone or an absent/skipped test report does not qualify a release.
+CI retains the full installation manifest and installed-test JUnit report in its
+`installed-runtime-qualification` artifact on every run, and uploads the
+controller fault/effect evidence separately as
+`installed-runtime-evidence-<run_id>-<attempt>` on failed runs and on runs that
+execute full qualification mode. Release qualification always runs full mode;
+other events select subset or full from the event and changed paths. A manifest
+alone or an absent/skipped test report does not qualify a release.
 
 Two controller recovery cases cover queued resume and the finalized-candidate
 review boundary using actual persisted sessions, SIGKILL/restart, local provider
