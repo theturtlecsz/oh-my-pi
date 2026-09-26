@@ -160,7 +160,7 @@ class ResearchStoreMixin:
     ) -> dict[str, object]:
         payload = envelope.command.payload
         cur.execute(
-            f"SELECT {_CAMPAIGN_FIELDS} FROM omp_research.campaigns WHERE workspace_id=%s AND campaign_id=%s",
+            f"SELECT {_CAMPAIGN_FIELDS} FROM omp_research.campaigns WHERE workspace_id=%s AND campaign_id=%s",  # nosec B608 - static column fields
             (envelope.workspace_id, payload.campaign_id),
         )
         existing = cur.fetchone()
@@ -270,7 +270,7 @@ class ResearchStoreMixin:
                 %s, %s, NULL, 'draft', NULL,
                 clock_timestamp(), NULL, NULL
             ) RETURNING {_CAMPAIGN_FIELDS}
-            """,
+            """,  # nosec B608 - static column fields
             (
                 payload.campaign_id,
                 envelope.workspace_id,
@@ -299,7 +299,7 @@ class ResearchStoreMixin:
             )
 
         cur.execute(
-            f"SELECT {_COMPONENT_FIELDS} FROM omp_research.components WHERE workspace_id=%s AND component_sha256=%s",
+            f"SELECT {_COMPONENT_FIELDS} FROM omp_research.components WHERE workspace_id=%s AND component_sha256=%s",  # nosec B608 - static column fields
             (envelope.workspace_id, payload.component_sha256),
         )
         existing = cur.fetchone()
@@ -577,7 +577,7 @@ class ResearchStoreMixin:
             else str(payload.action)
         )
         cur.execute(
-            f"SELECT {_TRIAL_FIELDS} FROM omp_research.trials WHERE workspace_id=%s AND trial_id=%s",
+            f"SELECT {_TRIAL_FIELDS} FROM omp_research.trials WHERE workspace_id=%s AND trial_id=%s",  # nosec B608 - static column fields
             (envelope.workspace_id, payload.trial_id),
         )
         existing = cur.fetchone()
@@ -753,7 +753,7 @@ class ResearchStoreMixin:
     ) -> dict[str, object]:
         payload: RecordResearchObservationPayload = envelope.command.payload
         cur.execute(
-            f"SELECT {_OBSERVATION_FIELDS} FROM omp_research.observations WHERE workspace_id=%s AND observation_id=%s",
+            f"SELECT {_OBSERVATION_FIELDS} FROM omp_research.observations WHERE workspace_id=%s AND observation_id=%s",  # nosec B608 - static column fields
             (envelope.workspace_id, payload.observation_id),
         )
         existing = cur.fetchone()
@@ -775,7 +775,7 @@ class ResearchStoreMixin:
             else str(payload.issuer_kind)
         )
         cur.execute(
-            f"SELECT {_OBSERVATION_FIELDS} FROM omp_research.observations WHERE workspace_id=%s AND issuer_kind=%s AND source_ref=%s",
+            f"SELECT {_OBSERVATION_FIELDS} FROM omp_research.observations WHERE workspace_id=%s AND issuer_kind=%s AND source_ref=%s",  # nosec B608 - static column fields
             (envelope.workspace_id, issuer_kind_val, payload.source_ref),
         )
         ref_existing = cur.fetchone()
@@ -896,7 +896,7 @@ class ResearchStoreMixin:
     ) -> dict[str, object]:
         payload = envelope.command.payload
         cur.execute(
-            f"SELECT {_DELIVERABLE_BINDING_FIELDS} FROM omp_research.deliverable_bindings WHERE workspace_id=%s AND trial_id=%s",
+            f"SELECT {_DELIVERABLE_BINDING_FIELDS} FROM omp_research.deliverable_bindings WHERE workspace_id=%s AND trial_id=%s",  # nosec B608 - static column fields
             (envelope.workspace_id, payload.trial_id),
         )
         existing = cur.fetchone()
@@ -1192,22 +1192,22 @@ class ResearchStoreMixin:
         self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, work_id: UUID
     ) -> dict[str, object]:
         cur.execute(
-            f"SELECT {_CAMPAIGN_FIELDS} FROM omp_research.campaigns WHERE workspace_id=%s AND work_id=%s ORDER BY created_at, campaign_id LIMIT 20",
+            f"SELECT {_CAMPAIGN_FIELDS} FROM omp_research.campaigns WHERE workspace_id=%s AND work_id=%s ORDER BY created_at, campaign_id LIMIT 20",  # nosec B608 - static column fields
             (workspace_id, work_id),
         )
         campaigns = [_campaign_json(dict(r)) for r in cur.fetchall()]
         cur.execute(
-            f"SELECT {_TRIAL_FIELDS} FROM omp_research.trials WHERE workspace_id=%s AND work_id=%s ORDER BY proposed_at, trial_id LIMIT 200",
+            f"SELECT {_TRIAL_FIELDS} FROM omp_research.trials WHERE workspace_id=%s AND work_id=%s ORDER BY proposed_at, trial_id LIMIT 200",  # nosec B608 - static column fields
             (workspace_id, work_id),
         )
         trials = [_trial_json(dict(r)) for r in cur.fetchall()]
         cur.execute(
-            f"SELECT {_OBSERVATION_FIELDS} FROM omp_research.observations WHERE workspace_id=%s AND campaign_id IN (SELECT campaign_id FROM omp_research.campaigns WHERE workspace_id=%s AND work_id=%s) ORDER BY observed_at DESC, observation_id LIMIT 200",
+            f"SELECT {_OBSERVATION_FIELDS} FROM omp_research.observations WHERE workspace_id=%s AND campaign_id IN (SELECT campaign_id FROM omp_research.campaigns WHERE workspace_id=%s AND work_id=%s) ORDER BY observed_at DESC, observation_id LIMIT 200",  # nosec B608 - static column fields
             (workspace_id, workspace_id, work_id),
         )
         observations = [_observation_json(dict(r)) for r in cur.fetchall()]
         cur.execute(
-            f"SELECT {_DELIVERABLE_BINDING_FIELDS} FROM omp_research.deliverable_bindings WHERE workspace_id=%s AND work_id=%s ORDER BY bound_at, trial_id LIMIT 200",
+            f"SELECT {_DELIVERABLE_BINDING_FIELDS} FROM omp_research.deliverable_bindings WHERE workspace_id=%s AND work_id=%s ORDER BY bound_at, trial_id LIMIT 200",  # nosec B608 - static column fields
             (workspace_id, work_id),
         )
         deliverable_bindings = [
@@ -1224,7 +1224,7 @@ class ResearchStoreMixin:
                         comp_hashes.add(h)
         if comp_hashes:
             cur.execute(
-                f"SELECT {_COMPONENT_FIELDS} FROM omp_research.components WHERE workspace_id=%s AND component_sha256 = ANY(%s) ORDER BY component_sha256",
+                f"SELECT {_COMPONENT_FIELDS} FROM omp_research.components WHERE workspace_id=%s AND component_sha256 = ANY(%s) ORDER BY component_sha256",  # nosec B608 - static column fields
                 (workspace_id, list(comp_hashes)),
             )
             components = [_component_json(dict(r)) for r in cur.fetchall()]
