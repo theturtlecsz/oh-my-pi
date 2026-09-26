@@ -1,6 +1,7 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { DEFAULT_SHARE_URL } from "@oh-my-pi/pi-wire";
 import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
+import { ADVISOR_SUPERVISION_PATHS } from "../advisor/supervision-pipeline";
 import {
 	type BlobDestinationId,
 	type BlobDestinationMetadata,
@@ -596,6 +597,15 @@ export const SETTINGS_SCHEMA = {
 			],
 			condition: "advisorEnabled",
 		},
+	},
+	"advisor.supervisionPath": {
+		type: "enum",
+		values: ADVISOR_SUPERVISION_PATHS,
+		default: "legacy",
+	},
+	"advisor.supervisionCanaryMaxDivergences": {
+		type: "number",
+		default: 0,
 	},
 	shellPath: { type: "string", default: undefined },
 	"git.enabled": {

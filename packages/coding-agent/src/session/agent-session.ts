@@ -101,7 +101,12 @@ import {
 	untilAborted,
 	withTimeout,
 } from "@oh-my-pi/pi-utils";
-import { type AdvisorConfig, type AdvisorRuntimeStatus, loadAdvisorTranscriptCosts } from "../advisor";
+import {
+	type AdvisorConfig,
+	type AdvisorRuntimeStatus,
+	type AdvisorSupervisionPipelineReport,
+	loadAdvisorTranscriptCosts,
+} from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
@@ -12795,6 +12800,11 @@ export class AgentSession {
 	 */
 	getAdvisorStats(): AdvisorStats {
 		return this.#advisors.getAdvisorStats();
+	}
+
+	/** Per-advisor supervision path, authority, and arm counts for the live roster. */
+	getAdvisorSupervisionReport(): { name: string; report: AdvisorSupervisionPipelineReport }[] {
+		return this.#advisors.getAdvisorSupervisionReport();
 	}
 
 	/**
