@@ -99,6 +99,7 @@ function createContext(overrides?: {
 	enabledToolNames?: string[];
 }) {
 	const tempDir = TempDir.createSync("@omp-tan-controller-");
+	createdTempDirs.push(tempDir);
 	const parentFile = path.join(tempDir.path(), "parent.jsonl");
 	// The clone nests inside the parent's artifact directory, like a subagent.
 	const cloneFile = path.join(parentFile.slice(0, -6), "clone.jsonl");
@@ -174,9 +175,12 @@ function createContext(overrides?: {
 	};
 }
 
+const createdTempDirs: TempDir[] = [];
+
 describe("TanCommandController", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		for (const dir of createdTempDirs.splice(0)) dir.removeSync();
 	});
 
 	it("rejects empty work before forking", async () => {

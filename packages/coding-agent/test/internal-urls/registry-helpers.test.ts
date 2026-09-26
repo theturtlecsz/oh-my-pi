@@ -11,9 +11,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	artifactsDirsFromRegistry,
 	hasResolvableTranscript,
 	registerArtifactsDir,
 	resetRegisteredArtifactDirsForTests,
+	takeRegisteredArtifactDirsForTests,
 } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -117,5 +119,30 @@ describe("hasResolvableTranscript", () => {
 			status: "running",
 		});
 		expect(await hasResolvableTranscript("__advisor1")).toBe(false);
+	});
+});
+
+describe("takeRegisteredArtifactDirsForTests", () => {
+	beforeEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		resetRegisteredArtifactDirsForTests();
+	});
+	afterEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		resetRegisteredArtifactDirsForTests();
+	});
+
+	it("returns the registered extra dirs and clears them from the registry", () => {
+		registerArtifactsDir("/tmp/omp-eval-agent-one");
+		registerArtifactsDir("/tmp/omp-eval-agent-two");
+
+		expect(takeRegisteredArtifactDirsForTests().sort()).toEqual([
+			"/tmp/omp-eval-agent-one",
+			"/tmp/omp-eval-agent-two",
+		]);
+		// Taken dirs are gone: a second take yields nothing, and the registry no
+		// longer advertises them, so the caller owns their deletion.
+		expect(takeRegisteredArtifactDirsForTests()).toEqual([]);
+		expect(artifactsDirsFromRegistry()).not.toContain("/tmp/omp-eval-agent-one");
 	});
 });

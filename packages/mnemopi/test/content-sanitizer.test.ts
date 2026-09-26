@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,7 +15,10 @@ import {
 
 const ORIGINAL_BLOB_DIR = process.env.MNEMOPI_BLOB_DIR;
 
+const tempDirs: string[] = [];
+
 afterEach(() => {
+	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	if (ORIGINAL_BLOB_DIR === undefined) {
 		delete process.env.MNEMOPI_BLOB_DIR;
 	} else {
@@ -25,6 +28,7 @@ afterEach(() => {
 
 function useTempBlobDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "mnemopi-blobs-"));
+	tempDirs.push(dir);
 	process.env.MNEMOPI_BLOB_DIR = join(dir, "blobs");
 	return process.env.MNEMOPI_BLOB_DIR;
 }

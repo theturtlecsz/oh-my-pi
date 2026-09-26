@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -38,8 +38,15 @@ interface RevisePayloadData {
 	};
 }
 
+const temporaryCacheDirs: string[] = [];
+
+afterEach(() => {
+	for (const dir of temporaryCacheDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function temporaryCacheFile(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-revise-cache-"));
+	temporaryCacheDirs.push(dir);
 	return path.join(dir, "cache.json");
 }
 
