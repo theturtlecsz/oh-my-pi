@@ -140,6 +140,11 @@ docs/report/omp-milestone-20260915-work-contract.md	fork-only	added	a22a8c191eee
 docs/report/omp-programme-grill-2026-09-18.md	fork-only	added	b69c741c0e4f	OMP-325: OMP programme grill; copied byte-identical from /home/thetu/oh-my-pi/docs/report/omp-programme-grill-2026-09-18.md	retained
 docs/report/verification.json	fork-only	added	edffe3919cc7	OMP-325: architecture verification quick-mode output stub; copied byte-identical from /home/thetu/oh-my-pi/docs/report/verification.json	retained
 docs/report/verification.md	fork-only	added	3591c586ecf2	OMP-325: architecture verification report stub; copied byte-identical from /home/thetu/oh-my-pi/docs/report/verification.md	retained
+docs/reports/jev-measurement/build-sets.ts	fork-only	added	6f9d881f093d	OMP-298-s06: CLI to extract prompts, turn ends, and issue evaluation sets from sessions and robomp database	retained
+docs/reports/jev-measurement/harness.ts	fork-only	added	291873709f75	OMP-298-s06: measurement harness and verdict evaluator comparing current smol classifiers and robomp prefilter against Jev typed decisions	retained
+docs/reports/jev-measurement/index.ts	fork-only	added	31382acd7808	OMP-298-s06: exports for Jev measurement harness, build sets, and verdict evaluation	retained
+docs/reports/jev-measurement/report-template.md	fork-only	added	5895491dffde	OMP-298-s06: Markdown report template for Jev vs current classifier measurement metrics and verdict	retained
+docs/reports/jev-measurement/run.ts	fork-only	added	f3daefaad496	OMP-298-s06: CLI runner evaluating measurement sets, generating results.json, and rendering jev-measurement-report.md	retained
 docs/upstream-18.0.6-changelog.tsv	fork-only	added	ec9a00c04da9	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-matrix.tsv	fork-only	added	0b52aac14438	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; feat(omp-156): pre-merge inventory oracle and safe update driver	retained
 docs/upstream-18.0.6-fork-sources.tsv	fork-only	added	a3afa2e62165	feat(omp-156): pre-merge inventory oracle and safe update driver	retained
@@ -351,6 +356,7 @@ packages/coding-agent/test/issue-4324-repro.test.ts	shared	modified	37b3b88ca3be
 packages/coding-agent/test/issue-9597-cold-launch-double-clear.test.ts	shared	modified	dd4355cbb2be	OMP-217: Wait for the resumed transcript through adaptive render delay; retain reset/header/marker assertions; checks: controlled slow-write before/after, issue-9597, CI native bucket, ci:check:full	retained
 packages/coding-agent/test/jev/auto-thinking-jev.test.ts	fork-only	added	fddfd0936bbf	OMP-298-s02: tests for Jev auto-thinking classification covering flags off, stub high, threshold, max signals, 500/timeout/malformed fallback and usage reporting	retained
 packages/coding-agent/test/jev/jev-client.test.ts	fork-only	added	7226caf7f8fe	OMP-298-s01-s01: tests for Jev decide client covering success, 500 retry, timeout, malformed, off-list, truncation and disabled states; OMP-298-s01-s02: tests for circuit breaker, cooldown, success reset, choice/yesno wrappers and disabled states	retained
+packages/coding-agent/test/jev/measurement-harness.test.ts	fork-only	added	ad21554fbe6e	OMP-298-s06: tests for measurement dataset extraction, verdict branches, and end-to-end report generation	retained
 packages/coding-agent/test/jev/stub-jev-server.ts	fork-only	added	b72d3659c6b1	OMP-298-s01-s01: stub Jev HTTP decision server supporting ok, 500, delay, malformed and off-list modes for testing	retained
 packages/coding-agent/test/jev/unexpected-stop-jev.test.ts	fork-only	added	b29bfaa2c34a	OMP-298-s03: tests for Jev unexpected-stop classification covering flags off, probability threshold, failure fallbacks with warn logging, and jev_usage recording	retained
 packages/coding-agent/test/launch/broker-idle-shutdown.test.ts	shared	modified	fdc67e7e7b2c	OMP-246 CI: Hold startup presence until child admission, then prove live child retention and idle exit without authentication timing races	retained
@@ -650,6 +656,7 @@ python/robomp/src/db.py	shared	modified	810e24fcfe38	feat(robomp): add jev_calls
 python/robomp/src/host_tools.py	shared	modified	be4c73beab3c	feat(robomp): remove provisional labels on issue classification	retained
 python/robomp/src/jev_client.py	fork-only	added	b30f0c1c09b3	feat(robomp): async httpx client for Jev typed decisions endpoint	retained
 python/robomp/src/prefilter.py	fork-only	added	a7eef097b1e0	feat(robomp): issue prefilter evaluating Jev typed decisions before session	retained
+python/robomp/src/prefilter_eval.py	fork-only	added	45bc60a59324	OMP-298-s06: evaluation CLI and metric calculator for robomp issue prefilter confident accuracy and skip session share	retained
 python/robomp/src/prompts/prefilter_answer_batch_audit.md	fork-only	added	d4561dd11368	feat(robomp): prefilter provisional response template for batch audit issues	retained
 python/robomp/src/prompts/prefilter_answer_invalid.md	fork-only	added	d552e78355a7	feat(robomp): prefilter provisional response template for invalid issues	retained
 python/robomp/src/prompts/prefilter_answer_question.md	fork-only	added	49961e085e71	feat(robomp): prefilter provisional response template for question issues	retained
@@ -658,6 +665,7 @@ python/robomp/src/tasks.py	shared	modified	7dc4cda2bdc9	feat(robomp): evaluate i
 python/robomp/tests/jev_stub.py	fork-only	added	1c425f8c003f	test(robomp): mock transport stub for Jev systemone server	retained
 python/robomp/tests/test_jev_client.py	fork-only	added	07ffcdbb02b7	test(robomp): test suite for JevClient client contract and breaker	retained
 python/robomp/tests/test_prefilter.py	fork-only	added	3c697e3f3576	test(robomp): test suite for issue prefiltering and route outcomes	retained
+python/robomp/tests/test_prefilter_eval.py	fork-only	added	5783ac9d717f	OMP-298-s06: unit tests for robomp prefilter evaluation metric calculation and CLI runner	retained
 python/robomp/tests/test_tasks_prefilter.py	fork-only	added	ce0f2441a07c	test(robomp): test suite for issue prefiltering and provisional label cleanup	retained
 python/robomp/uv.lock	fork-only	added	5fd65f395c82	test(robomp): align queue and worker tests with reminder behavior	retained
 reanalyzed-omp-programs-v7.zip	fork-only	added	8db9e2905dc6	session candidate: OMP-177; session candidate: OMP-180	retained
