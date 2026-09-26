@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Generator
@@ -45,6 +47,7 @@ class InstalledRelease:
             assert bwrap, "bubblewrap is required for the isolated GitHub fixture"
             return [
                 bwrap,
+                "--die-with-parent",
                 "--bind",
                 "/",
                 "/",
@@ -80,7 +83,25 @@ def _free_port() -> int:
         return int(listener.getsockname()[1])
 
 
+_PR_SET_PDEATHSIG = 1
+
+
+def _set_pdeathsig(signum: int) -> None:
+    if sys.platform != "linux":
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(_PR_SET_PDEATHSIG, signum, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_PDEATHSIG)")
+
+
 def _run(arguments: list[str], cwd: Path, env: dict[str, str]) -> str:
+    parent_pid = os.getpid()
+
+    def _preexec() -> None:
+        _set_pdeathsig(signal.SIGTERM)
+        if os.getppid() != parent_pid:
+            os.kill(os.getpid(), signal.SIGKILL)
+
     result = subprocess.run(
         check=False,
         args=arguments,
@@ -89,6 +110,7 @@ def _run(arguments: list[str], cwd: Path, env: dict[str, str]) -> str:
         capture_output=True,
         text=True,
         timeout=120,
+        preexec_fn=_preexec,
     )
     assert result.returncode == 0, result.stderr[-6000:]
     return result.stdout
@@ -98,6 +120,13 @@ def _run(arguments: list[str], cwd: Path, env: dict[str, str]) -> str:
 def _process(
     arguments: list[str], cwd: Path, env: dict[str, str], log: Path
 ) -> Generator[subprocess.Popen[str]]:
+    parent_pid = os.getpid()
+
+    def _preexec() -> None:
+        _set_pdeathsig(signal.SIGTERM)
+        if os.getppid() != parent_pid:
+            os.kill(os.getpid(), signal.SIGKILL)
+
     with log.open("w") as stderr:
         child = subprocess.Popen(
             arguments,
@@ -109,6 +138,7 @@ def _process(
             text=True,
             bufsize=1,
             start_new_session=True,
+            preexec_fn=_preexec,  # noqa: PLW1509
         )
         try:
             yield child
