@@ -350,6 +350,13 @@ class PostgresWorkStore(ResearchStoreMixin):
             "skip_active_item",
             "complete_work",
             "record_external_delivery",
+            "register_research_artifact",
+            "collect_research_artifact",
+            "register_research_source",
+            "register_research_dataset",
+            "record_research_cache",
+            "claim_research_replicate",
+            "bind_research_receipt_manifest",
             "register_research_component",
             "create_research_campaign",
             "admit_research_campaign",
@@ -448,6 +455,20 @@ class PostgresWorkStore(ResearchStoreMixin):
                     result = self._cancel_auditor_launch(cur, envelope)
                 elif command.type == "settle_auditor_launch":
                     result = self._settle_auditor_launch(cur, envelope)
+                elif command.type == "register_research_artifact":
+                    result = self._register_research_artifact(cur, envelope)
+                elif command.type == "collect_research_artifact":
+                    result = self._collect_research_artifact(cur, envelope)
+                elif command.type == "register_research_source":
+                    result = self._register_research_source(cur, envelope)
+                elif command.type == "register_research_dataset":
+                    result = self._register_research_dataset(cur, envelope)
+                elif command.type == "record_research_cache":
+                    result = self._record_research_cache(cur, envelope)
+                elif command.type == "claim_research_replicate":
+                    result = self._claim_research_replicate(cur, envelope)
+                elif command.type == "bind_research_receipt_manifest":
+                    result = self._bind_research_receipt_manifest(cur, envelope)
                 elif command.type == "register_research_component":
                     result = self._register_research_component(cur, envelope)
                 elif command.type == "create_research_campaign":
@@ -6198,6 +6219,12 @@ class PostgresWorkStore(ResearchStoreMixin):
                     candidate_allowlist=candidate_allowlist,
                 )
                 return self._research_view(cur, workspace_id, item["work_id"])
+            if kind == "research_artifact":
+                return self._research_artifact_view(cur, workspace_id, value)
+            if kind == "research_source":
+                return self._research_source_view(cur, workspace_id, value)
+            if kind == "research_dataset":
+                return self._research_dataset_view(cur, workspace_id, value)
             if kind == "tree":
                 cur.execute(
                     "SELECT a.key FROM omp_work.work_items i JOIN omp_work.work_aliases a ON a.work_id=i.work_id AND a.primary_alias WHERE i.workspace_id=%s ORDER BY a.key LIMIT 1000",

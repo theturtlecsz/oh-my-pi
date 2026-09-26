@@ -134,6 +134,7 @@ export interface JevUsageEntry {
 	serverId?: string;
 	feature: string;
 	outcome: JevOutcome;
+	status?: number;
 	latencyMs: number;
 	stateChars: number;
 	truncated: boolean;
@@ -319,9 +320,9 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 				body: JSON.stringify(body),
 				signal: controller.signal,
 			});
+			status = response.status;
 			if (!response.ok) {
 				outcome = "http_error";
-				status = response.status;
 			} else {
 				let json: unknown;
 				try {
@@ -352,6 +353,7 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 			serverId,
 			feature,
 			outcome,
+			status,
 			latencyMs: lastLatencyMs,
 			stateChars,
 			truncated,

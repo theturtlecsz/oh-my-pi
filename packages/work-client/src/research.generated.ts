@@ -43,6 +43,25 @@ export type BindResearchDeliverableResult = {
 	type: "bind_research_deliverable";
 };
 
+export type BindResearchReceiptManifestCommand = {
+	payload: BindResearchReceiptManifestPayload;
+	type: "bind_research_receipt_manifest";
+};
+
+export type BindResearchReceiptManifestPayload = {
+	artifact_sha256: string;
+	manifest_sha256: string;
+	receipt_id: string;
+};
+
+export type BindResearchReceiptManifestResult = {
+	artifact_sha256: string;
+	manifest_sha256: string;
+	receipt_id: string;
+	status: "applied" | "replayed";
+	type: "bind_research_receipt_manifest";
+};
+
 export type CancelResearchCampaignCommand = {
 	payload: CancelResearchCampaignPayload;
 	type: "cancel_research_campaign";
@@ -58,6 +77,39 @@ export type CancelResearchCampaignResult = {
 	campaign: ResearchCampaign;
 	status: "applied" | "replayed";
 	type: "cancel_research_campaign";
+};
+
+export type ClaimResearchReplicateCommand = {
+	payload: ClaimResearchReplicatePayload;
+	type: "claim_research_replicate";
+};
+
+export type ClaimResearchReplicatePayload = {
+	artifact_sha256: string;
+};
+
+export type ClaimResearchReplicateResult = {
+	artifact_sha256: string;
+	status: "applied" | "replayed";
+	type: "claim_research_replicate";
+};
+
+export type CollectResearchArtifactCommand = {
+	payload: CollectResearchArtifactPayload;
+	type: "collect_research_artifact";
+};
+
+export type CollectResearchArtifactPayload = {
+	archive_member?: string | null;
+	manifest: ResearchArtifactManifest;
+	manifest_sha256: string;
+	relative_path: string;
+};
+
+export type CollectResearchArtifactResult = {
+	artifact: ResearchArtifact;
+	status: "applied" | "replayed";
+	type: "collect_research_artifact";
 };
 
 export type ConcludeResearchCampaignCommand = {
@@ -128,6 +180,23 @@ export type ProposeResearchTrialResult = {
 	type: "propose_research_trial";
 };
 
+export type RecordResearchCacheCommand = {
+	payload: RecordResearchCachePayload;
+	type: "record_research_cache";
+};
+
+export type RecordResearchCachePayload = {
+	artifact_sha256: string;
+	cache_key: string;
+};
+
+export type RecordResearchCacheResult = {
+	artifact_sha256: string;
+	cache_key: string;
+	status: "applied" | "replayed";
+	type: "record_research_cache";
+};
+
 export type RecordResearchObservationCommand = {
 	payload: RecordResearchObservationPayload;
 	type: "record_research_observation";
@@ -152,6 +221,23 @@ export type RecordResearchObservationResult = {
 	type: "record_research_observation";
 };
 
+export type RegisterResearchArtifactCommand = {
+	payload: RegisterResearchArtifactPayload;
+	type: "register_research_artifact";
+};
+
+export type RegisterResearchArtifactPayload = {
+	content_base64: string;
+	manifest: ResearchArtifactManifest;
+	manifest_sha256: string;
+};
+
+export type RegisterResearchArtifactResult = {
+	artifact: ResearchArtifact;
+	status: "applied" | "replayed";
+	type: "register_research_artifact";
+};
+
 export type RegisterResearchComponentCommand = {
 	payload: RegisterResearchComponentPayload;
 	type: "register_research_component";
@@ -168,6 +254,38 @@ export type RegisterResearchComponentResult = {
 	type: "register_research_component";
 };
 
+export type RegisterResearchDatasetCommand = {
+	payload: RegisterResearchDatasetPayload;
+	type: "register_research_dataset";
+};
+
+export type RegisterResearchDatasetPayload = {
+	manifest: ResearchDatasetManifest;
+	manifest_sha256: string;
+};
+
+export type RegisterResearchDatasetResult = {
+	dataset: ResearchDataset;
+	status: "applied" | "replayed";
+	type: "register_research_dataset";
+};
+
+export type RegisterResearchSourceCommand = {
+	payload: RegisterResearchSourcePayload;
+	type: "register_research_source";
+};
+
+export type RegisterResearchSourcePayload = {
+	manifest: ResearchSourceManifest;
+	manifest_sha256: string;
+};
+
+export type RegisterResearchSourceResult = {
+	source: ResearchSource;
+	status: "applied" | "replayed";
+	type: "register_research_source";
+};
+
 export type ResearchAction =
 	| "retrieve"
 	| "draft"
@@ -182,6 +300,32 @@ export type ResearchAction =
 	| "synthesize"
 	| "escalate"
 	| "conclude";
+
+export type ResearchArtifact = {
+	artifact_sha256: string;
+	manifest: ResearchArtifactManifest;
+	manifest_sha256: string;
+	registered_at: string;
+	registered_by: string;
+	workspace_id: string;
+};
+
+export type ResearchArtifactContentView = {
+	artifact: ResearchArtifact;
+	content_base64: string;
+};
+
+export type ResearchArtifactManifest = {
+	access_class: "workspace";
+	artifact_sha256: string;
+	contract_version: "research-artifact.v1";
+	issuer_kind: "legacy_autoresearch" | "candidate_authored";
+	media_type: string;
+	name: string;
+	size_bytes: number;
+	source_ref: string;
+	valid_until?: string | null;
+};
 
 export type ResearchBlockedDependency = {
 	kind: "work_item" | "budget_scope" | "capability" | "external";
@@ -251,6 +395,33 @@ export type ResearchComponentDescriptor = {
 
 export type ResearchComponentKind = "worker" | "evaluator" | "policy" | "audit" | "release" | "environment";
 
+export type ResearchDataset = {
+	artifact_sha256?: string | null;
+	dataset_id: string;
+	manifest: ResearchDatasetManifest;
+	manifest_sha256: string;
+	registered_at: string;
+	registered_by: string;
+	source_id: string;
+	workspace_id: string;
+};
+
+export type ResearchDatasetManifest = {
+	access: ResearchSourceAccess;
+	artifact_sha256?: string | null;
+	contract_version: "research-dataset.v1";
+	dataset_id: string;
+	retention_until?: string | null;
+	snapshot_sha256: string;
+	source_id: string;
+	version: string;
+};
+
+export type ResearchDatasetView = {
+	content_base64?: string | null;
+	dataset: ResearchDataset;
+};
+
 export type ResearchDeliverableBinding = {
 	binding_sha256: string;
 	bound_at: string;
@@ -310,6 +481,39 @@ export type ResearchRole =
 	| "native_auditor"
 	| "synthesizer";
 
+export type ResearchSource = {
+	artifact_sha256?: string | null;
+	manifest: ResearchSourceManifest;
+	manifest_sha256: string;
+	registered_at: string;
+	registered_by: string;
+	source_id: string;
+	status: "ok" | "inaccessible";
+	workspace_id: string;
+};
+
+export type ResearchSourceAccess = {
+	access_class: "workspace" | "project";
+	decision?: "allow" | "deny" | null;
+	project_id?: string | null;
+};
+
+export type ResearchSourceManifest = {
+	access: ResearchSourceAccess;
+	artifact_sha256?: string | null;
+	contract_version: "research-source.v1";
+	location: string;
+	retention_until?: string | null;
+	source_id: string;
+	status: "ok" | "inaccessible";
+	version: string;
+};
+
+export type ResearchSourceView = {
+	content_base64?: string | null;
+	source: ResearchSource;
+};
+
 export type ResearchTrial = {
 	action?: ResearchAction | null;
 	archived_at?: string | null;
@@ -334,6 +538,7 @@ export type ResearchTrial = {
 };
 
 export type ResearchView = {
+	artifacts: ResearchArtifact[];
 	campaigns: ResearchCampaign[];
 	components?: ResearchComponent[];
 	deliverable_bindings: ResearchDeliverableBinding[];

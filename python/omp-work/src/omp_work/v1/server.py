@@ -193,6 +193,44 @@ def create_app(
     ) -> JSONResponse:
         return read_route(request, x_omp_workspace_id, "research", key)
 
+    @app.get("/v1/workspaces/{workspace_id}/research-artifacts/{artifact_sha256}")
+    def research_artifact(
+        request: Request, workspace_id: UUID, artifact_sha256: str
+    ) -> JSONResponse:
+        return read_route(request, workspace_id, "research_artifact", artifact_sha256)
+
+    @app.get("/v1/workspaces/{workspace_id}/research-sources/{source_id}")
+    def research_source(
+        request: Request, workspace_id: UUID, source_id: UUID
+    ) -> JSONResponse:
+        return read_route(request, workspace_id, "research_source", str(source_id))
+
+    @app.get(
+        "/v1/workspaces/{workspace_id}/research-sources/{source_id}/projects/{project_id}"
+    )
+    def research_source_project(
+        request: Request, workspace_id: UUID, source_id: UUID, project_id: UUID
+    ) -> JSONResponse:
+        return read_route(
+            request, workspace_id, "research_source", f"{source_id}/{project_id}"
+        )
+
+    @app.get("/v1/workspaces/{workspace_id}/research-datasets/{dataset_id}")
+    def research_dataset(
+        request: Request, workspace_id: UUID, dataset_id: UUID
+    ) -> JSONResponse:
+        return read_route(request, workspace_id, "research_dataset", str(dataset_id))
+
+    @app.get(
+        "/v1/workspaces/{workspace_id}/research-datasets/{dataset_id}/projects/{project_id}"
+    )
+    def research_dataset_project(
+        request: Request, workspace_id: UUID, dataset_id: UUID, project_id: UUID
+    ) -> JSONResponse:
+        return read_route(
+            request, workspace_id, "research_dataset", f"{dataset_id}/{project_id}"
+        )
+
     @app.get("/v1/workspaces/{workspace_id}/tree")
     def tree(request: Request, workspace_id: UUID) -> JSONResponse:
         return read_route(request, workspace_id, "tree", "")

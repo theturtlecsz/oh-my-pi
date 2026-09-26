@@ -63,6 +63,13 @@ class WorkService:
         "set_execution_state": "work.execute",
         "complete_execution_item": "work.execute",
         "skip_active_item": "work.execute",
+        "register_research_artifact": "work.execute",
+        "collect_research_artifact": "work.execute",
+        "register_research_source": "work.execute",
+        "register_research_dataset": "work.execute",
+        "record_research_cache": "work.execute",
+        "claim_research_replicate": "work.execute",
+        "bind_research_receipt_manifest": "work.execute",
         "register_research_component": "work.execute",
         "create_research_campaign": "work.execute",
         "admit_research_campaign": "work.approve",
@@ -108,6 +115,7 @@ class WorkService:
                 "intake_admission_blocked": 409,
                 "completion_blocked": 409,
                 "cutover_invariant": 409,
+                "artifact_unavailable": 503,
                 "unavailable": 503,
             }
             raise WorkError(
@@ -165,7 +173,13 @@ class WorkService:
                 candidate_allowlist=allowlist,
             )
         except WorkStoreError as error:
-            statuses = {"invalid_request": 400, "forbidden": 403, "unavailable": 503}
+            statuses = {
+                "invalid_request": 400,
+                "forbidden": 403,
+                "artifact_unavailable": 503,
+                "stale_evidence": 409,
+                "unavailable": 503,
+            }
             raise WorkError(
                 error.code,
                 status=statuses.get(error.code, 409),

@@ -1,16 +1,30 @@
 from __future__ import annotations
 
+import base64
 import json
+import re
 from datetime import UTC, datetime
+from hashlib import sha256 as bytes_sha256
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 import psycopg
 
+from omp_work.operations.artifacts import install_bytes_artifact, read_verified_bytes
+from omp_work.research.custody import (
+    artifact_path,
+    collection_root,
+    load_collected_bytes,
+    replicate_masquerade,
+    retention_expired,
+    retrieval_denied,
+    validate_declared_location,
+)
 from omp_work.v1.canonical import canonical_json, sha256
 from omp_work.v1.models import (
     CommandEnvelope,
     RecordResearchObservationPayload,
+    ResearchArtifactManifest,
     ResearchCompatibilityManifest,
     ResearchComponentKind,
 )
@@ -26,6 +40,19 @@ _TRIAL_FIELDS = "trial_id,workspace_id,campaign_id,work_id,decision_id,candidate
 _OBSERVATION_FIELDS = "observation_id,workspace_id,campaign_id,trial_id,issuer_kind,source_ref,execution_status,commit_sha,payload,payload_sha256,observed_at,recorded_at"
 _DELIVERABLE_BINDING_FIELDS = "trial_id,workspace_id,campaign_id,work_id,revision_id,candidate_digest,native_candidate_id,binding_sha256,bound_at"
 _COMPONENT_FIELDS = "workspace_id,component_sha256,descriptor,kind,registered_at"
+_ARTIFACT_FIELDS = "workspace_id,artifact_sha256,manifest_sha256,manifest,registered_by,registered_at"
+_SOURCE_FIELDS = "workspace_id,source_id,manifest_sha256,manifest,status,artifact_sha256,registered_by,registered_at"
+_DATASET_FIELDS = "workspace_id,dataset_id,manifest_sha256,manifest,source_id,artifact_sha256,registered_by,registered_at"
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _manifest_json(row: dict[str, object] | None) -> dict[str, object] | None:
+    if row is None:
+        return None
+    res = row_json(row)
+    if res is not None and isinstance(res.get("manifest"), str):
+        res["manifest"] = json.loads(res["manifest"])
+    return res
 
 
 def _component_json(row: dict[str, object] | None) -> dict[str, object] | None:
@@ -340,6 +367,425 @@ class ResearchStoreMixin:
             "type": "register_research_component",
             "status": "applied",
             "component": _component_json(row),
+        }
+
+    def _install_artifact_bytes(
+        self, destination, data: bytes, digest: str
+    ) -> None:
+        try:
+            install_bytes_artifact(destination, data, digest)
+        except RuntimeError as err:
+            if str(err) == "artifact_unavailable":
+                raise WorkStoreError(
+                    "artifact_unavailable",
+                    ("corrupt artifact bytes at destination",),
+                ) from err
+            raise
+
+    def _put_research_artifact(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        manifest: ResearchArtifactManifest,
+        manifest_sha256: str,
+        data: bytes,
+        *,
+        result_type: str,
+    ) -> dict[str, object]:
+        if len(data) != manifest.size_bytes:
+            raise WorkStoreError("stale_evidence", ("artifact size mismatch",))
+        if bytes_sha256(data).hexdigest() != manifest.artifact_sha256:
+            raise WorkStoreError("stale_evidence", ("artifact digest mismatch",))
+        manifest_data = manifest.model_dump(mode="json")
+        if sha256(manifest_data) != manifest_sha256:
+            raise WorkStoreError("stale_evidence", ("manifest digest mismatch",))
+        destination = artifact_path(
+            self._config.data_dir, workspace_id, manifest.artifact_sha256
+        )
+        cur.execute(
+            f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",
+            (workspace_id, manifest.artifact_sha256),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            if existing["manifest_sha256"] != manifest_sha256:
+                raise WorkStoreError(
+                    "idempotency_conflict",
+                    ("artifact bytes already registered under a different manifest",),
+                )
+            self._install_artifact_bytes(destination, data, manifest.artifact_sha256)
+            return {
+                "type": result_type,
+                "status": "replayed",
+                "artifact": _manifest_json(existing),
+            }
+        self._install_artifact_bytes(destination, data, manifest.artifact_sha256)
+        cur.execute(
+            f"""
+            INSERT INTO omp_research.artifacts (
+                workspace_id, artifact_sha256, manifest_sha256, manifest
+            ) VALUES (%s, %s, %s, %s)
+            ON CONFLICT (workspace_id, artifact_sha256) DO NOTHING
+            RETURNING {_ARTIFACT_FIELDS}
+            """,
+            (
+                workspace_id,
+                manifest.artifact_sha256,
+                manifest_sha256,
+                canonical_json(manifest_data),
+            ),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",
+                (workspace_id, manifest.artifact_sha256),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise WorkStoreError(
+                    "unavailable", ("concurrent artifact registration vanished",)
+                )
+            if row["manifest_sha256"] != manifest_sha256:
+                raise WorkStoreError(
+                    "idempotency_conflict",
+                    ("artifact bytes already registered under a different manifest",),
+                )
+            return {
+                "type": result_type,
+                "status": "replayed",
+                "artifact": _manifest_json(row),
+            }
+        return {
+            "type": result_type,
+            "status": "applied",
+            "artifact": _manifest_json(row),
+        }
+
+    def _register_research_artifact(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        try:
+            data = base64.b64decode(payload.content_base64, validate=True)
+        except Exception as err:
+            raise WorkStoreError("invalid_request", ("invalid base64 content",)) from err
+        return self._put_research_artifact(
+            cur,
+            envelope.workspace_id,
+            payload.manifest,
+            payload.manifest_sha256,
+            data,
+            result_type="register_research_artifact",
+        )
+
+    def _collect_research_artifact(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        try:
+            data = load_collected_bytes(
+                collection_root(self._config.data_dir, envelope.workspace_id),
+                payload.relative_path,
+                payload.archive_member,
+            )
+        except ValueError as err:
+            raise WorkStoreError("invalid_request", (str(err),)) from err
+        return self._put_research_artifact(
+            cur,
+            envelope.workspace_id,
+            payload.manifest,
+            payload.manifest_sha256,
+            data,
+            result_type="collect_research_artifact",
+        )
+
+    def _require_artifact(
+        self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, digest: str
+    ) -> dict[str, object]:
+        cur.execute(
+            f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",
+            (workspace_id, digest),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise WorkStoreError("invalid_request", ("artifact not registered",))
+        return row
+
+    def _register_research_source(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        manifest = payload.manifest
+        manifest_data = manifest.model_dump(mode="json")
+        if sha256(manifest_data) != payload.manifest_sha256:
+            raise WorkStoreError("stale_evidence", ("manifest digest mismatch",))
+        try:
+            validate_declared_location(manifest.location)
+        except ValueError as err:
+            raise WorkStoreError("invalid_request", (str(err),)) from err
+        if manifest.artifact_sha256 is not None:
+            self._require_artifact(cur, envelope.workspace_id, manifest.artifact_sha256)
+        cur.execute(
+            f"SELECT {_SOURCE_FIELDS} FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",
+            (envelope.workspace_id, manifest.source_id),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            if existing["manifest_sha256"] != payload.manifest_sha256:
+                raise WorkStoreError(
+                    "idempotency_conflict",
+                    ("source already registered under a different manifest",),
+                )
+            return {
+                "type": "register_research_source",
+                "status": "replayed",
+                "source": _manifest_json(existing),
+            }
+        cur.execute(
+            f"""
+            INSERT INTO omp_research.sources (
+                workspace_id, source_id, manifest_sha256, manifest, status, artifact_sha256
+            ) VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (workspace_id, source_id) DO NOTHING
+            RETURNING {_SOURCE_FIELDS}
+            """,
+            (
+                envelope.workspace_id,
+                manifest.source_id,
+                payload.manifest_sha256,
+                canonical_json(manifest_data),
+                manifest.status,
+                manifest.artifact_sha256,
+            ),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                f"SELECT {_SOURCE_FIELDS} FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",
+                (envelope.workspace_id, manifest.source_id),
+            )
+            row = cur.fetchone()
+            if row is None or row["manifest_sha256"] != payload.manifest_sha256:
+                raise WorkStoreError(
+                    "idempotency_conflict",
+                    ("source already registered under a different manifest",),
+                )
+            return {
+                "type": "register_research_source",
+                "status": "replayed",
+                "source": _manifest_json(row),
+            }
+        return {
+            "type": "register_research_source",
+            "status": "applied",
+            "source": _manifest_json(row),
+        }
+
+    def _register_research_dataset(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        manifest = payload.manifest
+        manifest_data = manifest.model_dump(mode="json")
+        if sha256(manifest_data) != payload.manifest_sha256:
+            raise WorkStoreError("stale_evidence", ("manifest digest mismatch",))
+        cur.execute(
+            "SELECT status FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",
+            (envelope.workspace_id, manifest.source_id),
+        )
+        source = cur.fetchone()
+        if source is None:
+            raise WorkStoreError("invalid_request", ("source not registered",))
+        if manifest.artifact_sha256 is not None:
+            if manifest.snapshot_sha256 != manifest.artifact_sha256:
+                raise WorkStoreError(
+                    "stale_evidence",
+                    ("dataset snapshot digest does not match held artifact",),
+                )
+            self._require_artifact(cur, envelope.workspace_id, manifest.artifact_sha256)
+        cur.execute(
+            f"SELECT {_DATASET_FIELDS} FROM omp_research.datasets WHERE workspace_id=%s AND dataset_id=%s",
+            (envelope.workspace_id, manifest.dataset_id),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            if existing["manifest_sha256"] != payload.manifest_sha256:
+                raise WorkStoreError(
+                    "idempotency_conflict",
+                    ("dataset already registered under a different manifest",),
+                )
+            return {
+                "type": "register_research_dataset",
+                "status": "replayed",
+                "dataset": _manifest_json(existing),
+            }
+        cur.execute(
+            f"""
+            INSERT INTO omp_research.datasets (
+                workspace_id, dataset_id, manifest_sha256, manifest, source_id, artifact_sha256
+            ) VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (workspace_id, dataset_id) DO NOTHING
+            RETURNING {_DATASET_FIELDS}
+            """,
+            (
+                envelope.workspace_id,
+                manifest.dataset_id,
+                payload.manifest_sha256,
+                canonical_json(manifest_data),
+                manifest.source_id,
+                manifest.artifact_sha256,
+            ),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                f"SELECT {_DATASET_FIELDS} FROM omp_research.datasets WHERE workspace_id=%s AND dataset_id=%s",
+                (envelope.workspace_id, manifest.dataset_id),
+            )
+            row = cur.fetchone()
+            if row is None or row["manifest_sha256"] != payload.manifest_sha256:
+                raise WorkStoreError(
+                    "idempotency_conflict",
+                    ("dataset already registered under a different manifest",),
+                )
+            return {
+                "type": "register_research_dataset",
+                "status": "replayed",
+                "dataset": _manifest_json(row),
+            }
+        return {
+            "type": "register_research_dataset",
+            "status": "applied",
+            "dataset": _manifest_json(row),
+        }
+
+    def _record_research_cache(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        self._require_artifact(cur, envelope.workspace_id, payload.artifact_sha256)
+        cur.execute(
+            "SELECT artifact_sha256 FROM omp_research.artifact_cache WHERE workspace_id=%s AND cache_key=%s",
+            (envelope.workspace_id, payload.cache_key),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            if existing["artifact_sha256"] != payload.artifact_sha256:
+                raise WorkStoreError(
+                    "idempotency_conflict",
+                    ("cache key already records a different artifact",),
+                )
+            return {
+                "type": "record_research_cache",
+                "status": "replayed",
+                "cache_key": payload.cache_key,
+                "artifact_sha256": payload.artifact_sha256,
+            }
+        cur.execute(
+            """
+            INSERT INTO omp_research.artifact_cache (workspace_id, cache_key, artifact_sha256)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (workspace_id, cache_key) DO NOTHING
+            RETURNING cache_key
+            """,
+            (envelope.workspace_id, payload.cache_key, payload.artifact_sha256),
+        )
+        if cur.fetchone() is None:
+            return {
+                "type": "record_research_cache",
+                "status": "replayed",
+                "cache_key": payload.cache_key,
+                "artifact_sha256": payload.artifact_sha256,
+            }
+        return {
+            "type": "record_research_cache",
+            "status": "applied",
+            "cache_key": payload.cache_key,
+            "artifact_sha256": payload.artifact_sha256,
+        }
+
+    def _claim_research_replicate(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        self._require_artifact(cur, envelope.workspace_id, payload.artifact_sha256)
+        cur.execute(
+            "SELECT 1 FROM omp_research.artifact_cache WHERE workspace_id=%s AND artifact_sha256=%s",
+            (envelope.workspace_id, payload.artifact_sha256),
+        )
+        cached = cur.fetchone() is not None
+        refusal = replicate_masquerade(cached=cached)
+        if refusal is not None:
+            raise WorkStoreError("stale_evidence", (refusal,))
+        cur.execute(
+            """
+            INSERT INTO omp_research.replicate_claims (workspace_id, artifact_sha256)
+            VALUES (%s, %s)
+            ON CONFLICT (workspace_id, artifact_sha256) DO NOTHING
+            RETURNING artifact_sha256
+            """,
+            (envelope.workspace_id, payload.artifact_sha256),
+        )
+        status = "applied" if cur.fetchone() is not None else "replayed"
+        return {
+            "type": "claim_research_replicate",
+            "status": status,
+            "artifact_sha256": payload.artifact_sha256,
+        }
+
+    def _bind_research_receipt_manifest(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        artifact = self._require_artifact(
+            cur, envelope.workspace_id, payload.artifact_sha256
+        )
+        if artifact["manifest_sha256"] != payload.manifest_sha256:
+            raise WorkStoreError(
+                "stale_evidence", ("receipt manifest does not match installed artifact",)
+            )
+        cur.execute(
+            """
+            SELECT artifact_sha256, manifest_sha256 FROM omp_research.receipt_manifests
+            WHERE workspace_id=%s AND receipt_id=%s
+            """,
+            (envelope.workspace_id, payload.receipt_id),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            if (
+                existing["artifact_sha256"] != payload.artifact_sha256
+                or existing["manifest_sha256"] != payload.manifest_sha256
+            ):
+                raise WorkStoreError(
+                    "idempotency_conflict",
+                    ("receipt already bound to a different manifest",),
+                )
+            status = "replayed"
+        else:
+            cur.execute(
+                """
+                INSERT INTO omp_research.receipt_manifests (
+                    workspace_id, receipt_id, artifact_sha256, manifest_sha256
+                ) VALUES (%s, %s, %s, %s)
+                ON CONFLICT (workspace_id, receipt_id) DO NOTHING
+                RETURNING receipt_id
+                """,
+                (
+                    envelope.workspace_id,
+                    payload.receipt_id,
+                    payload.artifact_sha256,
+                    payload.manifest_sha256,
+                ),
+            )
+            status = "applied" if cur.fetchone() is not None else "replayed"
+        return {
+            "type": "bind_research_receipt_manifest",
+            "status": status,
+            "receipt_id": str(payload.receipt_id),
+            "artifact_sha256": payload.artifact_sha256,
+            "manifest_sha256": payload.manifest_sha256,
         }
 
     def _admit_research_campaign(
@@ -1231,6 +1677,30 @@ class ResearchStoreMixin:
         else:
             components = []
 
+        artifact_hashes: set[str] = set()
+        for trial in trials:
+            for field in (
+                "candidate_digest",
+                "experiment_spec_sha256",
+                "input_manifest_sha256",
+            ):
+                value = trial.get(field)
+                if isinstance(value, str):
+                    artifact_hashes.add(value)
+        for component in components:
+            descriptor = component.get("descriptor")
+            if isinstance(descriptor, dict):
+                digest = descriptor.get("artifact_sha256")
+                if isinstance(digest, str):
+                    artifact_hashes.add(digest)
+        artifacts: list[dict[str, object] | None] = []
+        if artifact_hashes:
+            cur.execute(
+                f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256 = ANY(%s) ORDER BY artifact_sha256",
+                (workspace_id, list(artifact_hashes)),
+            )
+            artifacts = [_manifest_json(dict(row)) for row in cur.fetchall()]
+
         return {
             "work_id": work_id,
             "campaigns": campaigns,
@@ -1238,4 +1708,167 @@ class ResearchStoreMixin:
             "observations": observations,
             "deliverable_bindings": deliverable_bindings,
             "components": components,
+            "artifacts": artifacts,
         }
+
+    def _read_held_bytes(
+        self,
+        workspace_id: UUID,
+        digest: str,
+        size_bytes: int,
+    ) -> bytes:
+        try:
+            return read_verified_bytes(
+                artifact_path(self._config.data_dir, workspace_id, digest),
+                digest,
+                size_bytes,
+            )
+        except RuntimeError as err:
+            if str(err) == "artifact_unavailable":
+                raise WorkStoreError(
+                    "artifact_unavailable",
+                    ("artifact bytes unavailable or corrupt",),
+                ) from err
+            raise
+
+    def _authorize_manifest_read(
+        self, manifest: dict[str, object], requested_project: str | None
+    ) -> None:
+        access = manifest.get("access")
+        if not isinstance(access, dict):
+            return
+        denial = retrieval_denied(
+            str(access.get("access_class")),
+            None if access.get("decision") is None else str(access.get("decision")),
+            project_id=requested_project,
+            declared_project=(
+                None
+                if access.get("project_id") is None
+                else str(access.get("project_id"))
+            ),
+        )
+        if denial is not None:
+            raise WorkStoreError("forbidden", (denial,))
+        if retention_expired(manifest.get("retention_until")):  # type: ignore[arg-type]
+            raise WorkStoreError("stale_evidence", ("retention expired",))
+
+    def _research_artifact_view(
+        self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, artifact_sha256: str
+    ) -> dict[str, object]:
+        if not _SHA256.fullmatch(artifact_sha256):
+            raise WorkStoreError(
+                "invalid_request",
+                ("invalid_artifact_sha256", f"invalid artifact SHA-256: '{artifact_sha256}'"),
+            )
+        cur.execute(
+            f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",
+            (workspace_id, artifact_sha256),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise WorkStoreError(
+                "invalid_request",
+                (
+                    "not_found",
+                    f"research artifact '{artifact_sha256}' not found in workspace",
+                ),
+            )
+        artifact = _manifest_json(row)
+        assert artifact is not None
+        manifest = artifact["manifest"]
+        assert isinstance(manifest, dict)
+        if retention_expired(manifest.get("valid_until")):  # type: ignore[arg-type]
+            raise WorkStoreError("stale_evidence", ("artifact validity expired",))
+        data = self._read_held_bytes(
+            workspace_id, artifact_sha256, int(manifest["size_bytes"])
+        )
+        return {
+            "artifact": artifact,
+            "content_base64": base64.b64encode(data).decode("ascii"),
+        }
+
+    def _scoped_identifier(self, value: str, label: str) -> tuple[UUID, str | None]:
+        identifier, _, project = value.partition("/")
+        try:
+            parsed = UUID(identifier)
+        except ValueError as err:
+            raise WorkStoreError(
+                "invalid_request", (f"invalid {label} id",)
+            ) from err
+        if project:
+            try:
+                UUID(project)
+            except ValueError as err:
+                raise WorkStoreError(
+                    "invalid_request", ("invalid project id",)
+                ) from err
+        return parsed, project or None
+
+    def _research_source_view(
+        self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, value: str
+    ) -> dict[str, object]:
+        source_id, project_id = self._scoped_identifier(value, "source")
+        cur.execute(
+            f"SELECT {_SOURCE_FIELDS} FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",
+            (workspace_id, source_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise WorkStoreError(
+                "invalid_request",
+                ("not_found", f"research source '{source_id}' not found in workspace"),
+            )
+        source = _manifest_json(row)
+        assert source is not None
+        manifest = source["manifest"]
+        assert isinstance(manifest, dict)
+        self._authorize_manifest_read(manifest, project_id)
+        if source["status"] == "inaccessible" or manifest.get("status") == "inaccessible":
+            raise WorkStoreError("artifact_unavailable", ("source inaccessible",))
+        content: str | None = None
+        digest = source.get("artifact_sha256")
+        if isinstance(digest, str):
+            held = self._require_artifact(cur, workspace_id, digest)
+            held_manifest = _manifest_json(held)
+            assert held_manifest is not None
+            size = int(held_manifest["manifest"]["size_bytes"])
+            data = self._read_held_bytes(workspace_id, digest, size)
+            content = base64.b64encode(data).decode("ascii")
+        return {"source": source, "content_base64": content}
+
+    def _research_dataset_view(
+        self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, value: str
+    ) -> dict[str, object]:
+        dataset_id, project_id = self._scoped_identifier(value, "dataset")
+        cur.execute(
+            f"SELECT {_DATASET_FIELDS} FROM omp_research.datasets WHERE workspace_id=%s AND dataset_id=%s",
+            (workspace_id, dataset_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise WorkStoreError(
+                "invalid_request",
+                ("not_found", f"research dataset '{dataset_id}' not found in workspace"),
+            )
+        dataset = _manifest_json(row)
+        assert dataset is not None
+        manifest = dataset["manifest"]
+        assert isinstance(manifest, dict)
+        self._authorize_manifest_read(manifest, project_id)
+        cur.execute(
+            "SELECT status FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",
+            (workspace_id, dataset["source_id"]),
+        )
+        source = cur.fetchone()
+        if source is None or source["status"] == "inaccessible":
+            raise WorkStoreError("artifact_unavailable", ("source inaccessible",))
+        content: str | None = None
+        digest = dataset.get("artifact_sha256")
+        if isinstance(digest, str):
+            held = self._require_artifact(cur, workspace_id, digest)
+            held_manifest = _manifest_json(held)
+            assert held_manifest is not None
+            size = int(held_manifest["manifest"]["size_bytes"])
+            data = self._read_held_bytes(workspace_id, digest, size)
+            content = base64.b64encode(data).decode("ascii")
+        return {"dataset": dataset, "content_base64": content}

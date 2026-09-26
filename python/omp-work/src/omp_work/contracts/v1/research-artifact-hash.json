@@ -1,0 +1,40 @@
+{
+  "algorithm": "research-artifact.v1",
+  "definition": "decisions/0011-research-artifact-custody.md",
+  "vectors": [
+    {
+      "name": "sample-text-artifact",
+      "content_base64": "aGVsbG8gcmVzZWFyY2ggYXJ0aWZhY3QK",
+      "artifact_sha256": "16824a325a026c1da78cdbdb14d3d4c3070801cd1cfb491e9d30cbd995821d14",
+      "manifest": {
+        "contract_version": "research-artifact.v1",
+        "artifact_sha256": "16824a325a026c1da78cdbdb14d3d4c3070801cd1cfb491e9d30cbd995821d14",
+        "size_bytes": 24,
+        "media_type": "text/plain",
+        "name": "sample.txt",
+        "access_class": "workspace",
+        "issuer_kind": "candidate_authored",
+        "source_ref": "experiments/001/sample.txt",
+        "valid_until": null
+      },
+      "manifest_sha256": "9063cee45e05eb7e596f46eade1fc57bc73b94523ea39c63f695e965b79e1a5f"
+    },
+    {
+      "name": "empty-binary-artifact",
+      "content_base64": "",
+      "artifact_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "manifest": {
+        "contract_version": "research-artifact.v1",
+        "artifact_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size_bytes": 0,
+        "media_type": "application/octet-stream",
+        "name": "empty.bin",
+        "access_class": "workspace",
+        "issuer_kind": "legacy_autoresearch",
+        "source_ref": "experiments/001/empty.bin",
+        "valid_until": null
+      },
+      "manifest_sha256": "611db50bb5f0d929b1e2dbd530f2d419d4a890013eae4ff679221060ede87735"
+    }
+  ]
+}

@@ -12,8 +12,10 @@
     "decisions/0008-execution-cycle-authority.md",
     "decisions/0009-research-campaign-lifecycle-authority.md",
     "decisions/0010-research-component-identity-and-compatibility.md",
+    "decisions/0011-research-artifact-custody.md",
     "examples.json",
     "manifest.json",
+    "research-artifact-hash.json",
     "research-component-hash.json",
     "schema.json"
   ]

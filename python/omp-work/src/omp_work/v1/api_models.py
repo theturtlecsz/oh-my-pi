@@ -17,10 +17,13 @@ from .models import (
     IntakeBlockingQuestion,
     OperationReceipt,
     RelationEdge,
+    ResearchArtifact,
     ResearchCampaign,
     ResearchComponent,
+    ResearchDataset,
     ResearchDeliverableBinding,
     ResearchObservation,
+    ResearchSource,
     ResearchTrial,
     StrictModel,
     WorkAlias,
@@ -397,6 +400,66 @@ class SetResearchCampaignStateResult(StrictModel):
     campaign: ResearchCampaign
 
 
+class RegisterResearchArtifactResult(StrictModel):
+    type: Literal["register_research_artifact"]
+    status: Literal["applied", "replayed"]
+    artifact: ResearchArtifact
+
+
+class CollectResearchArtifactResult(StrictModel):
+    type: Literal["collect_research_artifact"]
+    status: Literal["applied", "replayed"]
+    artifact: ResearchArtifact
+
+
+class ResearchArtifactContentView(StrictModel):
+    artifact: ResearchArtifact
+    content_base64: str
+
+
+class RegisterResearchSourceResult(StrictModel):
+    type: Literal["register_research_source"]
+    status: Literal["applied", "replayed"]
+    source: ResearchSource
+
+
+class ResearchSourceView(StrictModel):
+    source: ResearchSource
+    content_base64: str | None = None
+
+
+class RegisterResearchDatasetResult(StrictModel):
+    type: Literal["register_research_dataset"]
+    status: Literal["applied", "replayed"]
+    dataset: ResearchDataset
+
+
+class ResearchDatasetView(StrictModel):
+    dataset: ResearchDataset
+    content_base64: str | None = None
+
+
+class RecordResearchCacheResult(StrictModel):
+    type: Literal["record_research_cache"]
+    status: Literal["applied", "replayed"]
+    cache_key: str
+    artifact_sha256: str
+
+
+class ClaimResearchReplicateResult(StrictModel):
+    type: Literal["claim_research_replicate"]
+    status: Literal["applied", "replayed"]
+    artifact_sha256: str
+
+
+class BindResearchReceiptManifestResult(StrictModel):
+    type: Literal["bind_research_receipt_manifest"]
+    status: Literal["applied", "replayed"]
+    receipt_id: UUID
+    artifact_sha256: str
+    manifest_sha256: str
+
+
 class RegisterResearchComponentResult(StrictModel):
     type: Literal["register_research_component"]
     status: Literal["applied", "replayed"]
@@ -416,6 +479,7 @@ class ResearchView(StrictModel):
     observations: tuple[ResearchObservation, ...] = ()
     deliverable_bindings: tuple[ResearchDeliverableBinding, ...] = ()
     components: tuple[ResearchComponent, ...] = ()
+    artifacts: tuple[ResearchArtifact, ...] = ()
 
 
 CommandResult = Annotated[
@@ -444,6 +508,13 @@ CommandResult = Annotated[
     | RecordExternalDeliveryResult
     | RecordFableAdviceResult
     | PublishBoundedIntakeResult
+    | RegisterResearchArtifactResult
+    | CollectResearchArtifactResult
+    | RegisterResearchSourceResult
+    | RegisterResearchDatasetResult
+    | RecordResearchCacheResult
+    | ClaimResearchReplicateResult
+    | BindResearchReceiptManifestResult
     | RegisterResearchComponentResult
     | CreateResearchCampaignResult
     | AdmitResearchCampaignResult
