@@ -14,6 +14,7 @@ import {
 	getProjectDir,
 	getSessionsDir,
 	isEnoent,
+	isRecord,
 	logger,
 	stringifyJson,
 	toError,
@@ -172,17 +173,33 @@ function emptyUsageStatistics(): UsageStatistics {
 	};
 }
 
-function taskUsageFrom(details: unknown): Usage | undefined {
-	if (details === null || typeof details !== "object") return undefined;
+export const USAGE_REPORTING_TOOL_NAMES = new Set<string>(["task", "hypothesis_tournament"]);
+
+export function extractToolResultUsage(details: unknown): Usage | undefined {
+	if (!details || typeof details !== "object") return undefined;
 	const maybeUsage = (details as Record<string, unknown>).usage;
-	return maybeUsage !== null && typeof maybeUsage === "object" ? (maybeUsage as Usage) : undefined;
+	return isUsage(maybeUsage) ? maybeUsage : undefined;
+}
+
+function isUsage(value: unknown): value is Usage {
+	if (!isRecord(value) || !isRecord(value.cost)) return false;
+	return (
+		typeof value.input === "number" &&
+		typeof value.output === "number" &&
+		typeof value.cacheRead === "number" &&
+		typeof value.cacheWrite === "number" &&
+		typeof value.totalTokens === "number" &&
+		typeof value.cost.total === "number"
+	);
 }
 
 function entryUsage(entry: SessionEntry): Usage | undefined {
 	if (entry.type !== "message") return undefined;
 	const message = entry.message;
 	if (message.role === "assistant") return message.usage;
-	if (message.role === "toolResult" && message.toolName === "task") return taskUsageFrom(message.details);
+	if (message.role === "toolResult" && USAGE_REPORTING_TOOL_NAMES.has(message.toolName)) {
+		return extractToolResultUsage(message.details);
+	}
 	return undefined;
 }
 

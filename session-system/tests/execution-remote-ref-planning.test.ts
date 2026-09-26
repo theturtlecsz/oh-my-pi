@@ -24,6 +24,7 @@ type ToolHandler = (
 	onUpdate: undefined,
 	ctx: ExtensionContext,
 ) => Promise<ToolResult>;
+type CommandHandler = (args: string, ctx: ExtensionContext) => Promise<void>;
 
 const directories: string[] = [];
 
@@ -47,11 +48,13 @@ afterEach(async () => {
 });
 
 async function makeHarness(options: {
-	remoteRef: string;
+	remoteRef: string | undefined;
 	state?: ExecutionSnapshot["grant"]["state"];
 	workId?: string;
+	positionZeroWorkId?: string;
 	phase?: ExecutionGrantItemView["phase"];
 	findIssue?: WorkflowBackend["findIssue"];
+	workspaceBranch?: (key: string, grantId: string) => string;
 }) {
 	const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "execution-remote-ref-planning-"));
 	directories.push(directory);
@@ -59,20 +62,24 @@ async function makeHarness(options: {
 	const planPath = path.join(directory, "plan.md");
 	await fs.promises.writeFile(planPath, "## Approach\n1. Write the change\n\n## Verification\n1. Run the focused test\n");
 	const workId = options.workId ?? ANCHOR_KEY;
-	const item: ExecutionGrantItemView = {
-		item_id: "item-1",
+	const makeItem = (position: number, itemWorkId: string, phase: ExecutionGrantItemView["phase"]): ExecutionGrantItemView => ({
+		item_id: `item-${position}`,
 		workspace_id: "00000000-0000-7000-8000-000000000001",
 		grant_id: GRANT_ID,
-		work_id: workId,
-		position: 0,
-		phase: options.phase ?? "criteria_pending",
+		work_id: itemWorkId,
+		position,
+		phase,
 		claimed_revision_id: "00000000-0000-7000-8000-000000000020",
 		initial_git_baseline: "1".repeat(40),
 		original_request: "Ship the change",
 		original_request_sha256: "2".repeat(64),
 		close_attempts_started: 0,
 		consecutive_no_progress: 0,
-	};
+	});
+	const items: ExecutionGrantItemView[] = options.positionZeroWorkId
+		? [makeItem(0, options.positionZeroWorkId, "completed"), makeItem(1, workId, options.phase ?? "criteria_pending")]
+		: [makeItem(0, workId, options.phase ?? "criteria_pending")];
+	const item = items.at(-1)!;
 	const execution: ExecutionSnapshot = {
 		grant: {
 			grant_id: GRANT_ID,
@@ -81,7 +88,7 @@ async function makeHarness(options: {
 			repository: directory,
 			remote_ref: options.remoteRef,
 			state: options.state ?? "active",
-			mode: "single",
+			mode: options.positionZeroWorkId ? "queue" : "single",
 			grant_version: 1,
 			max_continuations: 8,
 			max_close_attempts: 5,
@@ -92,7 +99,7 @@ async function makeHarness(options: {
 			created_at: "2026-09-26T00:00:00Z",
 			expires_at: "2026-09-27T00:00:00Z",
 		},
-		items: [item],
+		items,
 		activeItem: item,
 	};
 	const sealExecutionCriteria = vi.fn(async () => ({
@@ -103,6 +110,11 @@ async function makeHarness(options: {
 	}));
 	const stampExecutionPlan = vi.fn(async () => structuredClone(execution));
 	const healthReady = vi.fn(async () => ({ ready: true, service_fingerprint: "5".repeat(64) }));
+	const setExecutionState = vi.fn(async (input: { targetState: "active" | "paused" | "stopped" | "canceled" | "completed" }) => {
+		execution.grant.state = input.targetState;
+		execution.grant.grant_version += 1;
+		return structuredClone(execution);
+	});
 	const backend = {
 		name: "work",
 		cacheFile: path.relative(path.join(os.homedir(), ".omp", "agent"), path.join(directory, "cache.json")),
@@ -113,17 +125,26 @@ async function makeHarness(options: {
 		findIssue: options.findIssue ?? (async () => {
 			throw new Error("findIssue should not run for a key-shaped position-0 work id");
 		}),
+		executionChildren: async () => ({ umbrella: false, children: [] }),
+		pendingDeliveries: async () => [],
 		sealExecutionCriteria,
 		stampExecutionPlan,
+		setExecutionState,
 		workClient: { healthReady },
 	} as unknown as WorkflowBackend;
+	const ensureCalls: Array<{ key: string; grantId: string }> = [];
+	const newSessionCalls: string[] = [];
+	const notifications: string[] = [];
 	let executeTool: ToolHandler | undefined;
+	const commands = new Map<string, CommandHandler>();
 	const pi = {
 		zod: z,
 		registerTool: (definition: { execute: ToolHandler }) => {
 			executeTool = definition.execute;
 		},
-		registerCommand: () => {},
+		registerCommand: (name: string, definition: { handler: CommandHandler }) => {
+			commands.set(name, definition.handler);
+		},
 		registerFlag: () => {},
 		registerMessageRenderer: () => {},
 		on: () => {},
@@ -137,23 +158,62 @@ async function makeHarness(options: {
 		teamNoun: "the ledger",
 		entryType: "work-now",
 		acceptEntry: () => true,
+		executionWorkspaceManager: {
+			primaryRoot: async cwd => cwd,
+			ensure: async (_cwd, key, grantId, baseline) => {
+				ensureCalls.push({ key, grantId });
+				const branch = options.workspaceBranch
+					? options.workspaceBranch(key, grantId)
+					: executionRemoteRef(key, grantId).slice("refs/heads/".length);
+				return { primaryRoot: directory, path: directory, branch, grantId, baseline, reused: true };
+			},
+			cleanup: async () => ({ cleaned: true, detail: "fixture workspace" }),
+		},
 	})(pi);
 	const context = {
 		cwd: directory,
 		taskDepth: 0,
-		ui: { notify: () => {}, setStatus: () => {}, theme: { fg: (_color: string, text: string) => text } },
+		sessionManager: { getCwd: () => directory, getSessionId: () => "session-1", getBranch: () => [] },
+		newSession: async () => {
+			newSessionCalls.push("newSession");
+			return { cancelled: false };
+		},
+		ui: {
+			notify: (text: string) => { notifications.push(text); },
+			setStatus: () => {},
+			theme: { fg: (_color: string, text: string) => text },
+		},
 	} as unknown as ExtensionContext;
-	const call = async (action: "seal_execution_criteria" | "stamp_execution_plan") => {
+	const call = async (action: "seal_execution_criteria" | "stamp_execution_plan", work = ANCHOR_KEY) => {
 		if (!executeTool) throw new Error("work tool missing");
 		return executeTool(
 			"planning-1",
-			{ action, work: ANCHOR_KEY, criteria: ["AC-1"], plan_file: planPath, paths: ["src/feat.ts"] },
+			{ action, work, criteria: ["AC-1"], plan_file: planPath, paths: ["src/feat.ts"] },
 			new AbortController().signal,
 			undefined,
 			context,
 		);
 	};
-	return { execution, item, planPath, sealExecutionCriteria, stampExecutionPlan, healthReady, call };
+	const resume = async (key?: string) => {
+		const handler = commands.get("execute");
+		if (!handler) throw new Error("execute command missing");
+		await handler(key ? `resume ${key}` : "resume", context);
+	};
+	return {
+		execution,
+		item,
+		planPath,
+		directory,
+		sealExecutionCriteria,
+		stampExecutionPlan,
+		healthReady,
+		setExecutionState,
+		ensureCalls,
+		newSessionCalls,
+		notifications,
+		call,
+		resume,
+	};
 }
 
 describe("execution remote ref before criteria sealing and plan stamping (OMP-233 AC6)", () => {
@@ -217,5 +277,94 @@ describe("execution remote ref before criteria sealing and plan stamping (OMP-23
 		expect(stoppedResult.content[0].text).not.toContain("execution remote ref refusal");
 		expect(stopped.sealExecutionCriteria).not.toHaveBeenCalled();
 		expect(stopped.stampExecutionPlan).not.toHaveBeenCalled();
+	});
+
+	const priorGrantRef = executionRemoteRef(ANCHOR_KEY, "00000000-0000-7000-8000-000000000001");
+	const unqualifiedSameKeyRef = "refs/heads/execution/omp-237";
+	for (const [label, recordedRef, marker] of [
+		["prior grant's qualified ref of the same key", priorGrantRef, priorGrantRef],
+		["unqualified same-key legacy ref", unqualifiedSameKeyRef, unqualifiedSameKeyRef],
+		["refs/heads/main", "refs/heads/main", "refs/heads/main"],
+		["missing ref", undefined, "undefined"],
+	] as const) {
+		test(`${label} refuses seal and stamp with zero backend mutation`, async () => {
+			const harness = await makeHarness({ remoteRef: recordedRef, phase: "criteria_pending" });
+			const read = vi.spyOn(fs, "readFileSync");
+			const sealed = await harness.call("seal_execution_criteria");
+			expect(sealed.details.success).toBe(false);
+			expect(sealed.content[0].text).toContain(marker);
+			expect(sealed.content[0].text).toContain(CANONICAL_REF);
+			expect(harness.sealExecutionCriteria).not.toHaveBeenCalled();
+			expect(harness.healthReady).not.toHaveBeenCalled();
+			expect(read.mock.calls.some(call => call[0] === harness.planPath)).toBe(false);
+
+			harness.item.phase = "planning";
+			const stamped = await harness.call("stamp_execution_plan");
+			expect(stamped.details.success).toBe(false);
+			expect(stamped.content[0].text).toContain(marker);
+			expect(stamped.content[0].text).toContain(CANONICAL_REF);
+			expect(harness.stampExecutionPlan).not.toHaveBeenCalled();
+			expect(harness.healthReady).not.toHaveBeenCalled();
+		});
+	}
+
+	test("queue grant whose active item is position 1 is accepted when the ref is canonical for position 0", async () => {
+		const positionZeroRef = executionRemoteRef("OMP-236", GRANT_ID);
+		const harness = await makeHarness({
+			remoteRef: positionZeroRef,
+			positionZeroWorkId: "OMP-236",
+			phase: "criteria_pending",
+		});
+		const sealed = await harness.call("seal_execution_criteria");
+		expect(sealed.details.success).toBe(true);
+		expect(sealed.content[0].text).toContain("criteria sealed successfully");
+		expect(harness.sealExecutionCriteria).toHaveBeenCalledTimes(1);
+
+		harness.item.phase = "planning";
+		const stamped = await harness.call("stamp_execution_plan");
+		expect(stamped.details.success).toBe(true);
+		expect(harness.stampExecutionPlan).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("execution remote ref alignment on /execute resume (OMP-233 AC6)", () => {
+	test("paused grant with refs/heads/execution/omp-238 refuses naming both refs before ensure or relocation", async () => {
+		const harness = await makeHarness({ remoteRef: ALIAS_REF, state: "paused", phase: "executing" });
+		await harness.resume(ANCHOR_KEY);
+		const refusal = harness.notifications.at(-1) ?? "";
+		expect(refusal).toContain("Cannot resume");
+		expect(refusal).toContain(ALIAS_REF);
+		expect(refusal).toContain(CANONICAL_REF);
+		expect(harness.ensureCalls).toEqual([]);
+		expect(harness.newSessionCalls).toEqual([]);
+		expect(harness.setExecutionState).not.toHaveBeenCalled();
+	});
+
+	test("resume refuses when ensure returns a branch differing from the recorded ref without relocating", async () => {
+		const harness = await makeHarness({
+			remoteRef: CANONICAL_REF,
+			state: "paused",
+			phase: "executing",
+			workspaceBranch: () => "execution/omp-238",
+		});
+		await harness.resume(ANCHOR_KEY);
+		const refusal = harness.notifications.at(-1) ?? "";
+		expect(refusal).toContain("Cannot resume");
+		expect(refusal).toContain("refs/heads/execution/omp-238");
+		expect(refusal).toContain(CANONICAL_REF);
+		expect(harness.ensureCalls).toHaveLength(1);
+		expect(harness.newSessionCalls).toEqual([]);
+		expect(harness.setExecutionState).not.toHaveBeenCalled();
+	});
+
+	test("terminal-grant resume still reports the terminal state and the /execute <KEY> first", async () => {
+		const harness = await makeHarness({ remoteRef: CANONICAL_REF, state: "stopped", phase: "executing" });
+		await harness.resume(ANCHOR_KEY);
+		const refusal = harness.notifications.at(-1) ?? "";
+		expect(refusal).toContain("grant state is stopped");
+		expect(refusal).toContain("/execute OMP-237");
+		expect(refusal).not.toContain("execution remote ref refusal");
+		expect(harness.ensureCalls).toEqual([]);
+		expect(harness.newSessionCalls).toEqual([]);
 	});
 });

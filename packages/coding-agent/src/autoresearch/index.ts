@@ -22,13 +22,20 @@ import {
 	reconstructControlState,
 } from "./state";
 import { openAutoresearchStorage, openAutoresearchStorageIfExists, type RunRow, type SessionRow } from "./storage";
+import { createHypothesisTournamentTool } from "./tools/hypothesis-tournament";
 import { createInitExperimentTool } from "./tools/init-experiment";
 import { createLogExperimentTool } from "./tools/log-experiment";
 import { createRunExperimentTool } from "./tools/run-experiment";
 import { createUpdateNotesTool } from "./tools/update-notes";
 import type { AutoresearchRuntime, ExperimentResult, PendingRunSummary } from "./types";
 
-const EXPERIMENT_TOOL_NAMES = ["init_experiment", "run_experiment", "log_experiment", "update_notes"];
+const EXPERIMENT_TOOL_NAMES = [
+	"init_experiment",
+	"run_experiment",
+	"log_experiment",
+	"update_notes",
+	"hypothesis_tournament",
+];
 
 export const createAutoresearchExtension: ExtensionFactory = api => {
 	const runtimeStore = createRuntimeStore();
@@ -122,6 +129,7 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 	api.registerTool(createRunExperimentTool({ dashboard, getRuntime, pi: api }));
 	api.registerTool(createLogExperimentTool({ dashboard, getRuntime, pi: api }));
 	api.registerTool(createUpdateNotesTool({ dashboard, getRuntime, pi: api }));
+	api.registerTool(createHypothesisTournamentTool({ dashboard, getRuntime, pi: api }));
 
 	api.registerCommand("autoresearch", {
 		description: "Toggle builtin autoresearch mode, or pass off / clear, or a goal message.",

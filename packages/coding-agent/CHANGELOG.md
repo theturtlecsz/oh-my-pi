@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- Execution grants record a lane ref tied to their item and grant; seal, stamp, and resume now refuse a mismatched ref.
 - Clarified worker and auditor completion instructions to honor assigned scope, verification duties, and harness stop boundaries.
 - Fixed paused execution planning guidance and kept pause notices in their owning session across session switches.
 - Fixed stopped umbrella recommendations to follow open-child dependencies and terminal resume errors to name fresh admission commands.

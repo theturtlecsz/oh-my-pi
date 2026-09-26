@@ -5,8 +5,7 @@ import {
 	isTranscriptUsageAnchor,
 	type SessionMessageEntry,
 } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, Model, ProviderResponseMetadata, Usage } from "@oh-my-pi/pi-ai";
-import { isRecord } from "@oh-my-pi/pi-utils";
+import type { AssistantMessage, Model, ProviderResponseMetadata } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "../config/model-registry";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import {
@@ -16,7 +15,7 @@ import {
 } from "../modes/utils/context-usage";
 import type { ContextUsageBreakdown, SessionStats } from "./agent-session-types";
 import { getLatestCompactionEntry } from "./session-context";
-import type { SessionManager } from "./session-manager";
+import { extractToolResultUsage, type SessionManager, USAGE_REPORTING_TOOL_NAMES } from "./session-manager";
 
 interface PendingContextSnapshot {
 	promptTokens: number;
@@ -108,8 +107,8 @@ export class SessionStatsTracker {
 				totalPremiumRequests += assistant.usage.premiumRequests ?? 0;
 				totalCost += assistant.usage.cost.total;
 			}
-			if (message.role === "toolResult" && message.toolName === "task") {
-				const usage = taskToolUsage(message.details);
+			if (message.role === "toolResult" && USAGE_REPORTING_TOOL_NAMES.has(message.toolName)) {
+				const usage = extractToolResultUsage(message.details);
 				if (!usage) continue;
 				totalInput += usage.input;
 				totalOutput += usage.output;
@@ -341,22 +340,4 @@ export class SessionStatsTracker {
 			baseUrl: this.#host.modelRegistry.getProviderBaseUrl?.(provider),
 		});
 	}
-}
-
-function taskToolUsage(details: unknown): Usage | undefined {
-	if (!details || typeof details !== "object") return undefined;
-	const usage = Reflect.get(details, "usage");
-	return isUsage(usage) ? usage : undefined;
-}
-
-function isUsage(value: unknown): value is Usage {
-	if (!isRecord(value) || !isRecord(value.cost)) return false;
-	return (
-		typeof value.input === "number" &&
-		typeof value.output === "number" &&
-		typeof value.cacheRead === "number" &&
-		typeof value.cacheWrite === "number" &&
-		typeof value.totalTokens === "number" &&
-		typeof value.cost.total === "number"
-	);
 }

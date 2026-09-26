@@ -48,6 +48,7 @@ import {
 	META_MUSE_STATIC_MODELS,
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	mapModelsDevToModels,
+	moonshotKimiK3MaxTokens,
 	OPENAI_DAYBREAK_CURATED_FALLBACK_MODELS,
 	projectOpenAIProReasoningAliases,
 	SAKANA_FUGU_STATIC_MODELS,
@@ -321,6 +322,13 @@ function applyKimiMaxTokensCap(models: readonly ModelSpec[]): ModelSpec[] {
 			// Discovery snapshots carried maxTokens=32000 uniformly (#6711); pin the
 			// documented per-family output ceilings and leave legacy K2 rows as-is.
 			const capped = kimiCodeMaxTokens(model.id, model.maxTokens);
+			return capped === model.maxTokens ? model : { ...model, maxTokens: capped };
+		}
+		if (model.provider === "moonshot") {
+			// Moonshot's `/v1/models` omits the output ceiling, so K3 (discovered or
+			// carried from a snapshot) inherits the context-sized 1,048,576 budget;
+			// every request sends `max_tokens`, so pin the documented 131,072 cap.
+			const capped = moonshotKimiK3MaxTokens(model.id, model.maxTokens);
 			return capped === model.maxTokens ? model : { ...model, maxTokens: capped };
 		}
 		return model;

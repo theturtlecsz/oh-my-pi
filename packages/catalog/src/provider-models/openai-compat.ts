@@ -4433,6 +4433,21 @@ const MOONSHOT_KIMI_K3_CONTEXT_WINDOW = 1_048_576;
 const MOONSHOT_KIMI_K3_MAX_TOKENS = 131_072;
 const MOONSHOT_KIMI_K3_THINKING: ThinkingConfig = { mode: "effort", efforts: [Effort.Max], requiresEffort: true };
 
+/**
+ * Clamp Moonshot-native Kimi K3's `maxTokens` to its documented output ceiling
+ * ({@link MOONSHOT_KIMI_K3_MAX_TOKENS}). Moonshot's discovery envelope omits
+ * `max_completion_tokens` and K3 arrives through the generic dynamic defaults,
+ * which fall back to the 1M context window. Every request sends `max_tokens`,
+ * so the bundled catalog must carry the real 131,072 cap instead. Leaves every
+ * other model untouched.
+ */
+export function moonshotKimiK3MaxTokens(modelId: string, candidate: number): number;
+export function moonshotKimiK3MaxTokens(modelId: string, candidate: number | null): number | null;
+export function moonshotKimiK3MaxTokens(modelId: string, candidate: number | null): number | null {
+	if (candidate === null) return null;
+	return isKimiK3ModelId(modelId) ? Math.min(candidate, MOONSHOT_KIMI_K3_MAX_TOKENS) : candidate;
+}
+
 export function moonshotModelManagerOptions(
 	config?: MoonshotModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {

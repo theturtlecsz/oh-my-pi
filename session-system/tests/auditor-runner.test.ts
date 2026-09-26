@@ -888,7 +888,7 @@ describe("native auditor runner (OMP-168)", () => {
 				workspace_id: "ws-1",
 				owner_id: "owner-1",
 				repository: cwd,
-				remote_ref: "refs/heads/main",
+				remote_ref: executionRemoteRef("OMP-190", "28a3950b-0abe-4a0c-a3ec-18438b8b3267"),
 				state: "active",
 				mode: "single",
 				grant_version: 1,

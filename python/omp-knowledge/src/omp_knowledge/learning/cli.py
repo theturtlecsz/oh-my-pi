@@ -7,10 +7,14 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from omp_work.v1.client import WorkClient
 
 from .capture import NativeEvents, RunRecord, drain, retry
+from .corrections import CorrectionRecord, correct
 from .generation import LessonGenerator, LocalChatGenerator
+from .models import Attribution, Precondition, SourceIdentity
 from .policy import NativeReceipts
 from .store import LearningStore
 from .uses import record_outcome, record_use, supply
@@ -71,11 +75,55 @@ def _build_parser() -> argparse.ArgumentParser:
     outcome_parser.add_argument("--receipt-id", "--receipt", dest="receipt_id", required=True)
     outcome_parser.add_argument("--json", action="store_true")
 
+    correct_parser = subcommands.add_parser("correct")
+    correct_parser.add_argument("--state-dir", required=True)
+    correct_parser.add_argument("--work-url", required=True)
+    correct_parser.add_argument("--workspace", required=True)
+    correct_parser.add_argument("--bearer-file", required=True)
+    correct_parser.add_argument("--procedure", required=True)
+    correct_parser.add_argument("--receipt", required=True)
+    correct_parser.add_argument(
+        "--action",
+        required=True,
+        choices=("narrow", "withdraw"),
+    )
+    correct_parser.add_argument(
+        "--precondition",
+        action="append",
+        default=None,
+        type=_parse_precondition,
+    )
+    correct_parser.add_argument("--model", required=True)
+    correct_parser.add_argument("--profile", required=True)
+    correct_parser.add_argument("--json", action="store_true")
+
     return parser
+
+
+def _parse_precondition(raw: str) -> Precondition:
+    key, sep, rest = raw.partition(":")
+    op, sep2, value = rest.partition(":")
+    if not sep or not sep2 or not key or not op:
+        raise argparse.ArgumentTypeError(f"precondition must be key:op:value, got {raw!r}")
+    try:
+        return Precondition.model_validate({"key": key, "op": op, "value": value})
+    except ValidationError as exc:
+        raise argparse.ArgumentTypeError(f"invalid precondition {raw!r}") from exc
 
 
 def _run_payload(record: RunRecord) -> dict[str, Any]:
     return record.model_dump(mode="json")
+
+
+def _format_correction(record: CorrectionRecord) -> str:
+    reason = f" reason={record.reason}" if record.reason else ""
+    left = record.from_version if record.from_version is not None else "-"
+    right = record.to_version if record.to_version is not None else "-"
+    return (
+        f"CORRECTION {record.correction_id} {record.status} "
+        f"action={record.action} procedure={record.procedure_id} "
+        f"v{left}->v{right}{reason}"
+    )
 
 
 def _resolve_repository(cwd: str | Path | None) -> str | None:
@@ -221,6 +269,41 @@ def main(
                 print(
                     f"OUTCOME {record.outcome_id} use={record.use_id} verdict={record.verdict}"
                 )
+            return EXIT_OK
+
+        if args.command == "correct":
+            if receipts is None:
+                client = WorkClient(
+                    args.work_url,
+                    UUID(str(args.workspace)),
+                    Path(args.bearer_file),
+                )
+                receipts = client
+            # A correction is not a domain event. Source records the workspace
+            # that issued it, the counterevidence receipt, and the procedure.
+            attribution = Attribution(
+                model=args.model,
+                profile=args.profile,
+                source=SourceIdentity(
+                    workspace_id=args.workspace,
+                    event_id=args.receipt,
+                    event_sequence=0,
+                    aggregate_id=args.procedure,
+                ),
+            )
+            record = correct(
+                active_store,
+                receipts,
+                procedure_id=args.procedure,
+                receipt_id=args.receipt,
+                action=args.action,
+                preconditions=tuple(args.precondition or ()),
+                attribution=attribution,
+            )
+            if args.json:
+                print(json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True))
+            else:
+                print(_format_correction(record))
             return EXIT_OK
 
         raise SystemExit(2)
