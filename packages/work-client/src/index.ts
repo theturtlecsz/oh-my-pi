@@ -3,11 +3,39 @@
  * service (work.omp.dev/v1). Types mirror python/omp-work/src/omp_work/v1/
  * models.py + api_models.py one-for-one; the service is the authority.
  */
+import * as os from "node:os";
 import { WORK_CONTRACT_SHA256 } from "./contract";
 
 export { WORK_CONTRACT_SHA256 } from "./contract";
 
 export type UUID = string;
+
+/**
+ * Per-request abort window. A local WorkService answers in single-digit
+ * milliseconds, but the service, its Postgres and the controller all share the
+ * host with the rest of the build/test load. A fixed 8 s abort then lands
+ * mid-command on a machine running well above its core count: the POST is
+ * cancelled, reconciliation only finds the stored row if the commit beat the
+ * abort, and a still-planning item refuses the next tool call. Scale the window
+ * with the run queue so a loaded host stretches the deadline instead of
+ * cancelling a valid command.
+ */
+export const WORK_REQUEST_TIMEOUT_MS = 8_000;
+export const WORK_REQUEST_LOAD_CAP = 8;
+
+/** 1 at or below one runnable task per core; grows with the 1-minute run queue. */
+export function workRequestLoadScale(
+	load: number = os.loadavg()[0],
+	cores: number = os.availableParallelism?.() ?? os.cpus().length ?? 1,
+): number {
+	const budget = Math.max(1, cores);
+	return Math.min(WORK_REQUEST_LOAD_CAP, Math.max(1, 1 + Math.max(0, load) / budget));
+}
+
+/** Abort window for one loopback request, stretched by current host load. */
+export function workRequestTimeoutMs(base: number = WORK_REQUEST_TIMEOUT_MS, load?: number): number {
+	return Math.round(base * workRequestLoadScale(load));
+}
 
 // ---- canonical encoding (mirrors v1/canonical.py byte-for-byte) ----
 
@@ -1083,7 +1111,7 @@ export class WorkClient {
 				method,
 				headers,
 				...(body === undefined ? {} : { body: JSON.stringify(body) }),
-				signal: AbortSignal.timeout(8000),
+				signal: AbortSignal.timeout(workRequestTimeoutMs()),
 			});
 		} catch (cause) {
 			throw new WorkError("unavailable", 0, [redact(String(cause))]);
