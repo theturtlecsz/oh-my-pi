@@ -1,5 +1,6 @@
 path	scope	state	head_blob	behavior	classification
 .clinerules/caveman.md	fork-only	added	f3bd524ff165	docs: record caveman mode rules and session-system merge note	retained
+.codacy.yml	fork-only	added	a2ee9dec508f	codacy-skip-tests: exclude test and fixture paths from PR reviews (owner ruling 2026-09-26)	retained
 .config/nextest.toml	shared	modified	b8f284493121	session candidate: OMP-127	retained
 .cursor/rules/caveman.mdc	fork-only	added	5aac1d5946f8	docs: record caveman mode rules and session-system merge note; OMP-243: Keep optional Cursor style rule out of automatic OMP context	retained
 .gitattributes	shared	modified	8d588d023059	docs(omp-156): finalize matrix/changelog proofs, gate results, and whitespace attributes; OMP-303: declare merge=union for python/omp-work/CHANGELOG.md and docs/upstream-fork-inventory.tsv	retained
