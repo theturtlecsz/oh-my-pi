@@ -8,7 +8,14 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type FakeSmolHandler, isMeasuredRobomp, type MeasurementResults, runMeasurementHarness } from "./harness";
+import {
+	type CurrentSmolHarness,
+	type FakeSmolHandler,
+	isMeasuredRobomp,
+	type MeasurementBaseline,
+	type MeasurementResults,
+	runMeasurementHarness,
+} from "./harness";
 
 function formatPercent(value?: number): string {
 	if (value === undefined || Number.isNaN(value)) return "0.0%";
@@ -27,6 +34,20 @@ function formatCost(value?: number): string {
 
 /** Shown in every robomp table cell when the issues set is empty. */
 export const ROBOMP_NOT_MEASURED = "not measured: no robomp history on the measuring machine";
+
+/** Human-readable name of the current-side implementation for the report. */
+export function baselineLabel(baseline: MeasurementBaseline | undefined): string {
+	switch (baseline) {
+		case "real":
+			return "real configured smol model (measured latency and provider-reported usage)";
+		case "fake":
+			return "--fake-smol test handler (verdict allowed)";
+		case "mocked":
+			return "mocked baseline (WP5 verdict withheld)";
+		default:
+			return "unknown (legacy results.json)";
+	}
+}
 
 const ROBOMP_PLACEHOLDERS = [
 	"{{robomp_current_confident_accuracy}}",
@@ -117,7 +138,29 @@ export function renderReport(results: MeasurementResults, template: string): str
 	// Verdict replacement
 	rendered = rendered.replace("{{verdict}}", results.verdict || "");
 
+	// Baseline and sample sizes: the report must name which implementation
+	// supplied the current side and how many samples each feature scored.
+	rendered = rendered.replace("{{baseline}}", baselineLabel(results.currentBaseline));
+	rendered = rendered.replace("{{auto_thinking_sample_size}}", formatSampleSize(results.sampleSizes?.auto_thinking));
+	rendered = rendered.replace(
+		"{{unexpected_stop_sample_size}}",
+		formatSampleSize(results.sampleSizes?.unexpected_stop),
+	);
+	rendered = rendered.replace("{{robomp_sample_size}}", formatRobompSampleSize(results.sampleSizes?.robomp));
+
 	return rendered;
+}
+
+function formatSampleSize(value?: number): string {
+	return value === undefined ? "unknown" : String(value);
+}
+
+function formatRobompSampleSize(value?: number | null): string {
+	// A null robomp size means the issues set was empty, so the sample is zero.
+	// Keep the "not measured" sentence to the table cells: the existing
+	// measurement tests count its occurrences there.
+	if (value === undefined) return "unknown";
+	return String(value ?? 0);
 }
 
 export async function run(options: {
@@ -128,6 +171,8 @@ export async function run(options: {
 	robompSessionP95Ms?: number;
 	jevBaseUrl?: string;
 	fakeSmol?: FakeSmolHandler;
+	smol?: CurrentSmolHarness;
+	mockedBaseline?: boolean;
 	robompRunner?: (issuesPath: string, jevBaseUrl?: string) => Promise<any>;
 }): Promise<MeasurementResults> {
 	const results = await runMeasurementHarness(options);
@@ -161,6 +206,7 @@ async function main() {
 	let robompSessionP95Ms: number | undefined;
 	let jevBaseUrl: string | undefined;
 	let fakeSmolPath: string | undefined;
+	let mockedBaseline = false;
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -192,6 +238,8 @@ async function main() {
 			fakeSmolPath = args[++i];
 		} else if (arg.startsWith("--fake-smol=")) {
 			fakeSmolPath = arg.slice("--fake-smol=".length);
+		} else if (arg === "--mocked-baseline") {
+			mockedBaseline = true;
 		}
 	}
 
@@ -214,8 +262,12 @@ async function main() {
 		robompSessionP95Ms,
 		jevBaseUrl,
 		fakeSmol,
+		mockedBaseline,
 	});
 
+	// Name the baseline, then print the verdict line (which is withheld text for
+	// a mocked baseline).
+	console.log(`baseline: ${results.currentBaseline ?? "unknown"} (${baselineLabel(results.currentBaseline)})`);
 	console.log(results.verdict);
 }
 

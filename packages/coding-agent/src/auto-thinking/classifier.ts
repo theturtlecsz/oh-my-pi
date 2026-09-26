@@ -99,6 +99,8 @@ export interface ClassifyDifficultyDeps {
 	signal?: AbortSignal;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	recordJevUsage?: (entry: JevUsageEntry) => void;
+	/** Receives the online classifier call's terminal message for per-call accounting. */
+	onCompletionUsage?: (message: AssistantMessage) => void;
 	fetch?: FetchImpl;
 }
 
@@ -262,6 +264,8 @@ async function classifyOnline(input: string, deps: ClassifyDifficultyDeps, ceili
 	if (response.stopReason === "error") {
 		throw new Error(`auto-thinking: online classification failed: ${response.errorMessage ?? "unknown error"}`);
 	}
+
+	deps.onCompletionUsage?.(response);
 
 	const text = extractText(response.content);
 	const effort = parseDifficultyLevel(text);

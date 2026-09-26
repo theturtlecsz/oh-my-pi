@@ -7,9 +7,13 @@ Measurement results comparing current smol chat classifiers and session triage a
 2. Unexpected-stop classification (`classifyUnexpectedStop`)
 3. Robomp issue triage prefilter (`run_prefilter`)
 
+Current-side baseline: {{baseline}}
+
 ## Results Summary
 
 ### 1. Auto-thinking Difficulty Classification
+
+Sample size: {{auto_thinking_sample_size}} prompts
 
 | Metric | Current (smol) | Jev |
 | --- | --- | --- |
@@ -21,6 +25,8 @@ Measurement results comparing current smol chat classifiers and session triage a
 | Off-list Rate | {{auto_thinking_current_off_list}} | {{auto_thinking_jev_off_list}} |
 
 ### 2. Unexpected-Stop Detection
+
+Sample size: {{unexpected_stop_sample_size}} turn ends
 
 | Metric | Current (smol) | Jev |
 | --- | --- | --- |
@@ -34,6 +40,8 @@ Measurement results comparing current smol chat classifiers and session triage a
 | Off-list Rate | {{unexpected_stop_current_off_list}} | {{unexpected_stop_jev_off_list}} |
 
 ### 3. Robomp Issue Triage Prefilter
+
+Sample size: {{robomp_sample_size}} issues
 
 | Metric | Current (Full Session) | Jev Prefilter |
 | --- | --- | --- |

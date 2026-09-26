@@ -2,6 +2,8 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import {
 	buildIssuesSet,
@@ -9,10 +11,12 @@ import {
 	extractTurnEndsFromSession,
 } from "../../../../docs/reports/jev-measurement/build-sets";
 import {
+	type CurrentSmolHarness,
 	type FakeSmolHandler,
 	type MeasurementResults,
 	verdict,
 	WP5_AMENDMENT,
+	WP5_VERDICT_WITHHELD,
 } from "../../../../docs/reports/jev-measurement/harness";
 import { renderReport, run } from "../../../../docs/reports/jev-measurement/run";
 import { type StubJevServer, startStubJevServer } from "./stub-jev-server";
@@ -676,6 +680,143 @@ describe("Jev measurement harness", () => {
 			expect(reportMarkdown).toContain("| Confident-Bucket Accuracy | - | 98.0% |");
 			expect(reportMarkdown).toContain("| Skip-Session Share | 0.0% | 25.0% |");
 			expect(wp5VerdictLines(reportMarkdown)).toEqual([WP5_AMENDMENT]);
+		});
+
+		it("fake-smol baseline is named and still permits the WP5 verdict", async () => {
+			const setsDir = path.join(tempDir.path(), "sets-fake-baseline");
+			const outDir = path.join(tempDir.path(), "out-fake-baseline");
+			await fs.mkdir(setsDir, { recursive: true });
+
+			await Bun.write(
+				path.join(setsDir, "prompts.jsonl"),
+				`${JSON.stringify({ prompt: "Refactor user authentication service", effort: "medium" })}\n`,
+			);
+			await Bun.write(
+				path.join(setsDir, "turn-ends.jsonl"),
+				`${JSON.stringify({ text: "I will now edit the file.", label: "continue" })}\n`,
+			);
+
+			const fakeSmol: FakeSmolHandler = {
+				classifyDifficulty: async () => ({ effort: "medium", cost: 0.0005, latencyMs: 1200 }),
+				classifyUnexpectedStop: async () => ({ unexpectedStop: true, cost: 0.0003, latencyMs: 900 }),
+			};
+
+			const results = await run({
+				setsDir,
+				outDir,
+				jevBaseUrl: stub.baseUrl,
+				fakeSmol,
+				robompRunner: async () => ({ accuracy: 1 }),
+			});
+
+			expect(results.currentBaseline).toBe("fake");
+			expect(results.features.auto_thinking.current.costPer1000).toBeCloseTo(0.5, 6);
+			expect(results.verdict).toBe(WP5_AMENDMENT);
+
+			const reportMarkdown = await Bun.file(path.join(outDir, "jev-measurement-report.md")).text();
+			expect(reportMarkdown).toContain("--fake-smol test handler (verdict allowed)");
+			expect(wp5VerdictLines(reportMarkdown)).toEqual([WP5_AMENDMENT]);
+		});
+
+		it("mocked baseline withholds the WP5 verdict line and names the mock", async () => {
+			const setsDir = path.join(tempDir.path(), "sets-mocked-baseline");
+			const outDir = path.join(tempDir.path(), "out-mocked-baseline");
+			await fs.mkdir(setsDir, { recursive: true });
+
+			const results = await run({ setsDir, outDir, jevBaseUrl: stub.baseUrl, mockedBaseline: true });
+
+			expect(results.currentBaseline).toBe("mocked");
+			expect(results.verdict).toBe(WP5_VERDICT_WITHHELD);
+			// The withheld sentence is what marks the fabrication; flipping the
+			// marker back to a real baseline restores a WP5 decision.
+			expect(verdict({ ...results, currentBaseline: "real" })).not.toBe(WP5_VERDICT_WITHHELD);
+
+			const reportMarkdown = await Bun.file(path.join(outDir, "jev-measurement-report.md")).text();
+			expect(reportMarkdown).toContain("mocked baseline (WP5 verdict withheld)");
+			expect(reportMarkdown).toContain(WP5_VERDICT_WITHHELD);
+			expect(wp5VerdictLines(reportMarkdown)).toEqual([]);
+		});
+
+		it("real current side measures per-call latency and provider-reported usage via an injected registry", async () => {
+			const setsDir = path.join(tempDir.path(), "sets-real-baseline");
+			const outDir = path.join(tempDir.path(), "out-real-baseline");
+			await fs.mkdir(setsDir, { recursive: true });
+
+			// The mock answers a FIXED value unrelated to the prompt's recorded
+			// label, so accuracy can only be 0 when the answer comes from the mock
+			// rather than from the label (the fabricating path would score 100%).
+			await Bun.write(
+				path.join(setsDir, "prompts.jsonl"),
+				`${JSON.stringify({ prompt: "Refactor user authentication service", effort: "medium" })}\n`,
+			);
+			await Bun.write(
+				path.join(setsDir, "turn-ends.jsonl"),
+				`${JSON.stringify({ text: "I will now edit the file.", label: "stop" })}\n`,
+			);
+
+			const mock = createMockModel({
+				id: "mock-model",
+				provider: "mock",
+				handler: (() => {
+					let call = 0;
+					return () => {
+						call += 1;
+						return {
+							content: [call === 1 ? "high" : "yes"],
+							stopReason: "stop" as const,
+							delayMs: 5,
+							usage: { cost: { total: 0.0042 } },
+						};
+					};
+				})(),
+			});
+			registerMockApi("measurement-harness-test");
+			try {
+				const settings = {
+					get: (key: string) => {
+						if (key === "providers.autoThinkingModel") return "online";
+						if (key === "providers.unexpectedStopModel") return "online";
+						return undefined;
+					},
+					getModelRole: (role: string) => (role === "tiny" || role === "smol" ? "mock/mock-model" : undefined),
+					getStorage: () => undefined,
+				} as unknown as CurrentSmolHarness["settings"];
+				const registry = {
+					getAvailable: () => [mock],
+					getApiKey: async () => "test-key",
+					getApiKeyForProvider: async () => "test-key",
+					resolver: () => async () => "test-key",
+				} as unknown as CurrentSmolHarness["registry"];
+
+				const results = await run({
+					setsDir,
+					outDir,
+					jevBaseUrl: stub.baseUrl,
+					smol: { settings, registry },
+					robompRunner: async () => ({ accuracy: 1 }),
+				});
+
+				expect(results.currentBaseline).toBe("real");
+				// 0.0042 per call * 1000, replacing the fabricated 0.0005 constant.
+				expect(results.features.auto_thinking.current.costPer1000).toBeCloseTo(4.2, 6);
+				expect(results.features.unexpected_stop.current.costPer1000).toBeCloseTo(4.2, 6);
+				// Latency is measured around the call (the mock delays 5ms), never
+				// the constant 1200/900 the faked handler reported.
+				expect(results.features.auto_thinking.current.p50LatencyMs).toBeGreaterThanOrEqual(5);
+				expect(results.features.auto_thinking.current.p50LatencyMs).toBeLessThan(1200);
+				expect(results.features.unexpected_stop.current.p50LatencyMs).toBeGreaterThanOrEqual(5);
+				expect(results.features.unexpected_stop.current.p50LatencyMs).toBeLessThan(900);
+				// The answer came from the model, not the item's label.
+				expect(results.features.auto_thinking.current.accuracy).toBe(0);
+				expect(results.features.unexpected_stop.current.accuracy).toBe(0);
+
+				const reportMarkdown = await Bun.file(path.join(outDir, "jev-measurement-report.md")).text();
+				expect(reportMarkdown).toContain(
+					"real configured smol model (measured latency and provider-reported usage)",
+				);
+			} finally {
+				unregisterCustomApis("measurement-harness-test");
+			}
 		});
 	});
 });

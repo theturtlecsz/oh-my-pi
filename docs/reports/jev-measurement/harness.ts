@@ -7,15 +7,25 @@
  */
 
 import type { Effort, Model } from "@oh-my-pi/pi-ai";
-import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { classifyDifficulty } from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-broker-config";
 import { classifyUnexpectedStop } from "@oh-my-pi/pi-coding-agent/session/unexpected-stop-classifier";
 import { type JevUsageEntry, resetDefaultJevBreaker } from "@oh-my-pi/pi-coding-agent/tiny/jev-client";
 import { $ } from "bun";
 
 export const WP5_AMENDMENT =
 	"No per-request router using a generative model; cheap calibrated classifiers permitted with recorded usage.";
+
+/**
+ * Emitted instead of a WP5 verdict line when the current side was produced by a
+ * mock rather than a real measurement. Deliberately not matched by
+ * `wp5VerdictLines`, so the report carries no WP5 decision on a mocked run.
+ */
+export const WP5_VERDICT_WITHHELD =
+	"WP5 verdict withheld: the current side is a mocked baseline, not a measurement.";
 
 export const JEV_COST_PER_MTOK_USD = 0.042;
 
@@ -103,6 +113,15 @@ export function isMeasuredRobomp(robomp: RobompFeature): robomp is FeatureCompar
 	return robomp.current.accuracy !== null && robomp.jev.accuracy !== null;
 }
 
+/**
+ * Which implementation supplied the "Current (smol)" side of a feature.
+ * `real` is the owner's configured smol role through the normal classifiers
+ * (a test may inject its settings/registry so no network is touched); `fake` is
+ * the `--fake-smol` handler; `mocked` is an explicitly mocked baseline. A
+ * `mocked` baseline withholds the WP5 verdict line; `real` and `fake` allow it.
+ */
+export type MeasurementBaseline = "real" | "fake" | "mocked";
+
 export interface MeasurementResults {
 	features: {
 		auto_thinking: FeatureComparison;
@@ -110,6 +129,14 @@ export interface MeasurementResults {
 		robomp: RobompFeature;
 	};
 	verdict?: string;
+	/** Which implementation supplied the current side. Absent on legacy results. */
+	currentBaseline?: MeasurementBaseline;
+	/** Per-feature dataset size; `null` for robomp when it was not measured. */
+	sampleSizes?: {
+		auto_thinking: number;
+		unexpected_stop: number;
+		robomp: number | null;
+	};
 	/** True when a measured robomp run lacked session cost/latency flags. Null when robomp was not measured. */
 	robompSessionFlagsMissing?: boolean | null;
 }
@@ -117,6 +144,45 @@ export interface MeasurementResults {
 export interface FakeSmolHandler {
 	classifyDifficulty?: (prompt: string) => Promise<{ effort?: string; cost?: number; latencyMs?: number }>;
 	classifyUnexpectedStop?: (text: string) => Promise<{ unexpectedStop?: boolean; cost?: number; latencyMs?: number }>;
+}
+
+/**
+ * Test-only seam for the current side. When omitted, the harness uses the
+ * owner's on-disk settings and the real model registry, so the current side
+ * runs the configured smol role with no mock in the loop. Tests inject a
+ * settings/registry pair whose available model answers through the pi-ai mock
+ * provider, so the real `classifyDifficulty` / `classifyUnexpectedStop` path
+ * runs with no network.
+ */
+export interface CurrentSmolHarness {
+	settings: Settings;
+	registry: ModelRegistry;
+}
+
+/** Settings + registry the current side classifies through. */
+interface CurrentSmolContext {
+	settings: Settings;
+	registry: ModelRegistry;
+	/** Provider-reported cost of the most recent current-side classifier call. */
+	usageCostUsd: number;
+}
+
+/**
+ * A settings view that forces the JeV decision path off, so the current side
+ * measures the plain smol classifier rather than a JeV round trip. Every other
+ * path falls through to the wrapped settings unchanged.
+ */
+function withoutJev(settings: Settings): Settings {
+	const forcedOff = new Set(["jev.enabled", "jev.autoThinking", "jev.unexpectedStop"]);
+	return new Proxy(settings, {
+		get(target, prop, receiver) {
+			if (prop === "get") {
+				return (path: string) => (forcedOff.has(path) ? false : target.get(path as never));
+			}
+			const value = Reflect.get(target, prop, receiver);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
 }
 
 export interface MeasurementRunOptions {
@@ -128,6 +194,13 @@ export interface MeasurementRunOptions {
 	robompSessionP50Ms?: number;
 	robompSessionP95Ms?: number;
 	fakeSmol?: FakeSmolHandler;
+	/** Settings/registry for the current side. Discovered from disk when omitted. */
+	smol?: CurrentSmolHarness;
+	/**
+	 * Mark the current side as a deliberately mocked baseline (test-only), which
+	 * suppresses the WP5 verdict line. A real or `--fake-smol` run allows it.
+	 */
+	mockedBaseline?: boolean;
 	robompRunner?: (issuesPath: string, jevBaseUrl?: string) => Promise<Partial<FeatureMetricSummary>>;
 }
 
@@ -139,6 +212,12 @@ export function percentile(values: number[], p: number): number {
 }
 
 export function verdict(results: MeasurementResults): string {
+	// A mocked current side is a fabricated baseline: no WP5 decision can be
+	// drawn from it, so withhold the verdict line entirely.
+	if (results.currentBaseline === "mocked") {
+		return WP5_VERDICT_WITHHELD;
+	}
+
 	const failedCriteria: string[] = [];
 
 	if (results.robompSessionFlagsMissing) {
@@ -230,12 +309,27 @@ function makeMockRegistry(model: Model): any {
 	};
 }
 
+/**
+ * Resolve the current-side settings/registry. With `injected` (tests) the
+ * harness classifies through the supplied mock registry with no network;
+ * otherwise it loads the owner's on-disk settings and the real model registry,
+ * so the current side is the same smol role `omp` itself uses.
+ */
+async function resolveCurrentSmolContext(injected: CurrentSmolHarness | undefined): Promise<CurrentSmolContext> {
+	if (injected) return { settings: injected.settings, registry: injected.registry, usageCostUsd: 0 };
+	const settings = await Settings.loadReadOnly();
+	const registry = new ModelRegistry(await discoverAuthStorage(), undefined, { settings });
+	return { settings, registry, usageCostUsd: 0 };
+}
+
 export async function evaluateAutoThinkingFeature(
 	prompts: PromptSetItem[],
 	options: {
 		jevBaseUrl?: string;
 		apiKey?: string;
 		fakeSmol?: FakeSmolHandler;
+		current?: CurrentSmolContext;
+		smol?: CurrentSmolHarness;
 	},
 ): Promise<FeatureComparison> {
 	const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -247,6 +341,13 @@ export async function evaluateAutoThinkingFeature(
 		contextWindow: 200000,
 		maxTokens: 8192,
 	} as Model);
+	// The current side never touches Jev: it is the plain smol classifier, and
+	// its latency/cost must reflect that call, not a JeV round trip. With no
+	// samples there is nothing to classify, so the current context stays
+	// unresolved (a zero-sample run must not touch the owner's registry).
+	const useFake = Boolean(options.fakeSmol?.classifyDifficulty);
+	const current =
+		useFake || prompts.length === 0 ? undefined : (options.current ?? (await resolveCurrentSmolContext(options.smol)));
 
 	// Evaluate Jev on
 	const jevLatencies: number[] = [];
@@ -318,7 +419,37 @@ export async function evaluateAutoThinkingFeature(
 		const expectedEffort = (item.effort || item.label || "").toLowerCase();
 		const promptText = item.prompt || item.text || "";
 
-		if (options.fakeSmol?.classifyDifficulty) {
+		// A resolved context means the real path; the fake handler replaces it
+		// only when `--fake-smol` was supplied, so the two never coexist.
+		if (current) {
+			// Real path: the configured smol model's classifier, with JeV disabled
+			// for this call so the measurement is the current implementation, not
+			// JeV. Latency is measured per call; cost comes from the provider's
+			// reported usage on the terminal assistant message.
+			current.usageCostUsd = 0;
+			const start = performance.now();
+			let result: Effort | undefined;
+			try {
+				result = await classifyDifficulty(promptText, {
+					settings: withoutJev(current.settings),
+					registry: current.registry,
+					model: dummyModel,
+					sessionId: "harness-session-at-current",
+					onCompletionUsage: message => {
+						current.usageCostUsd += message.usage.cost.total;
+					},
+				});
+			} catch {
+				currentUnparseable++;
+			}
+			const duration = performance.now() - start;
+			currentLatencies.push(duration);
+			currentCostTotal += current.usageCostUsd;
+
+			if (result !== undefined && String(result).toLowerCase() === expectedEffort) {
+				currentCorrect++;
+			}
+		} else if (options.fakeSmol?.classifyDifficulty) {
 			const start = performance.now();
 			const res = await options.fakeSmol.classifyDifficulty(promptText);
 			const duration = res.latencyMs ?? performance.now() - start;
@@ -328,52 +459,6 @@ export async function evaluateAutoThinkingFeature(
 				if (res.effort.toLowerCase() === expectedEffort) currentCorrect++;
 			} else {
 				currentUnparseable++;
-			}
-		} else {
-			// Mock model returning expected effort or low
-			const resp: MockResponse = {
-				content: [{ type: "text", text: expectedEffort || "low" }],
-				stopReason: "stop",
-				usage: {
-					input: 200,
-					output: 10,
-					totalTokens: 210,
-					cost: { total: 0.0005 },
-				} as any,
-			};
-			const mock = createMockModel({ responses: [resp] });
-			const settings = {
-				get(path: string) {
-					if (path === "jev.enabled") return false;
-					if (path === "jev.autoThinking") return false;
-					if (path === "providers.autoThinkingModel") return "online";
-					return undefined;
-				},
-				getModelRole(role: string) {
-					return role === "smol" ? `${mock.provider}/${mock.id}` : undefined;
-				},
-			} as any;
-			const registry = makeMockRegistry(mock);
-			const deps = {
-				settings,
-				registry,
-				model: dummyModel,
-				sessionId: "harness-session-at-current",
-			};
-
-			const start = performance.now();
-			let result: Effort | undefined;
-			try {
-				result = await classifyDifficulty(promptText, deps);
-			} catch {
-				currentUnparseable++;
-			}
-			const duration = performance.now() - start;
-			currentLatencies.push(duration);
-			currentCostTotal += 0.0005;
-
-			if (result !== undefined && String(result).toLowerCase() === expectedEffort) {
-				currentCorrect++;
 			}
 		}
 	}
@@ -406,6 +491,8 @@ export async function evaluateUnexpectedStopFeature(
 		jevBaseUrl?: string;
 		apiKey?: string;
 		fakeSmol?: FakeSmolHandler;
+		current?: CurrentSmolContext;
+		smol?: CurrentSmolHarness;
 	},
 ): Promise<FeatureComparison> {
 	const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -417,6 +504,11 @@ export async function evaluateUnexpectedStopFeature(
 		contextWindow: 200000,
 		maxTokens: 8192,
 	} as Model);
+	const useFake = Boolean(options.fakeSmol?.classifyUnexpectedStop);
+	const current =
+		useFake || turnEnds.length === 0
+			? undefined
+			: (options.current ?? (await resolveCurrentSmolContext(options.smol)));
 
 	// Evaluate Jev on
 	const jevLatencies: number[] = [];
@@ -494,7 +586,36 @@ export async function evaluateUnexpectedStopFeature(
 	for (const item of turnEnds) {
 		const isContinue = item.label === "continue";
 
-		if (options.fakeSmol?.classifyUnexpectedStop) {
+		// A resolved context means the real path; the fake handler replaces it
+		// only when `--fake-smol` was supplied, so the two never coexist.
+		if (current) {
+			// Real path: the configured smol model's classifier with JeV disabled,
+			// measuring per-call latency and the provider-reported usage cost.
+			current.usageCostUsd = 0;
+			const start = performance.now();
+			let result: boolean | undefined;
+			try {
+				result = await classifyUnexpectedStop(item.text, {
+					settings: withoutJev(current.settings),
+					registry: current.registry,
+					sessionId: "harness-session-us-current",
+					onCompletionUsage: message => {
+						current.usageCostUsd += message.usage.cost.total;
+					},
+				});
+			} catch {
+				currentUnparseable++;
+			}
+			const duration = performance.now() - start;
+			currentLatencies.push(duration);
+			currentCostTotal += current.usageCostUsd;
+
+			const pred = result === true;
+			if (pred && isContinue) currentTP++;
+			else if (pred && !isContinue) currentFP++;
+			else if (!pred && !isContinue) currentTN++;
+			else if (!pred && isContinue) currentFN++;
+		} else if (options.fakeSmol?.classifyUnexpectedStop) {
 			const start = performance.now();
 			const res = await options.fakeSmol.classifyUnexpectedStop(item.text);
 			const duration = res.latencyMs ?? performance.now() - start;
@@ -511,52 +632,6 @@ export async function evaluateUnexpectedStopFeature(
 				if (isContinue) currentFN++;
 				else currentTN++;
 			}
-		} else {
-			const resp: MockResponse = {
-				content: [{ type: "text", text: isContinue ? "YES" : "NO" }],
-				stopReason: "stop",
-				usage: {
-					input: 150,
-					output: 5,
-					totalTokens: 155,
-					cost: { total: 0.0003 },
-				} as any,
-			};
-			const mock = createMockModel({ responses: [resp] });
-			const settings = {
-				get(path: string) {
-					if (path === "jev.enabled") return false;
-					if (path === "jev.unexpectedStop") return false;
-					if (path === "providers.unexpectedStopModel") return "online";
-					return undefined;
-				},
-				getModelRole(role: string) {
-					return role === "smol" ? `${mock.provider}/${mock.id}` : undefined;
-				},
-			} as any;
-			const registry = makeMockRegistry(mock);
-			const deps = {
-				settings,
-				registry,
-				sessionId: "harness-session-us-current",
-			};
-
-			const start = performance.now();
-			let result: boolean | undefined;
-			try {
-				result = await classifyUnexpectedStop(item.text, deps);
-			} catch {
-				currentUnparseable++;
-			}
-			const duration = performance.now() - start;
-			currentLatencies.push(duration);
-			currentCostTotal += 0.0003;
-
-			const pred = result === true;
-			if (pred && isContinue) currentTP++;
-			else if (pred && !isContinue) currentFP++;
-			else if (!pred && !isContinue) currentTN++;
-			else if (!pred && isContinue) currentFN++;
 		}
 	}
 
@@ -697,16 +772,29 @@ export async function runMeasurementHarness(options: MeasurementRunOptions): Pro
 	const turnEnds = await loadJsonl<TurnEndSetItem>(turnEndsPath);
 	const issues = await loadJsonl<IssueSetItem>(issuesPath);
 
+	// One current-side context per run, resolved only when there is real work and
+	// no `--fake-smol` replacement: the real configured smol role unless a test
+	// injected a mock registry. A robomp-only or zero-sample run stays off disk.
+	const needsRealCurrent = !options.fakeSmol && (prompts.length > 0 || turnEnds.length > 0);
+	const current = needsRealCurrent ? await resolveCurrentSmolContext(options.smol) : undefined;
+	const currentBaseline: MeasurementBaseline = options.fakeSmol
+		? "fake"
+		: options.mockedBaseline
+			? "mocked"
+			: "real";
+
 	const autoThinking = await evaluateAutoThinkingFeature(prompts, {
 		jevBaseUrl: options.jevBaseUrl,
 		apiKey: options.apiKey,
 		fakeSmol: options.fakeSmol,
+		current,
 	});
 
 	const unexpectedStop = await evaluateUnexpectedStopFeature(turnEnds, {
 		jevBaseUrl: options.jevBaseUrl,
 		apiKey: options.apiKey,
 		fakeSmol: options.fakeSmol,
+		current,
 	});
 
 	// No issue rows means this machine has no robomp history. Null robomp fields
@@ -730,6 +818,12 @@ export async function runMeasurementHarness(options: MeasurementRunOptions): Pro
 			auto_thinking: autoThinking,
 			unexpected_stop: unexpectedStop,
 			robomp,
+		},
+		currentBaseline,
+		sampleSizes: {
+			auto_thinking: prompts.length,
+			unexpected_stop: turnEnds.length,
+			robomp: issues.length > 0 ? issues.length : null,
 		},
 		robompSessionFlagsMissing: sessionFlagsMissing,
 	};
