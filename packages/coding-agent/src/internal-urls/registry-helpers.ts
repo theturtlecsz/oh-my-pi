@@ -23,6 +23,17 @@ export function resetRegisteredArtifactDirsForTests(): void {
 }
 
 /**
+ * Snapshot and clear the extra artifacts dirs so a test can remove the
+ * temporary directories its run registered. Kept side-effect-free here (no
+ * filesystem access) so callers own the deletion strategy.
+ */
+export function takeRegisteredArtifactDirsForTests(): string[] {
+	const dirs = [...extraArtifactsDirs];
+	extraArtifactsDirs.clear();
+	return dirs;
+}
+
+/**
  * Snapshot of artifacts dirs for every registered session, deduped.
  *
  * Collects TWO candidate dirs per ref, because a subagent reads from its

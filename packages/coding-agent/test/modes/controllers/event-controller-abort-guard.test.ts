@@ -28,6 +28,8 @@ import { TERMINAL } from "@oh-my-pi/pi-tui";
 
 const originalWarpProtocolVersion = process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
 
+let tempDir: string | undefined;
+
 function restoreWarpProtocolEnvironment(): void {
 	if (originalWarpProtocolVersion === undefined) {
 		delete process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
@@ -44,7 +46,7 @@ beforeEach(async () => {
 	resetSettingsForTest();
 	// Neutral baseline for notification gates; afterEach restores the suite's inherited value.
 	delete process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
-	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-abortguard-"));
+	tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-abortguard-"));
 	await Settings.init({ inMemory: true, cwd: tempDir });
 });
 
@@ -52,6 +54,8 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	resetSettingsForTest();
 	restoreWarpProtocolEnvironment();
+	if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+	tempDir = undefined;
 });
 
 type StopReason = "stop" | "aborted" | "error";

@@ -19,8 +19,11 @@ import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 
-afterEach(() => {
+const transientTempDirs: TempDir[] = [];
+
+afterEach(async () => {
 	vi.restoreAllMocks();
+	await Promise.all(transientTempDirs.splice(0).map(dir => dir.remove()));
 });
 
 function firstTextBlockText(content: Array<TextContent | ImageContent>): string {
@@ -31,6 +34,13 @@ function firstTextBlockText(content: Array<TextContent | ImageContent>): string 
 
 function makeTempDir(prefix = "@pi-autoresearch-tools-"): TempDir {
 	return TempDir.createSync(prefix);
+}
+
+/** Like makeTempDir, but removed by the shared afterEach instead of the caller. */
+function makeTransientTempDir(prefix = "@pi-autoresearch-tools-"): TempDir {
+	const dir = makeTempDir(prefix);
+	transientTempDirs.push(dir);
+	return dir;
 }
 
 function dashboardStub() {
@@ -107,7 +117,7 @@ afterAll(async () => {
 // Independent working copy of the template repo: baseline commit on `main`,
 // committer identity configured, ready for per-test branch/commit scenarios.
 function freshRepo(): { dir: string; baselineCommit: string } {
-	const dir = makeTempDir().path();
+	const dir = makeTransientTempDir().path();
 	fs.cpSync(templateRepo.path(), dir, { recursive: true });
 	return { dir, baselineCommit: templateBaselineCommit };
 }
@@ -115,7 +125,7 @@ function freshRepo(): { dir: string; baselineCommit: string } {
 // Like freshRepo, but already on an `autoresearch/*` branch with the harness
 // committed — the baseline for log_experiment's on-branch keep/discard paths.
 function freshBranchRepo(): { dir: string } {
-	const dir = makeTempDir().path();
+	const dir = makeTransientTempDir().path();
 	fs.cpSync(templateBranchRepo.path(), dir, { recursive: true });
 	return { dir };
 }
@@ -567,7 +577,7 @@ describe("log_experiment", () => {
 	it("flags previously logged runs via flag_runs", async () => {
 		// Bare temp dir (no repo): the session is created with `branch: null`, so the
 		// tool's branch lookup must also resolve to null to match it.
-		const dir = makeTempDir().path();
+		const dir = makeTransientTempDir().path();
 		const storage = await openAutoresearchStorage(dir);
 		const session = storage.openSession({
 			name: "speed",

@@ -21,10 +21,24 @@ import type {
 import { __resetProxyCache } from "@oh-my-pi/pi-ai/utils/proxy";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import type { TempDir } from "@oh-my-pi/pi-utils";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { withEnv } from "./helpers";
 
-const { getAgentDir, setAgentDir, TempDir } = piUtils;
+const { getAgentDir, setAgentDir } = piUtils;
+
+const agentTempDirs: TempDir[] = [];
+
+/**
+ * Create the per-test agent dir and remember it so afterEach removes it. Every
+ * test points `setAgentDir` at a fresh mkdtemp dir; without this the suite left
+ * one `@pi-codex-*-` entry per test in os.tmpdir().
+ */
+function makeAgentTempDir(prefix: string): TempDir {
+	const dir = piUtils.TempDir.createSync(prefix);
+	agentTempDirs.push(dir);
+	return dir;
+}
 
 const originalAgentDir = getAgentDir();
 const originalWebSocket = global.WebSocket;
@@ -63,6 +77,7 @@ afterEach(() => {
 	for (const key in originalProxyEnv) restoreEnv(key, originalProxyEnv[key]);
 	__resetProxyCache();
 	vi.restoreAllMocks();
+	for (const dir of agentTempDirs.splice(0)) dir.removeSync();
 });
 
 function createCodexTestToken(accountId = "acc_test"): string {
@@ -333,7 +348,7 @@ class MockWebSocket {
 
 describe("openai-codex streaming", () => {
 	it("normalizes Codex response endpoint base URLs", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
@@ -367,7 +382,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("omits chatgpt account headers for opaque custom provider API keys", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const context = createCodexTestContext();
 		const model: Model<"openai-codex-responses"> = buildModel({
@@ -416,7 +431,7 @@ describe("openai-codex streaming", () => {
 		// A region-pinned enterprise workspace answers 401 `Workspace is not
 		// authorized in this region.` when the request egresses elsewhere and the
 		// client did not declare the residency the token already carries.
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const context = createCodexTestContext();
 		const model = { ...createCodexTestModel(), preferWebsockets: false };
@@ -439,7 +454,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("omits the residency header for accounts without the claim", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const context = createCodexTestContext();
 		const model = { ...createCodexTestModel(), preferWebsockets: false };
@@ -462,7 +477,7 @@ describe("openai-codex streaming", () => {
 
 	it("keeps a caller-supplied residency header over the token claim", async () => {
 		// A proxy fronting Codex may need a different value than the token states.
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const context = createCodexTestContext();
 		const model = { ...createCodexTestModel(), preferWebsockets: false };
@@ -485,7 +500,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("omits chatgpt account headers on opaque custom provider websockets", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		let capturedHeaders: WsHeaders | undefined;
 		class OpaqueKeyWebSocket extends MockWebSocket {
@@ -534,7 +549,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("declares the workspace data residency on the websocket handshake", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		let capturedHeaders: WsHeaders | undefined;
 		class ResidencyWebSocket extends MockWebSocket {
@@ -565,7 +580,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("sends an async onPayload replacement body", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
@@ -595,7 +610,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("forwards SimpleStreamOptions textVerbosity into the Codex request body", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
@@ -621,7 +636,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("omits optional response controls from default SimpleStreamOptions", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
@@ -1041,7 +1056,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("maps end_turn=false on the terminal event to a pause_turn stop", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
@@ -1095,7 +1110,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("persists final tool-call args when SSE finalizes via output_item.done without an args.done event", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
@@ -1129,7 +1144,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("routes interleaved function-call argument deltas to the matching open item", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
@@ -1242,7 +1257,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("uses output_index to finalize idless function and custom tool calls", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
@@ -1307,7 +1322,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("routes fully keyless deltas/done to the latest open item via currentEntry", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
@@ -1356,7 +1371,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("prefers a later id-only current item over an older output_index entry on unkeyed events", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
@@ -1423,7 +1438,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("waits for caller abort when SSE streams only no-progress status events", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const context = createCodexTestContext();
@@ -1452,7 +1467,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("parses websocket JSON from non-string payloads", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		class BinaryPayloadWebSocket extends MockWebSocket {
@@ -1509,7 +1524,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("forwards websocket frames through onSseEvent for the raw-SSE debug viewer", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 
@@ -1563,7 +1578,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("separates websocket terminal orchestration usage from prompt cache buckets", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 
@@ -1615,7 +1630,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("omits request-body headers and replaces stale beta headers for websocket handshakes", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		let capturedHeaders: Record<string, string> | undefined;
@@ -1768,7 +1783,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("sends the Responses Lite marker on the upgrade and in response.create client_metadata", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		let capturedHeaders: WsHeaders | undefined;
@@ -1845,7 +1860,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("streams SSE responses into AssistantMessageEventStream", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -1973,7 +1988,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("includes the default service_tier in SSE payloads when requested", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -2029,7 +2044,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("fails truncated SSE streams that never emit a terminal response event", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -2095,7 +2110,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("stops reading SSE responses after a terminal response event", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -2142,7 +2157,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("surfaces 429 errors after retry budget checks without body reuse failures", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -2202,7 +2217,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("retries transient model_error SSE events before surfacing an error", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -2267,7 +2282,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("retries a pre-response watchdog timeout with a fresh attempt signal", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		vi.useFakeTimers();
@@ -2317,7 +2332,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("bounds Codex SSE socket-close attempts and preserves the default when omitted", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
@@ -2356,7 +2371,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("does not retry a caller abort before response headers", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const controller = new AbortController();
@@ -2393,7 +2408,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("sets conversation_id/session_id headers and prompt_cache_key when sessionId is provided", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -2495,7 +2510,7 @@ describe("openai-codex streaming", () => {
 		await streamResult.result();
 	});
 	it("keeps prompt_cache_key separate from Codex conversation headers", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const token = createCodexTestToken();
@@ -2583,7 +2598,7 @@ describe("openai-codex streaming", () => {
 		// `{"detail":"Unsupported parameter: temperature"}` 400 for any of
 		// these keys, so the provider MUST drop them even when the caller's
 		// `StreamOptions` carries non-default values.
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const token = createCodexTestToken();
@@ -2628,7 +2643,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("rejects gpt-5.3-codex minimal reasoning effort instead of clamping", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -2725,7 +2740,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("does not set conversation_id/session_id headers when sessionId is not provided", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -2811,7 +2826,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("falls back to SSE when websocket connect fails", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const payload = Buffer.from(
 			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
@@ -2884,7 +2899,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("carries fatal websocket fallback into isolated compaction transport", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -2973,7 +2988,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("isolates compaction transport and preserves main mid-turn state", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -3185,7 +3200,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("seeds the first sample from pre-turn compaction turn-state", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const websocketInstances: MockWebSocket[] = [];
@@ -3308,7 +3323,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("includes service_tier in websocket payloads when requested", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -3389,7 +3404,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("continues websocket chains across Standard → Fast → Standard service tiers", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const fetchMock = vi.fn(async () => {
@@ -3490,7 +3505,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("records websocket delta request and usage diagnostics", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const payload = Buffer.from(
 			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
@@ -3643,7 +3658,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("chains websocket tool output after normalizing an oversized call id", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const longCallId = `call_${"x".repeat(80)}`;
@@ -3744,7 +3759,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("chains websocket custom-tool output when live replay retains the provider item id", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-custom-append-");
+		const tempDir = makeAgentTempDir("@pi-codex-custom-append-");
 		setAgentDir(tempDir.path());
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const customInput = "print('ok')";
@@ -3850,7 +3865,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("does not enable websocket append state for a non-replayable response", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		class NonReplayableResponseWebSocket extends MockWebSocket {
@@ -3894,7 +3909,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("drops a stale terminal frame from the prior response leaking onto a reused websocket", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stale-frame-");
+		const tempDir = makeAgentTempDir("@pi-codex-stale-frame-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const fetchMock = vi.fn(async () => {
@@ -3990,7 +4005,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("applies onPayload to the final chained websocket frame", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-ws-payload-hook-");
+		const tempDir = makeAgentTempDir("@pi-codex-ws-payload-hook-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const sentRequests: Array<Record<string, unknown>> = [];
@@ -4107,7 +4122,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("preserves turn-state when append matching falls back to full context", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const fetchMock = vi.fn(async () => {
@@ -4205,7 +4220,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("retries websocket continuations with full context when previous_response_id expires", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const sentRequests: Array<Record<string, unknown>> = [];
@@ -4322,7 +4337,7 @@ describe("openai-codex streaming", () => {
 		["a pre-response rate_limit_exceeded rejection", "rate_limit_exceeded", false],
 		["slow_down interrupts response progress", "slow_down", true],
 	] as const)("preserves websocket continuation when %s", async (_case, code, emitPartialResponse) => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const fetchMock = vi.fn(async () => {
@@ -4438,7 +4453,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("retries websocket continuations when a proxy reports a stale previous response anchor", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const sentRequests: Array<Record<string, unknown>> = [];
@@ -4547,7 +4562,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("uses websocket v2 beta header when v2 mode is enabled", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		Bun.env.PI_CODEX_WEBSOCKET_V2 = "1";
 
@@ -4605,7 +4620,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("waits for caller abort when a prewarmed websocket is silent before its first event", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -4672,7 +4687,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("surfaces a websocket idle-timeout error when status events never make semantic progress", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const fetchMock = vi.fn(async () => {
@@ -4749,7 +4764,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("retries, then surfaces an error, when whitespace-only tool-call argument deltas never recover", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const fetchMock = vi.fn(async () => {
@@ -4813,7 +4828,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("drops the degenerate tool call and recovers when a retried websocket stream completes", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const fetchMock = vi.fn(async () => {
@@ -4944,7 +4959,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("interrupts whitespace-only custom tool input deltas", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const fetchMock = vi.fn(async () => {
@@ -4995,7 +5010,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("delivers a queued terminal event when the server closes immediately after it", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const fetchMock = vi.fn(async () => {
@@ -5038,7 +5053,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("surfaces a connection-limit error instead of replaying a delivered tool call over SSE", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const fetchMock = vi.fn(async () => {
@@ -5087,7 +5102,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("joins an in-flight websocket handshake instead of tearing it down", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const fetchMock = vi.fn(async () => {
@@ -5157,7 +5172,7 @@ describe("openai-codex streaming", () => {
 	}, 15_000); // real handshake join; 5s default flakes under full-suite load
 
 	it("surfaces a whitespace flood arriving after a delivered tool call instead of replaying", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
 		const fetchMock = vi.fn(async () => {
@@ -5216,7 +5231,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("resets websocket append state after an aborted request closes the connection", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -5344,7 +5359,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("replays over SSE when websocket closes after buffered output without a terminal event", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -5422,7 +5437,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("resets append state and stale turn headers when websocket requests diverge", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -5529,7 +5544,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("reuses a prewarmed websocket connection across turns", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -5650,7 +5665,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("does not throw when closing a stale socket", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const fetchMock = vi.fn(async () => {
 			throw new Error("SSE fallback should not be called");
@@ -5701,7 +5716,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("scopes x-codex-turn-state to the current turn on SSE requests", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -5815,7 +5830,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("isolates turn-state by credential, backend, model, and Responses Lite mode", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const firstModel: Model<"openai-codex-responses"> = {
 			...createCodexTestModel("https://chatgpt.com/backend-api"),
@@ -5921,7 +5936,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("isolates standalone compaction from a live turn-state", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const requestTurnStates: Array<string | null> = [];
 		let requestCount = 0;
@@ -6004,7 +6019,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("drops stale turn-state when direct pre-turn compaction opens the next turn", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const requestTurnStates: Array<string | null> = [];
 		let requestCount = 0;
@@ -6085,7 +6100,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("captures x-codex-turn-state from response.metadata event headers", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const requestTurnStates: Array<string | null> = [];
@@ -6160,7 +6175,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("drops stale frames from a prior response before sending the next websocket request", async () => {
-		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		const tempDir = makeAgentTempDir("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
 		const payload = Buffer.from(
@@ -6284,7 +6299,7 @@ describe("openai-codex SSE statelessness", () => {
 		// (codex-rs carries it only on websocket `response.create` frames);
 		// strict chatgpt.com gateway validators 400 it with
 		// `{"detail":"Unsupported parameter: previous_response_id"}`.
-		const tempDir = TempDir.createSync("@pi-codex-sse-stateless-");
+		const tempDir = makeAgentTempDir("@pi-codex-sse-stateless-");
 		setAgentDir(tempDir.path());
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const fetchMock = createCapturingFetch(sentRequests);

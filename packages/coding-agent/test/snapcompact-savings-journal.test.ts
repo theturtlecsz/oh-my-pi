@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,6 +8,12 @@ import {
 	createSnapcompactSavingsRecorder,
 	readSnapcompactSavingsJournal,
 } from "@oh-my-pi/pi-coding-agent/session/snapcompact-savings-journal";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+});
 
 function model(provider = "anthropic", id = "claude-test"): Model {
 	return buildModel({
@@ -26,6 +32,7 @@ function model(provider = "anthropic", id = "claude-test"): Model {
 
 async function tmpJournal(): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "snap-savings-journal-"));
+	tempDirs.push(dir);
 	return path.join(dir, "snapcompact-savings.jsonl");
 }
 

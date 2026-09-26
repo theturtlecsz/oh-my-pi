@@ -10,7 +10,10 @@ import { disposeAllVmContexts } from "../../src/eval/js/context-manager";
 import { executeJs } from "../../src/eval/js/executor";
 import { disposeAllKernelSessions, executePython } from "../../src/eval/py/executor";
 import { AgentProtocolHandler } from "../../src/internal-urls/agent-protocol";
-import { resetRegisteredArtifactDirsForTests } from "../../src/internal-urls/registry-helpers";
+import {
+	resetRegisteredArtifactDirsForTests,
+	takeRegisteredArtifactDirsForTests,
+} from "../../src/internal-urls/registry-helpers";
 import type { PlanModeState } from "../../src/plan-mode/state";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import type { AgentSession } from "../../src/session/agent-session";
@@ -130,6 +133,18 @@ function makeEvalSession(
 }
 
 /**
+ * Remove every temporary artifacts directory the production `leaseArtifacts`
+ * path registered under os.tmpdir() during the test. A session without a
+ * sessionFile (the default in `makeSession`) makes the lease temporary, and the
+ * paths that deliberately retain it (`apply=false`, `handle`) leave the dir on
+ * disk; nothing else owns its removal, so the suite must.
+ */
+async function removeLeasedTempArtifactDirs(): Promise<void> {
+	const dirs = takeRegisteredArtifactDirsForTests().filter(dir => path.basename(dir).startsWith("omp-eval-agent-"));
+	await Promise.all(dirs.map(dir => fs.rm(dir, { recursive: true, force: true })));
+}
+
+/**
  * Spy `runSubprocess` so a `parallel()` fan-out overlaps deterministically: every
  * bridge call parks until the pool saturates at `limit` concurrent calls in flight,
  * then all proceed. Proves the pool reaches its ceiling without a wall-clock sleep —
@@ -158,9 +173,10 @@ function spyConcurrencyBarrier(limit: number): { maxInFlight: () => number } {
 }
 
 describe("runEvalAgent", () => {
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
 		AgentRegistry.resetGlobalForTests();
+		await removeLeasedTempArtifactDirs();
 		resetRegisteredArtifactDirsForTests();
 	});
 
@@ -539,9 +555,11 @@ describe("agent() through eval runtimes", () => {
 	// these tests observe. Torn down in afterAll via disposeAllVmContexts().
 	const sharedJsSessionId = "agent-bridge-shared-js";
 
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
 		vi.useRealTimers();
+		await removeLeasedTempArtifactDirs();
+		resetRegisteredArtifactDirsForTests();
 	});
 
 	afterAll(async () => {
@@ -1096,8 +1114,10 @@ describe("agent() through eval runtimes", () => {
 });
 
 describe("runEvalAgent isolation", () => {
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
+		await removeLeasedTempArtifactDirs();
+		resetRegisteredArtifactDirsForTests();
 	});
 
 	function isolatedSession(overrides: Partial<Parameters<typeof Settings.isolated>[0]> = {}): ToolSession {
@@ -1568,7 +1588,12 @@ describe("runEvalAgent isolation", () => {
 	it("still cleans the temp artifacts dir when apply succeeds", async () => {
 		mockAgents();
 		mockIsolationContext();
-		const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+		// Pass the real rm through: the production cleanup unregisters the dir, so
+		// a mock that swallows the delete would leave it on disk with no owner.
+		const realRm = fs.rm;
+		const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+			await realRm(target as Parameters<typeof realRm>[0], options as Parameters<typeof realRm>[1]);
+		});
 		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
 			singleResult(opts.baseOptions, { output: "captured", patchPath: `/artifacts/${opts.agentId}.patch` }),
 		);
