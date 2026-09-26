@@ -5,6 +5,7 @@
 ### Added
 
 - Synced contract digest for record_external_delivery (OMP-283).
+- Research client bindings generated from the canonical contract schemas: campaigns, trials, observations, deliverable bindings, and component compatibility (OMP-322).
 
 ### Fixed
 

@@ -5,6 +5,27 @@
  */
 import * as os from "node:os";
 import { WORK_CONTRACT_SHA256 } from "./contract";
+import type {
+	AdmitResearchCampaignPayload,
+	AdmitResearchCampaignResult,
+	BindResearchDeliverablePayload,
+	BindResearchDeliverableResult,
+	CancelResearchCampaignPayload,
+	CancelResearchCampaignResult,
+	ConcludeResearchCampaignPayload,
+	ConcludeResearchCampaignResult,
+	CreateResearchCampaignPayload,
+	CreateResearchCampaignResult,
+	ProposeResearchTrialPayload,
+	ProposeResearchTrialResult,
+	RecordResearchObservationPayload,
+	RecordResearchObservationResult,
+	RegisterResearchComponentPayload,
+	RegisterResearchComponentResult,
+	ResearchView,
+	SetResearchCampaignStatePayload,
+	SetResearchCampaignStateResult,
+} from "./research.generated";
 
 export { WORK_CONTRACT_SHA256 } from "./contract";
 
@@ -752,91 +773,9 @@ export type SkipActiveItemPayload = {
 	reason: string;
 };
 
-// ---- research entities (R02-S1 / R02-S3b) ----
-
-export type ResearchComponentKind = "worker" | "evaluator" | "policy" | "audit" | "release" | "environment";
-
-export type ResearchRole =
-	| "campaign_planner"
-	| "research_worker"
-	| "hypothesis_generator"
-	| "method_critic"
-	| "implementer"
-	| "selector"
-	| "analyst"
-	| "scientific_reviewer"
-	| "harness_researcher"
-	| "native_auditor"
-	| "synthesizer";
+export * from "./research.generated";
 
 export type ResearchCapability = string;
-
-export type ResearchComponentDescriptor = {
-	contract_version: "research-component.v1";
-	kind: ResearchComponentKind;
-	name: string;
-	version: string;
-	artifact_sha256: string;
-	roles?: ResearchRole[];
-	capabilities?: ResearchCapability[];
-};
-
-export type ResearchComponent = {
-	component_sha256: string;
-	workspace_id: UUID;
-	kind: ResearchComponentKind;
-	descriptor: ResearchComponentDescriptor;
-	registered_at: string;
-};
-
-export type ResearchCompatibilityManifest = {
-	contract_version: "research-compatibility.v1";
-	workers?: string[];
-	evaluators?: string[];
-	audits?: string[];
-	releases?: string[];
-	environments?: string[];
-};
-
-export type RegisterResearchComponentPayload = {
-	component_sha256: string;
-	descriptor: ResearchComponentDescriptor;
-};
-
-export type RegisterResearchComponentResult = {
-	type: "register_research_component";
-	status: "applied" | "replayed";
-	component: ResearchComponent;
-};
-
-export type ResearchDomain =
-	| "engineering"
-	| "omp_harness"
-	| "machine_learning"
-	| "literature"
-	| "simulation"
-	| "external_instrument";
-
-export type ResearchResourceVector = {
-	cpu_seconds?: number | null;
-	gpu_seconds?: number | null;
-	max_wall_seconds?: number | null;
-	memory_mib?: number | null;
-	model_calls?: number | null;
-	input_tokens?: number | null;
-	output_tokens?: number | null;
-	retrieval_requests?: number | null;
-};
-
-export type ResearchCampaignSpec = {
-	objective: string;
-	evaluation_protocol_id: string;
-	evaluation_protocol_sha256: string;
-	resource_policy_ref: string;
-	resource_vector?: ResearchResourceVector | null;
-	authorized_data_classification?: string[];
-	candidate_mapping_policy: string;
-};
 
 export type ResearchCampaignState =
 	| "draft"
@@ -855,194 +794,9 @@ export type ResearchCampaignOutcome =
 	| "resource_exhausted"
 	| "externally_blocked";
 
-export type ResearchAction =
-	| "retrieve"
-	| "draft"
-	| "repair"
-	| "refine"
-	| "challenge"
-	| "combine"
-	| "evaluate"
-	| "replicate"
-	| "deepen"
-	| "prune"
-	| "synthesize"
-	| "escalate"
-	| "conclude";
-
-export type ResearchBlockedDependency = {
-	kind: "work_item" | "budget_scope" | "capability" | "external";
-	ref: string;
-	reason: string;
-};
-
-export type ResearchCampaign = {
-	campaign_id: UUID;
-	workspace_id: UUID;
-	work_id: UUID;
-	revision_id: UUID;
-	domain: ResearchDomain;
-	spec: ResearchCampaignSpec;
-	spec_sha256: string;
-	policy_sha256?: string | null;
-	state: ResearchCampaignState;
-	cancel_reason?: string | null;
-	created_at: string;
-	admitted_at?: string | null;
-	cancelled_at?: string | null;
-	outcome?: ResearchCampaignOutcome | null;
-	outcome_reason?: string | null;
-	concluded_at?: string | null;
-	blocked_dependency?: ResearchBlockedDependency | null;
-	blocked_from_state?: "admitted" | "running" | "paused" | "evaluating" | null;
-	compatibility?: ResearchCompatibilityManifest | null;
-	compatibility_sha256?: string | null;
-};
-
-export type ResearchTrial = {
-	trial_id: UUID;
-	workspace_id: UUID;
-	campaign_id: UUID;
-	work_id: UUID;
-	decision_id: UUID;
-	candidate_digest: string;
-	experiment_spec_sha256: string;
-	evaluator_sha256: string;
-	environment_sha256: string;
-	input_manifest_sha256: string;
-	seed?: number | null;
-	hardware_class?: string | null;
-	resource_request?: Record<string, unknown> | null;
-	policy_sha256: string;
-	state: "proposed" | "archived";
-	archived_reason?: string | null;
-	proposed_at: string;
-	archived_at?: string | null;
-	action?: ResearchAction | null;
-	reason?: string | null;
-};
-
 export type ResearchIssuerKind = "legacy_autoresearch" | "candidate_authored";
+
 export type ResearchExecutionStatus = "completed" | "crashed" | "timed_out" | "canceled" | "unknown";
-
-export type ResearchObservation = {
-	observation_id: UUID;
-	workspace_id: UUID;
-	campaign_id: UUID;
-	trial_id?: UUID | null;
-	issuer_kind: ResearchIssuerKind;
-	source_ref: string;
-	execution_status: ResearchExecutionStatus;
-	commit_sha?: string | null;
-	payload: Record<string, unknown>;
-	payload_sha256: string;
-	observed_at: string;
-	recorded_at: string;
-};
-
-export type ResearchDeliverableBinding = {
-	trial_id: UUID;
-	workspace_id: UUID;
-	campaign_id: UUID;
-	work_id: UUID;
-	revision_id: UUID;
-	candidate_digest: string;
-	native_candidate_id: UUID;
-	binding_sha256: string;
-	bound_at: string;
-};
-
-export type ResearchView = {
-	work_id: UUID;
-	campaigns: ResearchCampaign[];
-	trials: ResearchTrial[];
-	observations: ResearchObservation[];
-	deliverable_bindings: ResearchDeliverableBinding[];
-	components?: ResearchComponent[];
-};
-
-export type CreateResearchCampaignPayload = {
-	campaign_id: UUID;
-	work_id: UUID;
-	revision_id: UUID;
-	domain: ResearchDomain;
-	spec: ResearchCampaignSpec;
-	spec_sha256: string;
-};
-
-export type AdmitResearchCampaignPayload = {
-	campaign_id: UUID;
-	work_id: UUID;
-	revision_id: UUID;
-	spec_sha256: string;
-	policy_sha256: string;
-	compatibility: ResearchCompatibilityManifest;
-	compatibility_sha256: string;
-};
-
-export type CancelResearchCampaignPayload = {
-	campaign_id: UUID;
-	work_id: UUID;
-	reason: string;
-};
-
-export type ProposeResearchTrialPayload = {
-	trial_id: UUID;
-	campaign_id: UUID;
-	work_id: UUID;
-	decision_id: UUID;
-	action: ResearchAction;
-	reason?: string | null;
-	candidate_digest: string;
-	experiment_spec_sha256: string;
-	evaluator_sha256: string;
-	environment_sha256: string;
-	input_manifest_sha256: string;
-	seed?: number | null;
-	hardware_class?: string | null;
-	resource_request?: Record<string, unknown> | null;
-	policy_sha256: string;
-};
-
-export type SetResearchCampaignStatePayload = {
-	campaign_id: UUID;
-	work_id: UUID;
-	expected_state: "admitted" | "running" | "paused" | "evaluating" | "blocked";
-	target_state: "admitted" | "running" | "paused" | "evaluating" | "blocked";
-	policy_sha256: string;
-	blocked_dependency?: ResearchBlockedDependency | null;
-};
-
-export type ConcludeResearchCampaignPayload = {
-	campaign_id: UUID;
-	work_id: UUID;
-	policy_sha256: string;
-	outcome: ResearchCampaignOutcome;
-	reason: string;
-};
-
-export type RecordResearchObservationPayload = {
-	observation_id: UUID;
-	campaign_id: UUID;
-	trial_id?: UUID | null;
-	issuer_kind: ResearchIssuerKind;
-	source_ref: string;
-	execution_status: ResearchExecutionStatus;
-	commit_sha?: string | null;
-	payload: Record<string, unknown>;
-	payload_sha256: string;
-	observed_at: string;
-};
-
-export type BindResearchDeliverablePayload = {
-	trial_id: UUID;
-	campaign_id: UUID;
-	work_id: UUID;
-	revision_id: UUID;
-	candidate_digest: string;
-	native_candidate_id: UUID;
-	binding_sha256: string;
-};
 
 export type Command =
 	| { type: "create_work_batch"; payload: CreateWorkBatchPayload }
@@ -1091,54 +845,6 @@ export type CreatedWorkItem = {
 	key: string;
 	state: string;
 	row_version: number;
-};
-
-export type CreateResearchCampaignResult = {
-	type: "create_research_campaign";
-	status: "applied" | "replayed";
-	campaign: ResearchCampaign;
-};
-
-export type AdmitResearchCampaignResult = {
-	type: "admit_research_campaign";
-	status: "applied" | "replayed";
-	campaign: ResearchCampaign;
-};
-
-export type CancelResearchCampaignResult = {
-	type: "cancel_research_campaign";
-	status: "applied" | "replayed";
-	campaign: ResearchCampaign;
-};
-
-export type ProposeResearchTrialResult = {
-	type: "propose_research_trial";
-	status: "applied" | "replayed";
-	trial: ResearchTrial;
-};
-
-export type RecordResearchObservationResult = {
-	type: "record_research_observation";
-	status: "applied" | "replayed";
-	observation: ResearchObservation;
-};
-
-export type BindResearchDeliverableResult = {
-	type: "bind_research_deliverable";
-	status: "applied" | "replayed";
-	deliverable_binding: ResearchDeliverableBinding;
-};
-
-export type SetResearchCampaignStateResult = {
-	type: "set_research_campaign_state";
-	status: "applied" | "replayed";
-	campaign: ResearchCampaign;
-};
-
-export type ConcludeResearchCampaignResult = {
-	type: "conclude_research_campaign";
-	status: "applied" | "replayed";
-	campaign: ResearchCampaign;
 };
 
 export type CommandResult =
