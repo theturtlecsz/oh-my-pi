@@ -542,12 +542,18 @@ python/omp-work/tests/test_workflow_service.py	fork-only	added	d83b8397b5fd	sess
 python/omp-work/uv.lock	fork-only	added	c0f474814268	feat(work-ledger): PostgreSQL Work Ledger with Linear export and import (HOME-143, HOME-144, HOME-145, HOME-146); OMP-335-s02: lock pytest-xdist and execnet for dev optional-dependencies	retained
 python/robomp/src/config.py	shared	modified	2fc7e5e5eb18	feat(robomp): add jev and issue prefilter configuration settings	retained
 python/robomp/src/db.py	shared	modified	810e24fcfe38	feat(robomp): add jev_calls and issue_prefilter database tables and queries	retained
+python/robomp/src/host_tools.py	shared	modified	be4c73beab3c	feat(robomp): remove provisional labels on issue classification	retained
 python/robomp/src/jev_client.py	fork-only	added	b30f0c1c09b3	feat(robomp): async httpx client for Jev typed decisions endpoint	retained
 python/robomp/src/prefilter.py	fork-only	added	a7eef097b1e0	feat(robomp): issue prefilter evaluating Jev typed decisions before session	retained
+python/robomp/src/prompts/prefilter_answer_batch_audit.md	fork-only	added	d4561dd11368	feat(robomp): prefilter provisional response template for batch audit issues	retained
+python/robomp/src/prompts/prefilter_answer_invalid.md	fork-only	added	d552e78355a7	feat(robomp): prefilter provisional response template for invalid issues	retained
+python/robomp/src/prompts/prefilter_answer_question.md	fork-only	added	49961e085e71	feat(robomp): prefilter provisional response template for question issues	retained
 python/robomp/src/prompts/prefilter_questions.toml	fork-only	added	e156c4b0bf39	feat(robomp): Jev prefilter questions specification	retained
+python/robomp/src/tasks.py	shared	modified	7dc4cda2bdc9	feat(robomp): evaluate issue prefilter before session creation in triage	retained
 python/robomp/tests/jev_stub.py	fork-only	added	1c425f8c003f	test(robomp): mock transport stub for Jev systemone server	retained
 python/robomp/tests/test_jev_client.py	fork-only	added	07ffcdbb02b7	test(robomp): test suite for JevClient client contract and breaker	retained
 python/robomp/tests/test_prefilter.py	fork-only	added	3c697e3f3576	test(robomp): test suite for issue prefiltering and route outcomes	retained
+python/robomp/tests/test_tasks_prefilter.py	fork-only	added	ce0f2441a07c	test(robomp): test suite for issue prefiltering and provisional label cleanup	retained
 python/robomp/uv.lock	fork-only	added	5fd65f395c82	test(robomp): align queue and worker tests with reminder behavior	retained
 reanalyzed-omp-programs-v7.zip	fork-only	added	8db9e2905dc6	session candidate: OMP-177; session candidate: OMP-180	retained
 scripts/ci-test-ts.test.ts	shared	modified	5a2883a61742	OMP-292: add tests for host package.json change detection gate check; ci: repair red main baseline (OMP-217); fix(ci): extract withTempAgentDir wrapper and verify temp dir cleanup on resolve and reject; fix: slim session workflow loadout and isolate test execution (OMP-166); OMP-306: unit tests for buildTimingRecords/formatTimingTable/writeTimingJson per-chunk timing summary	retained
