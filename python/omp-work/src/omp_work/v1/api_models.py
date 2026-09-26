@@ -17,6 +17,10 @@ from .models import (
     IntakeBlockingQuestion,
     OperationReceipt,
     RelationEdge,
+    ResearchCampaign,
+    ResearchDeliverableBinding,
+    ResearchObservation,
+    ResearchTrial,
     StrictModel,
     WorkAlias,
     WorkRevision,
@@ -350,6 +354,50 @@ class PublishBoundedIntakeResult(StrictModel):
     receipt: EvidenceReceipt
 
 
+class CreateResearchCampaignResult(StrictModel):
+    type: Literal["create_research_campaign"]
+    status: Literal["applied", "replayed"]
+    campaign: ResearchCampaign
+
+
+class AdmitResearchCampaignResult(StrictModel):
+    type: Literal["admit_research_campaign"]
+    status: Literal["applied", "replayed"]
+    campaign: ResearchCampaign
+
+
+class CancelResearchCampaignResult(StrictModel):
+    type: Literal["cancel_research_campaign"]
+    status: Literal["applied", "replayed"]
+    campaign: ResearchCampaign
+
+
+class ProposeResearchTrialResult(StrictModel):
+    type: Literal["propose_research_trial"]
+    status: Literal["applied", "replayed"]
+    trial: ResearchTrial
+
+
+class RecordResearchObservationResult(StrictModel):
+    type: Literal["record_research_observation"]
+    status: Literal["applied", "replayed"]
+    observation: ResearchObservation
+
+
+class BindResearchDeliverableResult(StrictModel):
+    type: Literal["bind_research_deliverable"]
+    status: Literal["applied", "replayed"]
+    deliverable_binding: ResearchDeliverableBinding
+
+
+class ResearchView(StrictModel):
+    work_id: UUID
+    campaigns: tuple[ResearchCampaign, ...] = ()
+    trials: tuple[ResearchTrial, ...] = ()
+    observations: tuple[ResearchObservation, ...] = ()
+    deliverable_bindings: tuple[ResearchDeliverableBinding, ...] = ()
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -375,7 +423,13 @@ CommandResult = Annotated[
     | AssessBoundedIntakeResult
     | RecordExternalDeliveryResult
     | RecordFableAdviceResult
-    | PublishBoundedIntakeResult,
+    | PublishBoundedIntakeResult
+    | CreateResearchCampaignResult
+    | AdmitResearchCampaignResult
+    | CancelResearchCampaignResult
+    | ProposeResearchTrialResult
+    | RecordResearchObservationResult
+    | BindResearchDeliverableResult,
     Field(discriminator="type"),
 ]
 

@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -1135,6 +1135,202 @@ class PublishBoundedIntakeCommand(StrictModel):
     payload: PublishBoundedIntakePayload
 
 
+class ResearchDomain(StrEnum):
+    ENGINEERING = "engineering"
+    OMP_HARNESS = "omp_harness"
+    MACHINE_LEARNING = "machine_learning"
+    LITERATURE = "literature"
+    SIMULATION = "simulation"
+    EXTERNAL_INSTRUMENT = "external_instrument"
+
+
+class ResearchResourceVector(StrictModel):
+    cpu_seconds: int | None = Field(default=None, ge=0)
+    gpu_seconds: int | None = Field(default=None, ge=0)
+    max_wall_seconds: int | None = Field(default=None, ge=0)
+    memory_mib: int | None = Field(default=None, ge=0)
+    model_calls: int | None = Field(default=None, ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    retrieval_requests: int | None = Field(default=None, ge=0)
+
+
+class ResearchCampaignSpec(StrictModel):
+    objective: str = Field(min_length=1)
+    evaluation_protocol_id: str = Field(min_length=1)
+    evaluation_protocol_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    resource_policy_ref: str = Field(min_length=1)
+    resource_vector: ResearchResourceVector | None = None
+    authorized_data_classification: tuple[str, ...] = Field(default_factory=tuple)
+    candidate_mapping_policy: str = Field(min_length=1)
+
+
+class ResearchCampaign(StrictModel):
+    campaign_id: UUID
+    workspace_id: UUID
+    work_id: UUID
+    revision_id: UUID
+    domain: ResearchDomain
+    spec: ResearchCampaignSpec
+    spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    policy_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    state: Literal["draft", "admitted", "cancelled"]
+    cancel_reason: str | None = None
+    created_at: datetime
+    admitted_at: datetime | None = None
+    cancelled_at: datetime | None = None
+
+
+class ResearchTrial(StrictModel):
+    trial_id: UUID
+    workspace_id: UUID
+    campaign_id: UUID
+    work_id: UUID
+    decision_id: UUID
+    candidate_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    experiment_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evaluator_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    environment_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    input_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    seed: int | None = None
+    hardware_class: str | None = None
+    resource_request: dict[str, object] | None = None
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    state: Literal["proposed", "archived"]
+    archived_reason: str | None = None
+    proposed_at: datetime
+    archived_at: datetime | None = None
+
+
+ResearchIssuerKind = Literal["legacy_autoresearch", "candidate_authored"]
+ResearchExecutionStatus = Literal[
+    "completed", "crashed", "timed_out", "canceled", "unknown"
+]
+
+
+class ResearchObservation(StrictModel):
+    observation_id: UUID
+    workspace_id: UUID
+    campaign_id: UUID
+    trial_id: UUID | None = None
+    issuer_kind: ResearchIssuerKind
+    source_ref: str = Field(min_length=1)
+    execution_status: ResearchExecutionStatus
+    commit_sha: str | None = Field(
+        default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    )
+    payload: dict[str, object]
+    payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observed_at: AwareDatetime
+    recorded_at: datetime
+
+
+class ResearchDeliverableBinding(StrictModel):
+    trial_id: UUID
+    workspace_id: UUID
+    campaign_id: UUID
+    work_id: UUID
+    revision_id: UUID
+    candidate_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    native_candidate_id: UUID
+    binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bound_at: datetime
+
+
+class CreateResearchCampaignPayload(StrictModel):
+    campaign_id: UUID
+    work_id: UUID
+    revision_id: UUID
+    domain: ResearchDomain
+    spec: ResearchCampaignSpec
+    spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class AdmitResearchCampaignPayload(StrictModel):
+    campaign_id: UUID
+    work_id: UUID
+    revision_id: UUID
+    spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CancelResearchCampaignPayload(StrictModel):
+    campaign_id: UUID
+    work_id: UUID
+    reason: str = Field(min_length=1)
+
+
+class ProposeResearchTrialPayload(StrictModel):
+    trial_id: UUID
+    campaign_id: UUID
+    work_id: UUID
+    decision_id: UUID
+    candidate_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    experiment_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evaluator_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    environment_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    input_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    seed: int | None = None
+    hardware_class: str | None = None
+    resource_request: dict[str, object] | None = None
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class RecordResearchObservationPayload(StrictModel):
+    observation_id: UUID
+    campaign_id: UUID
+    trial_id: UUID | None = None
+    issuer_kind: ResearchIssuerKind
+    source_ref: str = Field(min_length=1)
+    execution_status: ResearchExecutionStatus
+    commit_sha: str | None = Field(
+        default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    )
+    payload: dict[str, object]
+    payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observed_at: AwareDatetime
+
+
+class BindResearchDeliverablePayload(StrictModel):
+    trial_id: UUID
+    work_id: UUID
+    revision_id: UUID
+    campaign_id: UUID
+    candidate_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    native_candidate_id: UUID
+    binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CreateResearchCampaignCommand(StrictModel):
+    type: Literal["create_research_campaign"]
+    payload: CreateResearchCampaignPayload
+
+
+class AdmitResearchCampaignCommand(StrictModel):
+    type: Literal["admit_research_campaign"]
+    payload: AdmitResearchCampaignPayload
+
+
+class CancelResearchCampaignCommand(StrictModel):
+    type: Literal["cancel_research_campaign"]
+    payload: CancelResearchCampaignPayload
+
+
+class ProposeResearchTrialCommand(StrictModel):
+    type: Literal["propose_research_trial"]
+    payload: ProposeResearchTrialPayload
+
+
+class RecordResearchObservationCommand(StrictModel):
+    type: Literal["record_research_observation"]
+    payload: RecordResearchObservationPayload
+
+
+class BindResearchDeliverableCommand(StrictModel):
+    type: Literal["bind_research_deliverable"]
+    payload: BindResearchDeliverablePayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -1170,7 +1366,13 @@ Command = Annotated[
     | AssessBoundedIntakeCommand
     | RecordFableAdviceCommand
     | AttestIntakeAdmissionCommand
-    | PublishBoundedIntakeCommand,
+    | PublishBoundedIntakeCommand
+    | CreateResearchCampaignCommand
+    | AdmitResearchCampaignCommand
+    | CancelResearchCampaignCommand
+    | ProposeResearchTrialCommand
+    | RecordResearchObservationCommand
+    | BindResearchDeliverableCommand,
     Field(discriminator="type"),
 ]
 
