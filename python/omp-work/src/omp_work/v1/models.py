@@ -1121,6 +1121,20 @@ class AttestIntakeAdmissionCommand(StrictModel):
     payload: AttestIntakeAdmissionPayload
 
 
+class PublishBoundedIntakePayload(StrictModel):
+    draft: BoundedIntakeDraft
+    assessment_operation_id: UUID
+    ratified_semantic_sha256: hex64
+    admission_work_id: UUID
+    admission_revision_id: UUID
+    admission_receipt_id: UUID
+
+
+class PublishBoundedIntakeCommand(StrictModel):
+    type: Literal["publish_bounded_intake"]
+    payload: PublishBoundedIntakePayload
+
+
 Command = Annotated[
     CreateWorkBatchCommand
     | CreateSameSessionChildCommand
@@ -1155,7 +1169,8 @@ Command = Annotated[
     | SkipActiveItemCommand
     | AssessBoundedIntakeCommand
     | RecordFableAdviceCommand
-    | AttestIntakeAdmissionCommand,
+    | AttestIntakeAdmissionCommand
+    | PublishBoundedIntakeCommand,
     Field(discriminator="type"),
 ]
 

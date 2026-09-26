@@ -344,6 +344,12 @@ class RecordFableAdviceResult(StrictModel):
     receipt: EvidenceReceipt
 
 
+class PublishBoundedIntakeResult(StrictModel):
+    type: Literal["publish_bounded_intake"]
+    item: CreatedWorkItem
+    receipt: EvidenceReceipt
+
+
 CommandResult = Annotated[
     CreateWorkBatchResult
     | CreateSameSessionChildResult
@@ -368,7 +374,8 @@ CommandResult = Annotated[
     | SkipActiveItemResult
     | AssessBoundedIntakeResult
     | RecordExternalDeliveryResult
-    | RecordFableAdviceResult,
+    | RecordFableAdviceResult
+    | PublishBoundedIntakeResult,
     Field(discriminator="type"),
 ]
 

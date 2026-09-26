@@ -41,6 +41,7 @@ class WorkService:
         "assess_bounded_intake": "work.approve",
         "record_fable_advice": "work.approve",
         "attest_intake_admission": "work.approve",
+        "publish_bounded_intake": "work.approve",
         "create_same_session_child": "work.close",
         "begin_close_attempt": "work.close",
         "seal_audit_manifest": "work.close",
@@ -87,11 +88,15 @@ class WorkService:
         except WorkStoreError as error:
             statuses = {
                 "invalid_request": 400,
+                "forbidden": 403,
                 "relation_cycle": 400,
                 "idempotency_conflict": 409,
                 "revision_conflict": 409,
                 "focus_conflict": 409,
                 "stale_evidence": 409,
+                "stale_intake": 409,
+                "intake_not_ready": 409,
+                "intake_admission_blocked": 409,
                 "completion_blocked": 409,
                 "cutover_invariant": 409,
                 "unavailable": 503,

@@ -24,6 +24,7 @@
 - Claim-support evidence matrix (`report_evidence.py`): extracts material claims from a report draft with stable ids and locations, links each claim to top-k passages from the sources it cites, classifies every pair as supports/contradicts/neither through a stub or batched chat-model classifier, and stores a digest-verified matrix the report and its auditor read (OMP-300).
 - Added record_external_delivery command closing externally delivered work with an evidence receipt (OMP-283).
 - `record_fable_advice` command (`work.approve`) records advisor verification evidence bound to candidate and bounded intake semantic and rule bundle hashes (OMP-266).
+- `publish_bounded_intake` command (`work.approve`, owner-only) ratifies one ready bounded intake draft into a work item, related OMP-249 edge, planned candidate, and `intake_publication` receipt in one serializable transaction (OMP-266).
 
 ### Changed
 
