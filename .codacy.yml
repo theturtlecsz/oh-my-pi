@@ -1,0 +1,9 @@
+---
+exclude_paths:
+  - "**/test/**"
+  - "**/tests/**"
+  - "**/__tests__/**"
+  - "fixtures/**"
+  - "**/fixtures/**"
+  - "**/*.test.*"
+  - "**/*.spec.*"
