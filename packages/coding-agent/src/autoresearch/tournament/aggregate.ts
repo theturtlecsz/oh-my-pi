@@ -175,10 +175,13 @@ function classifyPreference(mean: number): number {
 function compareComparisons(a: ComparisonRecord, b: ComparisonRecord): number {
 	const left = comparisonKey(a);
 	const right = comparisonKey(b);
-	for (let i = 0; i < 5; i++) {
-		const order = compareStrings(left[i], right[i]);
-		if (order !== 0) return order;
-	}
+	const order =
+		compareStrings(left[0], right[0]) ||
+		compareStrings(left[1], right[1]) ||
+		compareStrings(left[2], right[2]) ||
+		compareStrings(left[3], right[3]) ||
+		compareStrings(left[4], right[4]);
+	if (order !== 0) return order;
 	if (left[5] !== right[5]) return left[5] - right[5];
 	const timestampOrder = compareStrings(left[6], right[6]);
 	if (timestampOrder !== 0) return timestampOrder;
