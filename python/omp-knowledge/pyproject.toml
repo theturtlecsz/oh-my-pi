@@ -36,7 +36,7 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-omp_knowledge = ["py.typed"]
+omp_knowledge = ["py.typed", "learning/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
