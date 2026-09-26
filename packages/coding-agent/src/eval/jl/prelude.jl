@@ -419,7 +419,28 @@ end
 # Dynamic bridge proxy
 # -------------------------------------------------------------------------
 
-using Downloads
+# Downloads is resolved on the first bridge call, never while the prelude is
+# being loaded. A cold depot must compile the stdlib before `using Downloads`
+# returns; doing that eagerly made the kernel-startup prelude phase pay seconds
+# of package compilation, which on a cold CI runner under full-suite contention
+# overran the fixed startup budget and cancelled kernel init (OMP-340). The
+# loaded module is cached, so only the first `tool.*` call pays the cost. The
+# Python and Ruby preludes import their HTTP client inside the bridge too.
+const __omp_downloads_lock = ReentrantLock()
+const __omp_downloads_mod = Ref{Union{Module, Nothing}}(nothing)
+
+function __omp_downloads()
+    mod = __omp_downloads_mod[]
+    if mod === nothing
+        lock(__omp_downloads_lock) do
+            if __omp_downloads_mod[] === nothing
+                __omp_downloads_mod[] = Base.require(Main, :Downloads)
+            end
+        end
+        mod = __omp_downloads_mod[]
+    end
+    return mod
+end
 
 function __omp_call_bridge(name::String, args::Dict{String, Any})
     base_url = get(ENV, "PI_TOOL_BRIDGE_URL", nothing)
@@ -449,7 +470,10 @@ function __omp_call_bridge(name::String, args::Dict{String, Any})
     ]
     
     io_out = IOBuffer()
-    response = Downloads.request(
+    # `invokelatest` is required: `Downloads` is loaded on this first call, so
+    # its methods postdate this function's compiled world age.
+    response = Base.invokelatest(
+        __omp_downloads().request,
         url,
         method="POST",
         headers=headers,
