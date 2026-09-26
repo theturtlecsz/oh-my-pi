@@ -67,6 +67,7 @@ import {
 	type WorkStateCarrier,
 	type ExecutionSnapshot,
 	type ExecutionChildren,
+	type CommittedSkipClaim,
 	renderCenterReadout,
 } from "./backend";
 import { deliverCheckpoint, deliverPendingCheckpoints, queueCheckpointDelivery, queuePendingCheckpointDeliveries } from "./checkpoint-delivery";
@@ -2356,6 +2357,96 @@ export function createWorkflowHost(cfg: HostConfig) {
 					if (backend.workClient) {
 						const exec = await backend.getExecution(startupWitness?.workspace.grantId);
 						if (!startupCurrent() || (startupWitness && (!ownsExecutionSession(ctx, startupWitness) || (exec && !witnessMatchesGrant(startupWitness, exec))))) return;
+						if (startupWitness && exec) {
+							let skipClaims: CommittedSkipClaim[] = [];
+							try {
+								skipClaims = typeof backend.getCommittedSkipClaims === "function"
+									? await backend.getCommittedSkipClaims(startupWitness.workspace.grantId)
+									: [];
+							} catch (error) {
+								const errorMsg = error instanceof Error ? error.message : String(error);
+								if (errorMsg.includes("unreadable pending claim")) {
+									if (ownsExecutionSession(sessionCtx, startupWitness) || ownsExecutionSession(sessionCtx, startupWitness, startupWitness.workspace.path)) {
+										sessionCtx.ui.notify(`Recovery blocked by unreadable claim: ${String(error)}`, "error");
+									}
+								}
+								sessionCtx.ui.notify(`Execution recovery skipped: ${errorMsg}`, "warning");
+								return;
+							}
+							if (skipClaims.length > 1) {
+								sessionCtx.ui.notify("Execution recovery skipped: committed skip does not match claim count", "warning");
+								return;
+							}
+							if (skipClaims.length === 1) {
+								const claim = skipClaims[0]!;
+								const payload = claim.command?.payload;
+								const result = claim.result;
+
+								if (
+									!payload ||
+									!result ||
+									payload.grant_id !== startupWitness.workspace.grantId ||
+									result.grant?.grant_id !== startupWitness.workspace.grantId ||
+									payload.grant_id !== result.grant?.grant_id
+								) {
+									sessionCtx.ui.notify("Execution recovery skipped: committed skip does not match grant", "warning");
+									return;
+								}
+
+								if (result.grant?.grant_version !== payload.expected_grant_version + 1) {
+									sessionCtx.ui.notify("Execution recovery skipped: committed skip does not match version transition", "warning");
+									return;
+								}
+
+								if (result.item?.work_id !== payload.work_id) {
+									sessionCtx.ui.notify("Execution recovery skipped: committed skip does not match work_id", "warning");
+									return;
+								}
+
+								if (result.item?.position !== payload.position) {
+									sessionCtx.ui.notify("Execution recovery skipped: committed skip does not match position", "warning");
+									return;
+								}
+
+								if (result.reason !== payload.reason) {
+									sessionCtx.ui.notify("Execution recovery skipped: committed skip does not match reason", "warning");
+									return;
+								}
+
+								if (result.item?.phase !== "skipped") {
+									sessionCtx.ui.notify("Execution recovery skipped: committed skip does not match phase", "warning");
+									return;
+								}
+
+								const itemAtPos = exec.items?.find(i => i.position === payload.position);
+								const isSameItemSkipped = itemAtPos !== undefined && itemAtPos.work_id === payload.work_id && itemAtPos.phase === "skipped";
+
+								if (
+									exec.grant.grant_version === result.grant.grant_version &&
+									exec.grant.state === result.grant.state &&
+									isSameItemSkipped &&
+									!exec.activeItem
+								) {
+									const targetIssue = await backend.findIssue(payload.work_id).catch(() => null);
+									const activeKey = targetIssue?.key ?? payload.work_id;
+									await continueAfterSkip(ctx, startupWitness, exec, activeKey);
+									if (typeof backend.acknowledgeSkipClaim === "function") {
+										await backend.acknowledgeSkipClaim(claim.claimId);
+									}
+									return;
+								} else if (
+									exec.grant.grant_version > result.grant.grant_version &&
+									isSameItemSkipped
+								) {
+									if (typeof backend.acknowledgeSkipClaim === "function") {
+										await backend.acknowledgeSkipClaim(claim.claimId);
+									}
+								} else {
+									sessionCtx.ui.notify("Execution recovery skipped: committed skip does not match current state", "warning");
+									return;
+								}
+							}
+						}
 						if (startupWitness && (!exec || exec.grant.state !== "active" || !exec.activeItem)) {
 							state.executingIssue = undefined;
 							state.approvedPlan = undefined;
