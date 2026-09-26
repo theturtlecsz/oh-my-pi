@@ -24,6 +24,71 @@ export const JEV_PROVIDER = "typesafe";
 /** Environment fallback when no stored credential exists. */
 export const JEV_ENV_KEY = "TYPESAFE_API_KEY";
 export const JEV_DEFAULT_BASE_URL = "https://api.typesafe.ai";
+/** Consecutive failures before opening the circuit breaker. */
+export const JEV_BREAKER_FAILURES = 2;
+/** Cooldown period in milliseconds while the circuit breaker is open. */
+export const JEV_BREAKER_COOLDOWN_MS = 60_000;
+
+/** Circuit breaker protecting against cascading failures to the Jev service. */
+export class JevBreaker {
+	#now: () => number;
+	#customNow: boolean;
+	#consecutiveFailures = 0;
+	#openUntil = 0;
+
+	constructor(now?: () => number) {
+		this.#customNow = now !== undefined;
+		this.#now = now ?? Date.now;
+	}
+
+	get consecutiveFailures(): number {
+		return this.#consecutiveFailures;
+	}
+
+	get openUntil(): number {
+		return this.#openUntil;
+	}
+
+	isOpen(now?: number): boolean {
+		if (this.#openUntil > 0) {
+			const currentTime = now !== undefined && !this.#customNow ? now : this.#now();
+			if (currentTime < this.#openUntil) {
+				return true;
+			}
+			this.#openUntil = 0;
+		}
+		return false;
+	}
+
+	recordSuccess(): void {
+		this.#consecutiveFailures = 0;
+		this.#openUntil = 0;
+	}
+
+	recordFailure(now?: number): void {
+		this.#consecutiveFailures += 1;
+		if (this.#consecutiveFailures >= JEV_BREAKER_FAILURES) {
+			const currentTime = now !== undefined && !this.#customNow ? now : this.#now();
+			this.#openUntil = currentTime + JEV_BREAKER_COOLDOWN_MS;
+		}
+	}
+
+	reset(): void {
+		this.recordSuccess();
+	}
+}
+
+/** Create a new circuit breaker instance with an optional time source. */
+export function createJevBreaker(now?: () => number): JevBreaker {
+	return new JevBreaker(now);
+}
+
+const defaultBreaker = createJevBreaker();
+
+/** Reset the module-level circuit breaker instance (for tests). */
+export function resetDefaultJevBreaker(): void {
+	defaultBreaker.reset();
+}
 
 /** Choice question sent to the decision service. */
 export type JevChoiceQuestion = {
@@ -88,6 +153,7 @@ export interface JevDeps {
 	feature?: string;
 	uuid?: () => string;
 	budgetMs?: number;
+	breaker?: JevBreaker;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -196,8 +262,11 @@ function validateAnswers(
  * made, inside the whole-call budget, and never after a timeout.
  */
 export async function decide(state: string, questions: JevQuestions, deps: JevDeps): Promise<JevAnswers | undefined> {
+	const breaker = deps.breaker ?? defaultBreaker;
 	const now = deps.now ?? Date.now;
 	const feature = deps.feature ?? "jev";
+
+	if (breaker.isOpen(now())) return undefined;
 
 	if (!readSetting(deps, "jev.enabled")) return undefined;
 
@@ -290,6 +359,7 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 		});
 
 		if (outcome === "ok") {
+			breaker.recordSuccess();
 			return answers;
 		}
 
@@ -302,6 +372,8 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 
 	if (attempt === 0) return undefined;
 
+	breaker.recordFailure(now());
+
 	logger.warn("jev: decision call failed", {
 		feature,
 		outcome: lastOutcome,
@@ -310,4 +382,52 @@ export async function decide(state: string, questions: JevQuestions, deps: JevDe
 		latencyMs: lastLatencyMs,
 	});
 	return undefined;
+}
+
+/**
+ * Convenience wrapper for a single choice question. Returns a probability map
+ * over the allowed options, or `undefined` on any failure.
+ */
+export async function choice(
+	question: string,
+	options: string[],
+	state: string,
+	deps: JevDeps,
+): Promise<Record<string, number> | undefined> {
+	const answers = await decide(
+		state,
+		{
+			choice: {
+				type: "choice",
+				instructions: question,
+				options,
+			},
+		},
+		deps,
+	);
+	if (!answers) return undefined;
+	const answer = answers.choice ?? Object.values(answers)[0];
+	if (!answer || !("probabilities" in answer)) return undefined;
+	return answer.probabilities;
+}
+
+/**
+ * Convenience wrapper for a single yes/no (noul) question. Returns the probability
+ * number, or `undefined` on any failure.
+ */
+export async function yesno(statement: string, state: string, deps: JevDeps): Promise<number | undefined> {
+	const answers = await decide(
+		state,
+		{
+			statement: {
+				type: "noul",
+				instructions: statement,
+			},
+		},
+		deps,
+	);
+	if (!answers) return undefined;
+	const answer = answers.statement ?? Object.values(answers)[0];
+	if (!answer || !("probability" in answer)) return undefined;
+	return answer.probability;
 }
