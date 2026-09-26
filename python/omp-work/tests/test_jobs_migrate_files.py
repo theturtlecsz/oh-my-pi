@@ -16,6 +16,7 @@ def test_jobs_migrations_returns_expected_files_in_ordinal_order() -> None:
     assert [p.name for p in files] == [
         "0001_omp_jobs_schema.sql",
         "0002_shadow_provenance.sql",
+        "0003_native_research_jobs.sql",
     ]
     for p in files:
         assert isinstance(p, Path)
@@ -29,7 +30,11 @@ def test_main_migrations_ledger_intact_and_isolated_from_jobs_migrations() -> No
     assert [ordinal for ordinal, _ in main_migs] == list(range(1, 29))
 
     jobs_names = {p.name for p in jobs_migrations()}
-    assert jobs_names == {"0001_omp_jobs_schema.sql", "0002_shadow_provenance.sql"}
+    assert jobs_names == {
+        "0001_omp_jobs_schema.sql",
+        "0002_shadow_provenance.sql",
+        "0003_native_research_jobs.sql",
+    }
 
     main_names = {path.name for _, path in main_migs}
     assert jobs_names.isdisjoint(main_names)
