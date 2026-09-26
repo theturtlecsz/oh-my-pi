@@ -171,6 +171,10 @@ Harbor OMP-250 and paid comparisons OMP-252 remain separate optional work.
 Exit: deployed release meets its recorded acceptance criteria. Only then resume
 bounded typed intake. General CPK, broad hot reload, Fleet, new hosts, and major
 UI work stay deferred unless they remove a reproduced stabilization blocker.
+Isolated Fleet Knowledge work may proceed before and after promotion as long as
+it does not bypass or weaken live promotion, trusted evidence, recovery, or
+schema-qualification requirements
+([OMP immediate roadmap amendment](plans/fleet-knowledge/OMP_Immediate_Roadmap_Amendment.md)).
 
 The [versioned intake exploration contract and ownership](omp-intake-exploration-implementation-plan.md)
 records the accepted 03B amendments and separate future qualification gates.
