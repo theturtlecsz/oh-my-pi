@@ -1352,6 +1352,178 @@ ResearchExecutionStatus = Literal[
     "completed", "crashed", "timed_out", "canceled", "unknown"
 ]
 
+RESEARCH_ARTIFACT_MAX_BYTES = 4 * 1024 * 1024
+_RESEARCH_ARTIFACT_MAX_BASE64 = 4 * ((RESEARCH_ARTIFACT_MAX_BYTES + 2) // 3)
+MediaType = Annotated[
+    str,
+    Field(
+        pattern=r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$"
+    ),
+]
+
+
+class ResearchArtifactManifest(StrictModel):
+    """Canonical custody declaration. The field set is the manifest identity."""
+
+    contract_version: Literal["research-artifact.v1"]
+    artifact_sha256: Sha256Hex
+    size_bytes: int = Field(ge=0, le=RESEARCH_ARTIFACT_MAX_BYTES)
+    media_type: MediaType
+    name: str = Field(min_length=1, max_length=255)
+    access_class: Literal["workspace"]
+    issuer_kind: ResearchIssuerKind
+    source_ref: str = Field(min_length=1, max_length=512)
+    valid_until: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def validate_name(self) -> ResearchArtifactManifest:
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in self.name):
+            raise ValueError("name contains control characters")
+        return self
+
+
+class ResearchArtifact(StrictModel):
+    workspace_id: UUID
+    artifact_sha256: Sha256Hex
+    manifest_sha256: Sha256Hex
+    manifest: ResearchArtifactManifest
+    registered_by: UUID
+    registered_at: datetime
+
+
+class RegisterResearchArtifactPayload(StrictModel):
+    manifest_sha256: Sha256Hex
+    manifest: ResearchArtifactManifest
+    content_base64: str = Field(
+        pattern=r"^[A-Za-z0-9+/]*={0,2}$", max_length=_RESEARCH_ARTIFACT_MAX_BASE64
+    )
+
+
+class RegisterResearchArtifactCommand(StrictModel):
+    type: Literal["register_research_artifact"]
+    payload: RegisterResearchArtifactPayload
+
+
+class CollectResearchArtifactPayload(StrictModel):
+    relative_path: str = Field(min_length=1, max_length=512)
+    archive_member: str | None = Field(default=None, max_length=512)
+    manifest_sha256: Sha256Hex
+    manifest: ResearchArtifactManifest
+
+
+class CollectResearchArtifactCommand(StrictModel):
+    type: Literal["collect_research_artifact"]
+    payload: CollectResearchArtifactPayload
+
+
+class ResearchSourceAccess(StrictModel):
+    access_class: Literal["workspace", "project"]
+    project_id: UUID | None = None
+    decision: Literal["allow", "deny"] | None = None
+
+    @model_validator(mode="after")
+    def project_pair(self) -> ResearchSourceAccess:
+        if self.access_class == "workspace":
+            if self.project_id is not None or self.decision is not None:
+                raise ValueError("workspace access has no project decision")
+        elif self.project_id is None or self.decision is None:
+            raise ValueError("project access requires project_id and decision")
+        return self
+
+
+class ResearchSourceManifest(StrictModel):
+    contract_version: Literal["research-source.v1"]
+    source_id: UUID
+    version: str = Field(min_length=1, max_length=128)
+    location: str = Field(min_length=1, max_length=1024)
+    status: Literal["ok", "inaccessible"]
+    retention_until: AwareDatetime | None = None
+    access: ResearchSourceAccess
+    artifact_sha256: Sha256Hex | None = None
+
+
+class ResearchSource(StrictModel):
+    workspace_id: UUID
+    source_id: UUID
+    manifest_sha256: Sha256Hex
+    manifest: ResearchSourceManifest
+    status: Literal["ok", "inaccessible"]
+    artifact_sha256: Sha256Hex | None = None
+    registered_by: UUID
+    registered_at: datetime
+
+
+class RegisterResearchSourcePayload(StrictModel):
+    manifest_sha256: Sha256Hex
+    manifest: ResearchSourceManifest
+
+
+class RegisterResearchSourceCommand(StrictModel):
+    type: Literal["register_research_source"]
+    payload: RegisterResearchSourcePayload
+
+
+class ResearchDatasetManifest(StrictModel):
+    contract_version: Literal["research-dataset.v1"]
+    dataset_id: UUID
+    snapshot_sha256: Sha256Hex
+    source_id: UUID
+    version: str = Field(min_length=1, max_length=128)
+    retention_until: AwareDatetime | None = None
+    access: ResearchSourceAccess
+    artifact_sha256: Sha256Hex | None = None
+
+
+class ResearchDataset(StrictModel):
+    workspace_id: UUID
+    dataset_id: UUID
+    manifest_sha256: Sha256Hex
+    manifest: ResearchDatasetManifest
+    source_id: UUID
+    artifact_sha256: Sha256Hex | None = None
+    registered_by: UUID
+    registered_at: datetime
+
+
+class RegisterResearchDatasetPayload(StrictModel):
+    manifest_sha256: Sha256Hex
+    manifest: ResearchDatasetManifest
+
+
+class RegisterResearchDatasetCommand(StrictModel):
+    type: Literal["register_research_dataset"]
+    payload: RegisterResearchDatasetPayload
+
+
+class RecordResearchCachePayload(StrictModel):
+    cache_key: str = Field(min_length=1, max_length=256)
+    artifact_sha256: Sha256Hex
+
+
+class RecordResearchCacheCommand(StrictModel):
+    type: Literal["record_research_cache"]
+    payload: RecordResearchCachePayload
+
+
+class ClaimResearchReplicatePayload(StrictModel):
+    artifact_sha256: Sha256Hex
+
+
+class ClaimResearchReplicateCommand(StrictModel):
+    type: Literal["claim_research_replicate"]
+    payload: ClaimResearchReplicatePayload
+
+
+class BindResearchReceiptManifestPayload(StrictModel):
+    receipt_id: UUID
+    artifact_sha256: Sha256Hex
+    manifest_sha256: Sha256Hex
+
+
+class BindResearchReceiptManifestCommand(StrictModel):
+    type: Literal["bind_research_receipt_manifest"]
+    payload: BindResearchReceiptManifestPayload
+
 
 class ResearchObservation(StrictModel):
     observation_id: UUID
@@ -1553,6 +1725,13 @@ Command = Annotated[
     | RecordFableAdviceCommand
     | AttestIntakeAdmissionCommand
     | PublishBoundedIntakeCommand
+    | RegisterResearchArtifactCommand
+    | CollectResearchArtifactCommand
+    | RegisterResearchSourceCommand
+    | RegisterResearchDatasetCommand
+    | RecordResearchCacheCommand
+    | ClaimResearchReplicateCommand
+    | BindResearchReceiptManifestCommand
     | RegisterResearchComponentCommand
     | CreateResearchCampaignCommand
     | AdmitResearchCampaignCommand
