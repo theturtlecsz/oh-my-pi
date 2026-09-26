@@ -270,7 +270,8 @@ class StructuralPublicationStore:
                     projection.repository_id,
                     projection.snapshot_id,
                 )
-                assert row is not None
+                if row is None:
+                    raise AssertionError("staged row missing after re-stage")
                 return self._publication(row)
             conn.execute(
                 """
@@ -300,7 +301,8 @@ class StructuralPublicationStore:
                 projection.repository_id,
                 projection.snapshot_id,
             )
-            assert row is not None
+            if row is None:
+                raise AssertionError("staged row missing after insert")
             return self._publication(row)
 
     def stage_enola_snapshot(
@@ -349,7 +351,8 @@ class StructuralPublicationStore:
                 (now, now, str(workspace_id), str(repository_id), snapshot_id),
             )
             updated = self._row(conn, workspace_id, repository_id, snapshot_id)
-            assert updated is not None
+            if updated is None:
+                raise AssertionError("published row missing after update")
             return self._publication(updated)
 
     def abort(
@@ -372,7 +375,8 @@ class StructuralPublicationStore:
                 (now, str(workspace_id), str(repository_id), snapshot_id),
             )
             updated = self._row(conn, workspace_id, repository_id, snapshot_id)
-            assert updated is not None
+            if updated is None:
+                raise AssertionError("aborted row missing after update")
             return self._publication(updated)
 
     def retire(
@@ -395,7 +399,8 @@ class StructuralPublicationStore:
                 (now, str(workspace_id), str(repository_id), snapshot_id),
             )
             updated = self._row(conn, workspace_id, repository_id, snapshot_id)
-            assert updated is not None
+            if updated is None:
+                raise AssertionError("retired row missing after update")
             return self._publication(updated)
 
     def is_published(
