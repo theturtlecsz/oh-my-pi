@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from omp_work.knowledge_contracts import ProviderRoute, SourceRef
+from omp_work.knowledge_contracts import ProviderRoute
 
 from ..errors import EngineTimeoutError, EngineUnavailableError
 

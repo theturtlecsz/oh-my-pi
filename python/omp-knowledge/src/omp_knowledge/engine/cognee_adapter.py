@@ -12,7 +12,7 @@ from omp_work.knowledge_contracts import ProviderRoute
 from omp_work.v1.canonical import sha256
 
 from ..config import KnowledgeConfig
-from ..errors import EngineUnavailableError, SnapshotNotPublishedError
+from ..errors import EngineUnavailableError
 from ..publication import PublicationManager
 from .protocol import (
     CorrectResult,
@@ -28,7 +28,6 @@ from .protocol import (
 
 # Optional Cognee imports - flagged so lack of Cognee raises EngineUnavailableError
 try:
-    import cognee
     from cognee.infrastructure.engine.models.DataPoint import DataPoint
     from cognee.infrastructure.databases.graph.get_graph_engine import get_graph_engine
     from cognee.tasks.storage.add_data_points import add_data_points
@@ -126,15 +125,11 @@ class RealCogneeAdapter(KnowledgeEngine):
         os.environ["CACHE_ROOT_DIRECTORY"] = str(cognee_dir / "cache")
         os.environ["COGNEE_LOGS_DIR"] = str(cognee_dir / "logs")
         if self._available and COGNEE_AVAILABLE:
-            try:
-                from cognee.base_config import get_base_config
+            from cognee.base_config import get_base_config
+            from cognee.infrastructure.databases.graph.config import get_graph_config
 
-                get_base_config.cache_clear()
-                from cognee.infrastructure.databases.graph.config import get_graph_config
-
-                get_graph_config.cache_clear()
-            except Exception:
-                pass
+            get_base_config.cache_clear()
+            get_graph_config.cache_clear()
 
     def _ensure_available(self) -> None:
         if not self._available:

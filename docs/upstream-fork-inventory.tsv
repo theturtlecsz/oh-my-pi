@@ -327,8 +327,8 @@ python/omp-knowledge/pyproject.toml	fork-only	added	aba04366e82c	OMP-288: packag
 python/omp-knowledge/src/omp_knowledge/__init__.py	fork-only	added	f6d1654e5acc	OMP-288: package exports for RealCogneeAdapter, PublicationManager, protocol models, and error taxonomy	retained
 python/omp-knowledge/src/omp_knowledge/config.py	fork-only	added	e41afedd05da	OMP-288: KnowledgeConfig Pydantic model and loader for fleet knowledge service and storage directories	retained
 python/omp-knowledge/src/omp_knowledge/engine/__init__.py	fork-only	added	042743e0bd8c	OMP-288: engine package exports for RealCogneeAdapter and protocol results	retained
-python/omp-knowledge/src/omp_knowledge/engine/cognee_adapter.py	fork-only	added	1ff838dc40c9	OMP-288: pinned Cognee adapter implementing ingestion, scoped query, exact lookup, correction, and status	retained
-python/omp-knowledge/src/omp_knowledge/engine/protocol.py	fork-only	added	6940e7c3e6a5	OMP-288: KnowledgeEngine protocol and result models for ingestion, query, lookup, correct, and status	retained
+python/omp-knowledge/src/omp_knowledge/engine/cognee_adapter.py	fork-only	added	18c8c71ad8f3	OMP-288: pinned Cognee adapter implementing ingestion, scoped query, exact lookup, correction, and status	retained
+python/omp-knowledge/src/omp_knowledge/engine/protocol.py	fork-only	added	bf041fa415fe	OMP-288: KnowledgeEngine protocol and result models for ingestion, query, lookup, correct, and status	retained
 python/omp-knowledge/src/omp_knowledge/errors.py	fork-only	added	21786b2d042c	OMP-288: explicit error taxonomy covering the 10 failure codes with status codes and details	retained
 python/omp-knowledge/src/omp_knowledge/publication.py	fork-only	added	4976302ef675	OMP-288: SQLite PublicationManager tracking snapshot publication, abortion, and retirement	retained
 python/omp-knowledge/src/omp_knowledge/py.typed	fork-only	added	7632ecf77545	OMP-288: PEP 561 marker file for typed package distribution	retained
