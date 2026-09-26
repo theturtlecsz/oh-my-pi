@@ -81,7 +81,7 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 	let nativeSession: SessionManager | undefined;
 	const sentMessages: unknown[] = [];
 	const workspaceEffects: string[] = [];
-	const workspace = { grantId: "grant-1", key: "OMP-1", primaryRoot: directory, path: directory, branch: "execution/omp-1", baseline: item.initial_git_baseline, reused: false };
+	const workspace = { grantId: "grant-1", key: "OMP-1", primaryRoot: directory, path: directory, branch: executionRemoteRef("OMP-1", "grant-1").slice("refs/heads/".length), baseline: item.initial_git_baseline, reused: false };
 	const branch: SessionEntry[] = bound ? [{ type: "custom", customType: "work-now", id: "original-binding", parentId: null, timestamp: new Date().toISOString(), data: { backend: "work", executionWorkspace: workspace } }] : [];
 	const lookups: Array<string | undefined> = [];
 	let lookupGate: Promise<void> | undefined;
@@ -182,7 +182,7 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 				return {
 				primaryRoot: directory,
 				path: directory,
-				branch: `execution/${key.toLowerCase()}`,
+				branch: executionRemoteRef(key, grantId).slice("refs/heads/".length),
 				grantId,
 				baseline,
 				reused: true,

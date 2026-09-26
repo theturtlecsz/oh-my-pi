@@ -3285,6 +3285,15 @@ export function createWorkflowHost(cfg: HostConfig) {
 						ctx.ui.notify("Cannot resume: execution workspace identity is incomplete", "error");
 						return;
 					}
+					const remoteRefRefusal = executionRemoteRefRefusal(
+						exec.grant.remote_ref,
+						await executionPositionZeroKey(backend, exec),
+						exec.grant.grant_id,
+					);
+					if (remoteRefRefusal) {
+						ctx.ui.notify(`Cannot resume: ${remoteRefRefusal}`, "error");
+						return;
+					}
 					let workspace: ExecutionWorkspace;
 					let activeCtx = ctx;
 					try {
@@ -3295,6 +3304,15 @@ export function createWorkflowHost(cfg: HostConfig) {
 							baseline,
 							{ create: false },
 						);
+					} catch (error) {
+						ctx.ui.notify(`Cannot resume: ${String(error)}`, "error");
+						return;
+					}
+					if (`refs/heads/${workspace.branch}` !== exec.grant.remote_ref) {
+						ctx.ui.notify(`Cannot resume: execution workspace branch mismatch: expected ${exec.grant.remote_ref}, got refs/heads/${workspace.branch}`, "error");
+						return;
+					}
+					try {
 						activeCtx = await relocateExecutionSession(ctx, workspace);
 					} catch (error) {
 						ctx.ui.notify(`Cannot resume: ${String(error)}`, "error");
