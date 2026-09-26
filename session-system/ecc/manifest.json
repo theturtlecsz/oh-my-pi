@@ -1,0 +1,446 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "repository": "https://github.com/affaan-m/ECC.git",
+    "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+    "tree": "a7489fb4da00fc7b4995df3a3c59c018d08a3807",
+    "version": "2.2.1",
+    "describe": "v2.2.1-33-g8321021c"
+  },
+  "transformVersion": 1,
+  "packs": [
+    {
+      "id": "ecc-engineering",
+      "lane": "engineering",
+      "selection": {
+        "profileId": null,
+        "moduleIds": ["rules", "agents", "workflow-quality"]
+      },
+      "assetIds": [
+        "ecc-common-coding-style",
+        "ecc-rust-coding-style",
+        "ecc-search-first",
+        "ecc-verification-loop",
+        "ecc-database-reviewer"
+      ]
+    },
+    {
+      "id": "ecc-research",
+      "lane": "research",
+      "selection": {
+        "profileId": null,
+        "moduleIds": ["research", "eval", "ml"]
+      },
+      "assetIds": [
+        "ecc-common-coding-style",
+        "ecc-rust-coding-style",
+        "ecc-research-ops",
+        "ecc-deep-research",
+        "ecc-mle-workflow",
+        "ecc-benchmark-optimization-loop",
+        "ecc-agent-self-evaluation",
+        "ecc-eval-harness",
+        "ecc-scholar-evaluation"
+      ]
+    }
+  ],
+  "nativeCommandNames": ["intake", "plan", "execute", "summary", "done"],
+  "assets": [
+    {
+      "id": "ecc-common-coding-style",
+      "pack": "engineering",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/common/coding-style.md",
+        "sha256": "3c069a2460702e1715e6b21408287401f1faa8d343045c98534d59fbd22a0e56"
+      },
+      "target": { "path": ".omp/rules/ecc-common-coding-style.md", "scope": "project" },
+      "adaptation": { "kind": "rule-metadata", "transformVersion": 1 },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook",
+        "globs": ["**/*"],
+        "description": "Core coding principles and shared conventions",
+        "selection": "model-driven retrieval"
+      },
+      "dependencies": [],
+      "disposition": "supported-with-adaptation",
+      "reason": "Rule metadata translated: description and globs emitted; body preserved byte-for-byte",
+      "qualification": {
+        "mechanicalTests": ["session-system/tests/ecc-adaptation.test.ts"],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-rust-coding-style",
+      "pack": "engineering",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "rules/rust/coding-style.md",
+        "sha256": "01c056bef1bf3b7ca7cfc516986c1d05bcd341c620d2a09ce75acdc2ed539f5f"
+      },
+      "target": { "path": ".omp/rules/ecc-rust-coding-style.md", "scope": "project" },
+      "adaptation": { "kind": "rule-metadata", "transformVersion": 1 },
+      "activation": {
+        "state": "inactive",
+        "mode": "rulebook",
+        "globs": ["**/*.rs"],
+        "description": "Rust engineering guidance and conventions",
+        "selection": "model-driven retrieval"
+      },
+      "dependencies": ["ecc-common-coding-style"],
+      "disposition": "supported-with-adaptation",
+      "reason": "paths: translated to globs:; relative link to the common rule rewritten to its installed target",
+      "qualification": {
+        "mechanicalTests": ["session-system/tests/ecc-adaptation.test.ts"],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-search-first",
+      "pack": "engineering",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/search-first",
+        "sha256": "d66d744228b9cf860acf35f8a90cbbe8195e61367860da9d3632f9fc65706733"
+      },
+      "target": { "path": ".omp/skills/ecc-search-first", "scope": "project" },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1,
+        "overlay": "overlays/ecc-search-first.json"
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery",
+        "description": "Research-before-coding workflow; find existing tools before writing custom code",
+        "selection": "model-driven skill discovery; body loads on invocation"
+      },
+      "dependencies": [],
+      "disposition": "supported-with-adaptation",
+      "reason": "Skill namespaced ecc-; Claude settings/skills paths and the researcher-agent launch adapted via overlay to omp equivalents",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-adaptation.test.ts",
+          "session-system/tests/ecc-install.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-verification-loop",
+      "pack": "engineering",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/verification-loop",
+        "sha256": "f0d56107f79e607d4de6c5543b8edfb1b58ab9ae4019b39831689cd91116543e"
+      },
+      "target": { "path": ".omp/skills/ecc-verification-loop", "scope": "project" },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1,
+        "overlay": "overlays/ecc-verification-loop.json"
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery",
+        "description": "Verification system for omp coding sessions; use before claiming work complete",
+        "selection": "model-driven skill discovery; body loads on invocation"
+      },
+      "dependencies": [],
+      "disposition": "supported-with-adaptation",
+      "reason": "Skill namespaced; Claude-only framing, the /verify command, and HEAD~1 diff inference adapted via overlay",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-adaptation.test.ts",
+          "session-system/tests/ecc-install.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-database-reviewer",
+      "pack": "engineering",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "agents/database-reviewer.md",
+        "sha256": "945c107dea01ca74e3e9bc3a5841e79e744673e8f14697e88cf1cfd9c01a1cc5"
+      },
+      "target": { "path": ".omp/WATCHDOG.yml", "scope": "project" },
+      "adaptation": {
+        "kind": "database-advisor-profile",
+        "transformVersion": 1,
+        "overlay": "overlays/ecc-database-reviewer.json"
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "advisor roster entry, disabled until explicitly enabled",
+        "description": "Read-only PostgreSQL review advisor",
+        "selection": "project-scoped data-system tasks after advisor enablement"
+      },
+      "dependencies": [],
+      "runtimes": [],
+      "disposition": "supported-with-adaptation",
+      "reason": "Specialist agent becomes a disabled read-only advisor profile: Bash dropped, psql/EXPLAIN instructions removed, model removed, advice is not acceptance authority",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-adaptation.test.ts",
+          "session-system/tests/ecc-install.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-research-ops",
+      "pack": "research",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/research-ops",
+        "sha256": "114d0e5480ce3ad263316c639ce0c401396e1d9fbec3cf15b3c962ae16f376db"
+      },
+      "target": { "path": ".omp/skills/ecc-research-ops", "scope": "project" },
+      "adaptation": { "kind": "skill-namespaced", "transformVersion": 1 },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery",
+        "description": "Evidence-first current-state research workflow",
+        "selection": "model-driven skill discovery; body loads on invocation"
+      },
+      "dependencies": [],
+      "disposition": "supported-without-changes",
+      "reason": "Name namespaced only; prose references to uninstalled ECC research skills are informational",
+      "qualification": {
+        "mechanicalTests": ["session-system/tests/ecc-adaptation.test.ts"],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-deep-research",
+      "pack": "research",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/deep-research",
+        "sha256": "72e184f5d0f31ca4d45286753409d8c8431b025e8ac3800dcc9f32d9e930f58a"
+      },
+      "target": { "path": ".omp/skills/ecc-deep-research", "scope": "project" },
+      "adaptation": {
+        "kind": "skill-namespaced",
+        "transformVersion": 1,
+        "overlay": "overlays/ecc-deep-research.json"
+      },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery",
+        "description": "Multi-source deep research with cited reports",
+        "selection": "model-driven skill discovery; body loads on invocation"
+      },
+      "dependencies": [],
+      "runtimes": ["firecrawl-mcp", "exa-mcp"],
+      "disposition": "supported-with-adaptation",
+      "reason": "Skill namespaced; Claude/Codex MCP config paths and the Claude Code Task tool adapted via overlay. Requires a real firecrawl/exa MCP: any live-run coverage is an owner trial, not a mechanical test",
+      "qualification": {
+        "mechanicalTests": ["session-system/tests/ecc-adaptation.test.ts"],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-mle-workflow",
+      "pack": "research",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/mle-workflow",
+        "sha256": "2497888dd543ca7bdf5d0cb4d90fce023eb2c1c14f860f0af8e8be42423131b4"
+      },
+      "target": { "path": ".omp/skills/ecc-mle-workflow", "scope": "project" },
+      "adaptation": { "kind": "skill-namespaced", "transformVersion": 1 },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery",
+        "description": "Production machine-learning engineering workflow",
+        "selection": "model-driven skill discovery; body loads on invocation"
+      },
+      "dependencies": [],
+      "disposition": "supported-without-changes",
+      "reason": "Name namespaced only; no Claude-only paths, tools, or commands in the body",
+      "qualification": {
+        "mechanicalTests": ["session-system/tests/ecc-adaptation.test.ts"],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-benchmark-optimization-loop",
+      "pack": "research",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/benchmark-optimization-loop",
+        "sha256": "51a766eba273a30c24b8f3851e115e72335f3e3851a82235b9f9c1fedfb423a4"
+      },
+      "target": { "path": ".omp/skills/ecc-benchmark-optimization-loop", "scope": "project" },
+      "adaptation": { "kind": "skill-namespaced", "transformVersion": 1 },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery",
+        "description": "Measured optimization loop: try variants and keep the best by repeated benchmark",
+        "selection": "model-driven skill discovery; body loads on invocation"
+      },
+      "dependencies": [],
+      "disposition": "supported-without-changes",
+      "reason": "Name namespaced only; the frontmatter tools list is inert under OMP skill discovery",
+      "qualification": {
+        "mechanicalTests": ["session-system/tests/ecc-adaptation.test.ts"],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-agent-self-evaluation",
+      "pack": "research",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/agent-self-evaluation",
+        "sha256": "96bb21eb37760f596789f84ec0a5dad4ef92fc2255e35cd7b88dc4234062b8c1"
+      },
+      "target": { "path": ".omp/skills/ecc-agent-self-evaluation", "scope": "project" },
+      "adaptation": { "kind": "skill-namespaced", "transformVersion": 1 },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery",
+        "description": "Five-axis self-evaluation scorecard after non-trivial tasks",
+        "selection": "model-driven skill discovery; body loads on invocation"
+      },
+      "dependencies": [
+        "scripts/evaluate.py",
+        "references/evaluation-criteria.md",
+        "references/hook-integration.md",
+        "templates/evaluation-report.md",
+        "examples/high-score-example.md",
+        "examples/low-score-example.md"
+      ],
+      "runtimes": ["python"],
+      "disposition": "supported-with-adaptation",
+      "reason": "Script-dependent research asset: SKILL.md namespaced (no body edits needed) and every referenced helper installed verbatim, so no reference is left dangling",
+      "qualification": {
+        "mechanicalTests": [
+          "session-system/tests/ecc-adaptation.test.ts",
+          "session-system/tests/ecc-install.test.ts"
+        ],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-eval-harness",
+      "pack": "research",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/eval-harness",
+        "sha256": "6a8fae5d958ff9b6bdf97c7d9217fdf0b2ec9196f61d125bac0a71468f7d44d0"
+      },
+      "target": { "path": ".omp/skills/ecc-eval-harness", "scope": "project" },
+      "adaptation": { "kind": "skill-namespaced", "transformVersion": 1 },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery",
+        "description": "Formal eval-driven-development framework",
+        "selection": "model-driven skill discovery; body loads on invocation"
+      },
+      "dependencies": [],
+      "disposition": "supported-without-changes",
+      "reason": "Reference only for R01. Candidate execution is disabled upstream (gate.isolation_required) and that refusal is preserved; OMP's runner is qualified separately by R05/R06",
+      "qualification": {
+        "mechanicalTests": ["session-system/tests/ecc-adaptation.test.ts"],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-scholar-evaluation",
+      "pack": "research",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/scientific-thinking-scholar-evaluation",
+        "sha256": "e9f8a3bce2bce769a96611a52804a2b3955f2796ee2749bc8275aea38a26cd2d"
+      },
+      "target": { "path": ".omp/skills/ecc-scholar-evaluation", "scope": "project" },
+      "adaptation": { "kind": "skill-namespaced", "transformVersion": 1 },
+      "activation": {
+        "state": "inactive",
+        "mode": "skill-discovery",
+        "description": "Structured scholarly-work evaluation rubric",
+        "selection": "model-driven skill discovery; body loads on invocation"
+      },
+      "dependencies": [],
+      "disposition": "supported-without-changes",
+      "reason": "Name namespaced; the upstream skill is named scholar-evaluation while its directory differs, so only the frontmatter name is rewritten",
+      "qualification": {
+        "mechanicalTests": ["session-system/tests/ecc-adaptation.test.ts"],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    },
+    {
+      "id": "ecc-harness-optimizer",
+      "pack": "research",
+      "upstream": {
+        "repository": "https://github.com/affaan-m/ECC.git",
+        "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+        "path": "skills/harness-optimizer",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "target": { "path": ".omp/skills/ecc-harness-optimizer", "scope": "project" },
+      "adaptation": { "kind": "skill-namespaced", "transformVersion": 1 },
+      "activation": { "state": "inactive", "mode": "skill-discovery" },
+      "dependencies": [],
+      "disposition": "deferred",
+      "reason": "Recorded in R00's research-pack list but no skill directory exists at the pinned revision; deferred until a pinned upstream path is identified",
+      "qualification": {
+        "mechanicalTests": [],
+        "behavioralTrial": null,
+        "qualifiedRelease": null
+      },
+      "rollback": { "removeOwnedArtifactOnly": true }
+    }
+  ],
+  "dispositionRules": [
+    { "prefix": ".kiro/", "disposition": "reference-only", "reason": "Kiro harness material" },
+    { "prefix": ".github/", "disposition": "reference-only", "reason": "CI workflows and automation" },
+    { "prefix": "docs/", "disposition": "reference-only", "reason": "Upstream documentation" },
+    { "prefix": "tests/", "disposition": "reference-only", "reason": "Upstream test suites" },
+    { "prefix": "scripts/", "disposition": "reference-only", "reason": "Upstream installer and maintenance scripts" },
+    { "prefix": "ecc2/", "disposition": "reference-only", "reason": "ECC2 incubation material" },
+    { "prefix": ".claude/", "disposition": "reference-only", "reason": "Claude harness configuration" },
+    { "prefix": "", "disposition": "reference-only", "reason": "Repository root files and metadata" }
+  ]
+}

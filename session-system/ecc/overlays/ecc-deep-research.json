@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "assetId": "ecc-deep-research",
+  "upstreamPath": "skills/deep-research",
+  "upstreamSha256": "72e184f5d0f31ca4d45286753409d8c8431b025e8ac3800dcc9f32d9e930f58a",
+  "adaptedSha256": "ebf4c937eed5b2521411cb5ef8b1f0966fcb76892b74de6ed4ff20ab9255491d",
+  "edits": [
+    {
+      "reason": "Configure MCP for the active omp session instead of Claude/Codex config files",
+      "find": [
+        "Both together give the best coverage. Configure in `~/.claude.json` or `~/.codex/config.toml`."
+      ],
+      "replace": [
+        "Both together give the best coverage. Configure the MCP servers for the active omp session."
+      ]
+    },
+    {
+      "reason": "Name the native agent tool instead of the Claude Code Task tool",
+      "find": [
+        "For broad topics, use Claude Code's Task tool to parallelize:"
+      ],
+      "replace": [
+        "For broad topics, use the `agent` tool to parallelize:"
+      ]
+    }
+  ]
+}

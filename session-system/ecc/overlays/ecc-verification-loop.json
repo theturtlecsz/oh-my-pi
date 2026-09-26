@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "assetId": "ecc-verification-loop",
+  "upstreamPath": "skills/verification-loop",
+  "upstreamSha256": "f0d56107f79e607d4de6c5543b8edfb1b58ab9ae4019b39831689cd91116543e",
+  "adaptedSha256": "d986b17ae9b514ab730f338dc4643e1f8b24668a4cfc0c88ffa4b7d751727899",
+  "edits": [
+    {
+      "reason": "Describe omp sessions, not Claude Code sessions, in the trigger description",
+      "find": [
+        "description: \"A comprehensive verification system for Claude Code sessions. Use when verifying a Claude Code session's work before claiming it is complete.\""
+      ],
+      "replace": [
+        "description: \"A comprehensive verification system for omp coding sessions. Use when verifying a session's work before claiming it is complete.\""
+      ]
+    },
+    {
+      "reason": "Describe omp sessions in the body heading",
+      "find": [
+        "A comprehensive verification system for Claude Code sessions."
+      ],
+      "replace": [
+        "A comprehensive verification system for omp coding sessions."
+      ]
+    },
+    {
+      "reason": "Compare against the current commit instead of assuming HEAD~1",
+      "find": [
+        "git diff HEAD~1 --name-only"
+      ],
+      "replace": [
+        "git diff HEAD --name-only"
+      ]
+    },
+    {
+      "reason": "Replace the non-existent /verify command with a real check instruction",
+      "find": [
+        "Run: /verify"
+      ],
+      "replace": [
+        "Run the task-appropriate check command (for example `bun test` or the project's test script)."
+      ]
+    }
+  ]
+}
