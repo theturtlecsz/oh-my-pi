@@ -785,3 +785,38 @@ def evaluate_bounded_intake(
 
     return capped_questions, issue_count
 
+
+RESEARCH_CAMPAIGN_TRANSITIONS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("draft", "admitted"),
+        ("admitted", "running"),
+        ("running", "paused"),
+        ("paused", "running"),
+        ("running", "evaluating"),
+        ("evaluating", "running"),
+        ("admitted", "blocked"),
+        ("running", "blocked"),
+        ("paused", "blocked"),
+        ("evaluating", "blocked"),
+        ("blocked", "admitted"),
+        ("blocked", "running"),
+        ("blocked", "paused"),
+        ("blocked", "evaluating"),
+        ("evaluating", "concluded"),
+        ("blocked", "concluded"),
+        ("draft", "cancelled"),
+        ("admitted", "cancelled"),
+        ("running", "cancelled"),
+        ("paused", "cancelled"),
+        ("evaluating", "cancelled"),
+        ("blocked", "cancelled"),
+    }
+)
+RESEARCH_CAMPAIGN_TERMINAL = frozenset({"concluded", "cancelled"})
+RESEARCH_CAMPAIGN_TRIAL_ACCEPTING = frozenset({"admitted", "running"})
+
+
+def research_campaign_transition_error(current: str, target: str) -> str | None:
+    if (current, target) in RESEARCH_CAMPAIGN_TRANSITIONS:
+        return None
+    return f"campaign in state {current} cannot transition to {target}"

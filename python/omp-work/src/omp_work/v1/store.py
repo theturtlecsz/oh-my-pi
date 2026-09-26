@@ -58,10 +58,12 @@ from .models import (
 )
 from .semantics import (
     BOUNDED_INTAKE_RULE_BUNDLE_SHA256,
+    RESEARCH_CAMPAIGN_TRIAL_ACCEPTING,
     bounded_intake_semantic_sha256,
     completion_blockers,
     evaluate_bounded_intake,
     normalize_auditor_report,
+    research_campaign_transition_error,
     validate_completion_evidence,
     validate_cutover_manifest,
     would_create_cycle,
@@ -75,8 +77,8 @@ _MANIFEST_FIELDS = "manifest_id,work_id,attempt_id,manifest_version,plan_receipt
 _LAUNCH_FIELDS = "launch_id,attempt_id,manifest_id,launch_number,task_sha256,tool_call_id,reserved_at"
 _EVENT_FIELDS = "event_id,sequence,work_id,attempt_id,launch_id,event_type,reason_code,reason,legal_next_actions,remaining_launches,remaining_reports,requires_fresh_authorization,rendered_text,rendered_sha256,requires_delivery,created_at"
 _DELIVERY_FIELDS = "delivery_id,event_id,delivery_sequence,owner_session_id,rendered_sha256,status,authorization_ref,created_at"
-_CAMPAIGN_FIELDS = "campaign_id,workspace_id,work_id,revision_id,domain,spec,spec_sha256,policy_sha256,state,cancel_reason,created_at,admitted_at,cancelled_at"
-_TRIAL_FIELDS = "trial_id,workspace_id,campaign_id,work_id,decision_id,candidate_digest,experiment_spec_sha256,evaluator_sha256,environment_sha256,input_manifest_sha256,seed,hardware_class,resource_request,policy_sha256,state,archived_reason,proposed_at,archived_at"
+_CAMPAIGN_FIELDS = "campaign_id,workspace_id,work_id,revision_id,domain,spec,spec_sha256,policy_sha256,state,cancel_reason,created_at,admitted_at,cancelled_at,outcome,outcome_reason,concluded_at,blocked_dependency,blocked_from_state"
+_TRIAL_FIELDS = "trial_id,workspace_id,campaign_id,work_id,decision_id,candidate_digest,experiment_spec_sha256,evaluator_sha256,environment_sha256,input_manifest_sha256,seed,hardware_class,resource_request,policy_sha256,state,archived_reason,proposed_at,archived_at,action,reason"
 _OBSERVATION_FIELDS = "observation_id,workspace_id,campaign_id,trial_id,issuer_kind,source_ref,execution_status,commit_sha,payload,payload_sha256,observed_at,recorded_at"
 _DELIVERABLE_BINDING_FIELDS = "trial_id,workspace_id,campaign_id,work_id,revision_id,candidate_digest,native_candidate_id,binding_sha256,bound_at"
 _LIVE_STATES = tuple(sorted(state.value for state in LIVE_CLOSE_ATTEMPT_STATES))
@@ -112,8 +114,11 @@ def _campaign_json(row: dict[str, object] | None) -> dict[str, object] | None:
     if row is None:
         return None
     res = _row_json(row)
-    if res is not None and isinstance(res.get("spec"), str):
-        res["spec"] = json.loads(res["spec"])
+    if res is not None:
+        if isinstance(res.get("spec"), str):
+            res["spec"] = json.loads(res["spec"])
+        if isinstance(res.get("blocked_dependency"), str):
+            res["blocked_dependency"] = json.loads(res["blocked_dependency"])
     return res
 
 
@@ -482,6 +487,8 @@ class PostgresWorkStore:
             "propose_research_trial",
             "record_research_observation",
             "bind_research_deliverable",
+            "set_research_campaign_state",
+            "conclude_research_campaign",
         }
         conflict = False
         with self._transaction(
@@ -583,6 +590,10 @@ class PostgresWorkStore:
                     result = self._record_research_observation(cur, envelope)
                 elif command.type == "bind_research_deliverable":
                     result = self._bind_research_deliverable(cur, envelope)
+                elif command.type == "set_research_campaign_state":
+                    result = self._set_research_campaign_state(cur, envelope)
+                elif command.type == "conclude_research_campaign":
+                    result = self._conclude_research_campaign(cur, envelope)
                 elif command.type == "attest_checkpoint_delivery":
                     result = self._attest_checkpoint_delivery(cur, envelope)
                 elif command.type == "record_closeout_review":
@@ -3179,12 +3190,18 @@ class PostgresWorkStore:
         if campaign["work_id"] != payload.work_id:
             raise WorkStoreError("invalid_request", ("campaign work mismatch",))
 
+        err = research_campaign_transition_error(campaign["state"], "cancelled")
+        if err:
+            raise WorkStoreError("invalid_request", (err,))
+
         cur.execute(
             f"""
             UPDATE omp_research.campaigns SET
                 state = 'cancelled',
                 cancel_reason = %s,
-                cancelled_at = clock_timestamp()
+                cancelled_at = clock_timestamp(),
+                blocked_dependency = NULL,
+                blocked_from_state = NULL
             WHERE workspace_id = %s AND campaign_id = %s
             RETURNING {_CAMPAIGN_FIELDS}
             """,
@@ -3213,6 +3230,11 @@ class PostgresWorkStore:
         self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
     ) -> dict[str, object]:
         payload = envelope.command.payload
+        action_val = (
+            payload.action.value
+            if hasattr(payload.action, "value")
+            else str(payload.action)
+        )
         cur.execute(
             f"SELECT {_TRIAL_FIELDS} FROM omp_research.trials WHERE workspace_id=%s AND trial_id=%s",
             (envelope.workspace_id, payload.trial_id),
@@ -3233,6 +3255,8 @@ class PostgresWorkStore:
                 and existing["hardware_class"] == payload.hardware_class
                 and existing["policy_sha256"] == payload.policy_sha256
                 and (existing["resource_request"] or None) == (payload.resource_request or None)
+                and existing.get("action") == action_val
+                and existing.get("reason") == payload.reason
             ):
                 return {
                     "type": "propose_research_trial",
@@ -3264,6 +3288,8 @@ class PostgresWorkStore:
                 and existing["hardware_class"] == payload.hardware_class
                 and existing["policy_sha256"] == payload.policy_sha256
                 and (existing["resource_request"] or None) == (payload.resource_request or None)
+                and existing.get("action") == action_val
+                and existing.get("reason") == payload.reason
             ):
                 return {
                     "type": "propose_research_trial",
@@ -3295,7 +3321,7 @@ class PostgresWorkStore:
             raise WorkStoreError("invalid_request", ("campaign not found",))
         if campaign["work_id"] != payload.work_id:
             raise WorkStoreError("invalid_request", ("campaign work mismatch",))
-        if campaign["state"] != "admitted":
+        if campaign["state"] not in RESEARCH_CAMPAIGN_TRIAL_ACCEPTING:
             raise WorkStoreError(
                 "invalid_request",
                 (f"cannot propose trial for campaign in state {campaign['state']}",),
@@ -3319,13 +3345,15 @@ class PostgresWorkStore:
                 candidate_digest, experiment_spec_sha256, evaluator_sha256,
                 environment_sha256, input_manifest_sha256, seed,
                 hardware_class, resource_request, policy_sha256,
-                state, archived_reason, proposed_at, archived_at
+                state, archived_reason, proposed_at, archived_at,
+                action, reason
             ) VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s, %s,
                 %s, %s, %s,
                 %s, %s, %s,
-                'proposed', NULL, clock_timestamp(), NULL
+                'proposed', NULL, clock_timestamp(), NULL,
+                %s, %s
             ) RETURNING {_TRIAL_FIELDS}
             """,
             (
@@ -3343,6 +3371,8 @@ class PostgresWorkStore:
                 payload.hardware_class,
                 resource_request_json,
                 payload.policy_sha256,
+                action_val,
+                payload.reason,
             ),
         )
         return {
@@ -3625,6 +3655,164 @@ class PostgresWorkStore:
             "type": "bind_research_deliverable",
             "status": "applied",
             "deliverable_binding": _deliverable_binding_json(cur.fetchone()),
+        }
+
+    def _set_research_campaign_state(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute(
+            f"SELECT {_CAMPAIGN_FIELDS} FROM omp_research.campaigns WHERE workspace_id=%s AND campaign_id=%s",
+            (envelope.workspace_id, payload.campaign_id),
+        )
+        campaign = cur.fetchone()
+        if campaign is None:
+            raise WorkStoreError("invalid_request", ("campaign not found",))
+
+        self._lock_work_chain(cur, envelope.workspace_id, campaign["work_id"])
+        cur.execute(
+            f"SELECT {_CAMPAIGN_FIELDS} FROM omp_research.campaigns WHERE workspace_id=%s AND campaign_id=%s",
+            (envelope.workspace_id, payload.campaign_id),
+        )
+        campaign = cur.fetchone()
+        if campaign is None:
+            raise WorkStoreError("invalid_request", ("campaign not found",))
+
+        if campaign["work_id"] != payload.work_id:
+            raise WorkStoreError("invalid_request", ("campaign work mismatch",))
+
+        if campaign["state"] != payload.expected_state:
+            raise WorkStoreError(
+                "revision_conflict",
+                (f"campaign state is {campaign['state']}, expected {payload.expected_state}",),
+            )
+
+        err = research_campaign_transition_error(campaign["state"], payload.target_state)
+        if err:
+            raise WorkStoreError("invalid_request", (err,))
+
+        if payload.policy_sha256 != campaign["policy_sha256"]:
+            raise WorkStoreError(
+                "stale_evidence",
+                ("policy fingerprint incompatible with admitted campaign",),
+            )
+
+        if campaign["state"] == "blocked" and payload.target_state != campaign["blocked_from_state"]:
+            raise WorkStoreError(
+                "invalid_request",
+                (f"blocked campaign resumes only to {campaign['blocked_from_state']}",),
+            )
+
+        if payload.target_state == "blocked":
+            blocked_dependency_json = canonical_json(
+                payload.blocked_dependency.model_dump(mode="json")
+            )
+            cur.execute(
+                f"""
+                UPDATE omp_research.campaigns SET
+                    state = %s,
+                    blocked_dependency = %s,
+                    blocked_from_state = %s
+                WHERE workspace_id = %s AND campaign_id = %s
+                RETURNING {_CAMPAIGN_FIELDS}
+                """,
+                (
+                    payload.target_state,
+                    blocked_dependency_json,
+                    campaign["state"],
+                    envelope.workspace_id,
+                    payload.campaign_id,
+                ),
+            )
+        else:
+            cur.execute(
+                f"""
+                UPDATE omp_research.campaigns SET
+                    state = %s,
+                    blocked_dependency = NULL,
+                    blocked_from_state = NULL
+                WHERE workspace_id = %s AND campaign_id = %s
+                RETURNING {_CAMPAIGN_FIELDS}
+                """,
+                (payload.target_state, envelope.workspace_id, payload.campaign_id),
+            )
+        updated = cur.fetchone()
+        return {
+            "type": "set_research_campaign_state",
+            "status": "applied",
+            "campaign": _campaign_json(updated),
+        }
+
+    def _conclude_research_campaign(
+        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+    ) -> dict[str, object]:
+        payload = envelope.command.payload
+        cur.execute(
+            f"SELECT {_CAMPAIGN_FIELDS} FROM omp_research.campaigns WHERE workspace_id=%s AND campaign_id=%s",
+            (envelope.workspace_id, payload.campaign_id),
+        )
+        campaign = cur.fetchone()
+        if campaign is None:
+            raise WorkStoreError("invalid_request", ("campaign not found",))
+
+        self._lock_work_chain(cur, envelope.workspace_id, campaign["work_id"])
+        cur.execute(
+            f"SELECT {_CAMPAIGN_FIELDS} FROM omp_research.campaigns WHERE workspace_id=%s AND campaign_id=%s",
+            (envelope.workspace_id, payload.campaign_id),
+        )
+        campaign = cur.fetchone()
+        if campaign is None:
+            raise WorkStoreError("invalid_request", ("campaign not found",))
+
+        if campaign["work_id"] != payload.work_id:
+            raise WorkStoreError("invalid_request", ("campaign work mismatch",))
+
+        if campaign["state"] not in {"evaluating", "blocked"}:
+            err = research_campaign_transition_error(campaign["state"], "concluded")
+            raise WorkStoreError(
+                "invalid_request",
+                (err or f"cannot conclude campaign in state {campaign['state']}",),
+            )
+
+        if campaign["state"] == "blocked" and payload.outcome not in {
+            "resource_exhausted",
+            "externally_blocked",
+        }:
+            raise WorkStoreError(
+                "invalid_request",
+                ("blocked campaign conclusion permitted only for resource_exhausted or externally_blocked",),
+            )
+
+        if payload.policy_sha256 != campaign["policy_sha256"]:
+            raise WorkStoreError(
+                "stale_evidence",
+                ("policy fingerprint incompatible with admitted campaign",),
+            )
+
+        cur.execute(
+            f"""
+            UPDATE omp_research.campaigns SET
+                state = 'concluded',
+                outcome = %s,
+                outcome_reason = %s,
+                concluded_at = clock_timestamp(),
+                blocked_dependency = NULL,
+                blocked_from_state = NULL
+            WHERE workspace_id = %s AND campaign_id = %s
+            RETURNING {_CAMPAIGN_FIELDS}
+            """,
+            (
+                payload.outcome,
+                payload.reason,
+                envelope.workspace_id,
+                payload.campaign_id,
+            ),
+        )
+        updated = cur.fetchone()
+        return {
+            "type": "conclude_research_campaign",
+            "status": "applied",
+            "campaign": _campaign_json(updated),
         }
 
     def _attest_checkpoint_delivery(

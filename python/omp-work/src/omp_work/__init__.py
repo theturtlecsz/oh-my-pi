@@ -117,6 +117,8 @@ _COMMAND_TYPES = frozenset(
         "propose_research_trial",
         "record_research_observation",
         "bind_research_deliverable",
+        "set_research_campaign_state",
+        "conclude_research_campaign",
     }
 )
 

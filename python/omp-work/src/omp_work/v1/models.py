@@ -1165,6 +1165,47 @@ class ResearchCampaignSpec(StrictModel):
     candidate_mapping_policy: str = Field(min_length=1)
 
 
+ResearchCampaignState = Literal[
+    "draft",
+    "admitted",
+    "running",
+    "paused",
+    "evaluating",
+    "blocked",
+    "concluded",
+    "cancelled",
+]
+ResearchCampaignOutcome = Literal[
+    "supported",
+    "refuted",
+    "inconclusive",
+    "resource_exhausted",
+    "externally_blocked",
+]
+
+
+class ResearchAction(StrEnum):
+    RETRIEVE = "retrieve"
+    DRAFT = "draft"
+    REPAIR = "repair"
+    REFINE = "refine"
+    CHALLENGE = "challenge"
+    COMBINE = "combine"
+    EVALUATE = "evaluate"
+    REPLICATE = "replicate"
+    DEEPEN = "deepen"
+    PRUNE = "prune"
+    SYNTHESIZE = "synthesize"
+    ESCALATE = "escalate"
+    CONCLUDE = "conclude"
+
+
+class ResearchBlockedDependency(StrictModel):
+    kind: Literal["work_item", "budget_scope", "capability", "external"]
+    ref: str = Field(min_length=1, max_length=512)
+    reason: str = Field(min_length=1, max_length=2048)
+
+
 class ResearchCampaign(StrictModel):
     campaign_id: UUID
     workspace_id: UUID
@@ -1174,11 +1215,18 @@ class ResearchCampaign(StrictModel):
     spec: ResearchCampaignSpec
     spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     policy_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    state: Literal["draft", "admitted", "cancelled"]
+    state: ResearchCampaignState
     cancel_reason: str | None = None
     created_at: datetime
     admitted_at: datetime | None = None
     cancelled_at: datetime | None = None
+    outcome: ResearchCampaignOutcome | None = None
+    outcome_reason: str | None = None
+    concluded_at: datetime | None = None
+    blocked_dependency: ResearchBlockedDependency | None = None
+    blocked_from_state: (
+        Literal["admitted", "running", "paused", "evaluating"] | None
+    ) = None
 
 
 class ResearchTrial(StrictModel):
@@ -1200,6 +1248,8 @@ class ResearchTrial(StrictModel):
     archived_reason: str | None = None
     proposed_at: datetime
     archived_at: datetime | None = None
+    action: ResearchAction | None = None
+    reason: str | None = None
 
 
 ResearchIssuerKind = Literal["legacy_autoresearch", "candidate_authored"]
@@ -1265,6 +1315,8 @@ class ProposeResearchTrialPayload(StrictModel):
     campaign_id: UUID
     work_id: UUID
     decision_id: UUID
+    action: ResearchAction
+    reason: str | None = Field(default=None, max_length=2048)
     candidate_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     experiment_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     evaluator_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -1301,6 +1353,33 @@ class BindResearchDeliverablePayload(StrictModel):
     binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class SetResearchCampaignStatePayload(StrictModel):
+    campaign_id: UUID
+    work_id: UUID
+    expected_state: Literal["admitted", "running", "paused", "evaluating", "blocked"]
+    target_state: Literal["admitted", "running", "paused", "evaluating", "blocked"]
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    blocked_dependency: ResearchBlockedDependency | None = None
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> SetResearchCampaignStatePayload:
+        if self.expected_state == self.target_state:
+            raise ValueError("expected_state and target_state must differ")
+        if (self.target_state == "blocked") != (self.blocked_dependency is not None):
+            raise ValueError(
+                "blocked_dependency is required exactly when target_state is blocked"
+            )
+        return self
+
+
+class ConcludeResearchCampaignPayload(StrictModel):
+    campaign_id: UUID
+    work_id: UUID
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    outcome: ResearchCampaignOutcome
+    reason: str = Field(min_length=1, max_length=4096)
+
+
 class CreateResearchCampaignCommand(StrictModel):
     type: Literal["create_research_campaign"]
     payload: CreateResearchCampaignPayload
@@ -1329,6 +1408,16 @@ class RecordResearchObservationCommand(StrictModel):
 class BindResearchDeliverableCommand(StrictModel):
     type: Literal["bind_research_deliverable"]
     payload: BindResearchDeliverablePayload
+
+
+class SetResearchCampaignStateCommand(StrictModel):
+    type: Literal["set_research_campaign_state"]
+    payload: SetResearchCampaignStatePayload
+
+
+class ConcludeResearchCampaignCommand(StrictModel):
+    type: Literal["conclude_research_campaign"]
+    payload: ConcludeResearchCampaignPayload
 
 
 Command = Annotated[
@@ -1372,7 +1461,9 @@ Command = Annotated[
     | CancelResearchCampaignCommand
     | ProposeResearchTrialCommand
     | RecordResearchObservationCommand
-    | BindResearchDeliverableCommand,
+    | BindResearchDeliverableCommand
+    | SetResearchCampaignStateCommand
+    | ConcludeResearchCampaignCommand,
     Field(discriminator="type"),
 ]
 

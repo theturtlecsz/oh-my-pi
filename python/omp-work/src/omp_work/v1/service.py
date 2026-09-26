@@ -69,6 +69,8 @@ class WorkService:
         "propose_research_trial": "work.execute",
         "record_research_observation": "work.execute",
         "bind_research_deliverable": "work.execute",
+        "set_research_campaign_state": "work.execute",
+        "conclude_research_campaign": "work.approve",
     }
 
     def __init__(self, store: WorkStore) -> None:

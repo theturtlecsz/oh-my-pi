@@ -390,6 +390,18 @@ class BindResearchDeliverableResult(StrictModel):
     deliverable_binding: ResearchDeliverableBinding
 
 
+class SetResearchCampaignStateResult(StrictModel):
+    type: Literal["set_research_campaign_state"]
+    status: Literal["applied", "replayed"]
+    campaign: ResearchCampaign
+
+
+class ConcludeResearchCampaignResult(StrictModel):
+    type: Literal["conclude_research_campaign"]
+    status: Literal["applied", "replayed"]
+    campaign: ResearchCampaign
+
+
 class ResearchView(StrictModel):
     work_id: UUID
     campaigns: tuple[ResearchCampaign, ...] = ()
@@ -429,7 +441,9 @@ CommandResult = Annotated[
     | CancelResearchCampaignResult
     | ProposeResearchTrialResult
     | RecordResearchObservationResult
-    | BindResearchDeliverableResult,
+    | BindResearchDeliverableResult
+    | SetResearchCampaignStateResult
+    | ConcludeResearchCampaignResult,
     Field(discriminator="type"),
 ]
 
