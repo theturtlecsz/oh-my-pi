@@ -133,8 +133,12 @@ function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, kernelKill
 	return `[execution timed out after ${rounded}s${explanation}]`;
 }
 
-function createCancelledJuliaResult(_timedOut: boolean, timeoutMs?: number): JuliaResult {
-	const output = formatTimeoutAnnotation(timeoutMs) ?? "[execution cancelled]\n";
+function createCancelledJuliaResult(timedOut: boolean, timeoutMs?: number, kernelExited?: boolean): JuliaResult {
+	const output = kernelExited
+		? "[kernel exited]\n"
+		: timedOut
+			? (formatTimeoutAnnotation(timeoutMs) ?? "[execution timed out]\n")
+			: "[execution cancelled]\n";
 	return createCancelledKernelResult(output);
 }
 
@@ -254,8 +258,28 @@ export async function executeJulia(code: string, options?: JuliaExecutorOptions)
 		await ensureToolBridge(executionOptions);
 		return await sessionRegistry.executeOnSession(code, cwd, executionOptions);
 	} catch (err) {
-		if (isJuliaCancellationError(err) || executionOptions.signal?.aborted) {
-			return createCancelledJuliaResult(isTimedOutJuliaCancellation(err, executionOptions.signal));
+		if (executionOptions.signal?.aborted) {
+			return createCancelledJuliaResult(
+				isTimedOutJuliaCancellation(executionOptions.signal.reason, executionOptions.signal),
+				executionOptions.timeoutMs,
+			);
+		}
+		if (isJuliaCancellationError(err)) {
+			const timedOut = isTimedOutJuliaCancellation(err, executionOptions.signal);
+			if (timedOut) {
+				throw new Error(`Julia execution timed out: ${err instanceof Error ? err.message : String(err)}`);
+			}
+			const message = err instanceof Error ? err.message : String(err);
+			if (
+				message.includes("kernel exited") ||
+				message.includes("kernel init") ||
+				message.includes("kernel prelude") ||
+				message.includes("kernel shutdown") ||
+				message.includes("kernel is not running")
+			) {
+				throw new Error(`Julia kernel exited: ${message}`);
+			}
+			throw new Error(`Julia execution cancelled: ${message}`);
 		}
 		throw err;
 	}

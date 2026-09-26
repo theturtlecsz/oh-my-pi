@@ -39,6 +39,16 @@ export const ADVISOR_RENDER_OPTIONS = {
 	expandEditDiffs: true,
 } as const;
 
+/**
+ * Suffix appended to the LAST chunk of a wip ("willContinue") update. It is the
+ * only byte that flips between an in-progress and a completed update, and the
+ * advisor system prompt keys the withhold-critique policy on it. Exported so the
+ * single-block renderer (`AdvisorRuntime.#renderPreparedDelta`) and the
+ * multi-message split append the identical marker — supervision-history.ts also
+ * reads it to recover `inProgress` from a persisted transcript.
+ */
+export const ADVISOR_WIP_MARKER = "[in progress — more steps follow]";
+
 export interface RenderAdvisorDeltaChunksOptions {
 	wip: boolean;
 	includeThinking: boolean;
@@ -92,7 +102,7 @@ export function renderAdvisorDeltaChunks(
 	if (chunks.length === 0) return null;
 	if (opts.wip) {
 		const last = chunks[chunks.length - 1];
-		last.content[0].text += `\n\n---\n\n[in progress — more steps follow]`;
+		last.content[0].text += `\n\n---\n\n${ADVISOR_WIP_MARKER}`;
 	}
 	return chunks as AgentMessage[];
 }

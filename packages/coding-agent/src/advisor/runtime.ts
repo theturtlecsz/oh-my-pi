@@ -13,7 +13,7 @@ import {
 	PRIMARY_CONTEXT_CUSTOM_TYPES,
 } from "../session/session-history-format";
 import type { AdvisorCategory } from "./advise-tool";
-import { ADVISOR_RENDER_OPTIONS, renderAdvisorDeltaChunks } from "./delta-split";
+import { ADVISOR_RENDER_OPTIONS, ADVISOR_WIP_MARKER, renderAdvisorDeltaChunks } from "./delta-split";
 import { fingerprintMessage } from "./message-fingerprint";
 
 /**
@@ -790,7 +790,7 @@ export class AdvisorRuntime {
 		const heading = "### Session update";
 		const mdHead = `${heading}\n\n${md}`;
 		if (!wip) return mdHead;
-		return `${mdHead}\n\n---\n\n[in progress — more steps follow]`;
+		return `${mdHead}\n\n---\n\n${ADVISOR_WIP_MARKER}`;
 	}
 
 	#renderDelta(messages?: AgentMessage[], wip = false): Omit<PendingDelta, "turns" | "overflowRecovery"> | null {

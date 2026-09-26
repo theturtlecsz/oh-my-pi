@@ -42,6 +42,8 @@ export interface ClassifyUnexpectedStopDeps {
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	signal?: AbortSignal;
 	recordJevUsage?: (entry: JevUsageEntry) => void;
+	/** Receives the online classifier call's terminal message for per-call accounting. */
+	onCompletionUsage?: (message: AssistantMessage) => void;
 	budgetMs?: number;
 	breaker?: JevBreaker;
 	fetch?: FetchImpl;
@@ -150,6 +152,8 @@ async function classifyOnline(text: string, deps: ClassifyUnexpectedStopDeps): P
 	if (response.stopReason === "error") {
 		throw new Error(`unexpected-stop: online classification failed: ${response.errorMessage ?? "unknown error"}`);
 	}
+
+	deps.onCompletionUsage?.(response);
 
 	const outputText = response.content
 		.filter((part): part is { type: "text"; text: string } => part.type === "text")

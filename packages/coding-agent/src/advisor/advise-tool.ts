@@ -9,6 +9,7 @@ import type {
 } from "@oh-my-pi/pi-agent-core";
 import { escapeXmlAttribute, escapeXmlText } from "@oh-my-pi/pi-utils";
 import adviseDescription from "../prompts/advisor/advise-tool.md" with { type: "text" };
+import type { AdvisorSupervisionGate } from "./supervision-gate";
 
 export type AdvisorCategory =
 	| "gate-defect"
@@ -172,15 +173,17 @@ export function deriveAdvisorTelemetry(
  */
 export const ADVISOR_DEFAULT_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "grep", "glob"]);
 
-function advisorNoteDedupeKey(note: string): string {
+/** Whitespace-collapsed key for rank dedupe. Shared with {@link AdvisorSupervisionGate}. */
+export function advisorNoteDedupeKey(note: string): string {
 	return note.trim().replace(/\s+/g, " ");
 }
 
 /** Rank advisor severities so the dedupe state can detect a real escalation
  *  (nit → concern → blocker) versus a verbatim repeat. `undefined` defers to
- *  `nit` because the schema treats an omitted severity as a plain nit. */
+ *  `nit` because the schema treats an omitted severity as a plain nit.
+ *  Shared with {@link AdvisorSupervisionGate}. */
 const ADVISOR_SEVERITY_RANK: Record<AdvisorSeverity, number> = { nit: 1, concern: 2, blocker: 3 };
-function advisorSeverityRank(severity: AdvisorSeverity | undefined): number {
+export function advisorSeverityRank(severity: AdvisorSeverity | undefined): number {
 	return ADVISOR_SEVERITY_RANK[severity ?? "nit"];
 }
 
@@ -190,27 +193,45 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 	readonly description = adviseDescription;
 	readonly parameters = adviseSchema;
 	readonly intent = "omit" as const;
-	/** Highest delivered severity rank per normalized note. A new call passes
-	 *  through only when its rank strictly exceeds the recorded one (a real
-	 *  escalation: nit → concern → blocker), so an advisor cannot bypass dedupe
-	 *  by retagging the same text at a lower or equal severity. */
+	/** Highest delivered severity rank per whitespace-collapsed note. A new call
+	 *  passes through only when its rank strictly exceeds the recorded one (a
+	 *  real escalation: nit → concern → blocker), so an advisor cannot bypass
+	 *  dedupe by retagging the same text at a lower or equal severity. Unused
+	 *  when a supervision gate is installed — the gate owns the rank map. */
 	#deliveredNoteSeverities = new Map<string, number>();
 	#inProgressUpdate = false;
+	#gate: AdvisorSupervisionGate | undefined;
+	#transcriptIndex: (() => number) | undefined;
 	/** Notes withheld while the primary was mid-turn, in arrival order. Flushed
 	 *  deterministically on the first `beginUpdate(false)` so delivery does not
 	 *  depend on the advisor model choosing to re-raise (it may not, since the
 	 *  tool previously returned "Recorded." for a note that was never routed).
-	 *  Cleared on `resetDeliveredNotes` alongside the delivered-rank map. */
-	#deferredNotes: { key: string; note: string; severity?: AdviseDetails["severity"]; category?: AdvisorCategory }[] =
-		[];
+	 *  Cleared on `resetDeliveredNotes` alongside the delivered-rank map.
+	 *  `transcriptIndex` is the value captured at `execute`, not at flush. */
+	#deferredNotes: {
+		key: string;
+		note: string;
+		severity?: AdviseDetails["severity"];
+		category?: AdvisorCategory;
+		transcriptIndex?: number;
+	}[] = [];
 
 	constructor(
 		private readonly onAdvice: (
 			note: string,
 			severity?: AdviseDetails["severity"],
 			category?: AdvisorCategory,
+			transcriptIndex?: number,
 		) => void,
-	) {}
+		opts?: {
+			gate?: AdvisorSupervisionGate;
+			/** Sampled once per `execute` and kept on a deferred note until flush. */
+			transcriptIndex?: () => number;
+		},
+	) {
+		this.#gate = opts?.gate;
+		this.#transcriptIndex = opts?.transcriptIndex;
+	}
 
 	/**
 	 * Mark whether the next advisor prompt reviews an in-progress primary turn.
@@ -227,8 +248,13 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		if (wasInProgress && !inProgress && this.#deferredNotes.length > 0) {
 			const pending = this.#deferredNotes;
 			this.#deferredNotes = [];
-			for (const { note, severity, category } of pending) this.#deliver(note, severity, category);
+			for (const { note, severity, category, transcriptIndex } of pending) {
+				this.#deliver(note, severity, category, transcriptIndex);
+			}
 		}
+		// Budget reopens after the flush so withheld notes still see the update
+		// that deferred them. Matches the session order: tool begin, then guard.
+		this.#gate?.beginUpdate();
 	}
 
 	/** Clear delivered-note memory when the advisor starts a fresh conversation. */
@@ -236,6 +262,7 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		this.#deliveredNoteSeverities.clear();
 		this.#inProgressUpdate = false;
 		this.#deferredNotes = [];
+		this.#gate?.reset();
 	}
 
 	async execute(
@@ -245,6 +272,7 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		_onUpdate?: AgentToolUpdateCallback<AdviseDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<AdviseDetails>> {
+		const transcriptIndex = this.#transcriptIndex?.();
 		if (this.#inProgressUpdate && args.severity !== "blocker") {
 			// Withheld, not delivered: queue for the deterministic flush on the next
 			// completed update. Skip if an identical note is already pending so a
@@ -254,10 +282,17 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 			const key = advisorNoteDedupeKey(args.note);
 			const pending = this.#deferredNotes.find(item => item.key === key);
 			if (!pending) {
-				this.#deferredNotes.push({ key, note: args.note, severity: args.severity, category: args.category });
+				this.#deferredNotes.push({
+					key,
+					note: args.note,
+					severity: args.severity,
+					category: args.category,
+					transcriptIndex,
+				});
 			} else if (advisorSeverityRank(args.severity) > advisorSeverityRank(pending.severity)) {
 				pending.severity = args.severity;
 				pending.category = args.category;
+				pending.transcriptIndex = transcriptIndex;
 			}
 			return {
 				content: [
@@ -270,24 +305,51 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 				useless: true,
 			};
 		}
-		const delivered = this.#deliver(args.note, args.severity, args.category);
+		const duplicateRank = this.#deliver(args.note, args.severity, args.category, transcriptIndex);
 		return {
-			content: [{ type: "text", text: delivered ? "Recorded." : "Duplicate advice ignored." }],
+			content: [{ type: "text", text: duplicateRank ? "Duplicate advice ignored." : "Recorded." }],
 			details: { note: args.note, severity: args.severity, category: args.category },
 			useless: true,
 		};
 	}
 
-	/** Run one note through the escalation-rank dedupe and, if it passes, route it
-	 *  to the primary. Returns true when the note was actually delivered. Shared by
-	 *  the live path (`execute`) and the deferred flush (`beginUpdate(false)`). */
-	#deliver(note: string, severity?: AdviseDetails["severity"], category?: AdvisorCategory): boolean {
+	/** Route one note. Returns true when the tool should say the rank-dedupe
+	 *  duplicate line. With a gate, that is only `duplicate-rank`; every other
+	 *  outcome, delivered or suppressed, says "Recorded." Without a gate, the
+	 *  local rank map is the only suppression, so a false delivery is that line.
+	 *  Shared by the live path (`execute`) and the deferred flush. */
+	#deliver(
+		note: string,
+		severity?: AdviseDetails["severity"],
+		category?: AdvisorCategory,
+		transcriptIndex?: number,
+	): boolean {
+		if (this.#gate) {
+			const decision = this.#gate.decide({
+				note,
+				severity,
+				category,
+				transcriptIndex: transcriptIndex ?? 0,
+			});
+			if (decision.deliver) this.#emit(note, severity, category, transcriptIndex);
+			return decision.reason === "duplicate-rank";
+		}
 		const key = advisorNoteDedupeKey(note);
 		const rank = advisorSeverityRank(severity);
 		const previousRank = this.#deliveredNoteSeverities.get(key) ?? 0;
-		if (rank <= previousRank) return false;
+		if (rank <= previousRank) return true;
 		this.#deliveredNoteSeverities.set(key, rank);
-		this.onAdvice(note, severity, category);
-		return true;
+		this.#emit(note, severity, category, transcriptIndex);
+		return false;
+	}
+
+	#emit(
+		note: string,
+		severity?: AdviseDetails["severity"],
+		category?: AdvisorCategory,
+		transcriptIndex?: number,
+	): void {
+		if (this.#transcriptIndex) this.onAdvice(note, severity, category, transcriptIndex);
+		else this.onAdvice(note, severity, category);
 	}
 }

@@ -1,0 +1,59 @@
+# R02 commit disposition
+
+`origin/research/r02-contracts` (`14a6edbd346fec80095367dc59bc4953849ed565`) has 55 commits since base `1b78b801edebc0ce8c4fbd90c8a192e6d5b6bec1`. Each commit is ported (old → new sha) or dropped with the reason from OMP-322-s01 assumptions.
+
+- 8379a6451fd99cb52481cd9a65ff322a5f1b0a42 feat(workflow): stage native execution and knowledge foundation — dropped: E4 items, not R02 prerequisites
+- 226e635d0c9cf6313831ff26de5d63542c868fde docs(programme): preserve full ECC and autoresearch scope — dropped: E4 items, not R02 prerequisites
+- 7e20056daaf5c0e48cf77e7e8ae1707d9f5709ff test(workflow): qualify versioned judge manifests — dropped: E4 items, not R02 prerequisites
+- a78ae885daf7fee350958f0d896d9f91168e277a docs(programme): record auditor policy acceptance — dropped: E4 items, not R02 prerequisites
+- a56af82d8be1b281f98ca3c11392c29aa519abf8 docs(programme): checkpoint native model hardening — dropped: E4 items, not R02 prerequisites
+- 6acd45ea2d25ff11790d3e02536a33a777f3bc26 docs(programme): refine frozen model dispatch plan — dropped: E4 items, not R02 prerequisites
+- eccd23faedc59c23b62680dc10384b9492810c1a docs(programme): record exact worker capacity block — dropped: E4 items, not R02 prerequisites
+- 621c6aef7f9d7d17f4ffaef668daebe8b7d4dd40 fix(workflow): pin resolved audit model dispatch — dropped: E4 items, not R02 prerequisites
+- ee66d45c64fc7abd5f60c6fe48f7ee089e52e0e6 docs(programme): record coordinator and blocker routes — dropped: E4 items, not R02 prerequisites
+- 83fce36fdbdf68af8225a1175e3e8bfb01418553 fix(work): reconcile unresolved budget settlements — dropped: E4 items, not R02 prerequisites
+- 5310136cd2681a0daebcbcff5210538c893a6e6e docs(programme): record reservation reconciliation — dropped: E4 items, not R02 prerequisites
+- 3e4fc9cd84fea64d715594cb2987e2a10870a61f docs(programme): make coordinator route invariant — dropped: E4 items, not R02 prerequisites
+- 853931c241655a9256fea2df0e1aea95e5c79986 fix(work): enforce hierarchical budget accounting — dropped: E4 items, not R02 prerequisites
+- 2314dd8dc3e2eeb68ad82b9ba19af114382a7fa2 docs(programme): record hierarchical budget authority — dropped: E4 items, not R02 prerequisites
+- 441e33ea518bc2e4e9627549b9661f575b5fcf61 fix(work): expire stale budget reservations — dropped: E4 items, not R02 prerequisites
+- 31b7cd1c4f3b6677c08f63a085ce58d1361aaa8d docs(programme): record reservation expiry authority — dropped: E4 items, not R02 prerequisites
+- addec64b77732fa2a595a9b56641505485438799 fix(work): bind stage handoff to budget reservations — dropped: E4 items, not R02 prerequisites
+- 75b62ef6f7c388b36ae0023d66111d0c0e4b07ee docs(programme): record atomic stage budget binding — dropped: E4 items, not R02 prerequisites
+- b4ee40cdbc32f7750f848032105a05ef711403a1 feat(work): provision provider budget accounts — dropped: E4 items, not R02 prerequisites
+- c0a749a2a6b1b5408ec616865bb6ce20be209d33 docs(programme): record provider account authority — dropped: E4 items, not R02 prerequisites
+- d71573832ba91e938d8f546a0c1063b25cb2c3d1 feat(work): expose budget authority in client — dropped: E4 items, not R02 prerequisites
+- d65629258f464f2ad614dfdf14d4e012e155975a docs(programme): record client parity and coordinator route — dropped: E4 items, not R02 prerequisites
+- f7461a9ac30d967334c0ad6dfed307f56de7e3fa feat(work): expose budget scope projections — dropped: E4 items, not R02 prerequisites
+- ad033ae16f2e89e2e8e0f86677f3d892c4c39d41 docs(programme): record budget scope projections — dropped: E4 items, not R02 prerequisites
+- f309193ba9f435dd2ad36381dfaedb0046a7ada0 feat(work): persist native stage usage — dropped: E4 items, not R02 prerequisites
+- 9502d6ae31221eaba4da55f720fa67b78c35edc1 docs(programme): record native stage usage — dropped: E4 items, not R02 prerequisites
+- 0c10d247cb5415dcd0c80a935e2c749269decdff feat(work): record native stage preflight usage — dropped: E4 items, not R02 prerequisites
+- 603677ee5a97b96761f83b23d64f078a84f2515d docs(programme): record preflight accounting authority — dropped: E4 items, not R02 prerequisites
+- f5f81783f50dd5a419e104ee64b4596bd502af2e feat(workflow): record native transport preflights — dropped: E4 items, not R02 prerequisites
+- 5835a30e8dded820a06dd6379c30921774cc9d74 docs(programme): record host preflight accounting — dropped: E4 items, not R02 prerequisites
+- 39716e83be823f3537d07a535982115bda8f0233 feat(workflow): persist native preflight intents — dropped: E4 items, not R02 prerequisites
+- 01f5485ce29ed5997bc14790fa562f0e8e1f9d35 docs(programme): record durable preflight intent — dropped: E4 items, not R02 prerequisites
+- b19ecb3603a1900e10b507ada0eb8623db3231e9 feat(workflow): admit native preflight dispatch — dropped: E4 items, not R02 prerequisites
+- b12b13e4fd95bf3d064e97d52ff3466065608421 docs(programme): record preflight dispatch admission — dropped: E4 items, not R02 prerequisites
+- 3a6d3238392db6d02c6bdad69e185a2800bc7a6e fix(workflow): unify native audit preflight dispatch — dropped: E4 items, not R02 prerequisites
+- 1ee7997e6164a7ffff8b012cc83df0cafa7b7272 docs(programme): record native audit preflight unification — dropped: E4 items, not R02 prerequisites
+- c550489c9aaec8f12ae191cdca781616534966e6 refactor(workflow): remove direct audit runner bypass — dropped: E4 items, not R02 prerequisites
+- c00420a5cb818e654860d22c8f5c85b2fec84e65 docs(programme): record audit runner API closure — dropped: E4 items, not R02 prerequisites
+- 7f38a8b70195038c22b2ba527c42944df9d8172a feat(work): reconcile uncertain stage preflights — dropped: E4 items, not R02 prerequisites
+- d84d57c54de9c60e5bebed5cd80b3d953691e957 docs(programme): record provider preflight reconciliation — dropped: E4 items, not R02 prerequisites
+- 581064ef6a7dbb1e52c4d9ca758560a84b63c0e0 feat(workflow): explain unsupported preflight reconciliation — dropped: E4 items, not R02 prerequisites
+- 55984580e52d59ceec75e06d7776a1c2b29699f6 docs(programme): record provider observation capability — dropped: E4 items, not R02 prerequisites
+- ec1bf011fa0c1cdac00de8d158ef4f793dbfa9be feat(work): register qualified rate cards — dropped: E4 items, not R02 prerequisites
+- 9d523cf726e8a32ad760d20575b2dacc67591f10 docs(programme): record rate-card authority — dropped: E4 items, not R02 prerequisites
+- faaa98f7d8bcb76574027526155ea8343ebeac7e feat(work): quote provider budgets — dropped: E4 items, not R02 prerequisites
+- 46068d9f95ee5fe3faee8599a21a9a0f0d8aa76b docs(programme): record provider budget quotes — dropped: E4 items, not R02 prerequisites
+- 8c6bfb0609bece244c21c398b6083b027dbef192 feat(workflow): enforce native stage budgets — dropped: E4 items, not R02 prerequisites
+- a4a7e65c8eafd885ab96c82df7b5e4f3a6ff31bf docs(programme): record native budget wiring — dropped: E4 items, not R02 prerequisites
+- 035aec0fd0cf250a432b188ee4cd79af8e0bd9d7 feat(work): add record-only research contracts → 50ef955015855e0c36d5ec70804d3332462076e5 (contracts), a6f756854d41956c435114b642c9ad9f2d932dde (work-client)
+- d4082c96d9bc353b4082a6a90148e3aeb134a966 docs(programme): record R02 research contract core — dropped: MASTER.md is not on main, plan landed via OMP-325
+- 24df1e6af53b44b85776bd36a13f7f8f7f26d5d0 feat(work): add research campaign lifecycle → fb704a921a0f72c45b4e12fd421191292a96696e (lifecycle), a6f756854d41956c435114b642c9ad9f2d932dde (work-client)
+- 52583c3a0843099e1c2dfcc74b2b252c46e661dd docs(programme): record R02 lifecycle contracts — dropped: MASTER.md is not on main, plan landed via OMP-325
+- 7626163e3d3a8967e8f4c0b9fd0ae77ff587a978 refactor(work): extract research persistence → 6affbad543a4517d65101af41a490497db28903d
+- 4323b78c4422eff3ec9cb0f1b895fc56e31539ac docs(programme): record R02 store extraction — dropped: MASTER.md is not on main, plan landed via OMP-325
+- 14a6edbd346fec80095367dc59bc4953849ed565 feat(research): bind component compatibility manifests → 6affbad543a4517d65101af41a490497db28903d

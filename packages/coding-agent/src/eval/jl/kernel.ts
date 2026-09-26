@@ -30,7 +30,7 @@ export type { KernelDisplayOutput };
 const TRACE_IPC = $flag("PI_JULIA_IPC_TRACE");
 
 const SHUTDOWN_GRACE_MS = 1_000;
-const STARTUP_TIMEOUT_MS = 15_000; // Julia compile/warmup can be slightly slower
+const STARTUP_TIMEOUT_MS = 60_000; // Julia compile/warmup can be slower under load
 const INTERRUPT_ESCALATION_MS = 5_000;
 
 export interface KernelExecuteOptions {
@@ -187,12 +187,15 @@ export class JuliaKernel extends BaseKernel<KernelExecuteOptions> {
 		kernel.setProcess(proc);
 
 		const startup = { signal: options.signal, deadlineMs: options.deadlineMs };
-		const startupBudget = Math.min(getRemainingTimeMs(startup.deadlineMs) ?? STARTUP_TIMEOUT_MS, STARTUP_TIMEOUT_MS);
+		const getStartupBudget = () => {
+			const remaining = getRemainingTimeMs(startup.deadlineMs);
+			return remaining !== undefined ? Math.max(0, remaining) : STARTUP_TIMEOUT_MS;
+		};
 
 		try {
 			const initScript = buildInitScript(options.cwd, options.env);
-			await kernel.executeWithBudget(initScript, startup.signal, startupBudget, "Julia kernel init");
-			await kernel.executeWithBudget(JULIA_PRELUDE, startup.signal, startupBudget, "Julia kernel prelude");
+			await kernel.executeWithBudget(initScript, startup.signal, getStartupBudget(), "Julia kernel init");
+			await kernel.executeWithBudget(JULIA_PRELUDE, startup.signal, getStartupBudget(), "Julia kernel prelude");
 			return kernel;
 		} catch (err) {
 			await kernel.shutdown({ timeoutMs: SHUTDOWN_GRACE_MS }).catch(() => {});
