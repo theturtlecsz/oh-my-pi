@@ -185,6 +185,14 @@ def create_app(
     ) -> JSONResponse:
         return read_route(request, x_omp_workspace_id, "workflow", key)
 
+    @app.get("/v1/work-items/{key}/research")
+    def research(
+        request: Request,
+        key: str,
+        x_omp_workspace_id: UUID = Header(alias="X-OMP-Workspace-ID"),
+    ) -> JSONResponse:
+        return read_route(request, x_omp_workspace_id, "research", key)
+
     @app.get("/v1/workspaces/{workspace_id}/tree")
     def tree(request: Request, workspace_id: UUID) -> JSONResponse:
         return read_route(request, workspace_id, "tree", "")

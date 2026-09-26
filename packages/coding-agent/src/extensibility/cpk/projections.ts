@@ -461,7 +461,8 @@ export class CpkDisposableProjection<TData = unknown> {
 			};
 		}
 
-		if (fact.schema !== CPK5_SCHEMA) {
+		const factSchema: string = fact.schema;
+		if (factSchema !== CPK5_SCHEMA) {
 			this.#stale = true;
 			this.#schemaCorrupted = true;
 			return {
@@ -470,7 +471,7 @@ export class CpkDisposableProjection<TData = unknown> {
 				gap: false,
 				schemaIncompatible: true,
 				offline: false,
-				message: `incompatible schema "${String(fact.schema)}"; expected "${CPK5_SCHEMA}"`,
+				message: `incompatible schema "${factSchema}"; expected "${CPK5_SCHEMA}"`,
 			};
 		}
 
@@ -618,7 +619,7 @@ export class CpkWebUiProjection {
 						updatedAt: fact.timestamp,
 						data: {
 							...existing.data,
-							status: (payload.status as WebUiTaskData["status"]) ?? existing.data.status,
+							status: (payload.status as WebUiTaskData["status"] | undefined) ?? existing.data.status,
 							lastSummary: payload.summary !== undefined ? String(payload.summary) : existing.data.lastSummary,
 						},
 					});
@@ -981,9 +982,14 @@ export function compareProjectionParity<T>(
 
 	let provenanceMatch = candidateRows.length === baselineRows.length;
 	if (provenanceMatch) {
-		for (let i = 0; i < candidateRows.length; i++) {
-			const c = candidateRows[i];
-			const b = baselineRows[i];
+		const baselineIterator = baselineRows[Symbol.iterator]();
+		for (const c of candidateRows) {
+			const nextBaseline = baselineIterator.next();
+			if (nextBaseline.done) {
+				provenanceMatch = false;
+				break;
+			}
+			const b = nextBaseline.value;
 			if (
 				c.sourceIdentity !== b.sourceIdentity ||
 				c.sourceVersion !== b.sourceVersion ||

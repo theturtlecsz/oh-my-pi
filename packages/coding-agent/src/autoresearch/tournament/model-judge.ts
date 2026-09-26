@@ -71,7 +71,12 @@ export function drawTwoLabels(pool: readonly string[], rng: () => number): [stri
 	if (idx2 >= idx1) {
 		idx2 += 1;
 	}
-	return [pool[idx1]!, pool[idx2]!];
+	const label1 = pool.at(idx1);
+	const label2 = pool.at(idx2);
+	if (label1 === undefined || label2 === undefined) {
+		throw new Error("Neutral label pool index out of range");
+	}
+	return [label1, label2];
 }
 
 export interface ParsedJudgeAnswer {
@@ -121,14 +126,14 @@ export function parseJudgeAnswer(text: string, labelA: string, labelB: string): 
 
 	let probabilities: JudgeProbabilities | undefined;
 	if (record.probabilities && typeof record.probabilities === "object" && !Array.isArray(record.probabilities)) {
-		const probRecord = record.probabilities as Record<string, unknown>;
-		const rawA = probRecord[labelA];
-		const rawB = probRecord[labelB];
-		const hasTie = "tie" in probRecord;
-		const rawTie = probRecord.tie;
+		const probabilitiesByLabel = new Map(Object.entries(record.probabilities as Record<string, unknown>));
+		const rawA = probabilitiesByLabel.get(labelA);
+		const rawB = probabilitiesByLabel.get(labelB);
+		const hasTie = probabilitiesByLabel.has("tie");
+		const rawTie = probabilitiesByLabel.get("tie");
 
 		const allowedKeys = new Set(hasTie ? [labelA, labelB, "tie"] : [labelA, labelB]);
-		const allKeysValid = Object.keys(probRecord).every(k => allowedKeys.has(k));
+		const allKeysValid = [...probabilitiesByLabel.keys()].every(key => allowedKeys.has(key));
 
 		const validA = typeof rawA === "number" && !Number.isNaN(rawA) && rawA >= 0 && rawA <= 1;
 		const validB = typeof rawB === "number" && !Number.isNaN(rawB) && rawB >= 0 && rawB <= 1;
@@ -136,8 +141,8 @@ export function parseJudgeAnswer(text: string, labelA: string, labelB: string): 
 
 		if (allKeysValid && validA && validB && validTie) {
 			probabilities = { A: rawA, B: rawB };
-			if (hasTie) {
-				probabilities.tie = rawTie as number;
+			if (typeof rawTie === "number") {
+				probabilities.tie = rawTie;
 			}
 		}
 	}

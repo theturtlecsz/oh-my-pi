@@ -27,6 +27,7 @@ _READS = frozenset(
         "GET /v1/workspaces/{workspace_id}/authority",
         "GET /v1/workspaces/{workspace_id}/execution",
         "GET /v1/workspaces/{workspace_id}/execution/{grant_id}",
+        "GET /v1/work-items/{key}/research",
         "GET /v1/health/live",
         "GET /v1/health/ready",
         "GET /v1/work-items/{key}/revisions/{selector}",
@@ -110,6 +111,12 @@ _COMMAND_TYPES = frozenset(
         "record_fable_advice",
         "attest_intake_admission",
         "publish_bounded_intake",
+        "create_research_campaign",
+        "admit_research_campaign",
+        "cancel_research_campaign",
+        "propose_research_trial",
+        "record_research_observation",
+        "bind_research_deliverable",
     }
 )
 

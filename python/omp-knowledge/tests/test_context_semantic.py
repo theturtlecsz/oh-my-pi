@@ -464,6 +464,12 @@ def test_http_reranker_timeout_raises(rerank_server: tuple[str, type[MockRerankH
         reranker.rerank("query", items)
 
 
+def test_http_reranker_rejects_non_http_scheme() -> None:
+    for bad_url in ("file:///etc/passwd", "ftp://example.com/rerank", "localhost:8080", ""):
+        with pytest.raises(ValueError, match="HttpReranker URL must use http or https scheme"):
+            HttpReranker(url=bad_url, model="test-model")
+
+
 # ===========================================================================
 # 3. Compiler integration test
 # ===========================================================================

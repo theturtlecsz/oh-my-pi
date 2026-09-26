@@ -348,7 +348,8 @@ export function resolveCpkBoot(
 	}
 
 	// 3. Iterative graph resolution and fail-closed requirement validation
-	let activeManifests = candidateIds.map(id => manifestMap.get(id)!);
+	const candidateSet = new Set(candidateIds);
+	let activeManifests = [...manifestMap.values()].filter(manifest => candidateSet.has(manifest.id));
 	let changed = true;
 	let graph: CpkGraph = resolveCpkGraph(activeManifests);
 
@@ -428,14 +429,22 @@ export function resolveCpkBoot(
 		}
 	}
 
-	const selectedPlugins = graph.order;
+	const selectedManifests: CpkManifest[] = [];
+	{
+		const activeById = new Map(activeManifests.map(manifest => [manifest.id, manifest]));
+		for (const pluginId of graph.order) {
+			const manifest = activeById.get(pluginId);
+			if (manifest) selectedManifests.push(manifest);
+		}
+	}
+	const selectedPlugins = selectedManifests.map(manifest => manifest.id);
 	const selectedSet = new Set(selectedPlugins);
 	const requiredSet = new Set(profile.requiredPlugins);
 
 	// Compute effective effects (narrowed by profile.allowedEffects)
 	const collectedEffects: string[] = [];
-	for (const pluginId of selectedPlugins) {
-		const manifest = manifestMap.get(pluginId)!;
+	for (const manifest of selectedManifests) {
+		const pluginId = manifest.id;
 		let pluginDowngraded = false;
 		const excludedEffects: string[] = [];
 
@@ -483,8 +492,7 @@ export function resolveCpkBoot(
 	let estimatedTokens = baseTokens;
 	let toolCount = 0;
 
-	for (const pluginId of selectedPlugins) {
-		const manifest = manifestMap.get(pluginId)!;
+	for (const manifest of selectedManifests) {
 		estimatedTokens += measureManifestTokens(manifest, tokenizer);
 		toolCount += countManifestTools(manifest);
 	}

@@ -515,6 +515,330 @@
       "title": "ActivateExecutionItemResult",
       "type": "object"
     },
+    "AdmitResearchCampaignResult": {
+      "$defs": {
+        "ResearchCampaign": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted At"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/ResearchDomain"
+            },
+            "policy_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Policy Sha256"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "spec": {
+              "$ref": "#/$defs/ResearchCampaignSpec"
+            },
+            "spec_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Spec Sha256",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "draft",
+                "admitted",
+                "cancelled"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "workspace_id",
+            "work_id",
+            "revision_id",
+            "domain",
+            "spec",
+            "spec_sha256",
+            "state",
+            "created_at"
+          ],
+          "title": "ResearchCampaign",
+          "type": "object"
+        },
+        "ResearchCampaignSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "authorized_data_classification": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Authorized Data Classification",
+              "type": "array"
+            },
+            "candidate_mapping_policy": {
+              "minLength": 1,
+              "title": "Candidate Mapping Policy",
+              "type": "string"
+            },
+            "evaluation_protocol_id": {
+              "minLength": 1,
+              "title": "Evaluation Protocol Id",
+              "type": "string"
+            },
+            "evaluation_protocol_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluation Protocol Sha256",
+              "type": "string"
+            },
+            "objective": {
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "resource_policy_ref": {
+              "minLength": 1,
+              "title": "Resource Policy Ref",
+              "type": "string"
+            },
+            "resource_vector": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchResourceVector"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "objective",
+            "evaluation_protocol_id",
+            "evaluation_protocol_sha256",
+            "resource_policy_ref",
+            "candidate_mapping_policy"
+          ],
+          "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchDomain": {
+          "enum": [
+            "engineering",
+            "omp_harness",
+            "machine_learning",
+            "literature",
+            "simulation",
+            "external_instrument"
+          ],
+          "title": "ResearchDomain",
+          "type": "string"
+        },
+        "ResearchResourceVector": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cpu Seconds"
+            },
+            "gpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gpu Seconds"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "max_wall_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Wall Seconds"
+            },
+            "memory_mib": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Memory Mib"
+            },
+            "model_calls": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Calls"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "retrieval_requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retrieval Requests"
+            }
+          },
+          "title": "ResearchResourceVector",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "campaign": {
+          "$ref": "#/$defs/ResearchCampaign"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "replayed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "admit_research_campaign",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "campaign"
+      ],
+      "title": "AdmitResearchCampaignResult",
+      "type": "object"
+    },
     "ApiError": {
       "additionalProperties": false,
       "properties": {
@@ -1363,6 +1687,423 @@
         "items"
       ],
       "title": "BeginExecutionResult",
+      "type": "object"
+    },
+    "BindResearchDeliverableResult": {
+      "$defs": {
+        "ResearchDeliverableBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "binding_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Binding Sha256",
+              "type": "string"
+            },
+            "bound_at": {
+              "format": "date-time",
+              "title": "Bound At",
+              "type": "string"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "candidate_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Digest",
+              "type": "string"
+            },
+            "native_candidate_id": {
+              "format": "uuid",
+              "title": "Native Candidate Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "trial_id": {
+              "format": "uuid",
+              "title": "Trial Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "trial_id",
+            "workspace_id",
+            "campaign_id",
+            "work_id",
+            "revision_id",
+            "candidate_digest",
+            "native_candidate_id",
+            "binding_sha256",
+            "bound_at"
+          ],
+          "title": "ResearchDeliverableBinding",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "deliverable_binding": {
+          "$ref": "#/$defs/ResearchDeliverableBinding"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "replayed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "bind_research_deliverable",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "deliverable_binding"
+      ],
+      "title": "BindResearchDeliverableResult",
+      "type": "object"
+    },
+    "CancelResearchCampaignResult": {
+      "$defs": {
+        "ResearchCampaign": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted At"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/ResearchDomain"
+            },
+            "policy_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Policy Sha256"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "spec": {
+              "$ref": "#/$defs/ResearchCampaignSpec"
+            },
+            "spec_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Spec Sha256",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "draft",
+                "admitted",
+                "cancelled"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "workspace_id",
+            "work_id",
+            "revision_id",
+            "domain",
+            "spec",
+            "spec_sha256",
+            "state",
+            "created_at"
+          ],
+          "title": "ResearchCampaign",
+          "type": "object"
+        },
+        "ResearchCampaignSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "authorized_data_classification": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Authorized Data Classification",
+              "type": "array"
+            },
+            "candidate_mapping_policy": {
+              "minLength": 1,
+              "title": "Candidate Mapping Policy",
+              "type": "string"
+            },
+            "evaluation_protocol_id": {
+              "minLength": 1,
+              "title": "Evaluation Protocol Id",
+              "type": "string"
+            },
+            "evaluation_protocol_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluation Protocol Sha256",
+              "type": "string"
+            },
+            "objective": {
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "resource_policy_ref": {
+              "minLength": 1,
+              "title": "Resource Policy Ref",
+              "type": "string"
+            },
+            "resource_vector": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchResourceVector"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "objective",
+            "evaluation_protocol_id",
+            "evaluation_protocol_sha256",
+            "resource_policy_ref",
+            "candidate_mapping_policy"
+          ],
+          "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchDomain": {
+          "enum": [
+            "engineering",
+            "omp_harness",
+            "machine_learning",
+            "literature",
+            "simulation",
+            "external_instrument"
+          ],
+          "title": "ResearchDomain",
+          "type": "string"
+        },
+        "ResearchResourceVector": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cpu Seconds"
+            },
+            "gpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gpu Seconds"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "max_wall_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Wall Seconds"
+            },
+            "memory_mib": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Memory Mib"
+            },
+            "model_calls": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Calls"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "retrieval_requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retrieval Requests"
+            }
+          },
+          "title": "ResearchResourceVector",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "campaign": {
+          "$ref": "#/$defs/ResearchCampaign"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "replayed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "cancel_research_campaign",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "campaign"
+      ],
+      "title": "CancelResearchCampaignResult",
       "type": "object"
     },
     "Candidate": {
@@ -3110,6 +3851,34 @@
           "title": "ActivateExecutionItemResult",
           "type": "object"
         },
+        "AdmitResearchCampaignResult": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign": {
+              "$ref": "#/$defs/ResearchCampaign"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "admit_research_campaign",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "campaign"
+          ],
+          "title": "AdmitResearchCampaignResult",
+          "type": "object"
+        },
         "AssessBoundedIntakeResult": {
           "additionalProperties": false,
           "properties": {
@@ -3358,6 +4127,62 @@
             "items"
           ],
           "title": "BeginExecutionResult",
+          "type": "object"
+        },
+        "BindResearchDeliverableResult": {
+          "additionalProperties": false,
+          "properties": {
+            "deliverable_binding": {
+              "$ref": "#/$defs/ResearchDeliverableBinding"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "bind_research_deliverable",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "deliverable_binding"
+          ],
+          "title": "BindResearchDeliverableResult",
+          "type": "object"
+        },
+        "CancelResearchCampaignResult": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign": {
+              "$ref": "#/$defs/ResearchCampaign"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "cancel_research_campaign",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "campaign"
+          ],
+          "title": "CancelResearchCampaignResult",
           "type": "object"
         },
         "Candidate": {
@@ -4197,6 +5022,34 @@
             "work_id"
           ],
           "title": "CompleteWorkResult",
+          "type": "object"
+        },
+        "CreateResearchCampaignResult": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign": {
+              "$ref": "#/$defs/ResearchCampaign"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "create_research_campaign",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "campaign"
+          ],
+          "title": "CreateResearchCampaignResult",
           "type": "object"
         },
         "CreateSameSessionChildResult": {
@@ -5138,6 +5991,34 @@
           "title": "ProjectHealthView",
           "type": "object"
         },
+        "ProposeResearchTrialResult": {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "trial": {
+              "$ref": "#/$defs/ResearchTrial"
+            },
+            "type": {
+              "const": "propose_research_trial",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "trial"
+          ],
+          "title": "ProposeResearchTrialResult",
+          "type": "object"
+        },
         "PublishBoundedIntakeResult": {
           "additionalProperties": false,
           "properties": {
@@ -5269,6 +6150,34 @@
           "title": "RecordFableAdviceResult",
           "type": "object"
         },
+        "RecordResearchObservationResult": {
+          "additionalProperties": false,
+          "properties": {
+            "observation": {
+              "$ref": "#/$defs/ResearchObservation"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_research_observation",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "observation"
+          ],
+          "title": "RecordResearchObservationResult",
+          "type": "object"
+        },
         "RelationResult": {
           "additionalProperties": false,
           "properties": {
@@ -5313,6 +6222,619 @@
             "active"
           ],
           "title": "RelationResult",
+          "type": "object"
+        },
+        "ResearchCampaign": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted At"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/ResearchDomain"
+            },
+            "policy_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Policy Sha256"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "spec": {
+              "$ref": "#/$defs/ResearchCampaignSpec"
+            },
+            "spec_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Spec Sha256",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "draft",
+                "admitted",
+                "cancelled"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "workspace_id",
+            "work_id",
+            "revision_id",
+            "domain",
+            "spec",
+            "spec_sha256",
+            "state",
+            "created_at"
+          ],
+          "title": "ResearchCampaign",
+          "type": "object"
+        },
+        "ResearchCampaignSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "authorized_data_classification": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Authorized Data Classification",
+              "type": "array"
+            },
+            "candidate_mapping_policy": {
+              "minLength": 1,
+              "title": "Candidate Mapping Policy",
+              "type": "string"
+            },
+            "evaluation_protocol_id": {
+              "minLength": 1,
+              "title": "Evaluation Protocol Id",
+              "type": "string"
+            },
+            "evaluation_protocol_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluation Protocol Sha256",
+              "type": "string"
+            },
+            "objective": {
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "resource_policy_ref": {
+              "minLength": 1,
+              "title": "Resource Policy Ref",
+              "type": "string"
+            },
+            "resource_vector": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchResourceVector"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "objective",
+            "evaluation_protocol_id",
+            "evaluation_protocol_sha256",
+            "resource_policy_ref",
+            "candidate_mapping_policy"
+          ],
+          "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchDeliverableBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "binding_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Binding Sha256",
+              "type": "string"
+            },
+            "bound_at": {
+              "format": "date-time",
+              "title": "Bound At",
+              "type": "string"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "candidate_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Digest",
+              "type": "string"
+            },
+            "native_candidate_id": {
+              "format": "uuid",
+              "title": "Native Candidate Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "trial_id": {
+              "format": "uuid",
+              "title": "Trial Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "trial_id",
+            "workspace_id",
+            "campaign_id",
+            "work_id",
+            "revision_id",
+            "candidate_digest",
+            "native_candidate_id",
+            "binding_sha256",
+            "bound_at"
+          ],
+          "title": "ResearchDeliverableBinding",
+          "type": "object"
+        },
+        "ResearchDomain": {
+          "enum": [
+            "engineering",
+            "omp_harness",
+            "machine_learning",
+            "literature",
+            "simulation",
+            "external_instrument"
+          ],
+          "title": "ResearchDomain",
+          "type": "string"
+        },
+        "ResearchObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "execution_status": {
+              "enum": [
+                "completed",
+                "crashed",
+                "timed_out",
+                "canceled",
+                "unknown"
+              ],
+              "title": "Execution Status",
+              "type": "string"
+            },
+            "issuer_kind": {
+              "enum": [
+                "legacy_autoresearch",
+                "candidate_authored"
+              ],
+              "title": "Issuer Kind",
+              "type": "string"
+            },
+            "observation_id": {
+              "format": "uuid",
+              "title": "Observation Id",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "recorded_at": {
+              "format": "date-time",
+              "title": "Recorded At",
+              "type": "string"
+            },
+            "source_ref": {
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "trial_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Trial Id"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "observation_id",
+            "workspace_id",
+            "campaign_id",
+            "issuer_kind",
+            "source_ref",
+            "execution_status",
+            "payload",
+            "payload_sha256",
+            "observed_at",
+            "recorded_at"
+          ],
+          "title": "ResearchObservation",
+          "type": "object"
+        },
+        "ResearchResourceVector": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cpu Seconds"
+            },
+            "gpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gpu Seconds"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "max_wall_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Wall Seconds"
+            },
+            "memory_mib": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Memory Mib"
+            },
+            "model_calls": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Calls"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "retrieval_requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retrieval Requests"
+            }
+          },
+          "title": "ResearchResourceVector",
+          "type": "object"
+        },
+        "ResearchTrial": {
+          "additionalProperties": false,
+          "properties": {
+            "archived_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Archived At"
+            },
+            "archived_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Archived Reason"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "candidate_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Digest",
+              "type": "string"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "environment_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Environment Sha256",
+              "type": "string"
+            },
+            "evaluator_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluator Sha256",
+              "type": "string"
+            },
+            "experiment_spec_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Experiment Spec Sha256",
+              "type": "string"
+            },
+            "hardware_class": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Hardware Class"
+            },
+            "input_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Input Manifest Sha256",
+              "type": "string"
+            },
+            "policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Policy Sha256",
+              "type": "string"
+            },
+            "proposed_at": {
+              "format": "date-time",
+              "title": "Proposed At",
+              "type": "string"
+            },
+            "resource_request": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resource Request"
+            },
+            "seed": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seed"
+            },
+            "state": {
+              "enum": [
+                "proposed",
+                "archived"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "trial_id": {
+              "format": "uuid",
+              "title": "Trial Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "trial_id",
+            "workspace_id",
+            "campaign_id",
+            "work_id",
+            "decision_id",
+            "candidate_digest",
+            "experiment_spec_sha256",
+            "evaluator_sha256",
+            "environment_sha256",
+            "input_manifest_sha256",
+            "policy_sha256",
+            "state",
+            "proposed_at"
+          ],
+          "title": "ResearchTrial",
           "type": "object"
         },
         "ReviseWorkResult": {
@@ -5604,25 +7126,31 @@
             "mapping": {
               "activate_cutover": "#/$defs/ActivateCutoverResult",
               "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
+              "admit_research_campaign": "#/$defs/AdmitResearchCampaignResult",
               "append_evidence": "#/$defs/EvidenceResult",
               "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
               "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
               "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
               "begin_close_attempt": "#/$defs/CloseAttemptResult",
               "begin_execution": "#/$defs/BeginExecutionResult",
+              "bind_research_deliverable": "#/$defs/BindResearchDeliverableResult",
               "cancel_auditor_launch": "#/$defs/CloseAttemptResult",
+              "cancel_research_campaign": "#/$defs/CancelResearchCampaignResult",
               "clear_focus": "#/$defs/FocusResult",
               "complete_execution_item": "#/$defs/CompleteExecutionItemResult",
               "complete_work": "#/$defs/CompleteWorkResult",
+              "create_research_campaign": "#/$defs/CreateResearchCampaignResult",
               "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
               "create_work_batch": "#/$defs/CreateWorkBatchResult",
               "finalize_candidate": "#/$defs/FinalizeCandidateResult",
+              "propose_research_trial": "#/$defs/ProposeResearchTrialResult",
               "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
               "put_relation": "#/$defs/RelationResult",
               "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
               "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
               "record_fable_advice": "#/$defs/RecordFableAdviceResult",
               "record_project_health": "#/$defs/ProjectHealthResult",
+              "record_research_observation": "#/$defs/RecordResearchObservationResult",
               "remove_relation": "#/$defs/RelationResult",
               "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
               "revise_work": "#/$defs/ReviseWorkResult",
@@ -5712,6 +7240,24 @@
             },
             {
               "$ref": "#/$defs/PublishBoundedIntakeResult"
+            },
+            {
+              "$ref": "#/$defs/CreateResearchCampaignResult"
+            },
+            {
+              "$ref": "#/$defs/AdmitResearchCampaignResult"
+            },
+            {
+              "$ref": "#/$defs/CancelResearchCampaignResult"
+            },
+            {
+              "$ref": "#/$defs/ProposeResearchTrialResult"
+            },
+            {
+              "$ref": "#/$defs/RecordResearchObservationResult"
+            },
+            {
+              "$ref": "#/$defs/BindResearchDeliverableResult"
             }
           ],
           "title": "Result"
@@ -6569,6 +8115,330 @@
         "work_id"
       ],
       "title": "CompleteWorkResult",
+      "type": "object"
+    },
+    "CreateResearchCampaignResult": {
+      "$defs": {
+        "ResearchCampaign": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted At"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/ResearchDomain"
+            },
+            "policy_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Policy Sha256"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "spec": {
+              "$ref": "#/$defs/ResearchCampaignSpec"
+            },
+            "spec_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Spec Sha256",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "draft",
+                "admitted",
+                "cancelled"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "workspace_id",
+            "work_id",
+            "revision_id",
+            "domain",
+            "spec",
+            "spec_sha256",
+            "state",
+            "created_at"
+          ],
+          "title": "ResearchCampaign",
+          "type": "object"
+        },
+        "ResearchCampaignSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "authorized_data_classification": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Authorized Data Classification",
+              "type": "array"
+            },
+            "candidate_mapping_policy": {
+              "minLength": 1,
+              "title": "Candidate Mapping Policy",
+              "type": "string"
+            },
+            "evaluation_protocol_id": {
+              "minLength": 1,
+              "title": "Evaluation Protocol Id",
+              "type": "string"
+            },
+            "evaluation_protocol_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluation Protocol Sha256",
+              "type": "string"
+            },
+            "objective": {
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "resource_policy_ref": {
+              "minLength": 1,
+              "title": "Resource Policy Ref",
+              "type": "string"
+            },
+            "resource_vector": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchResourceVector"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "objective",
+            "evaluation_protocol_id",
+            "evaluation_protocol_sha256",
+            "resource_policy_ref",
+            "candidate_mapping_policy"
+          ],
+          "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchDomain": {
+          "enum": [
+            "engineering",
+            "omp_harness",
+            "machine_learning",
+            "literature",
+            "simulation",
+            "external_instrument"
+          ],
+          "title": "ResearchDomain",
+          "type": "string"
+        },
+        "ResearchResourceVector": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cpu Seconds"
+            },
+            "gpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gpu Seconds"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "max_wall_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Wall Seconds"
+            },
+            "memory_mib": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Memory Mib"
+            },
+            "model_calls": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Calls"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "retrieval_requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retrieval Requests"
+            }
+          },
+          "title": "ResearchResourceVector",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "campaign": {
+          "$ref": "#/$defs/ResearchCampaign"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "replayed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "create_research_campaign",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "campaign"
+      ],
+      "title": "CreateResearchCampaignResult",
       "type": "object"
     },
     "CreateSameSessionChildResult": {
@@ -9023,6 +10893,188 @@
       "title": "ProjectView",
       "type": "object"
     },
+    "ProposeResearchTrialResult": {
+      "$defs": {
+        "ResearchTrial": {
+          "additionalProperties": false,
+          "properties": {
+            "archived_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Archived At"
+            },
+            "archived_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Archived Reason"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "candidate_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Digest",
+              "type": "string"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "environment_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Environment Sha256",
+              "type": "string"
+            },
+            "evaluator_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluator Sha256",
+              "type": "string"
+            },
+            "experiment_spec_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Experiment Spec Sha256",
+              "type": "string"
+            },
+            "hardware_class": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Hardware Class"
+            },
+            "input_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Input Manifest Sha256",
+              "type": "string"
+            },
+            "policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Policy Sha256",
+              "type": "string"
+            },
+            "proposed_at": {
+              "format": "date-time",
+              "title": "Proposed At",
+              "type": "string"
+            },
+            "resource_request": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resource Request"
+            },
+            "seed": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seed"
+            },
+            "state": {
+              "enum": [
+                "proposed",
+                "archived"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "trial_id": {
+              "format": "uuid",
+              "title": "Trial Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "trial_id",
+            "workspace_id",
+            "campaign_id",
+            "work_id",
+            "decision_id",
+            "candidate_digest",
+            "experiment_spec_sha256",
+            "evaluator_sha256",
+            "environment_sha256",
+            "input_manifest_sha256",
+            "policy_sha256",
+            "state",
+            "proposed_at"
+          ],
+          "title": "ResearchTrial",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "applied",
+            "replayed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "trial": {
+          "$ref": "#/$defs/ResearchTrial"
+        },
+        "type": {
+          "const": "propose_research_trial",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "trial"
+      ],
+      "title": "ProposeResearchTrialResult",
+      "type": "object"
+    },
     "PublishBoundedIntakeResult": {
       "$defs": {
         "CreatedWorkItem": {
@@ -10237,6 +12289,140 @@
       "title": "RecordFableAdviceResult",
       "type": "object"
     },
+    "RecordResearchObservationResult": {
+      "$defs": {
+        "ResearchObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "execution_status": {
+              "enum": [
+                "completed",
+                "crashed",
+                "timed_out",
+                "canceled",
+                "unknown"
+              ],
+              "title": "Execution Status",
+              "type": "string"
+            },
+            "issuer_kind": {
+              "enum": [
+                "legacy_autoresearch",
+                "candidate_authored"
+              ],
+              "title": "Issuer Kind",
+              "type": "string"
+            },
+            "observation_id": {
+              "format": "uuid",
+              "title": "Observation Id",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "recorded_at": {
+              "format": "date-time",
+              "title": "Recorded At",
+              "type": "string"
+            },
+            "source_ref": {
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "trial_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Trial Id"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "observation_id",
+            "workspace_id",
+            "campaign_id",
+            "issuer_kind",
+            "source_ref",
+            "execution_status",
+            "payload",
+            "payload_sha256",
+            "observed_at",
+            "recorded_at"
+          ],
+          "title": "ResearchObservation",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "observation": {
+          "$ref": "#/$defs/ResearchObservation"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "replayed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "const": "record_research_observation",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status",
+        "observation"
+      ],
+      "title": "RecordResearchObservationResult",
+      "type": "object"
+    },
     "RelationEdge": {
       "$defs": {
         "RelationKind": {
@@ -10329,6 +12515,1283 @@
         "active"
       ],
       "title": "RelationResult",
+      "type": "object"
+    },
+    "ResearchCampaign": {
+      "$defs": {
+        "ResearchCampaignSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "authorized_data_classification": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Authorized Data Classification",
+              "type": "array"
+            },
+            "candidate_mapping_policy": {
+              "minLength": 1,
+              "title": "Candidate Mapping Policy",
+              "type": "string"
+            },
+            "evaluation_protocol_id": {
+              "minLength": 1,
+              "title": "Evaluation Protocol Id",
+              "type": "string"
+            },
+            "evaluation_protocol_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluation Protocol Sha256",
+              "type": "string"
+            },
+            "objective": {
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "resource_policy_ref": {
+              "minLength": 1,
+              "title": "Resource Policy Ref",
+              "type": "string"
+            },
+            "resource_vector": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchResourceVector"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "objective",
+            "evaluation_protocol_id",
+            "evaluation_protocol_sha256",
+            "resource_policy_ref",
+            "candidate_mapping_policy"
+          ],
+          "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchDomain": {
+          "enum": [
+            "engineering",
+            "omp_harness",
+            "machine_learning",
+            "literature",
+            "simulation",
+            "external_instrument"
+          ],
+          "title": "ResearchDomain",
+          "type": "string"
+        },
+        "ResearchResourceVector": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cpu Seconds"
+            },
+            "gpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gpu Seconds"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "max_wall_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Wall Seconds"
+            },
+            "memory_mib": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Memory Mib"
+            },
+            "model_calls": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Calls"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "retrieval_requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retrieval Requests"
+            }
+          },
+          "title": "ResearchResourceVector",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "admitted_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Admitted At"
+        },
+        "campaign_id": {
+          "format": "uuid",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "cancel_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancel Reason"
+        },
+        "cancelled_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancelled At"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "domain": {
+          "$ref": "#/$defs/ResearchDomain"
+        },
+        "policy_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Sha256"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/$defs/ResearchCampaignSpec"
+        },
+        "spec_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Spec Sha256",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "draft",
+            "admitted",
+            "cancelled"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "workspace_id",
+        "work_id",
+        "revision_id",
+        "domain",
+        "spec",
+        "spec_sha256",
+        "state",
+        "created_at"
+      ],
+      "title": "ResearchCampaign",
+      "type": "object"
+    },
+    "ResearchDeliverableBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "bound_at": {
+          "format": "date-time",
+          "title": "Bound At",
+          "type": "string"
+        },
+        "campaign_id": {
+          "format": "uuid",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "candidate_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Digest",
+          "type": "string"
+        },
+        "native_candidate_id": {
+          "format": "uuid",
+          "title": "Native Candidate Id",
+          "type": "string"
+        },
+        "revision_id": {
+          "format": "uuid",
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "trial_id": {
+          "format": "uuid",
+          "title": "Trial Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "trial_id",
+        "workspace_id",
+        "campaign_id",
+        "work_id",
+        "revision_id",
+        "candidate_digest",
+        "native_candidate_id",
+        "binding_sha256",
+        "bound_at"
+      ],
+      "title": "ResearchDeliverableBinding",
+      "type": "object"
+    },
+    "ResearchObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "campaign_id": {
+          "format": "uuid",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "commit_sha": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Commit Sha"
+        },
+        "execution_status": {
+          "enum": [
+            "completed",
+            "crashed",
+            "timed_out",
+            "canceled",
+            "unknown"
+          ],
+          "title": "Execution Status",
+          "type": "string"
+        },
+        "issuer_kind": {
+          "enum": [
+            "legacy_autoresearch",
+            "candidate_authored"
+          ],
+          "title": "Issuer Kind",
+          "type": "string"
+        },
+        "observation_id": {
+          "format": "uuid",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "payload_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Payload Sha256",
+          "type": "string"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "source_ref": {
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        },
+        "trial_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trial Id"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "observation_id",
+        "workspace_id",
+        "campaign_id",
+        "issuer_kind",
+        "source_ref",
+        "execution_status",
+        "payload",
+        "payload_sha256",
+        "observed_at",
+        "recorded_at"
+      ],
+      "title": "ResearchObservation",
+      "type": "object"
+    },
+    "ResearchTrial": {
+      "additionalProperties": false,
+      "properties": {
+        "archived_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Archived At"
+        },
+        "archived_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Archived Reason"
+        },
+        "campaign_id": {
+          "format": "uuid",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "candidate_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Digest",
+          "type": "string"
+        },
+        "decision_id": {
+          "format": "uuid",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "environment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Environment Sha256",
+          "type": "string"
+        },
+        "evaluator_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evaluator Sha256",
+          "type": "string"
+        },
+        "experiment_spec_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Experiment Spec Sha256",
+          "type": "string"
+        },
+        "hardware_class": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hardware Class"
+        },
+        "input_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Manifest Sha256",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "proposed_at": {
+          "format": "date-time",
+          "title": "Proposed At",
+          "type": "string"
+        },
+        "resource_request": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resource Request"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "state": {
+          "enum": [
+            "proposed",
+            "archived"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "trial_id": {
+          "format": "uuid",
+          "title": "Trial Id",
+          "type": "string"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "trial_id",
+        "workspace_id",
+        "campaign_id",
+        "work_id",
+        "decision_id",
+        "candidate_digest",
+        "experiment_spec_sha256",
+        "evaluator_sha256",
+        "environment_sha256",
+        "input_manifest_sha256",
+        "policy_sha256",
+        "state",
+        "proposed_at"
+      ],
+      "title": "ResearchTrial",
+      "type": "object"
+    },
+    "ResearchView": {
+      "$defs": {
+        "ResearchCampaign": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted At"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/ResearchDomain"
+            },
+            "policy_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Policy Sha256"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "spec": {
+              "$ref": "#/$defs/ResearchCampaignSpec"
+            },
+            "spec_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Spec Sha256",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "draft",
+                "admitted",
+                "cancelled"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "workspace_id",
+            "work_id",
+            "revision_id",
+            "domain",
+            "spec",
+            "spec_sha256",
+            "state",
+            "created_at"
+          ],
+          "title": "ResearchCampaign",
+          "type": "object"
+        },
+        "ResearchCampaignSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "authorized_data_classification": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Authorized Data Classification",
+              "type": "array"
+            },
+            "candidate_mapping_policy": {
+              "minLength": 1,
+              "title": "Candidate Mapping Policy",
+              "type": "string"
+            },
+            "evaluation_protocol_id": {
+              "minLength": 1,
+              "title": "Evaluation Protocol Id",
+              "type": "string"
+            },
+            "evaluation_protocol_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluation Protocol Sha256",
+              "type": "string"
+            },
+            "objective": {
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "resource_policy_ref": {
+              "minLength": 1,
+              "title": "Resource Policy Ref",
+              "type": "string"
+            },
+            "resource_vector": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchResourceVector"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "objective",
+            "evaluation_protocol_id",
+            "evaluation_protocol_sha256",
+            "resource_policy_ref",
+            "candidate_mapping_policy"
+          ],
+          "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchDeliverableBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "binding_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Binding Sha256",
+              "type": "string"
+            },
+            "bound_at": {
+              "format": "date-time",
+              "title": "Bound At",
+              "type": "string"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "candidate_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Digest",
+              "type": "string"
+            },
+            "native_candidate_id": {
+              "format": "uuid",
+              "title": "Native Candidate Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "trial_id": {
+              "format": "uuid",
+              "title": "Trial Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "trial_id",
+            "workspace_id",
+            "campaign_id",
+            "work_id",
+            "revision_id",
+            "candidate_digest",
+            "native_candidate_id",
+            "binding_sha256",
+            "bound_at"
+          ],
+          "title": "ResearchDeliverableBinding",
+          "type": "object"
+        },
+        "ResearchDomain": {
+          "enum": [
+            "engineering",
+            "omp_harness",
+            "machine_learning",
+            "literature",
+            "simulation",
+            "external_instrument"
+          ],
+          "title": "ResearchDomain",
+          "type": "string"
+        },
+        "ResearchObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "execution_status": {
+              "enum": [
+                "completed",
+                "crashed",
+                "timed_out",
+                "canceled",
+                "unknown"
+              ],
+              "title": "Execution Status",
+              "type": "string"
+            },
+            "issuer_kind": {
+              "enum": [
+                "legacy_autoresearch",
+                "candidate_authored"
+              ],
+              "title": "Issuer Kind",
+              "type": "string"
+            },
+            "observation_id": {
+              "format": "uuid",
+              "title": "Observation Id",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "recorded_at": {
+              "format": "date-time",
+              "title": "Recorded At",
+              "type": "string"
+            },
+            "source_ref": {
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "trial_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Trial Id"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "observation_id",
+            "workspace_id",
+            "campaign_id",
+            "issuer_kind",
+            "source_ref",
+            "execution_status",
+            "payload",
+            "payload_sha256",
+            "observed_at",
+            "recorded_at"
+          ],
+          "title": "ResearchObservation",
+          "type": "object"
+        },
+        "ResearchResourceVector": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cpu Seconds"
+            },
+            "gpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gpu Seconds"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "max_wall_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Wall Seconds"
+            },
+            "memory_mib": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Memory Mib"
+            },
+            "model_calls": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Calls"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "retrieval_requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retrieval Requests"
+            }
+          },
+          "title": "ResearchResourceVector",
+          "type": "object"
+        },
+        "ResearchTrial": {
+          "additionalProperties": false,
+          "properties": {
+            "archived_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Archived At"
+            },
+            "archived_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Archived Reason"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "candidate_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Digest",
+              "type": "string"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "environment_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Environment Sha256",
+              "type": "string"
+            },
+            "evaluator_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluator Sha256",
+              "type": "string"
+            },
+            "experiment_spec_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Experiment Spec Sha256",
+              "type": "string"
+            },
+            "hardware_class": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Hardware Class"
+            },
+            "input_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Input Manifest Sha256",
+              "type": "string"
+            },
+            "policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Policy Sha256",
+              "type": "string"
+            },
+            "proposed_at": {
+              "format": "date-time",
+              "title": "Proposed At",
+              "type": "string"
+            },
+            "resource_request": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resource Request"
+            },
+            "seed": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seed"
+            },
+            "state": {
+              "enum": [
+                "proposed",
+                "archived"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "trial_id": {
+              "format": "uuid",
+              "title": "Trial Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "trial_id",
+            "workspace_id",
+            "campaign_id",
+            "work_id",
+            "decision_id",
+            "candidate_digest",
+            "experiment_spec_sha256",
+            "evaluator_sha256",
+            "environment_sha256",
+            "input_manifest_sha256",
+            "policy_sha256",
+            "state",
+            "proposed_at"
+          ],
+          "title": "ResearchTrial",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "campaigns": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResearchCampaign"
+          },
+          "title": "Campaigns",
+          "type": "array"
+        },
+        "deliverable_bindings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResearchDeliverableBinding"
+          },
+          "title": "Deliverable Bindings",
+          "type": "array"
+        },
+        "observations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResearchObservation"
+          },
+          "title": "Observations",
+          "type": "array"
+        },
+        "trials": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResearchTrial"
+          },
+          "title": "Trials",
+          "type": "array"
+        },
+        "work_id": {
+          "format": "uuid",
+          "title": "Work Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_id"
+      ],
+      "title": "ResearchView",
       "type": "object"
     },
     "ReviseWorkResult": {
@@ -12278,6 +15741,34 @@
           "title": "ActivateExecutionItemResult",
           "type": "object"
         },
+        "AdmitResearchCampaignResult": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign": {
+              "$ref": "#/$defs/ResearchCampaign"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "admit_research_campaign",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "campaign"
+          ],
+          "title": "AdmitResearchCampaignResult",
+          "type": "object"
+        },
         "AssessBoundedIntakeResult": {
           "additionalProperties": false,
           "properties": {
@@ -12526,6 +16017,62 @@
             "items"
           ],
           "title": "BeginExecutionResult",
+          "type": "object"
+        },
+        "BindResearchDeliverableResult": {
+          "additionalProperties": false,
+          "properties": {
+            "deliverable_binding": {
+              "$ref": "#/$defs/ResearchDeliverableBinding"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "bind_research_deliverable",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "deliverable_binding"
+          ],
+          "title": "BindResearchDeliverableResult",
+          "type": "object"
+        },
+        "CancelResearchCampaignResult": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign": {
+              "$ref": "#/$defs/ResearchCampaign"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "cancel_research_campaign",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "campaign"
+          ],
+          "title": "CancelResearchCampaignResult",
           "type": "object"
         },
         "Candidate": {
@@ -13365,6 +16912,34 @@
             "work_id"
           ],
           "title": "CompleteWorkResult",
+          "type": "object"
+        },
+        "CreateResearchCampaignResult": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign": {
+              "$ref": "#/$defs/ResearchCampaign"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "create_research_campaign",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "campaign"
+          ],
+          "title": "CreateResearchCampaignResult",
           "type": "object"
         },
         "CreateSameSessionChildResult": {
@@ -14306,6 +17881,34 @@
           "title": "ProjectHealthView",
           "type": "object"
         },
+        "ProposeResearchTrialResult": {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "trial": {
+              "$ref": "#/$defs/ResearchTrial"
+            },
+            "type": {
+              "const": "propose_research_trial",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "trial"
+          ],
+          "title": "ProposeResearchTrialResult",
+          "type": "object"
+        },
         "PublishBoundedIntakeResult": {
           "additionalProperties": false,
           "properties": {
@@ -14437,6 +18040,34 @@
           "title": "RecordFableAdviceResult",
           "type": "object"
         },
+        "RecordResearchObservationResult": {
+          "additionalProperties": false,
+          "properties": {
+            "observation": {
+              "$ref": "#/$defs/ResearchObservation"
+            },
+            "status": {
+              "enum": [
+                "applied",
+                "replayed"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "record_research_observation",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "observation"
+          ],
+          "title": "RecordResearchObservationResult",
+          "type": "object"
+        },
         "RelationResult": {
           "additionalProperties": false,
           "properties": {
@@ -14481,6 +18112,619 @@
             "active"
           ],
           "title": "RelationResult",
+          "type": "object"
+        },
+        "ResearchCampaign": {
+          "additionalProperties": false,
+          "properties": {
+            "admitted_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Admitted At"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "cancel_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancel Reason"
+            },
+            "cancelled_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cancelled At"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/ResearchDomain"
+            },
+            "policy_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Policy Sha256"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "spec": {
+              "$ref": "#/$defs/ResearchCampaignSpec"
+            },
+            "spec_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Spec Sha256",
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "draft",
+                "admitted",
+                "cancelled"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "workspace_id",
+            "work_id",
+            "revision_id",
+            "domain",
+            "spec",
+            "spec_sha256",
+            "state",
+            "created_at"
+          ],
+          "title": "ResearchCampaign",
+          "type": "object"
+        },
+        "ResearchCampaignSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "authorized_data_classification": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Authorized Data Classification",
+              "type": "array"
+            },
+            "candidate_mapping_policy": {
+              "minLength": 1,
+              "title": "Candidate Mapping Policy",
+              "type": "string"
+            },
+            "evaluation_protocol_id": {
+              "minLength": 1,
+              "title": "Evaluation Protocol Id",
+              "type": "string"
+            },
+            "evaluation_protocol_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluation Protocol Sha256",
+              "type": "string"
+            },
+            "objective": {
+              "minLength": 1,
+              "title": "Objective",
+              "type": "string"
+            },
+            "resource_policy_ref": {
+              "minLength": 1,
+              "title": "Resource Policy Ref",
+              "type": "string"
+            },
+            "resource_vector": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResearchResourceVector"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "objective",
+            "evaluation_protocol_id",
+            "evaluation_protocol_sha256",
+            "resource_policy_ref",
+            "candidate_mapping_policy"
+          ],
+          "title": "ResearchCampaignSpec",
+          "type": "object"
+        },
+        "ResearchDeliverableBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "binding_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Binding Sha256",
+              "type": "string"
+            },
+            "bound_at": {
+              "format": "date-time",
+              "title": "Bound At",
+              "type": "string"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "candidate_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Digest",
+              "type": "string"
+            },
+            "native_candidate_id": {
+              "format": "uuid",
+              "title": "Native Candidate Id",
+              "type": "string"
+            },
+            "revision_id": {
+              "format": "uuid",
+              "title": "Revision Id",
+              "type": "string"
+            },
+            "trial_id": {
+              "format": "uuid",
+              "title": "Trial Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "trial_id",
+            "workspace_id",
+            "campaign_id",
+            "work_id",
+            "revision_id",
+            "candidate_digest",
+            "native_candidate_id",
+            "binding_sha256",
+            "bound_at"
+          ],
+          "title": "ResearchDeliverableBinding",
+          "type": "object"
+        },
+        "ResearchDomain": {
+          "enum": [
+            "engineering",
+            "omp_harness",
+            "machine_learning",
+            "literature",
+            "simulation",
+            "external_instrument"
+          ],
+          "title": "ResearchDomain",
+          "type": "string"
+        },
+        "ResearchObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "commit_sha": {
+              "anyOf": [
+                {
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Commit Sha"
+            },
+            "execution_status": {
+              "enum": [
+                "completed",
+                "crashed",
+                "timed_out",
+                "canceled",
+                "unknown"
+              ],
+              "title": "Execution Status",
+              "type": "string"
+            },
+            "issuer_kind": {
+              "enum": [
+                "legacy_autoresearch",
+                "candidate_authored"
+              ],
+              "title": "Issuer Kind",
+              "type": "string"
+            },
+            "observation_id": {
+              "format": "uuid",
+              "title": "Observation Id",
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "recorded_at": {
+              "format": "date-time",
+              "title": "Recorded At",
+              "type": "string"
+            },
+            "source_ref": {
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "trial_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Trial Id"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "observation_id",
+            "workspace_id",
+            "campaign_id",
+            "issuer_kind",
+            "source_ref",
+            "execution_status",
+            "payload",
+            "payload_sha256",
+            "observed_at",
+            "recorded_at"
+          ],
+          "title": "ResearchObservation",
+          "type": "object"
+        },
+        "ResearchResourceVector": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cpu Seconds"
+            },
+            "gpu_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gpu Seconds"
+            },
+            "input_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Input Tokens"
+            },
+            "max_wall_seconds": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Wall Seconds"
+            },
+            "memory_mib": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Memory Mib"
+            },
+            "model_calls": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Calls"
+            },
+            "output_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Output Tokens"
+            },
+            "retrieval_requests": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retrieval Requests"
+            }
+          },
+          "title": "ResearchResourceVector",
+          "type": "object"
+        },
+        "ResearchTrial": {
+          "additionalProperties": false,
+          "properties": {
+            "archived_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Archived At"
+            },
+            "archived_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Archived Reason"
+            },
+            "campaign_id": {
+              "format": "uuid",
+              "title": "Campaign Id",
+              "type": "string"
+            },
+            "candidate_digest": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Candidate Digest",
+              "type": "string"
+            },
+            "decision_id": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            },
+            "environment_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Environment Sha256",
+              "type": "string"
+            },
+            "evaluator_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Evaluator Sha256",
+              "type": "string"
+            },
+            "experiment_spec_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Experiment Spec Sha256",
+              "type": "string"
+            },
+            "hardware_class": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Hardware Class"
+            },
+            "input_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Input Manifest Sha256",
+              "type": "string"
+            },
+            "policy_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Policy Sha256",
+              "type": "string"
+            },
+            "proposed_at": {
+              "format": "date-time",
+              "title": "Proposed At",
+              "type": "string"
+            },
+            "resource_request": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resource Request"
+            },
+            "seed": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Seed"
+            },
+            "state": {
+              "enum": [
+                "proposed",
+                "archived"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "trial_id": {
+              "format": "uuid",
+              "title": "Trial Id",
+              "type": "string"
+            },
+            "work_id": {
+              "format": "uuid",
+              "title": "Work Id",
+              "type": "string"
+            },
+            "workspace_id": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "trial_id",
+            "workspace_id",
+            "campaign_id",
+            "work_id",
+            "decision_id",
+            "candidate_digest",
+            "experiment_spec_sha256",
+            "evaluator_sha256",
+            "environment_sha256",
+            "input_manifest_sha256",
+            "policy_sha256",
+            "state",
+            "proposed_at"
+          ],
+          "title": "ResearchTrial",
           "type": "object"
         },
         "ReviseWorkResult": {
@@ -14788,25 +19032,31 @@
                 "mapping": {
                   "activate_cutover": "#/$defs/ActivateCutoverResult",
                   "activate_execution_item": "#/$defs/ActivateExecutionItemResult",
+                  "admit_research_campaign": "#/$defs/AdmitResearchCampaignResult",
                   "append_evidence": "#/$defs/EvidenceResult",
                   "assess_bounded_intake": "#/$defs/AssessBoundedIntakeResult",
                   "attest_checkpoint_delivery": "#/$defs/CloseAttemptResult",
                   "attest_cutover_plan": "#/$defs/AttestCutoverPlanResult",
                   "begin_close_attempt": "#/$defs/CloseAttemptResult",
                   "begin_execution": "#/$defs/BeginExecutionResult",
+                  "bind_research_deliverable": "#/$defs/BindResearchDeliverableResult",
                   "cancel_auditor_launch": "#/$defs/CloseAttemptResult",
+                  "cancel_research_campaign": "#/$defs/CancelResearchCampaignResult",
                   "clear_focus": "#/$defs/FocusResult",
                   "complete_execution_item": "#/$defs/CompleteExecutionItemResult",
                   "complete_work": "#/$defs/CompleteWorkResult",
+                  "create_research_campaign": "#/$defs/CreateResearchCampaignResult",
                   "create_same_session_child": "#/$defs/CreateSameSessionChildResult",
                   "create_work_batch": "#/$defs/CreateWorkBatchResult",
                   "finalize_candidate": "#/$defs/FinalizeCandidateResult",
+                  "propose_research_trial": "#/$defs/ProposeResearchTrialResult",
                   "publish_bounded_intake": "#/$defs/PublishBoundedIntakeResult",
                   "put_relation": "#/$defs/RelationResult",
                   "record_closeout_review": "#/$defs/RecordCloseoutReviewResult",
                   "record_external_delivery": "#/$defs/RecordExternalDeliveryResult",
                   "record_fable_advice": "#/$defs/RecordFableAdviceResult",
                   "record_project_health": "#/$defs/ProjectHealthResult",
+                  "record_research_observation": "#/$defs/RecordResearchObservationResult",
                   "remove_relation": "#/$defs/RelationResult",
                   "reserve_auditor_launch": "#/$defs/CloseAttemptResult",
                   "revise_work": "#/$defs/ReviseWorkResult",
@@ -14896,6 +19146,24 @@
                 },
                 {
                   "$ref": "#/$defs/PublishBoundedIntakeResult"
+                },
+                {
+                  "$ref": "#/$defs/CreateResearchCampaignResult"
+                },
+                {
+                  "$ref": "#/$defs/AdmitResearchCampaignResult"
+                },
+                {
+                  "$ref": "#/$defs/CancelResearchCampaignResult"
+                },
+                {
+                  "$ref": "#/$defs/ProposeResearchTrialResult"
+                },
+                {
+                  "$ref": "#/$defs/RecordResearchObservationResult"
+                },
+                {
+                  "$ref": "#/$defs/BindResearchDeliverableResult"
                 }
               ]
             },
