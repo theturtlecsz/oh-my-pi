@@ -1,14 +1,17 @@
 import { type AssistantMessage, completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { type FetchImpl, logger, prompt } from "@oh-my-pi/pi-utils";
 
 import type { ModelRegistry } from "../config/model-registry";
 import { resolveRoleSelection } from "../config/model-resolver";
-import type { Settings } from "../config/settings";
+import type { SettingPath, Settings } from "../config/settings";
+import unexpectedStopJevStatement from "../prompts/jev/unexpected-stop.md" with { type: "text" };
 import unexpectedStopClassifierPrompt from "../prompts/system/unexpected-stop-classifier.md" with { type: "text" };
+import { JEV_PROVIDER, type JevBreaker, type JevUsageEntry, yesno } from "../tiny/jev-client";
 import { isTinyMemoryLocalModelKey, ONLINE_MEMORY_MODEL_KEY } from "../tiny/models";
 import { tinyModelClient } from "../tiny/title-client";
 
 const CLASSIFIER_SYSTEM_PROMPT = prompt.render(unexpectedStopClassifierPrompt);
+const JEV_UNEXPECTED_STOP_STATEMENT = prompt.render(unexpectedStopJevStatement).trim();
 
 /**
  * The answer is a single word. OpenAI-compatible endpoints reject values below
@@ -38,6 +41,11 @@ export interface ClassifyUnexpectedStopDeps {
 	sessionId: string;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	signal?: AbortSignal;
+	recordJevUsage?: (entry: JevUsageEntry) => void;
+	budgetMs?: number;
+	breaker?: JevBreaker;
+	fetch?: FetchImpl;
+	now?: () => number;
 }
 
 /** Detects terminal turns eligible for mechanical recovery or smart classification. */
@@ -68,6 +76,29 @@ export async function classifyUnexpectedStop(
 ): Promise<boolean | undefined> {
 	const backend = deps.settings.get("providers.unexpectedStopModel");
 	try {
+		if (deps.settings.get("jev.enabled") && deps.settings.get("jev.unexpectedStop")) {
+			const prob = await yesno(JEV_UNEXPECTED_STOP_STATEMENT, text, {
+				feature: "unexpected_stop",
+				recordUsage: entry => deps.recordJevUsage?.(entry),
+				getSetting: <P extends SettingPath>(path: P) => deps.settings.get(path),
+				getApiKey: async (provider?: string) => {
+					try {
+						return await deps.registry?.getApiKeyForProvider?.(provider ?? JEV_PROVIDER, deps.sessionId);
+					} catch {
+						return undefined;
+					}
+				},
+				budgetMs: deps.budgetMs,
+				breaker: deps.breaker,
+				fetch: deps.fetch,
+				now: deps.now,
+			});
+			if (prob !== undefined) {
+				const threshold = (deps.settings.get("jev.unexpectedStopThreshold") as number | undefined) ?? 0.7;
+				return prob >= threshold;
+			}
+		}
+
 		if (backend === ONLINE_MEMORY_MODEL_KEY) {
 			return await classifyOnline(text, deps);
 		}

@@ -790,6 +790,7 @@ export class TurnRecovery {
 					sessionId: this.#host.sessionId(),
 					metadataResolver: (provider: string) => this.#host.agent.metadataForProvider(provider),
 					signal: controller.signal,
+					recordJevUsage: entry => this.#host.sessionManager.appendCustomEntry("jev_usage", entry),
 				});
 			} finally {
 				clearTimeout(timeout);
