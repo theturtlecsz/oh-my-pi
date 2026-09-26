@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omp-knowledge"
+version = "0.1.0"
+description = "Connected engineering knowledge service foundation powered by Cognee"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "omp-work",
+    "cognee==1.5.4",
+    "ladybug==0.19.0",
+    "lancedb>=0.24.3,<1.0.0",
+    "aiosqlite>=0.20.0,<1.0.0",
+    "pydantic>=2.10.5,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.21.2",
+]
+
+[tool.uv]
+environments = ["sys_platform == 'linux'"]
+
+[tool.uv.sources]
+omp-work = { path = "../omp-work", editable = true }
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+omp_knowledge = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+tmp_path_retention_policy = "failed"
+filterwarnings = [
+    "ignore::pydantic.PydanticDeprecatedSince20",
+]

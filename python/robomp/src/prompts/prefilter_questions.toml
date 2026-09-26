@@ -1,0 +1,33 @@
+[primary_type]
+type = "choice"
+instructions = "What is the primary classification of this issue?"
+options = [
+  "bug",
+  "enhancement",
+  "question",
+  "proposal",
+  "documentation",
+  "wontfix",
+  "invalid",
+  "duplicate",
+]
+
+[batch_audit]
+type = "noul"
+instructions = "Is this issue an automated batch audit, bulk scan, or spam submission across repositories?"
+
+[first_person_failure]
+type = "noul"
+instructions = "Does the author report a concrete failure or error that they personally experienced?"
+
+[wanted_different_behavior]
+type = "noul"
+instructions = "Does the author clearly explain what behavior they wanted or expected versus what actually occurred?"
+
+[upstream_cause]
+type = "noul"
+instructions = "Is the root cause attributable to an upstream platform or external dependency rather than this codebase?"
+
+[nondefault_exotic_env]
+type = "noul"
+instructions = "Does the issue report an error occurring exclusively in an exotic, customized, or non-default environment?"

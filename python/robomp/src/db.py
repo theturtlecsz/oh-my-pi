@@ -181,6 +181,28 @@ CREATE TABLE IF NOT EXISTS issue_index_sync (
   repo        TEXT PRIMARY KEY,
   last_synced TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS jev_calls (
+  request_id   TEXT PRIMARY KEY,
+  server_id    TEXT,
+  feature      TEXT NOT NULL,
+  outcome      TEXT NOT NULL,
+  latency_ms   INTEGER NOT NULL,
+  state_chars  INTEGER NOT NULL,
+  truncated    INTEGER NOT NULL,
+  attempt      INTEGER NOT NULL,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS jev_calls_feature ON jev_calls(feature, created_at);
+
+CREATE TABLE IF NOT EXISTS issue_prefilter (
+  key                 TEXT PRIMARY KEY,
+  route               TEXT NOT NULL,
+  label               TEXT,
+  probabilities_json  TEXT NOT NULL,
+  request_id          TEXT,
+  created_at          TEXT NOT NULL
+);
 """
 
 
@@ -323,6 +345,29 @@ def _pending_closure_from_row(row: sqlite3.Row) -> PendingClosureRow:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+@dataclass(slots=True, frozen=True)
+class JevCallRow:
+    request_id: str
+    server_id: str | None
+    feature: str
+    outcome: str
+    latency_ms: int
+    state_chars: int
+    truncated: bool
+    attempt: int
+    created_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class IssuePrefilterRow:
+    key: str
+    route: str
+    label: str | None
+    probabilities_json: str
+    request_id: str | None
+    created_at: str
 
 
 def issue_key(repo: str, number: int) -> str:
@@ -1473,6 +1518,124 @@ class Database:
                 ON CONFLICT(repo) DO UPDATE SET last_synced = excluded.last_synced
                 """,
                 (repo, last_synced),
+            )
+
+    def record_jev_call(
+        self,
+        *,
+        request_id: str,
+        server_id: str | None,
+        feature: str,
+        outcome: str,
+        latency_ms: int | float,
+        state_chars: int,
+        truncated: bool,
+        attempt: int,
+        created_at: str | None = None,
+    ) -> None:
+        now = created_at or _utcnow()
+        with self._txn() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO jev_calls (
+                    request_id, server_id, feature, outcome, latency_ms,
+                    state_chars, truncated, attempt, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    server_id,
+                    feature,
+                    outcome,
+                    int(round(latency_ms)),
+                    state_chars,
+                    1 if truncated else 0,
+                    attempt,
+                    now,
+                ),
+            )
+
+    def get_jev_calls(self, feature: str | None = None) -> list[JevCallRow]:
+        with self._lock:
+            if feature:
+                cur = self._conn.execute(
+                    "SELECT * FROM jev_calls WHERE feature = ? ORDER BY created_at ASC, attempt ASC",
+                    (feature,),
+                )
+            else:
+                cur = self._conn.execute("SELECT * FROM jev_calls ORDER BY created_at ASC, attempt ASC")
+            rows = cur.fetchall()
+            return [
+                JevCallRow(
+                    request_id=row["request_id"],
+                    server_id=row["server_id"],
+                    feature=row["feature"],
+                    outcome=row["outcome"],
+                    latency_ms=int(row["latency_ms"]),
+                    state_chars=int(row["state_chars"]),
+                    truncated=bool(row["truncated"]),
+                    attempt=int(row["attempt"]),
+                    created_at=row["created_at"],
+                )
+                for row in rows
+            ]
+
+    def get_jev_call(self, request_id: str) -> JevCallRow | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM jev_calls WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return JevCallRow(
+                request_id=row["request_id"],
+                server_id=row["server_id"],
+                feature=row["feature"],
+                outcome=row["outcome"],
+                latency_ms=int(row["latency_ms"]),
+                state_chars=int(row["state_chars"]),
+                truncated=bool(row["truncated"]),
+                attempt=int(row["attempt"]),
+                created_at=row["created_at"],
+            )
+
+    def record_issue_prefilter(
+        self,
+        *,
+        key: str,
+        route: str,
+        label: str | None,
+        probabilities_json: str,
+        request_id: str | None,
+        created_at: str | None = None,
+    ) -> None:
+        now = created_at or _utcnow()
+        with self._txn() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO issue_prefilter (
+                    key, route, label, probabilities_json, request_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (key, route, label, probabilities_json, request_id, now),
+            )
+
+    def get_issue_prefilter(self, key: str) -> IssuePrefilterRow | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM issue_prefilter WHERE key = ?",
+                (key,),
+            ).fetchone()
+            if row is None:
+                return None
+            return IssuePrefilterRow(
+                key=row["key"],
+                route=row["route"],
+                label=row["label"],
+                probabilities_json=row["probabilities_json"],
+                request_id=row["request_id"],
+                created_at=row["created_at"],
             )
 
 

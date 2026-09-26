@@ -1,0 +1,86 @@
+{
+  "snapshot_id": "sha256:5dc87df1316f9afab59d47c42eed60f6a3d78286d9dc852d5b9ff827b66d4aee",
+  "format_version": 1,
+  "enola_version": "0.4.18",
+  "extractor_version": "v265",
+  "generated_at": "2026-09-12T12:54:41Z",
+  "duration": "21.062462ms",
+  "repo_path": "/home/thetu/.local/state/omp-fleet-knowledge/enola-runtime-20260912/fixtures/A",
+  "git": {
+    "ref": "main",
+    "commit": "375c62487eec02913cf68f705853276306baaf1f",
+    "dirty": true,
+    "remote": "example.invalid/omp/enola-fixture"
+  },
+  "extractors": [
+    "manifests",
+    "python",
+    "typescript"
+  ],
+  "explainers": [
+    "cycles",
+    "layers",
+    "crossrepo",
+    "coverage",
+    "unused-routes",
+    "domain",
+    "query-loops",
+    "dead-methods",
+    "entry-points",
+    "messaging-coverage",
+    "god-class",
+    "hotspots",
+    "dependency-depth",
+    "exported-surface",
+    "complexity-outliers",
+    "intent",
+    "constraints",
+    "vendored-candidates",
+    "import-closure"
+  ],
+  "renderers": [
+    "llm_context"
+  ],
+  "config_hash": "sha256:f8233549c49910b52327defe5523379e050b55de00b039017b649b3c0545ee96",
+  "ignore_glob_hash": "sha256:7523cc6397a498e151125a682d28fbf6df20c6f51f6dfaf18fd8f5239a20d2d8",
+  "output_hashes": {
+    "facts.jsonl": "sha256:35f64f38e77678a96eb5a2d8f026d3d8e12a3c82bffc84e26723eeba25346495",
+    "insights.json": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "llm_context.md": "sha256:49c7e6af67af6c58cfcb379de38862576c1c3077cea2806989a56925551f29d9"
+  },
+  "fact_count": 19,
+  "insight_count": 0,
+  "quality": {
+    "files_seen": 10,
+    "files_parsed": 7,
+    "files_skipped": 2,
+    "dirs_skipped": 1,
+    "skipped_sample": [
+      ".git/ (glob: **/.git/**)",
+      "py/tests/test_alpha.py (glob: **/test_*.py)",
+      "ts/src/alpha.test.ts (glob: **/*.test.ts)"
+    ],
+    "parse_errors": 0,
+    "heuristic_insights": 0,
+    "census": {
+      "files_walked": 12,
+      "parsed": 7,
+      "excluded_by_ignore": 2,
+      "excluded_by_kind": 1,
+      "excluded_kinds": {
+        ".mts": 1
+      },
+      "skipped_with_cause": 2,
+      "top_skip_causes": [
+        {
+          "cause": "claimed by manifests, no facts emitted",
+          "count": 1
+        },
+        {
+          "cause": "claimed by python, no facts emitted",
+          "count": 1
+        }
+      ]
+    }
+  }
+}
