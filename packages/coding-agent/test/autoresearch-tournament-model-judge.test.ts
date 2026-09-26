@@ -127,9 +127,76 @@ describe("parseJudgeAnswer", () => {
 		expect(res.probabilities).toBeUndefined();
 	});
 
-	it("throws on JSON wrapped in markdown code fence", () => {
-		const markdownText = '```json\n{"winner": "Sapphire"}\n```';
-		expect(() => parseJudgeAnswer(markdownText, "Emerald", "Sapphire")).toThrow(/Malformed judge response/);
+	it("accepts a winner object wrapped in a json fence or a bare fence", () => {
+		const payload = {
+			winner: "Emerald",
+			probabilities: {
+				Emerald: 0.7,
+				Sapphire: 0.2,
+				tie: 0.1,
+			},
+		};
+		const raw = JSON.stringify(payload);
+		const pretty = '{\n  "winner": "Emerald",\n  "probabilities": { "Emerald": 0.7, "Sapphire": 0.2, "tie": 0.1 }\n}';
+		const expected = parseJudgeAnswer(raw, "Emerald", "Sapphire");
+		expect(parseJudgeAnswer(`\`\`\`json\n${raw}\n\`\`\``, "Emerald", "Sapphire")).toEqual(expected);
+		expect(parseJudgeAnswer(`\`\`\`\n${raw}\n\`\`\``, "Emerald", "Sapphire")).toEqual(expected);
+		expect(parseJudgeAnswer(`\n\`\`\`json\n${raw}\n\`\`\`\n`, "Emerald", "Sapphire")).toEqual(expected);
+		expect(parseJudgeAnswer(`\`\`\`json\r\n${raw}\r\n\`\`\``, "Emerald", "Sapphire")).toEqual(expected);
+		expect(parseJudgeAnswer(`\`\`\`json\n${pretty}\n\`\`\``, "Emerald", "Sapphire")).toEqual(
+			parseJudgeAnswer(pretty, "Emerald", "Sapphire"),
+		);
+		expect(parseJudgeAnswer('```json\n{"winner": "Sapphire"}\n```', "Emerald", "Sapphire")).toEqual(
+			parseJudgeAnswer('{"winner": "Sapphire"}', "Emerald", "Sapphire"),
+		);
+	});
+
+	it("throws invalid JSON when a single fence body is not JSON", () => {
+		let bodyError = "";
+		try {
+			JSON.parse("not json");
+		} catch (err) {
+			bodyError = err instanceof Error ? err.message : String(err);
+		}
+		expect(() => parseJudgeAnswer("```json\nnot json\n```", "Emerald", "Sapphire")).toThrow(
+			`Malformed judge response: invalid JSON: ${bodyError}`,
+		);
+		expect(() => parseJudgeAnswer("```\nnot json\n```", "Emerald", "Sapphire")).toThrow(
+			`Malformed judge response: invalid JSON: ${bodyError}`,
+		);
+	});
+
+	it("throws invalid JSON when the text is not a single fenced JSON block", () => {
+		const samples = [
+			"not a json",
+			'See ```json\n{"winner": "Emerald"}\n```',
+			'```json\n{"winner": "Emerald"}\n```\nthanks',
+			'```json\n{"winner": "Emerald"}',
+			'```JSON\n{"winner": "Emerald"}\n```',
+			'```javascript\n{"winner": "Emerald"}\n```',
+			'``` json\n{"winner": "Emerald"}\n```',
+			'```json\n{"winner": "Emerald"}\n```\n```\n{"winner": "Sapphire"}\n```',
+		];
+		for (const text of samples) {
+			let parseError = "";
+			try {
+				JSON.parse(text.trim());
+			} catch (err) {
+				parseError = err instanceof Error ? err.message : String(err);
+			}
+			expect(() => parseJudgeAnswer(text, "Emerald", "Sapphire")).toThrow(
+				`Malformed judge response: invalid JSON: ${parseError}`,
+			);
+		}
+	});
+
+	it("rejects a fenced JSON non-object the same way as unwrapped JSON", () => {
+		expect(() => parseJudgeAnswer("```json\n123\n```", "Emerald", "Sapphire")).toThrow(
+			/expected a single JSON object/,
+		);
+		expect(() => parseJudgeAnswer('```\n["Emerald"]\n```', "Emerald", "Sapphire")).toThrow(
+			/expected a single JSON object/,
+		);
 	});
 
 	it("throws on unknown winner label", () => {
