@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test";
 import {
+	type ResearchArtifact,
+	type ResearchArtifactContentView,
 	type ResearchCampaign,
 	type ResearchComponent,
+	type ResearchDatasetView,
 	type ResearchDeliverableBinding,
 	type ResearchObservation,
+	type ResearchSourceView,
 	type ResearchTrial,
 	type ResearchView,
 	WorkClient,
@@ -375,12 +379,30 @@ test("dispatches research commands, decodes results, and calls research view", a
 	}
 
 	// 9. client.research(key)
+	const mockArtifact: ResearchArtifact = {
+		artifact_sha256: "3".repeat(64),
+		manifest_sha256: "4".repeat(64),
+		manifest: {
+			contract_version: "research-artifact.v1",
+			name: "test-artifact",
+			size_bytes: 12,
+			media_type: "text/plain",
+			source_ref: "repo://tests/test.txt",
+			access_class: "workspace",
+			issuer_kind: "candidate_authored",
+			artifact_sha256: "3".repeat(64),
+		},
+		registered_by: "test-user",
+		workspace_id: ENV.workspace_id,
+		registered_at: new Date().toISOString(),
+	};
 	const mockResearchView: ResearchView = {
 		work_id: workId,
 		campaigns: [mockCampaign],
 		trials: [mockTrial],
 		observations: [mockObservation],
 		deliverable_bindings: [mockBinding],
+		artifacts: [mockArtifact],
 	};
 	nextResult = mockResearchView;
 	const view = await client.research("test-work-key");
@@ -391,4 +413,78 @@ test("dispatches research commands, decodes results, and calls research view", a
 	expect(view.trials.length).toBe(1);
 	expect(view.observations.length).toBe(1);
 	expect(view.deliverable_bindings.length).toBe(1);
+	expect(view.artifacts.length).toBe(1);
+
+	// 10. client.researchArtifact(sha)
+	const mockArtifactView: ResearchArtifactContentView = {
+		artifact: mockArtifact,
+		content_base64: "aGVsbG8gd29ybGQ=",
+	};
+	nextResult = mockArtifactView;
+	const artView = await client.researchArtifact(mockArtifact.artifact_sha256);
+	expect(lastUrl).toBe(
+		`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/research-artifacts/${mockArtifact.artifact_sha256}`,
+	);
+	expect(lastMethod).toBe("GET");
+	expect(artView.artifact.artifact_sha256).toBe(mockArtifact.artifact_sha256);
+	expect(artView.content_base64).toBe("aGVsbG8gd29ybGQ=");
+
+	// 11. client.researchSource(sourceId, projectId)
+	const sourceId = "00000000-0000-0000-0000-0000000000s1";
+	const projectId = "00000000-0000-0000-0000-0000000000p1";
+	const mockSourceView: ResearchSourceView = {
+		source: {
+			source_id: sourceId,
+			workspace_id: ENV.workspace_id,
+			status: "ok",
+			manifest_sha256: "5".repeat(64),
+			manifest: {
+				contract_version: "research-source.v1",
+				source_id: sourceId,
+				version: "1.0",
+				location: "https://example.com/source",
+				status: "ok",
+				access: { access_class: "workspace" },
+			},
+			registered_by: "test-user",
+			registered_at: new Date().toISOString(),
+		},
+		content_base64: null,
+	};
+	nextResult = mockSourceView;
+	const srcView = await client.researchSource(sourceId, projectId);
+	expect(lastUrl).toBe(
+		`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/research-sources/${sourceId}/projects/${projectId}`,
+	);
+	expect(lastMethod).toBe("GET");
+	expect(srcView.source.source_id).toBe(sourceId);
+
+	// 12. client.researchDataset(datasetId, projectId)
+	const datasetId = "00000000-0000-0000-0000-0000000000e1";
+	const mockDatasetView: ResearchDatasetView = {
+		dataset: {
+			dataset_id: datasetId,
+			source_id: sourceId,
+			workspace_id: ENV.workspace_id,
+			manifest_sha256: "6".repeat(64),
+			manifest: {
+				contract_version: "research-dataset.v1",
+				dataset_id: datasetId,
+				source_id: sourceId,
+				version: "1.0",
+				snapshot_sha256: "7".repeat(64),
+				access: { access_class: "workspace" },
+			},
+			registered_by: "test-user",
+			registered_at: new Date().toISOString(),
+		},
+		content_base64: null,
+	};
+	nextResult = mockDatasetView;
+	const dsView = await client.researchDataset(datasetId, projectId);
+	expect(lastUrl).toBe(
+		`http://127.0.0.1:54322/v1/workspaces/${ENV.workspace_id}/research-datasets/${datasetId}/projects/${projectId}`,
+	);
+	expect(lastMethod).toBe("GET");
+	expect(dsView.dataset.dataset_id).toBe(datasetId);
 });

@@ -13,7 +13,14 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-broker-config";
 import { classifyUnexpectedStop } from "@oh-my-pi/pi-coding-agent/session/unexpected-stop-classifier";
-import { type JevUsageEntry, resetDefaultJevBreaker } from "@oh-my-pi/pi-coding-agent/tiny/jev-client";
+import {
+	JEV_DEFAULT_BASE_URL,
+	JEV_ENV_KEY,
+	JEV_PROVIDER,
+	type JevUsageEntry,
+	resetDefaultJevBreaker,
+} from "@oh-my-pi/pi-coding-agent/tiny/jev-client";
+import { $pickenv, type FetchImpl } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 
 export const WP5_AMENDMENT =
@@ -28,6 +35,13 @@ export const WP5_VERDICT_WITHHELD =
 	"WP5 verdict withheld: the current side is a mocked baseline, not a measurement.";
 
 export const JEV_COST_PER_MTOK_USD = 0.042;
+
+export class JevTransportError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "JevTransportError";
+	}
+}
 
 export interface PromptSetItem {
 	prompt: string;
@@ -61,6 +75,9 @@ export interface FeatureMetricSummary {
 	recall?: number;
 	confidentBucketAccuracy?: number;
 	skipSessionShare?: number;
+	httpErrorRate?: number;
+	networkErrorRate?: number;
+	timeoutRate?: number;
 }
 
 export interface FeatureComparison {
@@ -80,6 +97,9 @@ export interface UnmeasuredFeatureMetricSummary {
 	recall?: null;
 	confidentBucketAccuracy?: null;
 	skipSessionShare?: null;
+	httpErrorRate?: null;
+	networkErrorRate?: null;
+	timeoutRate?: null;
 }
 
 export interface UnmeasuredFeatureComparison {
@@ -96,6 +116,9 @@ const UNMEASURED_ROBOMP_METRICS: UnmeasuredFeatureMetricSummary = {
 	costPer1000: null,
 	unparseableRate: null,
 	offListRate: null,
+	httpErrorRate: null,
+	networkErrorRate: null,
+	timeoutRate: null,
 };
 
 export function unmeasuredRobomp(): UnmeasuredFeatureComparison {
@@ -309,6 +332,74 @@ function makeMockRegistry(model: Model): any {
 	};
 }
 
+function makeJevSideRegistry(apiKey?: string): any {
+	return {
+		getAvailable: () => {
+			throw new Error("Jev side must never reach a network model: getAvailable() called");
+		},
+		getApiKey: async (model?: any) => {
+			throw new Error(
+				`Jev side must never reach a network model: getApiKey() called for ${model?.id ?? "unknown"}`,
+			);
+		},
+		getApiKeyForProvider: async (provider?: string) => {
+			if (provider === JEV_PROVIDER || provider === "typesafe") {
+				return apiKey ?? $pickenv(JEV_ENV_KEY) ?? "test-key";
+			}
+			throw new Error(`Jev side must never reach a network model: getApiKeyForProvider(${provider})`);
+		},
+		resolver: (model?: any) => async () => {
+			throw new Error(
+				`Jev side must never reach a network model: resolver() called for ${model?.id ?? "unknown"}`,
+			);
+		},
+	};
+}
+
+function makeJevSideSettings(options: {
+	jevBaseUrl?: string;
+	autoThinking?: boolean;
+	unexpectedStop?: boolean;
+}): any {
+	return {
+		get(path: string) {
+			if (path === "jev.enabled") return true;
+			if (path === "jev.autoThinking") return Boolean(options.autoThinking);
+			if (path === "jev.unexpectedStop") return Boolean(options.unexpectedStop);
+			if (path === "jev.baseUrl") return options.jevBaseUrl;
+			if (path === "jev.autoThinkingConfidence") return 0.5;
+			if (path === "jev.autoThinkingMaxSignal") return 0.7;
+			if (path === "jev.unexpectedStopThreshold") return 0.70;
+			if (path === "providers.autoThinkingModel") return "off";
+			if (path === "providers.unexpectedStopModel") return "off";
+			return undefined;
+		},
+		getModelRole(_role: string) {
+			return undefined;
+		},
+	};
+}
+
+function makeJevGuardedFetch(jevBaseUrl?: string): FetchImpl {
+	const effectiveBaseUrl = jevBaseUrl ?? JEV_DEFAULT_BASE_URL;
+	const allowedOrigin = new URL(effectiveBaseUrl).origin;
+	return async (input, init) => {
+		const urlStr =
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.toString()
+					: (input as Request).url;
+		const reqOrigin = new URL(urlStr).origin;
+		if (reqOrigin !== allowedOrigin) {
+			throw new Error(
+				`Jev side must never reach a network model: attempted request to ${urlStr} (only ${allowedOrigin} allowed)`,
+			);
+		}
+		return globalThis.fetch(input, init);
+	};
+}
+
 /**
  * Resolve the current-side settings/registry. With `injected` (tests) the
  * harness classifies through the supplied mock registry with no network;
@@ -355,57 +446,81 @@ export async function evaluateAutoThinkingFeature(
 	let jevCorrect = 0;
 	let jevUnparseable = 0;
 	let jevOffList = 0;
+	let jevHttpError = 0;
+	let jevNetworkError = 0;
+	let jevTimeout = 0;
+	let jevTransportFailures = 0;
 
 	resetDefaultJevBreaker();
 	for (const item of prompts) {
 		const expectedEffort = (item.effort || item.label || "").toLowerCase();
 		const promptText = item.prompt || item.text || "";
 
-		const settings = {
-			get(path: string) {
-				if (path === "jev.enabled") return true;
-				if (path === "jev.autoThinking") return true;
-				if (path === "jev.baseUrl") return options.jevBaseUrl;
-				if (path === "jev.autoThinkingConfidence") return 0.5;
-				if (path === "jev.autoThinkingMaxSignal") return 0.7;
-				if (path === "providers.autoThinkingModel") return "online";
-				return undefined;
-			},
-			getModelRole(role: string) {
-				return role === "smol" ? `${dummyModel.provider}/${dummyModel.id}` : undefined;
-			},
-		} as any;
+		const settings = makeJevSideSettings({
+			jevBaseUrl: options.jevBaseUrl,
+			autoThinking: true,
+		});
+		const registry = makeJevSideRegistry(options.apiKey);
+		const guardedFetch = makeJevGuardedFetch(options.jevBaseUrl);
 
-		const registry = makeMockRegistry(dummyModel);
 		const deps = {
 			settings,
 			registry,
 			model: dummyModel,
 			sessionId: "harness-session-at-jev",
 			recordJevUsage: (u: JevUsageEntry) => jevUsageEntries.push(u),
+			fetch: guardedFetch,
 		};
 
+		resetDefaultJevBreaker();
+		const entryCountBefore = jevUsageEntries.length;
 		const start = performance.now();
 		let result: Effort | undefined;
 		try {
 			result = await classifyDifficulty(promptText, deps);
 		} catch {
-			jevUnparseable++;
+			// Fallback is disabled/throwing when Jev fails
 		}
 		const duration = performance.now() - start;
 		jevLatencies.push(duration);
+
+		const itemEntries = jevUsageEntries.slice(entryCountBefore);
+		const lastEntry = itemEntries[itemEntries.length - 1];
+
+		if (lastEntry) {
+			if (lastEntry.outcome === "http_error") {
+				if (lastEntry.status === 401 || lastEntry.status === 403) {
+					throw new JevTransportError(
+						`Jev call failed with HTTP ${lastEntry.status}: authentication or authorization failure`,
+					);
+				}
+				jevHttpError++;
+				jevTransportFailures++;
+			} else if (lastEntry.outcome === "network_error") {
+				jevNetworkError++;
+				jevTransportFailures++;
+			} else if (lastEntry.outcome === "timeout") {
+				jevTimeout++;
+				jevTransportFailures++;
+			} else if (lastEntry.outcome === "malformed") {
+				jevUnparseable++;
+			} else if (lastEntry.outcome === "off_list" || lastEntry.outcome === "off_options") {
+				jevOffList++;
+			}
+		}
 
 		if (result !== undefined && String(result).toLowerCase() === expectedEffort) {
 			jevCorrect++;
 		}
 	}
 
-	for (const u of jevUsageEntries) {
-		if (u.outcome === "malformed") jevUnparseable++;
-		if (u.outcome === "off_list" || u.outcome === "off_options") jevOffList++;
+	const jevTotal = prompts.length || 1;
+	if (prompts.length > 0 && jevTransportFailures / prompts.length > 0.05) {
+		throw new JevTransportError(
+			`Jev transport failures in auto_thinking (${jevTransportFailures}/${prompts.length}, ${((jevTransportFailures / prompts.length) * 100).toFixed(1)}%) exceeded 5% limit`,
+		);
 	}
 
-	const jevTotal = prompts.length || 1;
 	const totalJevTokens = jevUsageEntries.reduce((sum, u) => sum + Math.ceil(u.stateChars / 4) + 100, 0);
 	const jevCostPer1000 = (totalJevTokens * JEV_COST_PER_MTOK_USD) / 1000;
 
@@ -473,6 +588,9 @@ export async function evaluateAutoThinkingFeature(
 			costPer1000: currentCostPer1000,
 			unparseableRate: currentUnparseable / jevTotal,
 			offListRate: 0,
+			httpErrorRate: 0,
+			networkErrorRate: 0,
+			timeoutRate: 0,
 		},
 		jev: {
 			accuracy: jevCorrect / jevTotal,
@@ -481,6 +599,9 @@ export async function evaluateAutoThinkingFeature(
 			costPer1000: jevCostPer1000,
 			unparseableRate: jevUnparseable / jevTotal,
 			offListRate: jevOffList / jevTotal,
+			httpErrorRate: jevHttpError / jevTotal,
+			networkErrorRate: jevNetworkError / jevTotal,
+			timeoutRate: jevTimeout / jevTotal,
 		},
 	};
 }
@@ -519,55 +640,79 @@ export async function evaluateUnexpectedStopFeature(
 	let jevFN = 0;
 	let jevUnparseable = 0;
 	let jevOffList = 0;
+	let jevHttpError = 0;
+	let jevNetworkError = 0;
+	let jevTimeout = 0;
+	let jevTransportFailures = 0;
 
 	resetDefaultJevBreaker();
 	for (const item of turnEnds) {
 		const isContinue = item.label === "continue";
-		const settings = {
-			get(path: string) {
-				if (path === "jev.enabled") return true;
-				if (path === "jev.unexpectedStop") return true;
-				if (path === "jev.baseUrl") return options.jevBaseUrl;
-				if (path === "jev.unexpectedStopThreshold") return 0.70;
-				if (path === "providers.unexpectedStopModel") return "online";
-				return undefined;
-			},
-			getModelRole(role: string) {
-				return role === "smol" ? `${dummyModel.provider}/${dummyModel.id}` : undefined;
-			},
-		} as any;
+		const settings = makeJevSideSettings({
+			jevBaseUrl: options.jevBaseUrl,
+			unexpectedStop: true,
+		});
+		const registry = makeJevSideRegistry(options.apiKey);
+		const guardedFetch = makeJevGuardedFetch(options.jevBaseUrl);
 
-		const registry = makeMockRegistry(dummyModel);
 		const deps = {
 			settings,
 			registry,
 			sessionId: "harness-session-us-jev",
 			recordJevUsage: (u: JevUsageEntry) => jevUsageEntries.push(u),
+			fetch: guardedFetch,
 		};
 
+		resetDefaultJevBreaker();
+		const entryCountBefore = jevUsageEntries.length;
 		const start = performance.now();
 		let result: boolean | undefined;
 		try {
 			result = await classifyUnexpectedStop(item.text, deps);
 		} catch {
-			jevUnparseable++;
+			// Catch error
 		}
 		const duration = performance.now() - start;
 		jevLatencies.push(duration);
 
-		const predContinue = result === true;
-		if (predContinue && isContinue) jevTP++;
-		else if (predContinue && !isContinue) jevFP++;
-		else if (!predContinue && !isContinue) jevTN++;
-		else if (!predContinue && isContinue) jevFN++;
-	}
+		const itemEntries = jevUsageEntries.slice(entryCountBefore);
+		const lastEntry = itemEntries[itemEntries.length - 1];
 
-	for (const u of jevUsageEntries) {
-		if (u.outcome === "malformed") jevUnparseable++;
-		if (u.outcome === "off_list" || u.outcome === "off_options") jevOffList++;
+		if (lastEntry) {
+			if (lastEntry.outcome === "http_error") {
+				if (lastEntry.status === 401 || lastEntry.status === 403) {
+					throw new JevTransportError(
+						`Jev call failed with HTTP ${lastEntry.status}: authentication or authorization failure`,
+					);
+				}
+				jevHttpError++;
+				jevTransportFailures++;
+			} else if (lastEntry.outcome === "network_error") {
+				jevNetworkError++;
+				jevTransportFailures++;
+			} else if (lastEntry.outcome === "timeout") {
+				jevTimeout++;
+				jevTransportFailures++;
+			} else if (lastEntry.outcome === "malformed") {
+				jevUnparseable++;
+			} else if (lastEntry.outcome === "off_list" || lastEntry.outcome === "off_options") {
+				jevOffList++;
+			}
+		}
+
+		if (result === true && isContinue) jevTP++;
+		else if (result === true && !isContinue) jevFP++;
+		else if (result === false && !isContinue) jevTN++;
+		else if (result === false && isContinue) jevFN++;
 	}
 
 	const jevTotal = turnEnds.length || 1;
+	if (turnEnds.length > 0 && jevTransportFailures / turnEnds.length > 0.05) {
+		throw new JevTransportError(
+			`Jev transport failures in unexpected_stop (${jevTransportFailures}/${turnEnds.length}, ${((jevTransportFailures / turnEnds.length) * 100).toFixed(1)}%) exceeded 5% limit`,
+		);
+	}
+
 	const totalJevTokens = jevUsageEntries.reduce((sum, u) => sum + Math.ceil(u.stateChars / 4) + 80, 0);
 	const jevCostPer1000 = (totalJevTokens * JEV_COST_PER_MTOK_USD) / 1000;
 	const jevPrecision = jevTP + jevFP > 0 ? jevTP / (jevTP + jevFP) : 1.0;
@@ -650,6 +795,9 @@ export async function evaluateUnexpectedStopFeature(
 			costPer1000: currentCostPer1000,
 			unparseableRate: currentUnparseable / jevTotal,
 			offListRate: 0,
+			httpErrorRate: 0,
+			networkErrorRate: 0,
+			timeoutRate: 0,
 		},
 		jev: {
 			accuracy: jevAccuracy,
@@ -660,6 +808,9 @@ export async function evaluateUnexpectedStopFeature(
 			costPer1000: jevCostPer1000,
 			unparseableRate: jevUnparseable / jevTotal,
 			offListRate: jevOffList / jevTotal,
+			httpErrorRate: jevHttpError / jevTotal,
+			networkErrorRate: jevNetworkError / jevTotal,
+			timeoutRate: jevTimeout / jevTotal,
 		},
 	};
 }
@@ -796,6 +947,26 @@ export async function runMeasurementHarness(options: MeasurementRunOptions): Pro
 		fakeSmol: options.fakeSmol,
 		current,
 	});
+
+	const totalJevCalls = prompts.length + turnEnds.length;
+	if (totalJevCalls > 0) {
+		const atFailures =
+			((autoThinking.jev.httpErrorRate ?? 0) +
+				(autoThinking.jev.networkErrorRate ?? 0) +
+				(autoThinking.jev.timeoutRate ?? 0)) *
+			prompts.length;
+		const usFailures =
+			((unexpectedStop.jev.httpErrorRate ?? 0) +
+				(unexpectedStop.jev.networkErrorRate ?? 0) +
+				(unexpectedStop.jev.timeoutRate ?? 0)) *
+			turnEnds.length;
+		const totalFailures = Math.round(atFailures + usFailures);
+		if (totalFailures / totalJevCalls > 0.05) {
+			throw new JevTransportError(
+				`Jev transport failures across run (${totalFailures}/${totalJevCalls}, ${((totalFailures / totalJevCalls) * 100).toFixed(1)}%) exceeded 5% limit`,
+			);
+		}
+	}
 
 	// No issue rows means this machine has no robomp history. Null robomp fields
 	// stay out of the verdict, which then uses only the features that were measured.

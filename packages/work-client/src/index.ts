@@ -10,18 +10,35 @@ import type {
 	AdmitResearchCampaignResult,
 	BindResearchDeliverablePayload,
 	BindResearchDeliverableResult,
+	BindResearchReceiptManifestPayload,
+	BindResearchReceiptManifestResult,
 	CancelResearchCampaignPayload,
 	CancelResearchCampaignResult,
+	ClaimResearchReplicatePayload,
+	ClaimResearchReplicateResult,
+	CollectResearchArtifactPayload,
+	CollectResearchArtifactResult,
 	ConcludeResearchCampaignPayload,
 	ConcludeResearchCampaignResult,
 	CreateResearchCampaignPayload,
 	CreateResearchCampaignResult,
 	ProposeResearchTrialPayload,
 	ProposeResearchTrialResult,
+	RecordResearchCachePayload,
+	RecordResearchCacheResult,
 	RecordResearchObservationPayload,
 	RecordResearchObservationResult,
+	RegisterResearchArtifactPayload,
+	RegisterResearchArtifactResult,
 	RegisterResearchComponentPayload,
 	RegisterResearchComponentResult,
+	RegisterResearchDatasetPayload,
+	RegisterResearchDatasetResult,
+	RegisterResearchSourcePayload,
+	RegisterResearchSourceResult,
+	ResearchArtifactContentView,
+	ResearchDatasetView,
+	ResearchSourceView,
 	ResearchView,
 	SetResearchCampaignStatePayload,
 	SetResearchCampaignStateResult,
@@ -826,6 +843,13 @@ export type Command =
 	| { type: "set_execution_state"; payload: SetExecutionStatePayload }
 	| { type: "complete_execution_item"; payload: CompleteExecutionItemPayload }
 	| { type: "skip_active_item"; payload: SkipActiveItemPayload }
+	| { type: "register_research_artifact"; payload: RegisterResearchArtifactPayload }
+	| { type: "collect_research_artifact"; payload: CollectResearchArtifactPayload }
+	| { type: "register_research_source"; payload: RegisterResearchSourcePayload }
+	| { type: "register_research_dataset"; payload: RegisterResearchDatasetPayload }
+	| { type: "record_research_cache"; payload: RecordResearchCachePayload }
+	| { type: "claim_research_replicate"; payload: ClaimResearchReplicatePayload }
+	| { type: "bind_research_receipt_manifest"; payload: BindResearchReceiptManifestPayload }
 	| { type: "register_research_component"; payload: RegisterResearchComponentPayload }
 	| { type: "create_research_campaign"; payload: CreateResearchCampaignPayload }
 	| { type: "admit_research_campaign"; payload: AdmitResearchCampaignPayload }
@@ -934,6 +958,13 @@ export type CommandResult =
 			item: ExecutionGrantItemView;
 			reason: string;
 	  }
+	| RegisterResearchArtifactResult
+	| CollectResearchArtifactResult
+	| RegisterResearchSourceResult
+	| RegisterResearchDatasetResult
+	| RecordResearchCacheResult
+	| ClaimResearchReplicateResult
+	| BindResearchReceiptManifestResult
 	| RegisterResearchComponentResult
 	| CreateResearchCampaignResult
 	| AdmitResearchCampaignResult
@@ -1242,6 +1273,29 @@ export class WorkClient {
 
 	research(key: string): Promise<ResearchView> {
 		return this.request("GET", `/v1/work-items/${encodeURIComponent(key)}/research`) as Promise<ResearchView>;
+	}
+
+	researchArtifact(artifactSha256: string): Promise<ResearchArtifactContentView> {
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/research-artifacts/${artifactSha256}`,
+		) as Promise<ResearchArtifactContentView>;
+	}
+
+	researchSource(sourceId: UUID, projectId?: UUID): Promise<ResearchSourceView> {
+		const project = projectId ? `/projects/${projectId}` : "";
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/research-sources/${sourceId}${project}`,
+		) as Promise<ResearchSourceView>;
+	}
+
+	researchDataset(datasetId: UUID, projectId?: UUID): Promise<ResearchDatasetView> {
+		const project = projectId ? `/projects/${projectId}` : "";
+		return this.request(
+			"GET",
+			`/v1/workspaces/${this.workspaceId}/research-datasets/${datasetId}${project}`,
+		) as Promise<ResearchDatasetView>;
 	}
 
 	tree(): Promise<WorkspaceTree> {

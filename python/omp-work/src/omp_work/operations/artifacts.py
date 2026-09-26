@@ -5,6 +5,7 @@ import os
 from hashlib import sha256 as bytes_sha256
 from pathlib import Path
 from subprocess import CalledProcessError, run
+from uuid import uuid4
 
 from omp_work.v1.canonical import canonical_json, sha256
 
@@ -25,6 +26,49 @@ def _install(temporary: Path, destination: Path, mode: int) -> None:
     except FileExistsError as error:
         raise FileExistsError("immutable artifact already exists") from error
     destination.chmod(mode)
+
+
+def install_bytes_artifact(
+    destination: Path, data: bytes, expected_sha256: str, *, mode: int = 0o400
+) -> None:
+    """Install immutable content-addressed bytes.
+
+    An existing destination must already hold the same bytes. A different
+    payload is left untouched and reported as unavailable.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = destination.with_name(
+        f".{destination.name}.{os.getpid()}.{uuid4().hex}.next"
+    )
+    try:
+        with open(temporary, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            _install(temporary, destination, mode)
+        except FileExistsError:
+            if bytes_sha256(destination.read_bytes()).hexdigest() != expected_sha256:
+                raise RuntimeError("artifact_unavailable") from None
+        dir_fd = os.open(destination.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def read_verified_bytes(path: Path, expected_sha256: str, expected_size: int) -> bytes:
+    """Return bytes only when length and SHA-256 both match. Missing or
+    mismatched bytes are unavailable; the file is never rewritten."""
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        raise RuntimeError("artifact_unavailable") from None
+    if len(data) != expected_size or bytes_sha256(data).hexdigest() != expected_sha256:
+        raise RuntimeError("artifact_unavailable")
+    return data
 
 
 def encrypt_file(

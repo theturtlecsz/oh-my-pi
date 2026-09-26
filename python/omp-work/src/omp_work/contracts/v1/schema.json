@@ -1717,7 +1717,8 @@
             "OMP-279",
             "OMP-283",
             "OMP-295",
-            "OMP-322"
+            "OMP-322",
+            "OMP-323"
           ],
           "title": "Issue",
           "type": "string"
@@ -4076,6 +4077,81 @@
       "title": "BindResearchDeliverablePayload",
       "type": "object"
     },
+    "BindResearchReceiptManifestCommand": {
+      "$defs": {
+        "BindResearchReceiptManifestPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "artifact_sha256",
+            "manifest_sha256"
+          ],
+          "title": "BindResearchReceiptManifestPayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/BindResearchReceiptManifestPayload"
+        },
+        "type": {
+          "const": "bind_research_receipt_manifest",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "BindResearchReceiptManifestCommand",
+      "type": "object"
+    },
+    "BindResearchReceiptManifestPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "receipt_id": {
+          "format": "uuid",
+          "title": "Receipt Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "receipt_id",
+        "artifact_sha256",
+        "manifest_sha256"
+      ],
+      "title": "BindResearchReceiptManifestPayload",
+      "type": "object"
+    },
     "BindingManifest": {
       "additionalProperties": false,
       "properties": {
@@ -4707,6 +4783,57 @@
         "created_at"
       ],
       "title": "CheckpointDelivery",
+      "type": "object"
+    },
+    "ClaimResearchReplicateCommand": {
+      "$defs": {
+        "ClaimResearchReplicatePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "artifact_sha256"
+          ],
+          "title": "ClaimResearchReplicatePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ClaimResearchReplicatePayload"
+        },
+        "type": {
+          "const": "claim_research_replicate",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "ClaimResearchReplicateCommand",
+      "type": "object"
+    },
+    "ClaimResearchReplicatePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_sha256"
+      ],
+      "title": "ClaimResearchReplicatePayload",
       "type": "object"
     },
     "ClearFocusCommand": {
@@ -5380,6 +5507,261 @@
         "supersede_authority"
       ],
       "title": "CloseAttemptExample",
+      "type": "object"
+    },
+    "CollectResearchArtifactCommand": {
+      "$defs": {
+        "CollectResearchArtifactPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "archive_member": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Archive Member"
+            },
+            "manifest": {
+              "$ref": "#/$defs/ResearchArtifactManifest"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            },
+            "relative_path": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Relative Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "relative_path",
+            "manifest_sha256",
+            "manifest"
+          ],
+          "title": "CollectResearchArtifactPayload",
+          "type": "object"
+        },
+        "ResearchArtifactManifest": {
+          "additionalProperties": false,
+          "description": "Canonical custody declaration. The field set is the manifest identity.",
+          "properties": {
+            "access_class": {
+              "const": "workspace",
+              "title": "Access Class",
+              "type": "string"
+            },
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "contract_version": {
+              "const": "research-artifact.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "issuer_kind": {
+              "enum": [
+                "legacy_autoresearch",
+                "candidate_authored"
+              ],
+              "title": "Issuer Kind",
+              "type": "string"
+            },
+            "media_type": {
+              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+              "title": "Media Type",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "size_bytes": {
+              "maximum": 4194304,
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "source_ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "valid_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid Until"
+            }
+          },
+          "required": [
+            "contract_version",
+            "artifact_sha256",
+            "size_bytes",
+            "media_type",
+            "name",
+            "access_class",
+            "issuer_kind",
+            "source_ref"
+          ],
+          "title": "ResearchArtifactManifest",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CollectResearchArtifactPayload"
+        },
+        "type": {
+          "const": "collect_research_artifact",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "CollectResearchArtifactCommand",
+      "type": "object"
+    },
+    "CollectResearchArtifactPayload": {
+      "$defs": {
+        "ResearchArtifactManifest": {
+          "additionalProperties": false,
+          "description": "Canonical custody declaration. The field set is the manifest identity.",
+          "properties": {
+            "access_class": {
+              "const": "workspace",
+              "title": "Access Class",
+              "type": "string"
+            },
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "contract_version": {
+              "const": "research-artifact.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "issuer_kind": {
+              "enum": [
+                "legacy_autoresearch",
+                "candidate_authored"
+              ],
+              "title": "Issuer Kind",
+              "type": "string"
+            },
+            "media_type": {
+              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+              "title": "Media Type",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "size_bytes": {
+              "maximum": 4194304,
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "source_ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "valid_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid Until"
+            }
+          },
+          "required": [
+            "contract_version",
+            "artifact_sha256",
+            "size_bytes",
+            "media_type",
+            "name",
+            "access_class",
+            "issuer_kind",
+            "source_ref"
+          ],
+          "title": "ResearchArtifactManifest",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "archive_member": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Archive Member"
+        },
+        "manifest": {
+          "$ref": "#/$defs/ResearchArtifactManifest"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "relative_path": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relative_path",
+        "manifest_sha256",
+        "manifest"
+      ],
+      "title": "CollectResearchArtifactPayload",
       "type": "object"
     },
     "CommandEnvelope": {
@@ -6192,6 +6574,52 @@
           "title": "BindResearchDeliverablePayload",
           "type": "object"
         },
+        "BindResearchReceiptManifestCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/BindResearchReceiptManifestPayload"
+            },
+            "type": {
+              "const": "bind_research_receipt_manifest",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "BindResearchReceiptManifestCommand",
+          "type": "object"
+        },
+        "BindResearchReceiptManifestPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            },
+            "receipt_id": {
+              "format": "uuid",
+              "title": "Receipt Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_id",
+            "artifact_sha256",
+            "manifest_sha256"
+          ],
+          "title": "BindResearchReceiptManifestPayload",
+          "type": "object"
+        },
         "BoundedIntakeDraft": {
           "additionalProperties": false,
           "properties": {
@@ -6415,6 +6843,40 @@
           "title": "Candidate",
           "type": "object"
         },
+        "ClaimResearchReplicateCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/ClaimResearchReplicatePayload"
+            },
+            "type": {
+              "const": "claim_research_replicate",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "ClaimResearchReplicateCommand",
+          "type": "object"
+        },
+        "ClaimResearchReplicatePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "artifact_sha256"
+          ],
+          "title": "ClaimResearchReplicatePayload",
+          "type": "object"
+        },
         "ClearFocusCommand": {
           "additionalProperties": false,
           "properties": {
@@ -6459,6 +6921,64 @@
             "expected_version"
           ],
           "title": "ClearFocusPayload",
+          "type": "object"
+        },
+        "CollectResearchArtifactCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/CollectResearchArtifactPayload"
+            },
+            "type": {
+              "const": "collect_research_artifact",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "CollectResearchArtifactCommand",
+          "type": "object"
+        },
+        "CollectResearchArtifactPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "archive_member": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Archive Member"
+            },
+            "manifest": {
+              "$ref": "#/$defs/ResearchArtifactManifest"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            },
+            "relative_path": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Relative Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "relative_path",
+            "manifest_sha256",
+            "manifest"
+          ],
+          "title": "CollectResearchArtifactPayload",
           "type": "object"
         },
         "CommandSmokeResult": {
@@ -8725,6 +9245,47 @@
           "title": "RecordProjectHealthPayload",
           "type": "object"
         },
+        "RecordResearchCacheCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RecordResearchCachePayload"
+            },
+            "type": {
+              "const": "record_research_cache",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RecordResearchCacheCommand",
+          "type": "object"
+        },
+        "RecordResearchCachePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "cache_key": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Cache Key",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cache_key",
+            "artifact_sha256"
+          ],
+          "title": "RecordResearchCachePayload",
+          "type": "object"
+        },
         "RecordResearchObservationCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8836,6 +9397,51 @@
           "title": "RecordResearchObservationPayload",
           "type": "object"
         },
+        "RegisterResearchArtifactCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RegisterResearchArtifactPayload"
+            },
+            "type": {
+              "const": "register_research_artifact",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RegisterResearchArtifactCommand",
+          "type": "object"
+        },
+        "RegisterResearchArtifactPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "content_base64": {
+              "maxLength": 5592408,
+              "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+              "title": "Content Base64",
+              "type": "string"
+            },
+            "manifest": {
+              "$ref": "#/$defs/ResearchArtifactManifest"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "manifest_sha256",
+            "manifest",
+            "content_base64"
+          ],
+          "title": "RegisterResearchArtifactPayload",
+          "type": "object"
+        },
         "RegisterResearchComponentCommand": {
           "additionalProperties": false,
           "properties": {
@@ -8872,6 +9478,82 @@
             "descriptor"
           ],
           "title": "RegisterResearchComponentPayload",
+          "type": "object"
+        },
+        "RegisterResearchDatasetCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RegisterResearchDatasetPayload"
+            },
+            "type": {
+              "const": "register_research_dataset",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RegisterResearchDatasetCommand",
+          "type": "object"
+        },
+        "RegisterResearchDatasetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "manifest": {
+              "$ref": "#/$defs/ResearchDatasetManifest"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "manifest_sha256",
+            "manifest"
+          ],
+          "title": "RegisterResearchDatasetPayload",
+          "type": "object"
+        },
+        "RegisterResearchSourceCommand": {
+          "additionalProperties": false,
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/RegisterResearchSourcePayload"
+            },
+            "type": {
+              "const": "register_research_source",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "title": "RegisterResearchSourceCommand",
+          "type": "object"
+        },
+        "RegisterResearchSourcePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "manifest": {
+              "$ref": "#/$defs/ResearchSourceManifest"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "manifest_sha256",
+            "manifest"
+          ],
+          "title": "RegisterResearchSourcePayload",
           "type": "object"
         },
         "RelationEdge": {
@@ -8970,6 +9652,83 @@
           ],
           "title": "ResearchAction",
           "type": "string"
+        },
+        "ResearchArtifactManifest": {
+          "additionalProperties": false,
+          "description": "Canonical custody declaration. The field set is the manifest identity.",
+          "properties": {
+            "access_class": {
+              "const": "workspace",
+              "title": "Access Class",
+              "type": "string"
+            },
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "contract_version": {
+              "const": "research-artifact.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "issuer_kind": {
+              "enum": [
+                "legacy_autoresearch",
+                "candidate_authored"
+              ],
+              "title": "Issuer Kind",
+              "type": "string"
+            },
+            "media_type": {
+              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+              "title": "Media Type",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "size_bytes": {
+              "maximum": 4194304,
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "source_ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "valid_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid Until"
+            }
+          },
+          "required": [
+            "contract_version",
+            "artifact_sha256",
+            "size_bytes",
+            "media_type",
+            "name",
+            "access_class",
+            "issuer_kind",
+            "source_ref"
+          ],
+          "title": "ResearchArtifactManifest",
+          "type": "object"
         },
         "ResearchBlockedDependency": {
           "additionalProperties": false,
@@ -9192,6 +9951,76 @@
           "title": "ResearchComponentKind",
           "type": "string"
         },
+        "ResearchDatasetManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "$ref": "#/$defs/ResearchSourceAccess"
+            },
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "contract_version": {
+              "const": "research-dataset.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "dataset_id": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            },
+            "retention_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retention Until"
+            },
+            "snapshot_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Snapshot Sha256",
+              "type": "string"
+            },
+            "source_id": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "dataset_id",
+            "snapshot_sha256",
+            "source_id",
+            "version",
+            "access"
+          ],
+          "title": "ResearchDatasetManifest",
+          "type": "object"
+        },
         "ResearchDomain": {
           "enum": [
             "engineering",
@@ -9331,6 +10160,127 @@
           ],
           "title": "ResearchRole",
           "type": "string"
+        },
+        "ResearchSourceAccess": {
+          "additionalProperties": false,
+          "properties": {
+            "access_class": {
+              "enum": [
+                "workspace",
+                "project"
+              ],
+              "title": "Access Class",
+              "type": "string"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "deny"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            }
+          },
+          "required": [
+            "access_class"
+          ],
+          "title": "ResearchSourceAccess",
+          "type": "object"
+        },
+        "ResearchSourceManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "$ref": "#/$defs/ResearchSourceAccess"
+            },
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "contract_version": {
+              "const": "research-source.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "location": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Location",
+              "type": "string"
+            },
+            "retention_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retention Until"
+            },
+            "source_id": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "ok",
+                "inaccessible"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "source_id",
+            "version",
+            "location",
+            "status",
+            "access"
+          ],
+          "title": "ResearchSourceManifest",
+          "type": "object"
         },
         "ReserveAuditorLaunchCommand": {
           "additionalProperties": false,
@@ -10170,9 +11120,12 @@
               "begin_close_attempt": "#/$defs/BeginCloseAttemptCommand",
               "begin_execution": "#/$defs/BeginExecutionCommand",
               "bind_research_deliverable": "#/$defs/BindResearchDeliverableCommand",
+              "bind_research_receipt_manifest": "#/$defs/BindResearchReceiptManifestCommand",
               "cancel_auditor_launch": "#/$defs/CancelAuditorLaunchCommand",
               "cancel_research_campaign": "#/$defs/CancelResearchCampaignCommand",
+              "claim_research_replicate": "#/$defs/ClaimResearchReplicateCommand",
               "clear_focus": "#/$defs/ClearFocusCommand",
+              "collect_research_artifact": "#/$defs/CollectResearchArtifactCommand",
               "complete_execution_item": "#/$defs/CompleteExecutionItemCommand",
               "complete_work": "#/$defs/CompleteWorkCommand",
               "conclude_research_campaign": "#/$defs/ConcludeResearchCampaignCommand",
@@ -10188,8 +11141,12 @@
               "record_external_delivery": "#/$defs/RecordExternalDeliveryCommand",
               "record_fable_advice": "#/$defs/RecordFableAdviceCommand",
               "record_project_health": "#/$defs/RecordProjectHealthCommand",
+              "record_research_cache": "#/$defs/RecordResearchCacheCommand",
               "record_research_observation": "#/$defs/RecordResearchObservationCommand",
+              "register_research_artifact": "#/$defs/RegisterResearchArtifactCommand",
               "register_research_component": "#/$defs/RegisterResearchComponentCommand",
+              "register_research_dataset": "#/$defs/RegisterResearchDatasetCommand",
+              "register_research_source": "#/$defs/RegisterResearchSourceCommand",
               "remove_relation": "#/$defs/RemoveRelationCommand",
               "reserve_auditor_launch": "#/$defs/ReserveAuditorLaunchCommand",
               "revise_work": "#/$defs/ReviseWorkCommand",
@@ -10311,6 +11268,27 @@
             },
             {
               "$ref": "#/$defs/PublishBoundedIntakeCommand"
+            },
+            {
+              "$ref": "#/$defs/RegisterResearchArtifactCommand"
+            },
+            {
+              "$ref": "#/$defs/CollectResearchArtifactCommand"
+            },
+            {
+              "$ref": "#/$defs/RegisterResearchSourceCommand"
+            },
+            {
+              "$ref": "#/$defs/RegisterResearchDatasetCommand"
+            },
+            {
+              "$ref": "#/$defs/RecordResearchCacheCommand"
+            },
+            {
+              "$ref": "#/$defs/ClaimResearchReplicateCommand"
+            },
+            {
+              "$ref": "#/$defs/BindResearchReceiptManifestCommand"
             },
             {
               "$ref": "#/$defs/RegisterResearchComponentCommand"
@@ -18753,6 +19731,71 @@
       "title": "RecordProjectHealthPayload",
       "type": "object"
     },
+    "RecordResearchCacheCommand": {
+      "$defs": {
+        "RecordResearchCachePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "cache_key": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Cache Key",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cache_key",
+            "artifact_sha256"
+          ],
+          "title": "RecordResearchCachePayload",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RecordResearchCachePayload"
+        },
+        "type": {
+          "const": "record_research_cache",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RecordResearchCacheCommand",
+      "type": "object"
+    },
+    "RecordResearchCachePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "cache_key": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Cache Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cache_key",
+        "artifact_sha256"
+      ],
+      "title": "RecordResearchCachePayload",
+      "type": "object"
+    },
     "RecordResearchObservationCommand": {
       "$defs": {
         "RecordResearchObservationPayload": {
@@ -18956,6 +19999,235 @@
         "observed_at"
       ],
       "title": "RecordResearchObservationPayload",
+      "type": "object"
+    },
+    "RegisterResearchArtifactCommand": {
+      "$defs": {
+        "RegisterResearchArtifactPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "content_base64": {
+              "maxLength": 5592408,
+              "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+              "title": "Content Base64",
+              "type": "string"
+            },
+            "manifest": {
+              "$ref": "#/$defs/ResearchArtifactManifest"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "manifest_sha256",
+            "manifest",
+            "content_base64"
+          ],
+          "title": "RegisterResearchArtifactPayload",
+          "type": "object"
+        },
+        "ResearchArtifactManifest": {
+          "additionalProperties": false,
+          "description": "Canonical custody declaration. The field set is the manifest identity.",
+          "properties": {
+            "access_class": {
+              "const": "workspace",
+              "title": "Access Class",
+              "type": "string"
+            },
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "contract_version": {
+              "const": "research-artifact.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "issuer_kind": {
+              "enum": [
+                "legacy_autoresearch",
+                "candidate_authored"
+              ],
+              "title": "Issuer Kind",
+              "type": "string"
+            },
+            "media_type": {
+              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+              "title": "Media Type",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "size_bytes": {
+              "maximum": 4194304,
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "source_ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "valid_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid Until"
+            }
+          },
+          "required": [
+            "contract_version",
+            "artifact_sha256",
+            "size_bytes",
+            "media_type",
+            "name",
+            "access_class",
+            "issuer_kind",
+            "source_ref"
+          ],
+          "title": "ResearchArtifactManifest",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RegisterResearchArtifactPayload"
+        },
+        "type": {
+          "const": "register_research_artifact",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RegisterResearchArtifactCommand",
+      "type": "object"
+    },
+    "RegisterResearchArtifactPayload": {
+      "$defs": {
+        "ResearchArtifactManifest": {
+          "additionalProperties": false,
+          "description": "Canonical custody declaration. The field set is the manifest identity.",
+          "properties": {
+            "access_class": {
+              "const": "workspace",
+              "title": "Access Class",
+              "type": "string"
+            },
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "contract_version": {
+              "const": "research-artifact.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "issuer_kind": {
+              "enum": [
+                "legacy_autoresearch",
+                "candidate_authored"
+              ],
+              "title": "Issuer Kind",
+              "type": "string"
+            },
+            "media_type": {
+              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+              "title": "Media Type",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "size_bytes": {
+              "maximum": 4194304,
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "source_ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "valid_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid Until"
+            }
+          },
+          "required": [
+            "contract_version",
+            "artifact_sha256",
+            "size_bytes",
+            "media_type",
+            "name",
+            "access_class",
+            "issuer_kind",
+            "source_ref"
+          ],
+          "title": "ResearchArtifactManifest",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "content_base64": {
+          "maxLength": 5592408,
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "title": "Content Base64",
+          "type": "string"
+        },
+        "manifest": {
+          "$ref": "#/$defs/ResearchArtifactManifest"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest_sha256",
+        "manifest",
+        "content_base64"
+      ],
+      "title": "RegisterResearchArtifactPayload",
       "type": "object"
     },
     "RegisterResearchComponentCommand": {
@@ -19193,6 +20465,604 @@
       "title": "RegisterResearchComponentPayload",
       "type": "object"
     },
+    "RegisterResearchDatasetCommand": {
+      "$defs": {
+        "RegisterResearchDatasetPayload": {
+          "additionalProperties": false,
+          "properties": {
+            "manifest": {
+              "$ref": "#/$defs/ResearchDatasetManifest"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "manifest_sha256",
+            "manifest"
+          ],
+          "title": "RegisterResearchDatasetPayload",
+          "type": "object"
+        },
+        "ResearchDatasetManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "$ref": "#/$defs/ResearchSourceAccess"
+            },
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "contract_version": {
+              "const": "research-dataset.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "dataset_id": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            },
+            "retention_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retention Until"
+            },
+            "snapshot_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Snapshot Sha256",
+              "type": "string"
+            },
+            "source_id": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "dataset_id",
+            "snapshot_sha256",
+            "source_id",
+            "version",
+            "access"
+          ],
+          "title": "ResearchDatasetManifest",
+          "type": "object"
+        },
+        "ResearchSourceAccess": {
+          "additionalProperties": false,
+          "properties": {
+            "access_class": {
+              "enum": [
+                "workspace",
+                "project"
+              ],
+              "title": "Access Class",
+              "type": "string"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "deny"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            }
+          },
+          "required": [
+            "access_class"
+          ],
+          "title": "ResearchSourceAccess",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RegisterResearchDatasetPayload"
+        },
+        "type": {
+          "const": "register_research_dataset",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RegisterResearchDatasetCommand",
+      "type": "object"
+    },
+    "RegisterResearchDatasetPayload": {
+      "$defs": {
+        "ResearchDatasetManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "$ref": "#/$defs/ResearchSourceAccess"
+            },
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "contract_version": {
+              "const": "research-dataset.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "dataset_id": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            },
+            "retention_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retention Until"
+            },
+            "snapshot_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Snapshot Sha256",
+              "type": "string"
+            },
+            "source_id": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "dataset_id",
+            "snapshot_sha256",
+            "source_id",
+            "version",
+            "access"
+          ],
+          "title": "ResearchDatasetManifest",
+          "type": "object"
+        },
+        "ResearchSourceAccess": {
+          "additionalProperties": false,
+          "properties": {
+            "access_class": {
+              "enum": [
+                "workspace",
+                "project"
+              ],
+              "title": "Access Class",
+              "type": "string"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "deny"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            }
+          },
+          "required": [
+            "access_class"
+          ],
+          "title": "ResearchSourceAccess",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "manifest": {
+          "$ref": "#/$defs/ResearchDatasetManifest"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest_sha256",
+        "manifest"
+      ],
+      "title": "RegisterResearchDatasetPayload",
+      "type": "object"
+    },
+    "RegisterResearchSourceCommand": {
+      "$defs": {
+        "RegisterResearchSourcePayload": {
+          "additionalProperties": false,
+          "properties": {
+            "manifest": {
+              "$ref": "#/$defs/ResearchSourceManifest"
+            },
+            "manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Manifest Sha256",
+              "type": "string"
+            }
+          },
+          "required": [
+            "manifest_sha256",
+            "manifest"
+          ],
+          "title": "RegisterResearchSourcePayload",
+          "type": "object"
+        },
+        "ResearchSourceAccess": {
+          "additionalProperties": false,
+          "properties": {
+            "access_class": {
+              "enum": [
+                "workspace",
+                "project"
+              ],
+              "title": "Access Class",
+              "type": "string"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "deny"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            }
+          },
+          "required": [
+            "access_class"
+          ],
+          "title": "ResearchSourceAccess",
+          "type": "object"
+        },
+        "ResearchSourceManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "$ref": "#/$defs/ResearchSourceAccess"
+            },
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "contract_version": {
+              "const": "research-source.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "location": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Location",
+              "type": "string"
+            },
+            "retention_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retention Until"
+            },
+            "source_id": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "ok",
+                "inaccessible"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "source_id",
+            "version",
+            "location",
+            "status",
+            "access"
+          ],
+          "title": "ResearchSourceManifest",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/RegisterResearchSourcePayload"
+        },
+        "type": {
+          "const": "register_research_source",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ],
+      "title": "RegisterResearchSourceCommand",
+      "type": "object"
+    },
+    "RegisterResearchSourcePayload": {
+      "$defs": {
+        "ResearchSourceAccess": {
+          "additionalProperties": false,
+          "properties": {
+            "access_class": {
+              "enum": [
+                "workspace",
+                "project"
+              ],
+              "title": "Access Class",
+              "type": "string"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "deny"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            }
+          },
+          "required": [
+            "access_class"
+          ],
+          "title": "ResearchSourceAccess",
+          "type": "object"
+        },
+        "ResearchSourceManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "$ref": "#/$defs/ResearchSourceAccess"
+            },
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "contract_version": {
+              "const": "research-source.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "location": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Location",
+              "type": "string"
+            },
+            "retention_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retention Until"
+            },
+            "source_id": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "ok",
+                "inaccessible"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "source_id",
+            "version",
+            "location",
+            "status",
+            "access"
+          ],
+          "title": "ResearchSourceManifest",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "manifest": {
+          "$ref": "#/$defs/ResearchSourceManifest"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest_sha256",
+        "manifest"
+      ],
+      "title": "RegisterResearchSourcePayload",
+      "type": "object"
+    },
     "RelationCycleExample": {
       "additionalProperties": false,
       "properties": {
@@ -19414,6 +21284,205 @@
         "relation"
       ],
       "title": "RemoveRelationPayload",
+      "type": "object"
+    },
+    "ResearchArtifact": {
+      "$defs": {
+        "ResearchArtifactManifest": {
+          "additionalProperties": false,
+          "description": "Canonical custody declaration. The field set is the manifest identity.",
+          "properties": {
+            "access_class": {
+              "const": "workspace",
+              "title": "Access Class",
+              "type": "string"
+            },
+            "artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Artifact Sha256",
+              "type": "string"
+            },
+            "contract_version": {
+              "const": "research-artifact.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "issuer_kind": {
+              "enum": [
+                "legacy_autoresearch",
+                "candidate_authored"
+              ],
+              "title": "Issuer Kind",
+              "type": "string"
+            },
+            "media_type": {
+              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+              "title": "Media Type",
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "size_bytes": {
+              "maximum": 4194304,
+              "minimum": 0,
+              "title": "Size Bytes",
+              "type": "integer"
+            },
+            "source_ref": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Source Ref",
+              "type": "string"
+            },
+            "valid_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid Until"
+            }
+          },
+          "required": [
+            "contract_version",
+            "artifact_sha256",
+            "size_bytes",
+            "media_type",
+            "name",
+            "access_class",
+            "issuer_kind",
+            "source_ref"
+          ],
+          "title": "ResearchArtifactManifest",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "manifest": {
+          "$ref": "#/$defs/ResearchArtifactManifest"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "registered_at": {
+          "format": "date-time",
+          "title": "Registered At",
+          "type": "string"
+        },
+        "registered_by": {
+          "format": "uuid",
+          "title": "Registered By",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "artifact_sha256",
+        "manifest_sha256",
+        "manifest",
+        "registered_by",
+        "registered_at"
+      ],
+      "title": "ResearchArtifact",
+      "type": "object"
+    },
+    "ResearchArtifactManifest": {
+      "additionalProperties": false,
+      "description": "Canonical custody declaration. The field set is the manifest identity.",
+      "properties": {
+        "access_class": {
+          "const": "workspace",
+          "title": "Access Class",
+          "type": "string"
+        },
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "contract_version": {
+          "const": "research-artifact.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "issuer_kind": {
+          "enum": [
+            "legacy_autoresearch",
+            "candidate_authored"
+          ],
+          "title": "Issuer Kind",
+          "type": "string"
+        },
+        "media_type": {
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "size_bytes": {
+          "maximum": 4194304,
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "source_ref": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Source Ref",
+          "type": "string"
+        },
+        "valid_until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valid Until"
+        }
+      },
+      "required": [
+        "contract_version",
+        "artifact_sha256",
+        "size_bytes",
+        "media_type",
+        "name",
+        "access_class",
+        "issuer_kind",
+        "source_ref"
+      ],
+      "title": "ResearchArtifactManifest",
       "type": "object"
     },
     "ResearchBlockedDependency": {
@@ -20385,6 +22454,306 @@
       "title": "ResearchComponentDescriptor",
       "type": "object"
     },
+    "ResearchDataset": {
+      "$defs": {
+        "ResearchDatasetManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "$ref": "#/$defs/ResearchSourceAccess"
+            },
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "contract_version": {
+              "const": "research-dataset.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "dataset_id": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            },
+            "retention_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retention Until"
+            },
+            "snapshot_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Snapshot Sha256",
+              "type": "string"
+            },
+            "source_id": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "dataset_id",
+            "snapshot_sha256",
+            "source_id",
+            "version",
+            "access"
+          ],
+          "title": "ResearchDatasetManifest",
+          "type": "object"
+        },
+        "ResearchSourceAccess": {
+          "additionalProperties": false,
+          "properties": {
+            "access_class": {
+              "enum": [
+                "workspace",
+                "project"
+              ],
+              "title": "Access Class",
+              "type": "string"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "deny"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            }
+          },
+          "required": [
+            "access_class"
+          ],
+          "title": "ResearchSourceAccess",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Sha256"
+        },
+        "dataset_id": {
+          "format": "uuid",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "manifest": {
+          "$ref": "#/$defs/ResearchDatasetManifest"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "registered_at": {
+          "format": "date-time",
+          "title": "Registered At",
+          "type": "string"
+        },
+        "registered_by": {
+          "format": "uuid",
+          "title": "Registered By",
+          "type": "string"
+        },
+        "source_id": {
+          "format": "uuid",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "dataset_id",
+        "manifest_sha256",
+        "manifest",
+        "source_id",
+        "registered_by",
+        "registered_at"
+      ],
+      "title": "ResearchDataset",
+      "type": "object"
+    },
+    "ResearchDatasetManifest": {
+      "$defs": {
+        "ResearchSourceAccess": {
+          "additionalProperties": false,
+          "properties": {
+            "access_class": {
+              "enum": [
+                "workspace",
+                "project"
+              ],
+              "title": "Access Class",
+              "type": "string"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "deny"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            }
+          },
+          "required": [
+            "access_class"
+          ],
+          "title": "ResearchSourceAccess",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/ResearchSourceAccess"
+        },
+        "artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Sha256"
+        },
+        "contract_version": {
+          "const": "research-dataset.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "dataset_id": {
+          "format": "uuid",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "retention_until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retention Until"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "source_id": {
+          "format": "uuid",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_version",
+        "dataset_id",
+        "snapshot_sha256",
+        "source_id",
+        "version",
+        "access"
+      ],
+      "title": "ResearchDatasetManifest",
+      "type": "object"
+    },
     "ResearchDeliverableBinding": {
       "additionalProperties": false,
       "properties": {
@@ -20661,6 +23030,364 @@
         }
       },
       "title": "ResearchResourceVector",
+      "type": "object"
+    },
+    "ResearchSource": {
+      "$defs": {
+        "ResearchSourceAccess": {
+          "additionalProperties": false,
+          "properties": {
+            "access_class": {
+              "enum": [
+                "workspace",
+                "project"
+              ],
+              "title": "Access Class",
+              "type": "string"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "deny"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            }
+          },
+          "required": [
+            "access_class"
+          ],
+          "title": "ResearchSourceAccess",
+          "type": "object"
+        },
+        "ResearchSourceManifest": {
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "$ref": "#/$defs/ResearchSourceAccess"
+            },
+            "artifact_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Artifact Sha256"
+            },
+            "contract_version": {
+              "const": "research-source.v1",
+              "title": "Contract Version",
+              "type": "string"
+            },
+            "location": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Location",
+              "type": "string"
+            },
+            "retention_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Retention Until"
+            },
+            "source_id": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "ok",
+                "inaccessible"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "contract_version",
+            "source_id",
+            "version",
+            "location",
+            "status",
+            "access"
+          ],
+          "title": "ResearchSourceManifest",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Sha256"
+        },
+        "manifest": {
+          "$ref": "#/$defs/ResearchSourceManifest"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "registered_at": {
+          "format": "date-time",
+          "title": "Registered At",
+          "type": "string"
+        },
+        "registered_by": {
+          "format": "uuid",
+          "title": "Registered By",
+          "type": "string"
+        },
+        "source_id": {
+          "format": "uuid",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "inaccessible"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "workspace_id": {
+          "format": "uuid",
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "source_id",
+        "manifest_sha256",
+        "manifest",
+        "status",
+        "registered_by",
+        "registered_at"
+      ],
+      "title": "ResearchSource",
+      "type": "object"
+    },
+    "ResearchSourceAccess": {
+      "additionalProperties": false,
+      "properties": {
+        "access_class": {
+          "enum": [
+            "workspace",
+            "project"
+          ],
+          "title": "Access Class",
+          "type": "string"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "enum": [
+                "allow",
+                "deny"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decision"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        }
+      },
+      "required": [
+        "access_class"
+      ],
+      "title": "ResearchSourceAccess",
+      "type": "object"
+    },
+    "ResearchSourceManifest": {
+      "$defs": {
+        "ResearchSourceAccess": {
+          "additionalProperties": false,
+          "properties": {
+            "access_class": {
+              "enum": [
+                "workspace",
+                "project"
+              ],
+              "title": "Access Class",
+              "type": "string"
+            },
+            "decision": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "deny"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decision"
+            },
+            "project_id": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Project Id"
+            }
+          },
+          "required": [
+            "access_class"
+          ],
+          "title": "ResearchSourceAccess",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/ResearchSourceAccess"
+        },
+        "artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Sha256"
+        },
+        "contract_version": {
+          "const": "research-source.v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "location": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Location",
+          "type": "string"
+        },
+        "retention_until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retention Until"
+        },
+        "source_id": {
+          "format": "uuid",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "inaccessible"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_version",
+        "source_id",
+        "version",
+        "location",
+        "status",
+        "access"
+      ],
+      "title": "ResearchSourceManifest",
       "type": "object"
     },
     "ResearchTrial": {
