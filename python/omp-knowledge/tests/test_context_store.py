@@ -132,6 +132,68 @@ def test_reproduce_is_byte_identical_with_no_live_counter(tmp_path: Path) -> Non
     assert sha256(reproduced_text) == compiled.sha256
 
 
+def test_reproduce_replays_budget_dropped_render(tmp_path: Path) -> None:
+    """A bundle whose optional item was dropped for budget still reproduces.
+
+    The compiler counts the full render before dropping the last optional item,
+    so reproduction must be able to replay that pre-drop render too; otherwise a
+    stored bundle that only fit after a drop is unreproducible offline.
+    """
+    counter = WordCounter()
+    items = (
+        ContextItem(
+            section="exact",
+            source="work",
+            ref="spec",
+            text="mandatory specification text",
+            mandatory=True,
+            status="current",
+        ),
+        ContextItem(
+            section="structural",
+            source="codebase",
+            ref="ast",
+            text="alpha structural symbol details",
+            status="current",
+            score=0.8,
+        ),
+        ContextItem(
+            section="semantic",
+            source="search",
+            ref="hit",
+            text="semantic recall hit for the request",
+            status="current",
+            score=0.1,
+        ),
+    )
+
+    def request(budget: int) -> CompileRequest:
+        return CompileRequest(
+            identity=_make_identity(),
+            token_budget=budget,
+            encoding="ClaudeV5",
+            items=items,
+        )
+
+    generous = compile_bundle(request(100_000), counter)
+    assert len(generous.included) == len(items)
+
+    trimmed = compile_bundle(request(generous.tokens - 1), counter)
+    assert len(trimmed.included) < len(generous.included)
+    assert trimmed.tokens < generous.tokens
+    assert any(exclusion.reason == "budget" for exclusion in trimmed.exclusions)
+
+    store = ContextBundleStore(tmp_path)
+    bundle_id = store.persist(request(generous.tokens - 1), trimmed)
+
+    reopened = ContextBundleStore(tmp_path)
+    assert reopened.load(bundle_id).text == trimmed.text
+
+    reproduced_text = reopened.reproduce(bundle_id)
+    assert reproduced_text == trimmed.text
+    assert sha256(reproduced_text) == trimmed.sha256
+
+
 def test_tampered_request_json_raises_reproduction_error(tmp_path: Path) -> None:
     counter = WordCounter()
     request = _make_request()

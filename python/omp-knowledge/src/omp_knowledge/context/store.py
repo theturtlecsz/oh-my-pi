@@ -18,7 +18,7 @@ from typing import Any
 
 from omp_work.v1.canonical import canonical_json, sha256
 
-from .compiler import CompiledBundle, compile_bundle
+from .compiler import CompiledBundle, _sort_key, compile_bundle
 from .models import (
     CompileRequest,
     Exclusion,
@@ -359,6 +359,12 @@ class ContextBundleStore:
     def reproduce(self, bundle_id: str) -> str:
         """Recompile the stored request using RecordedCounter and return the bundle text.
 
+        The compiler counts the full render before each budget drop, but the
+        record only preserves the final render and the per-item counts, so the
+        request is first narrowed to the items the compiler actually admitted.
+        Replaying the recorded budget exclusions leaves a request that compiles
+        to the stored bytes without touching an unrecorded intermediate render.
+
         Raises :class:`ReproductionError` if the bundle is not found, the request
         cannot be recompiled, or the reproduced sha256/text does not match the stored record.
         """
@@ -386,9 +392,10 @@ class ContextBundleStore:
         except Exception:
             profile_str = record.counter_profile_json
 
+        effective = self._admitted_request(request, record)
         counter = RecordedCounter(profile=profile_str, counts=counts)
         try:
-            recompiled = compile_bundle(request, counter)
+            recompiled = compile_bundle(effective, counter)
         except ReproductionError:
             raise
         except Exception as exc:
@@ -406,6 +413,38 @@ class ContextBundleStore:
             )
 
         return recompiled.text
+
+    @staticmethod
+    def _admitted_request(
+        request: CompileRequest, record: BundleRecord
+    ) -> CompileRequest:
+        """Narrow a stored request to the current items the compiler admitted.
+
+        Uses the compiler's own admission order to remove exactly the optional
+        items it recorded as ``budget`` exclusions, so the recovered request
+        compiles in one pass instead of replaying the budget loop against
+        renders that were never recorded.
+        """
+        drops = sum(
+            1 for exclusion in record.exclusions if exclusion.reason == "budget"
+        )
+        if drops == 0:
+            return request
+
+        candidates = [
+            item for item in sorted(request.items, key=_sort_key) if item.status == "current"
+        ]
+        optional = [index for index, item in enumerate(candidates) if not item.mandatory]
+        if drops > len(optional):
+            raise ReproductionError(
+                f"stored exclusions drop {drops} optional items but only "
+                f"{len(optional)} are present"
+            )
+        dropped = set(optional[len(optional) - drops :])
+        survivors = tuple(
+            item for index, item in enumerate(candidates) if index not in dropped
+        )
+        return request.model_copy(update={"items": survivors})
 
 
 __all__ = [
