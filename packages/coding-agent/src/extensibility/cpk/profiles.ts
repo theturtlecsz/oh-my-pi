@@ -8,10 +8,9 @@
  * are frozen: authority, guards, tools, effects, and model-visible
  * context cannot be hot-reloaded during a run. Cosmetic/read-only reloads
  * are isolated and proven unable to alter the frozen digest or authority.
- *
- * This module is a pure library: it is not wired into any live execution path.
  */
 
+import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import { type CpkGraph, resolveCpkGraph } from "./graph";
 import { type CpkManifest, sortUnique } from "./manifest";
 
@@ -37,6 +36,11 @@ export function isCpkOperatingMode(value: string): value is CpkOperatingMode {
 	return (CPK_OPERATING_MODES as readonly string[]).includes(value);
 }
 
+export interface CpkProfileAuthority {
+	allowHotReload?: boolean;
+	strictSeals?: boolean;
+}
+
 export interface CpkProfile {
 	schema: typeof CPK4_SCHEMA;
 	mode: CpkOperatingMode;
@@ -53,6 +57,12 @@ export interface CpkProfile {
 	maxTools: number;
 	/** Whether isolated cosmetic reloads are permitted. */
 	cosmeticReloadable?: boolean;
+	/** Maximum permitted latency (ms) for first-tool preparation and resolution. */
+	firstToolBudgetMs?: number;
+	/** Authority configurations for this profile. */
+	authority?: CpkProfileAuthority;
+	/** Optional engine version requirement. */
+	minEngineVersion?: string;
 }
 
 export type CpkProfileErrorCode =
@@ -106,6 +116,21 @@ function parseStringList(value: unknown, field: string): string[] {
 	return sortUnique(list);
 }
 
+const KNOWN_PROFILE_FIELDS = new Set([
+	"schema",
+	"mode",
+	"version",
+	"requiredPlugins",
+	"optionalPlugins",
+	"allowedEffects",
+	"maxContextTokens",
+	"maxTools",
+	"cosmeticReloadable",
+	"firstToolBudgetMs",
+	"authority",
+	"minEngineVersion",
+]);
+
 /**
  * Validate and canonicalize an untrusted profile object.
  * Throws {@link CpkProfileError} with a stable `code` on malformed input.
@@ -115,6 +140,13 @@ export function parseCpkProfile(input: unknown): CpkProfile {
 		throw new CpkProfileError("not_object", "profile must be a JSON object");
 	}
 	const record = input as Record<string, unknown>;
+
+	for (const key of Object.keys(record)) {
+		if (!KNOWN_PROFILE_FIELDS.has(key)) {
+			throw new CpkProfileError("invalid_field", `unknown profile field "${key}"`);
+		}
+	}
+
 	if (record.schema !== CPK4_SCHEMA) {
 		throw new CpkProfileError("invalid_schema", `profile schema must be "${CPK4_SCHEMA}"`);
 	}
@@ -124,6 +156,33 @@ export function parseCpkProfile(input: unknown): CpkProfile {
 			"invalid_mode",
 			`profile mode must be one of ${CPK_OPERATING_MODES.join(", ")}, not "${String(mode)}"`,
 		);
+	}
+
+	if (record.minEngineVersion !== undefined) {
+		const minVer = String(record.minEngineVersion);
+		if (minVer > "1.0.0") {
+			throw new CpkProfileError(
+				"compatibility_failure",
+				`profile requires engine version "${minVer}" which is incompatible with current engine "1.0.0"`,
+			);
+		}
+	}
+
+	let firstToolBudgetMs: number | undefined;
+	if (record.firstToolBudgetMs !== undefined) {
+		firstToolBudgetMs = requirePositiveNumber(record.firstToolBudgetMs, "firstToolBudgetMs");
+	}
+
+	let authority: CpkProfileAuthority | undefined;
+	if (record.authority !== undefined) {
+		if (typeof record.authority !== "object" || record.authority === null || Array.isArray(record.authority)) {
+			throw new CpkProfileError("invalid_field", 'profile field "authority" must be an object');
+		}
+		const authRec = record.authority as Record<string, unknown>;
+		authority = {
+			allowHotReload: authRec.allowHotReload === true,
+			strictSeals: authRec.strictSeals !== false,
+		};
 	}
 
 	return {
@@ -136,6 +195,9 @@ export function parseCpkProfile(input: unknown): CpkProfile {
 		maxContextTokens: requirePositiveNumber(record.maxContextTokens, "maxContextTokens"),
 		maxTools: requirePositiveNumber(record.maxTools, "maxTools"),
 		cosmeticReloadable: record.cosmeticReloadable === true,
+		firstToolBudgetMs,
+		authority,
+		minEngineVersion: record.minEngineVersion !== undefined ? String(record.minEngineVersion) : undefined,
 	};
 }
 
@@ -157,10 +219,12 @@ export interface CpkBootResolution {
 	schema: typeof CPK4_SCHEMA;
 	mode: CpkOperatingMode;
 	profileVersion: string;
+	profile: CpkProfile;
 	selectedPlugins: string[];
 	effectiveEffects: string[];
 	graphDigest: string;
 	contextUsage: CpkContextUsage;
+	firstToolLatencyMs?: number;
 	explanations: CpkCapabilityExplanation[];
 	humanReadable: string;
 }
@@ -170,19 +234,27 @@ export interface CpkBootOptions {
 	enforceBudget?: boolean;
 	/** Base tokens allocated for system instructions prior to plugins. */
 	baseInstructionTokens?: number;
+	/** Override for first tool preparation latency budget (ms). */
+	firstToolBudgetMs?: number;
 }
 
-/** Deterministic token estimation for a plugin manifest. */
-export function estimateManifestTokens(manifest: CpkManifest): number {
-	const providesCost = manifest.provides.length * 40;
-	const effectsCost = manifest.effects.length * 20;
-	const scopesCost = manifest.scopes.length * 10;
-	return 80 + providesCost + effectsCost + scopesCost;
+/** Measured token count for a plugin manifest via standard Tokenizer. */
+export function measureManifestTokens(manifest: CpkManifest, tokenizer: Tokenizer = new Tokenizer(null)): number {
+	const canonicalManifestText = [
+		`plugin\t${manifest.id}\t${manifest.version}`,
+		`provides\t${manifest.provides.join(",")}`,
+		`requires\t${manifest.requires.join(",")}`,
+		`effects\t${manifest.effects.join(",")}`,
+		`scopes\t${manifest.scopes.join(",")}`,
+	].join("\n");
+	return tokenizer.countTokens(canonicalManifestText, "strict");
 }
 
 /** Count the number of tool capabilities provided by a manifest. */
 export function countManifestTools(manifest: CpkManifest): number {
-	return manifest.provides.filter(p => p.includes("tool") || p.endsWith(".tool") || p.startsWith("tool.")).length;
+	return manifest.provides.filter(
+		p => p.includes("tool") || p.endsWith(".tool") || p.startsWith("tool.") || p.startsWith("tool:"),
+	).length;
 }
 
 /** Compute the deterministic boot-frozen graph digest. */
@@ -232,7 +304,7 @@ function formatHumanExplanation(
  * - Fails closed if any required plugin is missing, cyclic, or has unsatisfied requirements.
  * - Missing or incompatible optional plugins degrade cleanly with explicit explanations.
  * - Computes a frozen graph digest.
- * - Measures context token and tool budgets.
+ * - Measures context token and tool budgets using strictly counted tokens.
  * - Generates machine-readable and human-readable explanations for all capabilities.
  */
 export function resolveCpkBoot(
@@ -240,6 +312,7 @@ export function resolveCpkBoot(
 	manifests: CpkManifest[],
 	options: CpkBootOptions = {},
 ): CpkBootResolution {
+	const startTime = performance.now();
 	const manifestMap = new Map<string, CpkManifest>();
 	for (const manifest of manifests) {
 		manifestMap.set(manifest.id, manifest);
@@ -274,70 +347,90 @@ export function resolveCpkBoot(
 		}
 	}
 
-	// 3. Resolve dependency graph of candidate manifests
-	const candidateManifests = candidateIds.map(id => manifestMap.get(id)!);
-	let graph: CpkGraph = resolveCpkGraph(candidateManifests);
+	// 3. Iterative graph resolution and fail-closed requirement validation
+	let activeManifests = candidateIds.map(id => manifestMap.get(id)!);
+	let changed = true;
+	let graph: CpkGraph = resolveCpkGraph(activeManifests);
 
-	// Check if any required plugin has missing dependencies or cycle
-	const requiredSet = new Set(profile.requiredPlugins);
-	for (const missingDep of graph.missing) {
-		// If a required plugin requires this missing dep, fail closed
-		const affectedRequired = profile.requiredPlugins.find(id => manifestMap.get(id)?.requires.includes(missingDep));
-		if (affectedRequired) {
-			throw new CpkProfileError(
-				"sealed_conflict",
-				`required plugin "${affectedRequired}" has unsatisfied dependency "${missingDep}"`,
-			);
-		}
-	}
-
-	for (const cycle of graph.cycles) {
-		const affectedRequired = cycle.find(id => requiredSet.has(id));
-		if (affectedRequired) {
-			throw new CpkProfileError(
-				"sealed_conflict",
-				`required plugin "${affectedRequired}" is part of cyclic dependency: ${cycle.join(" -> ")}`,
-			);
-		}
-	}
-
-	// If optional plugins have cycles or missing deps, drop them and re-resolve
-	const problematicOptionals = new Set<string>();
-	for (const missingDep of graph.missing) {
-		for (const optId of profile.optionalPlugins) {
-			if (manifestMap.get(optId)?.requires.includes(missingDep)) {
-				problematicOptionals.add(optId);
-				explanations.push({
-					id: optId,
-					status: "downgraded",
-					reason: `optional plugin excluded due to missing dependency "${missingDep}"`,
-				});
-			}
-		}
-	}
-
-	for (const cycle of graph.cycles) {
-		for (const member of cycle) {
-			if (!requiredSet.has(member) && profile.optionalPlugins.includes(member)) {
-				problematicOptionals.add(member);
-				explanations.push({
-					id: member,
-					status: "downgraded",
-					reason: `optional plugin excluded due to cycle: ${cycle.join(" -> ")}`,
-				});
-			}
-		}
-	}
-
-	let activeManifests = candidateManifests;
-	if (problematicOptionals.size > 0) {
-		activeManifests = candidateManifests.filter(m => !problematicOptionals.has(m.id));
+	while (changed) {
+		changed = false;
 		graph = resolveCpkGraph(activeManifests);
+
+		// Check if any REQUIRED plugin has an unsatisfied requirement in activeManifests
+		for (const reqId of profile.requiredPlugins) {
+			const reqM = manifestMap.get(reqId);
+			if (!reqM) continue;
+			for (const dep of reqM.requires) {
+				if (!activeManifests.some(m => m.id === dep)) {
+					throw new CpkProfileError(
+						"sealed_conflict",
+						`required plugin "${reqId}" has unsatisfied dependency "${dep}"`,
+					);
+				}
+			}
+		}
+
+		// Check if any REQUIRED plugin is involved in a cycle
+		for (const cycle of graph.cycles) {
+			if (cycle.some(id => profile.requiredPlugins.includes(id))) {
+				throw new CpkProfileError(
+					"sealed_conflict",
+					`required plugin part of cyclic dependency: ${cycle.join(" -> ")}`,
+				);
+			}
+		}
+
+		// Check for problematic optional plugins (missing dependencies or cycles)
+		const toDrop = new Set<string>();
+		for (const missingDep of graph.missing) {
+			for (const m of activeManifests) {
+				if (profile.optionalPlugins.includes(m.id) && m.requires.includes(missingDep)) {
+					toDrop.add(m.id);
+					if (!explanations.some(e => e.id === m.id && e.status === "downgraded")) {
+						explanations.push({
+							id: m.id,
+							status: "downgraded",
+							reason: `optional plugin excluded due to missing dependency "${missingDep}"`,
+						});
+					}
+				}
+			}
+		}
+
+		for (const cycle of graph.cycles) {
+			for (const member of cycle) {
+				if (profile.optionalPlugins.includes(member) && !profile.requiredPlugins.includes(member)) {
+					toDrop.add(member);
+					if (!explanations.some(e => e.id === member && e.status === "downgraded")) {
+						explanations.push({
+							id: member,
+							status: "downgraded",
+							reason: `optional plugin excluded due to cycle: ${cycle.join(" -> ")}`,
+						});
+					}
+				}
+			}
+		}
+
+		if (toDrop.size > 0) {
+			activeManifests = activeManifests.filter(m => !toDrop.has(m.id));
+			changed = true;
+		}
 	}
 
-	// Ordered selected plugin IDs
+	// Final check: Every required plugin MUST be in graph.order
+	for (const reqId of profile.requiredPlugins) {
+		if (!graph.order.includes(reqId)) {
+			throw new CpkProfileError(
+				"sealed_conflict",
+				`required plugin "${reqId}" could not be ordered in topological graph`,
+			);
+		}
+	}
+
 	const selectedPlugins = graph.order;
 	const selectedSet = new Set(selectedPlugins);
+	const requiredSet = new Set(profile.requiredPlugins);
 
 	// Compute effective effects (narrowed by profile.allowedEffects)
 	const collectedEffects: string[] = [];
@@ -384,14 +477,15 @@ export function resolveCpkBoot(
 	const effectiveEffects = sortUnique(collectedEffects);
 	explanations.sort((a, b) => a.id.localeCompare(b.id));
 
-	// 4. Measure context limits & tool budgets
+	// 4. Measure context limits & tool budgets using strict tokenizer
+	const tokenizer = new Tokenizer(null);
 	const baseTokens = options.baseInstructionTokens ?? 200;
 	let estimatedTokens = baseTokens;
 	let toolCount = 0;
 
 	for (const pluginId of selectedPlugins) {
 		const manifest = manifestMap.get(pluginId)!;
-		estimatedTokens += estimateManifestTokens(manifest);
+		estimatedTokens += measureManifestTokens(manifest, tokenizer);
 		toolCount += countManifestTools(manifest);
 	}
 
@@ -401,6 +495,15 @@ export function resolveCpkBoot(
 		throw new CpkProfileError(
 			"budget_exceeded",
 			`profile context budget exceeded: tokens ${estimatedTokens}/${profile.maxContextTokens}, tools ${toolCount}/${profile.maxTools}`,
+		);
+	}
+
+	const elapsedMs = performance.now() - startTime;
+	const firstToolBudget = profile.firstToolBudgetMs ?? options.firstToolBudgetMs;
+	if (firstToolBudget !== undefined && elapsedMs > firstToolBudget) {
+		throw new CpkProfileError(
+			"budget_exceeded",
+			`first-tool preparation budget exceeded: ${elapsedMs.toFixed(1)}ms > ${firstToolBudget}ms`,
 		);
 	}
 
@@ -425,10 +528,12 @@ export function resolveCpkBoot(
 		schema: CPK4_SCHEMA,
 		mode: profile.mode,
 		profileVersion: profile.version,
+		profile,
 		selectedPlugins,
 		effectiveEffects,
 		graphDigest,
 		contextUsage,
+		firstToolLatencyMs: elapsedMs,
 		explanations,
 		humanReadable,
 	};
@@ -439,6 +544,18 @@ export interface CpkCosmeticReloadResult {
 	graphDigest: string;
 	authorityPreserved: boolean;
 }
+
+const FORBIDDEN_COSMETIC_KEYS = new Set([
+	"plugins",
+	"tools",
+	"authority",
+	"effects",
+	"scopes",
+	"guards",
+	"permissions",
+	"model",
+	"schema",
+]);
 
 /**
  * Boot-frozen session wrapper.
@@ -451,12 +568,18 @@ export interface CpkCosmeticReloadResult {
 export class CpkBootFrozenSession {
 	readonly #resolution: CpkBootResolution;
 	readonly #sessionId: string;
+	readonly #selectedPlugins: readonly string[];
+	readonly #effectiveEffects: readonly string[];
 	#cosmeticVersion: number;
 	#cosmeticState: Record<string, string>;
+	#isFrozen = true;
+	#legacyActive = false;
 
 	constructor(resolution: CpkBootResolution, sessionId = "session-primary") {
 		this.#resolution = resolution;
 		this.#sessionId = sessionId;
+		this.#selectedPlugins = Object.freeze([...resolution.selectedPlugins]);
+		this.#effectiveEffects = Object.freeze([...resolution.effectiveEffects]);
 		this.#cosmeticVersion = 1;
 		this.#cosmeticState = {};
 	}
@@ -478,15 +601,19 @@ export class CpkBootFrozenSession {
 	}
 
 	get selectedPlugins(): readonly string[] {
-		return this.#resolution.selectedPlugins;
+		return this.#selectedPlugins;
 	}
 
 	get effectiveEffects(): readonly string[] {
-		return this.#resolution.effectiveEffects;
+		return this.#effectiveEffects;
 	}
 
 	get isFrozen(): boolean {
-		return true;
+		return this.#isFrozen;
+	}
+
+	get isLegacyActive(): boolean {
+		return this.#legacyActive;
 	}
 
 	get cosmeticVersion(): number {
@@ -501,20 +628,24 @@ export class CpkBootFrozenSession {
 		return this.#resolution;
 	}
 
-	/** Hot-reloading authority surfaces is forbidden during active runs. */
-	hotReloadAuthority(_newPlugins: string[]): never {
-		throw new CpkProfileError(
-			"hot_reload_forbidden",
-			"cannot hot reload authoritative surfaces during an active run; graph digest is frozen",
-		);
+	/** Hot-reloading authority surfaces is forbidden during active frozen runs. */
+	hotReloadAuthority(_newPlugins: string[]): void {
+		if (this.#isFrozen) {
+			throw new CpkProfileError(
+				"hot_reload_forbidden",
+				"cannot hot reload authoritative surfaces during an active run; graph digest is frozen",
+			);
+		}
 	}
 
-	/** Hot-reloading tools or guards is forbidden during active runs. */
-	hotReloadTools(_newTools: string[]): never {
-		throw new CpkProfileError(
-			"hot_reload_forbidden",
-			"cannot hot reload tools or model-visible instructions during an active run",
-		);
+	/** Hot-reloading tools or guards is forbidden during active frozen runs. */
+	hotReloadTools(_newTools: string[]): void {
+		if (this.#isFrozen) {
+			throw new CpkProfileError(
+				"hot_reload_forbidden",
+				"cannot hot reload tools or model-visible instructions during an active run",
+			);
+		}
 	}
 
 	/**
@@ -522,8 +653,21 @@ export class CpkBootFrozenSession {
 	 * Verifies that the frozen digest, effects, and plugin authority remain identical.
 	 */
 	reloadCosmetic(state: Record<string, string>): CpkCosmeticReloadResult {
+		if (this.#resolution.profile.cosmeticReloadable !== true) {
+			throw new CpkProfileError("hot_reload_forbidden", "cosmetic reload forbidden by profile configuration");
+		}
+
+		for (const key of Object.keys(state)) {
+			if (FORBIDDEN_COSMETIC_KEYS.has(key)) {
+				throw new CpkProfileError(
+					"hot_reload_forbidden",
+					`cannot reload authoritative surface "${key}" via cosmetic reload`,
+				);
+			}
+		}
+
 		this.#cosmeticVersion += 1;
-		this.#cosmeticState = { ...state };
+		this.#cosmeticState = { ...this.#cosmeticState, ...state };
 
 		return {
 			cosmeticVersion: this.#cosmeticVersion,
@@ -536,9 +680,24 @@ export class CpkBootFrozenSession {
 	 * Rollback to legacy profile path with one switch, preserving session state.
 	 */
 	rollbackToLegacy(switchFlag: boolean): { legacyActive: boolean; sessionPreserved: boolean } {
+		this.#legacyActive = switchFlag;
+		this.#isFrozen = !switchFlag;
 		return {
-			legacyActive: switchFlag,
+			legacyActive: this.#legacyActive,
 			sessionPreserved: true,
 		};
 	}
+}
+
+/**
+ * Qualify and freeze an agent session boot for the given operating mode.
+ */
+export function qualifySessionBoot(
+	profile: CpkProfile,
+	manifests: CpkManifest[],
+	sessionId = "session-primary",
+	options?: CpkBootOptions,
+): CpkBootFrozenSession {
+	const resolution = resolveCpkBoot(profile, manifests, options);
+	return new CpkBootFrozenSession(resolution, sessionId);
 }

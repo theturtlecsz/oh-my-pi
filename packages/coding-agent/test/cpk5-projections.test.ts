@@ -331,4 +331,218 @@ describe("CPK-5 replayable disposable projections (OMP-207)", () => {
 		const workerB = fleet.workers.find(w => w.workerId === "worker-B");
 		expect(workerB?.status).toBe("stopped");
 	});
+
+	it("derives outbox directly from native session entries and session JSONL without secondary ledgers", () => {
+		const rawSessionJsonl = [
+			JSON.stringify({ type: "session", id: "sess-1", timestamp: "2026-09-26T10:00:00Z", cwd: "/tmp" }),
+			JSON.stringify({
+				type: "custom",
+				customType: "work-now-execute-outbox",
+				data: { action: "dispatch", taskId: "job-99" },
+				timestamp: "2026-09-26T10:01:00Z",
+			}),
+			JSON.stringify({
+				type: "message",
+				id: "msg-1",
+				role: "assistant",
+				content: "Started job",
+				timestamp: "2026-09-26T10:02:00Z",
+			}),
+		].join("\n");
+
+		const outbox = CpkNativeOutbox.fromSessionJsonl(rawSessionJsonl, "session-store", "3.0.0");
+		expect(outbox.count).toBe(3);
+		expect(outbox.sourceIdentity).toBe("session-store");
+		expect(outbox.sourceVersion).toBe("3.0.0");
+
+		const facts = outbox.facts();
+		expect(facts[0].factType).toBe("session");
+		expect(facts[1].factType).toBe("work-now-execute-outbox");
+		expect((facts[1].payload as { taskId: string }).taskId).toBe("job-99");
+		expect(facts[2].factType).toBe("message");
+	});
+
+	it("proves canonical parity fails when row provenance differs despite identical row data", () => {
+		const makeProjWithSource = (sourceIdentity: string, sourceVersion: string) => {
+			const proj = new CpkDisposableProjection<{ count: number }>("kv", "1.0", (state, f) => {
+				const p = f.payload as { id: string; count: number };
+				state.set(p.id, {
+					id: p.id,
+					sourceIdentity: f.sourceIdentity,
+					sourceVersion: f.sourceVersion,
+					sourceSequence: f.sequence,
+					projectionVersion: "1.0",
+					updatedAt: f.timestamp,
+					data: { count: p.count },
+				});
+			});
+			proj.consume({
+				schema: CPK5_SCHEMA,
+				sourceIdentity,
+				sourceVersion,
+				sequence: 1,
+				factType: "item",
+				timestamp: "2026-09-26T12:00:00Z",
+				payload: { id: "row-1", count: 42 },
+			});
+			return proj;
+		};
+
+		const projA = makeProjWithSource("workservice", "1.0.0");
+		const projB = makeProjWithSource("git", "2.0.0");
+
+		// Identical row id and payload data, but different sourceIdentity/version
+		expect(projA.getRow("row-1")?.data.count).toBe(projB.getRow("row-1")?.data.count);
+
+		const parity = compareProjectionParity(projA, projB);
+		expect(parity.match).toBe(false);
+		expect(parity.provenanceMatch).toBe(false);
+		expect(parity.candidateDigest).not.toBe(parity.baselineDigest);
+	});
+
+	it("schema incompatibility sticks and refuses subsequent facts until recoverFromCorruption is called", () => {
+		const outbox = new CpkNativeOutbox();
+		const f1 = outbox.commit("task_created", { id: "t1" });
+		const f2 = {
+			schema: "cpk5/v99" as unknown as typeof CPK5_SCHEMA,
+			sourceIdentity: "workservice",
+			sourceVersion: "1.0.0",
+			sequence: 2,
+			factType: "bad",
+			timestamp: "now",
+			payload: {},
+		};
+		const f3 = outbox.commit("task_created", { id: "t3" });
+
+		const proj = new CpkDisposableProjection<{ id: string }>("tasks", "1.0", (state, f) => {
+			const p = f.payload as { id: string };
+			state.set(p.id, {
+				id: p.id,
+				sourceIdentity: f.sourceIdentity,
+				sourceVersion: f.sourceVersion,
+				sourceSequence: f.sequence,
+				projectionVersion: "1.0",
+				updatedAt: f.timestamp,
+				data: { id: p.id },
+			});
+		});
+
+		expect(proj.consume(f1).accepted).toBe(true);
+		expect(proj.isCurrent).toBe(true);
+
+		// Bad fact corrupts projection
+		const badRes = proj.consume(f2);
+		expect(badRes.accepted).toBe(false);
+		expect(badRes.schemaIncompatible).toBe(true);
+		expect(proj.isStale).toBe(true);
+
+		// Subsequent valid fact is REFUSED because schema failure sticks!
+		const nextRes = proj.consume(f3);
+		expect(nextRes.accepted).toBe(false);
+		expect(nextRes.schemaIncompatible).toBe(true);
+		expect(proj.isStale).toBe(true);
+		expect(proj.getRow("t3")).toBeUndefined();
+
+		// Calling recoverFromCorruption resets corruption and replays cleanly
+		proj.recoverFromCorruption([f1, f3]);
+		expect(proj.isCurrent).toBe(true);
+		expect(proj.rowCount).toBe(2);
+		expect(proj.getRow("t3")).toBeDefined();
+	});
+
+	it("faithfully reflects rebuilding status in banners without presenting rebuilding state as current", () => {
+		const webui = new CpkWebUiProjection("1.0.0");
+		const fleet = new CpkFleetManagerProjection("1.0.0");
+
+		expect(webui.banner.status).toBe("current");
+		expect(fleet.banner.status).toBe("current");
+
+		const outbox = new CpkNativeOutbox();
+		for (let i = 1; i <= 5; i++) {
+			outbox.commit("task_created", { taskId: `task-${i}`, title: `Task ${i}` });
+		}
+
+		// During rebuild, banner must show status rebuilding and isCurrent false
+		let checkedDuringRebuild = false;
+		const customProj = new CpkDisposableProjection("test", "1.0", () => {
+			if (!checkedDuringRebuild) {
+				checkedDuringRebuild = true;
+				expect(customProj.status).toBe("rebuilding");
+				expect(customProj.isCurrent).toBe(false);
+			}
+		});
+
+		customProj.rebuild(outbox.facts());
+		expect(checkedDuringRebuild).toBe(true);
+		expect(customProj.isCurrent).toBe(true);
+
+		webui.rebuild(outbox.facts());
+		expect(webui.isCurrent).toBe(true);
+		expect(webui.banner.isCurrent).toBe(true);
+
+		fleet.rebuild(outbox.facts());
+		expect(fleet.isCurrent).toBe(true);
+		expect(fleet.banner.isCurrent).toBe(true);
+	});
+
+	it("forbids any mutation on thin WebUI and Fleet Manager projections", () => {
+		const webui = new CpkWebUiProjection("1.0.0");
+		const fleet = new CpkFleetManagerProjection("1.0.0");
+
+		expectCode(() => webui.createTask({ title: "illegal" }), "mutation_forbidden");
+		expectCode(() => webui.updateTask("t1", { status: "running" }), "mutation_forbidden");
+		expectCode(() => webui.deleteTask("t1"), "mutation_forbidden");
+
+		expectCode(() => fleet.registerWorker({ role: "illegal" }), "mutation_forbidden");
+		expectCode(() => fleet.dispatchWorker("w1", "job-1"), "mutation_forbidden");
+		expectCode(() => fleet.stopWorker("w1"), "mutation_forbidden");
+	});
+
+	it("restores checkpoints and verifies cursor against native outbox to detect stale cursors", () => {
+		const outbox = new CpkNativeOutbox();
+		const f1 = outbox.commit("item", { id: "a" });
+		const f2 = outbox.commit("item", { id: "b" });
+
+		const proj = new CpkDisposableProjection("items", "1.0", (state, f) => {
+			const p = f.payload as { id: string };
+			state.set(p.id, {
+				id: p.id,
+				sourceIdentity: f.sourceIdentity,
+				sourceVersion: f.sourceVersion,
+				sourceSequence: f.sequence,
+				projectionVersion: "1.0",
+				updatedAt: f.timestamp,
+				data: p,
+			});
+		});
+
+		proj.consume(f1);
+		proj.consume(f2);
+		const checkpoint = proj.checkpoint;
+
+		const fresh = new CpkDisposableProjection("items", "1.0", () => {});
+		fresh.restoreCheckpoint(checkpoint);
+		expect(fresh.checkpoint.lastSequence).toBe(2);
+
+		// Verify cursor against outbox
+		const verification = fresh.verifyCursor(outbox);
+		expect(verification.valid).toBe(true);
+		expect(verification.cursor).toBe(2);
+
+		// Advance outbox without feeding fresh projection -> detect stale cursor
+		outbox.commit("item", { id: "c" });
+		// If projection is flagged stale or cursor is behind when stale
+		fresh.consume({
+			schema: "cpk5/v99" as unknown as typeof CPK5_SCHEMA,
+			sourceIdentity: "workservice",
+			sourceVersion: "1.0.0",
+			sequence: 3,
+			factType: "bad",
+			timestamp: "now",
+			payload: {},
+		});
+		const staleVerif = fresh.verifyCursor(outbox);
+		expect(staleVerif.isStale).toBe(true);
+		expect(staleVerif.valid).toBe(false);
+	});
 });

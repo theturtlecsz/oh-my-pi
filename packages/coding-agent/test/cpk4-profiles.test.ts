@@ -248,6 +248,130 @@ describe("CPK-4 boot-frozen qualified profiles (OMP-207)", () => {
 		const rollback = session.rollbackToLegacy(true);
 		expect(rollback.legacyActive).toBe(true);
 		expect(rollback.sessionPreserved).toBe(true);
+		expect(session.isLegacyActive).toBe(true);
+		expect(session.isFrozen).toBe(false);
 		expect(session.sessionId).toBe("session-test-3");
+	});
+
+	it("fails closed when a required plugin has a transitive dependency dropped from optional pruning", () => {
+		const customManifests = [
+			parseCpkManifest({
+				schema: "cpk1/v1",
+				id: "plug-main",
+				version: "1.0.0",
+				provides: ["main"],
+				requires: ["plug-opt-helper"],
+				effects: ["read"],
+				scopes: ["agent"],
+			}),
+			parseCpkManifest({
+				schema: "cpk1/v1",
+				id: "plug-opt-helper",
+				version: "1.0.0",
+				provides: ["helper"],
+				requires: ["ghost-missing"],
+				effects: ["read"],
+				scopes: ["agent"],
+			}),
+		];
+
+		const profile = parseCpkProfile({
+			schema: CPK4_SCHEMA,
+			mode: "implementation",
+			version: "1.0.0",
+			requiredPlugins: ["plug-main"],
+			optionalPlugins: ["plug-opt-helper"],
+			allowedEffects: ["read"],
+			maxContextTokens: 4000,
+			maxTools: 4,
+		});
+
+		// Must fail closed with sealed_conflict because required plug-main cannot satisfy plug-opt-helper
+		expectCode(() => resolveCpkBoot(profile, customManifests), "sealed_conflict");
+	});
+
+	it("enforces immutability of frozen capability sets and prevents smuggled modifications", () => {
+		const profile = parseCpkProfile(profileFixtures.find(p => p.mode === "interactive"));
+		const resolution = resolveCpkBoot(profile, manifests);
+		const session = new CpkBootFrozenSession(resolution, "session-freeze-test");
+
+		expect(Object.isFrozen(session.selectedPlugins)).toBe(true);
+		expect(Object.isFrozen(session.effectiveEffects)).toBe(true);
+		expect(() => {
+			(session.selectedPlugins as string[]).push("smuggled");
+		}).toThrow();
+		expect(session.selectedPlugins).toEqual(resolution.selectedPlugins);
+	});
+
+	it("enforces cosmeticReloadable: false and rejects cosmetic reloads when disallowed or with authoritative keys", () => {
+		const planProfile = parseCpkProfile(profileFixtures.find(p => p.mode === "plan"));
+		expect(planProfile.cosmeticReloadable).toBe(false);
+
+		const resPlan = resolveCpkBoot(planProfile, manifests);
+		const planSession = new CpkBootFrozenSession(resPlan, "session-plan-1");
+
+		expectCode(() => planSession.reloadCosmetic({ theme: "dark" }), "hot_reload_forbidden");
+
+		const interactiveProfile = parseCpkProfile(profileFixtures.find(p => p.mode === "interactive"));
+		const resInteractive = resolveCpkBoot(interactiveProfile, manifests);
+		const interactiveSession = new CpkBootFrozenSession(resInteractive, "session-interactive-1");
+
+		expectCode(() => interactiveSession.reloadCosmetic({ tools: "new-tools" }), "hot_reload_forbidden");
+		expectCode(() => interactiveSession.reloadCosmetic({ plugins: "new-plugins" }), "hot_reload_forbidden");
+	});
+
+	it("rejects unknown profile fields and incompatible engine version requirements", () => {
+		expectCode(
+			() =>
+				parseCpkProfile({
+					schema: CPK4_SCHEMA,
+					mode: "interactive",
+					version: "1.0.0",
+					maxContextTokens: 1000,
+					maxTools: 2,
+					unknownField: "bogus",
+				}),
+			"invalid_field",
+		);
+
+		expectCode(
+			() =>
+				parseCpkProfile({
+					schema: CPK4_SCHEMA,
+					mode: "interactive",
+					version: "1.0.0",
+					maxContextTokens: 1000,
+					maxTools: 2,
+					minEngineVersion: "99.0.0",
+				}),
+			"compatibility_failure",
+		);
+	});
+
+	it("validates all 8 qualified operating modes from fixture", () => {
+		const modes = ["interactive", "intake", "plan", "implementation", "audit", "summary", "fleet", "diagnostic"];
+		expect(profileFixtures.length).toBe(8);
+		for (const mode of modes) {
+			const found = profileFixtures.find(p => p.mode === mode);
+			expect(found).toBeDefined();
+			const parsed = parseCpkProfile(found);
+			expect(parsed.mode).toBe(mode as typeof parsed.mode);
+		}
+	});
+
+	it("enforces first-tool performance latency budget when specified", () => {
+		const profile = parseCpkProfile({
+			schema: CPK4_SCHEMA,
+			mode: "diagnostic",
+			version: "1.0.0",
+			requiredPlugins: ["core"],
+			optionalPlugins: [],
+			allowedEffects: ["read"],
+			maxContextTokens: 5000,
+			maxTools: 5,
+			firstToolBudgetMs: 0.000001, // Impossibly tight budget
+		});
+
+		expectCode(() => resolveCpkBoot(profile, manifests), "budget_exceeded");
 	});
 });

@@ -11,8 +11,6 @@
  * - Detect gaps, duplicate delivery, schema incompatibility, and stale cursors.
  * - Support clean rebuilds and loss recovery from native truth.
  * - Keep consumers offline-tolerant and non-blocking to authoritative commits.
- *
- * This module is a pure library: it is not wired into any live execution path.
  */
 
 /** Schema discriminator for CPK-5 native facts and projection records. */
@@ -123,12 +121,14 @@ export function parseCpkNativeFact(input: unknown): CpkNativeFact {
 export class CpkNativeOutbox {
 	readonly #sourceIdentity: string;
 	readonly #sourceVersion: string;
+	readonly #sink?: (fact: CpkNativeFact) => void;
 	readonly #facts: CpkNativeFact[] = [];
 	#nextSequence = 1;
 
-	constructor(sourceIdentity = "workservice", sourceVersion = "1.0.0") {
+	constructor(sourceIdentity = "workservice", sourceVersion = "1.0.0", sink?: (fact: CpkNativeFact) => void) {
 		this.#sourceIdentity = sourceIdentity;
 		this.#sourceVersion = sourceVersion;
+		this.#sink = sink;
 	}
 
 	get sourceIdentity(): string {
@@ -146,6 +146,7 @@ export class CpkNativeOutbox {
 	/**
 	 * Append a committed fact to the native outbox.
 	 * This is an authoritative commit; it never fails due to projection states.
+	 * When a native sink is attached, writes through directly to the underlying store.
 	 */
 	commit<T = unknown>(factType: string, payload: T, timestamp = new Date().toISOString()): CpkNativeFact<T> {
 		const fact: CpkNativeFact<T> = {
@@ -159,6 +160,7 @@ export class CpkNativeOutbox {
 		};
 		this.#nextSequence += 1;
 		this.#facts.push(fact as CpkNativeFact<unknown>);
+		this.#sink?.(fact as CpkNativeFact<unknown>);
 		return fact;
 	}
 
@@ -192,6 +194,97 @@ export class CpkNativeOutbox {
 		}
 		return outbox;
 	}
+
+	/**
+	 * Derive an authoritative outbox directly from native session entries (JSONL records).
+	 * Eliminates secondary state ledgers by reading directly from native session persistence.
+	 */
+	static fromSessionEntries(
+		entries: readonly unknown[],
+		sourceIdentity = "session",
+		sourceVersion = "3.0.0",
+	): CpkNativeOutbox {
+		const outbox = new CpkNativeOutbox(sourceIdentity, sourceVersion);
+		let seq = 1;
+		for (const raw of entries) {
+			if (!raw || typeof raw !== "object") continue;
+			const entry = raw as Record<string, unknown>;
+			const factType =
+				typeof entry.customType === "string" && entry.customType.length > 0
+					? entry.customType
+					: typeof entry.type === "string" && entry.type.length > 0
+						? entry.type
+						: "session_entry";
+			const timestamp =
+				typeof entry.timestamp === "string"
+					? entry.timestamp
+					: typeof entry.updatedAt === "string"
+						? entry.updatedAt
+						: new Date().toISOString();
+			const payload = entry.data !== undefined ? entry.data : entry;
+
+			outbox.#facts.push({
+				schema: CPK5_SCHEMA,
+				sourceIdentity,
+				sourceVersion,
+				sequence: seq++,
+				factType,
+				timestamp,
+				payload,
+			});
+		}
+		outbox.#nextSequence = seq;
+		return outbox;
+	}
+
+	/**
+	 * Derive an authoritative outbox directly from native session JSONL text.
+	 */
+	static fromSessionJsonl(jsonl: string, sourceIdentity = "session", sourceVersion = "3.0.0"): CpkNativeOutbox {
+		if (!jsonl.trim()) return new CpkNativeOutbox(sourceIdentity, sourceVersion);
+		const lines = jsonl.split("\n").filter(line => line.trim().length > 0);
+		const entries = lines.map(l => JSON.parse(l));
+		return CpkNativeOutbox.fromSessionEntries(entries, sourceIdentity, sourceVersion);
+	}
+
+	/**
+	 * Derive an authoritative outbox directly from workflow/execute outbox records.
+	 */
+	static fromExecuteOutbox(
+		records: readonly unknown[],
+		sourceIdentity = "workservice",
+		sourceVersion = "1.0.0",
+	): CpkNativeOutbox {
+		const outbox = new CpkNativeOutbox(sourceIdentity, sourceVersion);
+		let seq = 1;
+		for (const raw of records) {
+			if (!raw || typeof raw !== "object") continue;
+			const rec = raw as Record<string, unknown>;
+			const factType =
+				typeof rec.action === "string"
+					? rec.action
+					: typeof rec.customType === "string"
+						? rec.customType
+						: "execute_outbox";
+			const timestamp =
+				typeof rec.timestamp === "string"
+					? rec.timestamp
+					: typeof rec.at === "string"
+						? rec.at
+						: new Date().toISOString();
+			outbox.#facts.push({
+				schema: CPK5_SCHEMA,
+				sourceIdentity,
+				sourceVersion,
+				sequence: seq++,
+				factType,
+				timestamp,
+				payload: rec.payload ?? rec.data ?? rec,
+			});
+		}
+		outbox.#nextSequence = seq;
+		return outbox;
+	}
 }
 
 export interface CpkFactIngestResult {
@@ -220,6 +313,7 @@ export class CpkDisposableProjection<TData = unknown> {
 	#factCount = 0;
 	#offline = false;
 	#stale = false;
+	#schemaCorrupted = false;
 	#rebuilding = false;
 
 	constructor(
@@ -249,17 +343,17 @@ export class CpkDisposableProjection<TData = unknown> {
 	}
 
 	get isStale(): boolean {
-		return this.#stale;
+		return this.#stale || this.#schemaCorrupted;
 	}
 
 	get isCurrent(): boolean {
-		return !this.#offline && !this.#stale && !this.#rebuilding;
+		return !this.#offline && !this.#stale && !this.#schemaCorrupted && !this.#rebuilding;
 	}
 
 	get status(): CpkProjectionStatus {
 		if (this.#rebuilding) return "rebuilding";
 		if (this.#offline) return "offline";
-		if (this.#stale) return "stale";
+		if (this.#stale || this.#schemaCorrupted) return "stale";
 		return "current";
 	}
 
@@ -277,6 +371,8 @@ export class CpkDisposableProjection<TData = unknown> {
 
 	/**
 	 * Compute canonical SHA-256 digest of current projection state.
+	 * Incorporates full provenance (sourceIdentity, sourceVersion, sourceSequence, projectionVersion)
+	 * for strict canonical parity.
 	 */
 	digest(): string {
 		const hasher = new Bun.CryptoHasher("sha256");
@@ -288,7 +384,9 @@ export class CpkDisposableProjection<TData = unknown> {
 
 		const sortedRows = Array.from(this.#rows.values()).sort((a, b) => a.id.localeCompare(b.id));
 		for (const row of sortedRows) {
-			lines.push(`row\t${row.id}\t${row.sourceSequence}\t${JSON.stringify(row.data)}`);
+			lines.push(
+				`row\t${row.id}\t${row.sourceIdentity}\t${row.sourceVersion}\t${row.sourceSequence}\t${row.projectionVersion}\t${JSON.stringify(row.data)}`,
+			);
 		}
 
 		hasher.update(lines.join("\n"));
@@ -309,8 +407,35 @@ export class CpkDisposableProjection<TData = unknown> {
 	}
 
 	/**
+	 * Restore a previously saved checkpoint.
+	 */
+	restoreCheckpoint(checkpoint: CpkProjectionCheckpoint): void {
+		this.dispose();
+		this.#lastSequence = checkpoint.lastSequence;
+		this.#lastSourceIdentity = checkpoint.lastSourceIdentity;
+		this.#lastSourceVersion = checkpoint.lastSourceVersion;
+		this.#factCount = checkpoint.factCount;
+		this.#stale = checkpoint.status === "stale";
+	}
+
+	/**
+	 * Verify projection cursor against an authoritative native outbox.
+	 */
+	verifyCursor(outbox: CpkNativeOutbox): { valid: boolean; cursor: number; outboxCount: number; isStale: boolean } {
+		const outboxCount = outbox.count;
+		const isStale = this.#lastSequence > outboxCount || this.#stale || this.#schemaCorrupted;
+		return {
+			valid: !isStale && this.#lastSequence <= outboxCount,
+			cursor: this.#lastSequence,
+			outboxCount,
+			isStale,
+		};
+	}
+
+	/**
 	 * Ingest a committed fact from native outbox.
 	 * Detects duplicates, gaps, and schema incompatibility.
+	 * Schema incompatibility sticks until an explicit corruption recovery/rebuild is performed.
 	 */
 	consume(fact: CpkNativeFact): CpkFactIngestResult {
 		if (this.#offline) {
@@ -324,8 +449,21 @@ export class CpkDisposableProjection<TData = unknown> {
 			};
 		}
 
+		if (this.#schemaCorrupted) {
+			this.#stale = true;
+			return {
+				accepted: false,
+				deduplicated: false,
+				gap: false,
+				schemaIncompatible: true,
+				offline: false,
+				message: `projection "${this.#name}" is corrupted by previous incompatible schema; rebuild required`,
+			};
+		}
+
 		if (fact.schema !== CPK5_SCHEMA) {
 			this.#stale = true;
+			this.#schemaCorrupted = true;
 			return {
 				accepted: false,
 				deduplicated: false,
@@ -390,6 +528,7 @@ export class CpkDisposableProjection<TData = unknown> {
 		this.#lastSourceVersion = "";
 		this.#factCount = 0;
 		this.#stale = false;
+		this.#schemaCorrupted = false;
 	}
 
 	/**
@@ -407,9 +546,18 @@ export class CpkDisposableProjection<TData = unknown> {
 	}
 
 	/**
-	 * Recover after checkpoint loss or corruption by replaying native facts.
+	 * Recover after checkpoint loss by replaying native facts.
 	 */
 	recoverFromCheckpointLoss(facts: readonly CpkNativeFact[]): void {
+		this.rebuild(facts);
+	}
+
+	/**
+	 * Recover after schema corruption or incompatibility by resetting corruption state and replaying.
+	 */
+	recoverFromCorruption(facts: readonly CpkNativeFact[]): void {
+		this.#schemaCorrupted = false;
+		this.#stale = false;
 		this.rebuild(facts);
 	}
 }
@@ -420,7 +568,7 @@ export class CpkDisposableProjection<TData = unknown> {
  * Consumes task and session native facts into a thin, read-only UI view:
  * - task list and status
  * - step counts
- * - visibility banner that explicitly flags stale or offline projection status
+ * - visibility banner that explicitly flags stale, offline, or rebuilding status
  * - zero mutation authority: cannot write, modify, or commit native state.
  */
 export interface WebUiTaskData {
@@ -514,6 +662,13 @@ export class CpkWebUiProjection {
 	}
 
 	get banner(): WebUiBanner {
+		if (this.#projection.status === "rebuilding") {
+			return {
+				status: "rebuilding",
+				isCurrent: false,
+				message: "WebUI projection is rebuilding from native committed facts.",
+			};
+		}
 		if (this.#projection.isOffline) {
 			return {
 				status: "offline",
@@ -554,6 +709,50 @@ export class CpkWebUiProjection {
 	dispose(): void {
 		this.#projection.dispose();
 	}
+
+	/**
+	 * Thin consumers have zero mutation authority; mutations must go to native authorities.
+	 */
+	createTask(_task: unknown): never {
+		throw new CpkProjectionError(
+			"mutation_forbidden",
+			"projections are read-only thin views; state mutations must be committed through native authorities",
+		);
+	}
+
+	updateTask(_taskId: string, _update: unknown): never {
+		throw new CpkProjectionError(
+			"mutation_forbidden",
+			"projections are read-only thin views; state mutations must be committed through native authorities",
+		);
+	}
+
+	deleteTask(_taskId: string): never {
+		throw new CpkProjectionError(
+			"mutation_forbidden",
+			"projections are read-only thin views; state mutations must be committed through native authorities",
+		);
+	}
+
+	/**
+	 * Construct a thin WebUI projection directly from native session entries.
+	 */
+	static fromSessionEntries(entries: readonly unknown[], version = "1.0.0"): CpkWebUiProjection {
+		const outbox = CpkNativeOutbox.fromSessionEntries(entries);
+		const proj = new CpkWebUiProjection(version);
+		proj.rebuild(outbox.facts());
+		return proj;
+	}
+
+	/**
+	 * Construct a thin WebUI projection directly from session JSONL text.
+	 */
+	static fromSessionJsonl(jsonl: string, version = "1.0.0"): CpkWebUiProjection {
+		const outbox = CpkNativeOutbox.fromSessionJsonl(jsonl);
+		const proj = new CpkWebUiProjection(version);
+		proj.rebuild(outbox.facts());
+		return proj;
+	}
 }
 
 /**
@@ -563,7 +762,7 @@ export class CpkWebUiProjection {
  * - registered workers and statuses
  * - active assignments
  * - fleet capacity and load
- * - visibility banner that explicitly flags stale or offline projection status
+ * - visibility banner that explicitly flags stale, offline, or rebuilding status
  * - zero scheduling authority: cannot dispatch, reallocate, or commit native state.
  */
 export interface FleetWorkerData {
@@ -677,6 +876,13 @@ export class CpkFleetManagerProjection {
 	}
 
 	get banner(): FleetBanner {
+		if (this.#projection.status === "rebuilding") {
+			return {
+				status: "rebuilding",
+				isCurrent: false,
+				message: "Fleet Manager view is rebuilding from native committed facts.",
+			};
+		}
 		if (this.#projection.isOffline) {
 			return {
 				status: "offline",
@@ -717,10 +923,45 @@ export class CpkFleetManagerProjection {
 	dispose(): void {
 		this.#projection.dispose();
 	}
+
+	/**
+	 * Thin consumers have zero scheduling/mutation authority.
+	 */
+	registerWorker(_worker: unknown): never {
+		throw new CpkProjectionError(
+			"mutation_forbidden",
+			"projections are read-only thin views; state mutations must be committed through native authorities",
+		);
+	}
+
+	dispatchWorker(_workerId: string, _taskId: string): never {
+		throw new CpkProjectionError(
+			"mutation_forbidden",
+			"projections are read-only thin views; state mutations must be committed through native authorities",
+		);
+	}
+
+	stopWorker(_workerId: string): never {
+		throw new CpkProjectionError(
+			"mutation_forbidden",
+			"projections are read-only thin views; state mutations must be committed through native authorities",
+		);
+	}
+
+	/**
+	 * Construct a thin Fleet Manager projection directly from native session entries.
+	 */
+	static fromSessionEntries(entries: readonly unknown[], version = "1.0.0"): CpkFleetManagerProjection {
+		const outbox = CpkNativeOutbox.fromSessionEntries(entries);
+		const proj = new CpkFleetManagerProjection(version);
+		proj.rebuild(outbox.facts());
+		return proj;
+	}
 }
 
 /**
  * Compare two projections for canonical parity before promotion.
+ * Verifies both canonical state digest and strict provenance parity across all rows.
  */
 export function compareProjectionParity<T>(
 	candidate: CpkDisposableProjection<T>,
@@ -731,14 +972,36 @@ export function compareProjectionParity<T>(
 	baselineDigest: string;
 	candidateRows: number;
 	baselineRows: number;
+	provenanceMatch: boolean;
 } {
 	const candidateDigest = candidate.digest();
 	const baselineDigest = baseline.digest();
+	const candidateRows = candidate.rows;
+	const baselineRows = baseline.rows;
+
+	let provenanceMatch = candidateRows.length === baselineRows.length;
+	if (provenanceMatch) {
+		for (let i = 0; i < candidateRows.length; i++) {
+			const c = candidateRows[i];
+			const b = baselineRows[i];
+			if (
+				c.sourceIdentity !== b.sourceIdentity ||
+				c.sourceVersion !== b.sourceVersion ||
+				c.projectionVersion !== b.projectionVersion
+			) {
+				provenanceMatch = false;
+				break;
+			}
+		}
+	}
+
+	const match = candidateDigest === baselineDigest && provenanceMatch;
 	return {
-		match: candidateDigest === baselineDigest,
+		match,
 		candidateDigest,
 		baselineDigest,
 		candidateRows: candidate.rowCount,
 		baselineRows: baseline.rowCount,
+		provenanceMatch,
 	};
 }

@@ -64,5 +64,27 @@
 		"maxContextTokens": 2000,
 		"maxTools": 2,
 		"cosmeticReloadable": false
+	},
+	{
+		"schema": "cpk4/v1",
+		"mode": "intake",
+		"version": "1.0.0",
+		"requiredPlugins": ["core"],
+		"optionalPlugins": ["search"],
+		"allowedEffects": ["read", "network"],
+		"maxContextTokens": 4000,
+		"maxTools": 4,
+		"cosmeticReloadable": true
+	},
+	{
+		"schema": "cpk4/v1",
+		"mode": "summary",
+		"version": "1.0.0",
+		"requiredPlugins": ["core"],
+		"optionalPlugins": [],
+		"allowedEffects": ["read"],
+		"maxContextTokens": 3000,
+		"maxTools": 3,
+		"cosmeticReloadable": false
 	}
 ]
