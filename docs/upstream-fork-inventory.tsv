@@ -184,7 +184,11 @@ packages/coding-agent/src/autoresearch/tournament/schedule.ts	fork-only	added	c1
 packages/coding-agent/src/autoresearch/tournament/summarize-prompt.md	fork-only	added	7c2e6ae23ed4	OMP-299: Handlebars prompt template for hypothesis write-up condensation under maxChars limit	retained
 packages/coding-agent/src/autoresearch/tournament/types.ts	fork-only	added	f6de60d8a5eb	OMP-299: Tournament data models, verdict and record types, and seeded mulberry32 RNG	retained
 packages/coding-agent/src/capability/index.ts	shared	modified	76756a3cf5e9	OMP-249 capability discovery uses host-selected root with bounded ancestor traversal	retained
+packages/coding-agent/src/cli-commands.ts	shared	modified	e9e36a4583d1	OMP-311: register tokens subcommand right after token in CLI commands table	retained
+packages/coding-agent/src/cli/command-help.ts	shared	modified	1ac38a66fc12	OMP-311: command metadata and help text for tokens subcommand	retained
 packages/coding-agent/src/cli/gc-cli.ts	shared	modified	ec2759628e76	fix(gc): restrict per-cwd retention to existing working directories; fix: slim session workflow loadout and isolate test execution (OMP-166)	retained
+packages/coding-agent/src/cli/tokens-cli.ts	fork-only	added	9f05b6aef17b	OMP-311: runTokenCounter streaming line-oriented token counter using native countTokens with profile header and line-indexed error reporting	retained
+packages/coding-agent/src/commands/tokens.ts	fork-only	added	ca540af7cd28	OMP-311: tokens CLI command with count action and encoding flag dispatching to runTokenCounter	retained
 packages/coding-agent/src/config.ts	shared	modified	4bc15a622234	OMP-249 shared configuration lookup separates runtime configuration from tool workspace	retained
 packages/coding-agent/src/config/discovery-root.ts	fork-only	added	7c6f9f9638c2	OMP-249 optional host-selected configuration root; protected by discovery-root behavioral tests	retained
 packages/coding-agent/src/config/prompt-templates.ts	shared	modified	78a69275b7cf	OMP-249 prompt templates respect admitted runtime configuration root	retained
@@ -293,6 +297,7 @@ packages/coding-agent/test/autoresearch-tournament-runner.test.ts	fork-only	adde
 packages/coding-agent/test/autoresearch-tournament-schedule.test.ts	fork-only	added	d9f91554f35e	OMP-299: Unit tests for tournament schedule selection, round-robin and Swiss pairings	retained
 packages/coding-agent/test/autoresearch-tournament-settings.test.ts	fork-only	added	92962acce5f3	OMP-299: defaults and override precedence for the hidden autoresearch tournament settings (judgeModel "@smol", secondJudgeModel undefined, swissRoundCap 5, maxJudgeChars 6000; override wins)	retained
 packages/coding-agent/test/blob-exposure-tunnels.test.ts	shared	modified	089fca656096	OMP-291: Polling-based file content synchronization and atomic argument recording in fake tunnel test fixture	retained
+packages/coding-agent/test/cli/tokens-cli.test.ts	fork-only	added	e7a5a31ea0a9	OMP-311: contract tests for tokens-cli and omp tokens count CLI subcommand	retained
 packages/coding-agent/test/cli/update-rename-migration.integration.test.ts	shared	modified	04b65d5466cd	OMP-292: isolate HOME, XDG dirs, and global install manifest in rename migration tests to prevent mutating host package.json	retained
 packages/coding-agent/test/completed-task-result-contract.test.ts	fork-only	added	9d45c6c8db9e	OMP-246: Persisted ready/claim parsing, immutable copies and branch/discard refusal	retained
 packages/coding-agent/test/config/settings-backup-on-rewrite.test.ts	fork-only	added	fd1a138ab69b	session candidate: OMP-173; session candidate: OMP-172	retained
