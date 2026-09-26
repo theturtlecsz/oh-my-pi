@@ -22,6 +22,7 @@
 - Repository identity and manifest capture: read-only resolution of a checkout to an existing `omp_work.repositories` row (normalized URL, verified root commits) and capture of base/modified/untracked/deleted file bytes as a code snapshot manifest (OMP-279).
 - Versioned structural code graph with candidate snapshot isolation: engine-neutral Enola extraction (`facts.jsonl`/`receipt.json`), a repository/snapshot namespace adapter over the complete `(repository, enola_repo, kind, name, file)` fact identity, staged publication with retained active snapshots, and a per-snapshot coverage manifest of extracted and skipped files (OMP-309).
 - Claim-support evidence matrix (`report_evidence.py`): extracts material claims from a report draft with stable ids and locations, links each claim to top-k passages from the sources it cites, classifies every pair as supports/contradicts/neither through a stub or batched chat-model classifier, and stores a digest-verified matrix the report and its auditor read (OMP-300).
+- Added record_external_delivery command closing externally delivered work with an evidence receipt (OMP-283).
 
 ### Changed
 
