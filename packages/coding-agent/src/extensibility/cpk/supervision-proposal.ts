@@ -14,11 +14,15 @@ export const CPK_SUPERVISION_RULE_CLASSES = [
 
 export type CpkSupervisionRuleClass = (typeof CPK_SUPERVISION_RULE_CLASSES)[number];
 
-// Compile-time check that CpkSupervisionRuleClass equals AdvisorCategory.
-type _AssertEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
-type _AssertTrue<T extends true> = T;
-export type _CpkSupervisionRuleClassEqualsAdvisorCategory = _AssertTrue<
-	_AssertEqual<CpkSupervisionRuleClass, AdvisorCategory>
+// Compile-time check that CpkSupervisionRuleClass is exactly AdvisorCategory.
+// The conditional form `[A] extends [B] ? ... : never` collapses to `never` on a
+// mismatch, and `never` satisfies `T extends true`; the identity form yields
+// `false`, which the compiler rejects. The unused alias is still evaluated.
+type CpkSupervisionTypeEquals<A, B> =
+	(<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type CpkSupervisionAssertTrue<T extends true = never> = T;
+type _CpkSupervisionRuleClassEqualsAdvisorCategory = CpkSupervisionAssertTrue<
+	CpkSupervisionTypeEquals<CpkSupervisionRuleClass, AdvisorCategory>
 >;
 
 /** Type guard for canonical supervision rule classes. */
@@ -85,7 +89,7 @@ export function parseCpkSupervisionProposal(value: unknown): CpkSupervisionPropo
 	}
 
 	const index = record.transcriptIndex;
-	if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || Object.is(index, -0)) {
+	if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0) {
 		throw new CpkSupervisionError(
 			"invalid_index",
 			`transcriptIndex must be a non-negative safe integer, got ${String(index)}`,
@@ -175,13 +179,7 @@ export function assertCpkSentinelLabels(labels: unknown, eventCount: number): Cp
 		}
 
 		const index = record.transcriptIndex;
-		if (
-			typeof index !== "number" ||
-			!Number.isSafeInteger(index) ||
-			index < 0 ||
-			index >= eventCount ||
-			Object.is(index, -0)
-		) {
+		if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || index >= eventCount) {
 			throw new CpkSupervisionError(
 				"invalid_sentinel",
 				`sentinel label transcriptIndex must be a safe integer in [0, ${eventCount}), got ${String(index)}`,

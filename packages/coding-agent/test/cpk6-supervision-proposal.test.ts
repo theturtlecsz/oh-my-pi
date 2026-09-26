@@ -309,5 +309,21 @@ describe("CPK-6 supervision proposals (OMP-208-s01)", () => {
 			expect(assertCpkSentinelLabels([], 0)).toEqual([]);
 			expect(assertCpkSentinelLabels([], 10)).toEqual([]);
 		});
+
+		it("treats negative zero as index 0 because it is a non-negative safe integer", () => {
+			// -0 === 0, so it is a non-negative safe integer; -0 is index 0, not an invalid index.
+			const parsed = parseCpkSupervisionProposal({
+				schema: CPK6_SCHEMA,
+				ruleClass: "gate-defect",
+				transcriptIndex: -0,
+				claim: "negative zero is index zero",
+			});
+			expect(parsed.transcriptIndex === 0).toBe(true);
+
+			const labels = assertCpkSentinelLabels([{ ruleClass: "gate-defect", transcriptIndex: -0 }], 3);
+			expect(labels).toHaveLength(1);
+			expect(labels[0].ruleClass).toBe("gate-defect");
+			expect(labels[0].transcriptIndex === 0).toBe(true);
+		});
 	});
 });
