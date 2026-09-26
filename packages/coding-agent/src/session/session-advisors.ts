@@ -38,11 +38,9 @@ import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { extractHttpStatusFromError, extractRetryHint, logger } from "@oh-my-pi/pi-utils";
 import {
 	ADVISOR_DEFAULT_TOOL_NAMES,
-	AdviseTool,
 	type AdvisorAgent,
 	type AdvisorCategory,
 	type AdvisorConfig,
-	AdvisorEmissionGuard,
 	AdvisorLoopGuard,
 	type AdvisorMessageDetails,
 	type AdvisorNote,
@@ -50,6 +48,8 @@ import {
 	AdvisorRuntime,
 	type AdvisorRuntimeStatus,
 	type AdvisorSeverity,
+	AdvisorSupervisionPipeline,
+	type AdvisorSupervisionPipelineReport,
 	AdvisorTranscriptRecorder,
 	advisorTranscriptFilename,
 	buildAdvisorQuarantineSourceText,
@@ -154,8 +154,7 @@ interface ActiveAdvisor {
 	slug: string;
 	agent: Agent;
 	runtime: AdvisorRuntime;
-	adviseTool: AdviseTool;
-	emissionGuard: AdvisorEmissionGuard;
+	supervision: AdvisorSupervisionPipeline;
 	recorder: AdvisorTranscriptRecorder;
 	recorderClosed: Promise<void>;
 	agentUnsubscribe?: () => void;
@@ -626,8 +625,7 @@ export class SessionAdvisors {
 			a.agentUnsubscribe?.();
 			a.agentUnsubscribe = undefined;
 			a.runtime.reset("conversation-boundary");
-			a.adviseTool.resetDeliveredNotes();
-			a.emissionGuard.reset();
+			a.supervision.reset();
 			this.#attachAdvisorRecorderFeed(a);
 		}
 		this.#advisorPrimaryTurnsCompleted = 0;
@@ -776,10 +774,12 @@ export class SessionAdvisors {
 				signature,
 			} = descriptor;
 
-			const emissionGuard = new AdvisorEmissionGuard();
-			const adviseTool = new AdviseTool((note, severity, category) =>
-				this.#routeAdvice(advisorRef, note, severity, category),
-			);
+			const supervision = new AdvisorSupervisionPipeline({
+				path: this.#host.settings.get("advisor.supervisionPath"),
+				canaryMaxDivergences: this.#host.settings.get("advisor.supervisionCanaryMaxDivergences"),
+				transcriptIndex: () => this.#host.agent.state.messages.length,
+				deliver: (note, severity, category) => this.#routeAdvice(advisorRef, note, severity, category),
+			});
 
 			// `#advisorWatchdogPrompt` already carries WATCHDOG.md + YAML shared
 			// instructions; `config.instructions` adds this advisor's specialization.
@@ -791,7 +791,7 @@ export class SessionAdvisors {
 
 			const names = config.tools === undefined ? ADVISOR_DEFAULT_TOOL_NAMES : new Set(config.tools);
 			const tools = (this.#advisorTools ?? []).filter(t => names.has(t.name));
-			const advisorLoopTools: AgentTool<any>[] = [adviseTool, ...tools];
+			const advisorLoopTools: AgentTool<any>[] = [supervision.tool, ...tools];
 			const advisorToolMap = new Map<string, AgentTool<any>>();
 			const availableAdvisorToolNames = new Set<string>();
 			for (const tool of advisorLoopTools) {
@@ -1016,8 +1016,7 @@ export class SessionAdvisors {
 				getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
 				beginAdvisorUpdate: inProgress => {
 					advisorRef.recorder.beginTurn();
-					advisorRef.adviseTool.beginUpdate(inProgress);
-					advisorRef.emissionGuard.beginUpdate();
+					advisorRef.supervision.beginUpdate(inProgress);
 				},
 				onTurnError: (error, failedMessages, signal) =>
 					this.#recoverAdvisorTurn(advisorRef, error, failedMessages, signal),
@@ -1059,8 +1058,7 @@ export class SessionAdvisors {
 				slug,
 				agent: advisorAgent,
 				runtime,
-				adviseTool,
-				emissionGuard,
+				supervision,
 				recorder,
 				recorderClosed: Promise.resolve(),
 				model: advisorModel,
@@ -1110,9 +1108,9 @@ export class SessionAdvisors {
 	 * After a deliberate user interrupt auto-resume is suppressed while idle/unwinding
 	 * (the note becomes a preserved card re-entering on resume); a live-streaming turn is
 	 * steered in directly. A plain nit always rides the non-interrupting YieldQueue
-	 * aside. Suppression by the per-advisor emission guard drops the note silently —
-	 * the model still saw `Recorded.`, so it isn't tempted to rephrase the same note
-	 * past the dedupe.
+	 * aside. The supervision pipeline drops a suppressed note before this method
+	 * runs. The model still saw `Recorded.`, so it isn't tempted to rephrase the
+	 * same note past the dedupe.
 	 */
 	#hasTerminalTextAnswerWithoutQueuedWork(): boolean {
 		if (this.#host.agent.hasQueuedMessages() || this.#host.hasPendingNextTurnMessages()) return false;
@@ -1123,10 +1121,6 @@ export class SessionAdvisors {
 	}
 
 	#routeAdvice(advisor: ActiveAdvisor, note: string, severity?: AdvisorSeverity, category?: AdvisorCategory): void {
-		if (!advisor.emissionGuard.accept(note)) {
-			logger.debug("advisor advice suppressed by emission guard", { severity, advisor: advisor.name });
-			return;
-		}
 		// The implicit single ("default") advisor stamps no source name, so its
 		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
 		const source = advisor.slug ? advisor.name : undefined;
@@ -1840,6 +1834,11 @@ export class SessionAdvisors {
 		const sel = resolveAdvisorRoleSelection(this.#host.settings, this.#host.modelRegistry.getAvailable());
 		return sel ? this.#host.modelRegistry.isUsingOAuth(sel.model) : false;
 	}
+	/** Per-advisor supervision path, authority, and arm counts for the live roster. */
+	getAdvisorSupervisionReport(): { name: string; report: AdvisorSupervisionPipelineReport }[] {
+		return this.#advisors.map(advisor => ({ name: advisor.name, report: advisor.supervision.report() }));
+	}
+
 	/**
 	 * Return structured advisor stats for the status command and TUI panel.
 	 */
