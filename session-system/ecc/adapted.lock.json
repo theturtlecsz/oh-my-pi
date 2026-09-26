@@ -1,0 +1,223 @@
+{
+  "schemaVersion": 1,
+  "transformVersion": 1,
+  "upstream": {
+    "repository": "https://github.com/affaan-m/ECC.git",
+    "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+    "tree": "a7489fb4da00fc7b4995df3a3c59c018d08a3807",
+    "version": "2.2.1",
+    "describe": "v2.2.1-33-g8321021c"
+  },
+  "assets": [
+    {
+      "id": "ecc-agent-self-evaluation",
+      "upstreamPath": "skills/agent-self-evaluation",
+      "upstreamSha256": "96bb21eb37760f596789f84ec0a5dad4ef92fc2255e35cd7b88dc4234062b8c1",
+      "adaptedSha256": "04e65bf2d16b72f62e3505e01214bd4136bb502357df80922ddeb6ce5949fe9f",
+      "adaptationKind": "skill-namespaced",
+      "disposition": "supported-with-adaptation",
+      "files": [
+        {
+          "path": ".omp/skills/ecc-agent-self-evaluation/SKILL.md",
+          "sha256": "04e65bf2d16b72f62e3505e01214bd4136bb502357df80922ddeb6ce5949fe9f",
+          "mode": "644"
+        },
+        {
+          "path": ".omp/skills/ecc-agent-self-evaluation/scripts/evaluate.py",
+          "sha256": "5f21321971c23ffa845a8f25a99338705ff057981681c97cb79c653ce7e505d6",
+          "mode": "644"
+        },
+        {
+          "path": ".omp/skills/ecc-agent-self-evaluation/references/evaluation-criteria.md",
+          "sha256": "d1ccdbc90dfe2485a42e7aef2f06b71506dca3010da1ea8765382b8f038f7c61",
+          "mode": "644"
+        },
+        {
+          "path": ".omp/skills/ecc-agent-self-evaluation/references/hook-integration.md",
+          "sha256": "65888876994a12410c17723ca768f6715cb33a8ad963264a7caef67e3ef2fa8a",
+          "mode": "644"
+        },
+        {
+          "path": ".omp/skills/ecc-agent-self-evaluation/templates/evaluation-report.md",
+          "sha256": "5fc8a0820de9bc74e0a1470e55aaa50b3957aa1b0f947c4b458213b8e39fedbe",
+          "mode": "644"
+        },
+        {
+          "path": ".omp/skills/ecc-agent-self-evaluation/examples/high-score-example.md",
+          "sha256": "59467219aaaa41365953f904d7ffebb46b55c13d497e3646b0561a9ef5f56b0e",
+          "mode": "644"
+        },
+        {
+          "path": ".omp/skills/ecc-agent-self-evaluation/examples/low-score-example.md",
+          "sha256": "ee286d3adcbab489c5f277ae094a25e38e9401dc01b6c39987c3f5bf3b61706e",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-benchmark-optimization-loop",
+      "upstreamPath": "skills/benchmark-optimization-loop",
+      "upstreamSha256": "51a766eba273a30c24b8f3851e115e72335f3e3851a82235b9f9c1fedfb423a4",
+      "adaptedSha256": "18caf0d9e01dc3c447294aa7bd894d06dc711f867b25249b850b5be49786b430",
+      "adaptationKind": "skill-namespaced",
+      "disposition": "supported-without-changes",
+      "files": [
+        {
+          "path": ".omp/skills/ecc-benchmark-optimization-loop/SKILL.md",
+          "sha256": "18caf0d9e01dc3c447294aa7bd894d06dc711f867b25249b850b5be49786b430",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-common-coding-style",
+      "upstreamPath": "rules/common/coding-style.md",
+      "upstreamSha256": "3c069a2460702e1715e6b21408287401f1faa8d343045c98534d59fbd22a0e56",
+      "adaptedSha256": "2b277f30e7cbfea549781747d0f7f9e6b927edfcf0c8593a4b2c62784e80f8c2",
+      "adaptationKind": "rule-metadata",
+      "disposition": "supported-with-adaptation",
+      "files": [
+        {
+          "path": ".omp/rules/ecc-common-coding-style.md",
+          "sha256": "2b277f30e7cbfea549781747d0f7f9e6b927edfcf0c8593a4b2c62784e80f8c2",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-database-reviewer",
+      "upstreamPath": "agents/database-reviewer.md",
+      "upstreamSha256": "945c107dea01ca74e3e9bc3a5841e79e744673e8f14697e88cf1cfd9c01a1cc5",
+      "adaptedSha256": "a42cf8c566e0b1e20521c55e7de34e6ff7b40e740367893645b42774cf7034ff",
+      "adaptationKind": "database-advisor-profile",
+      "disposition": "supported-with-adaptation",
+      "files": [
+        {
+          "path": ".omp/WATCHDOG.yml",
+          "sha256": "a42cf8c566e0b1e20521c55e7de34e6ff7b40e740367893645b42774cf7034ff",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-deep-research",
+      "upstreamPath": "skills/deep-research",
+      "upstreamSha256": "72e184f5d0f31ca4d45286753409d8c8431b025e8ac3800dcc9f32d9e930f58a",
+      "adaptedSha256": "ebf4c937eed5b2521411cb5ef8b1f0966fcb76892b74de6ed4ff20ab9255491d",
+      "adaptationKind": "skill-namespaced",
+      "disposition": "supported-with-adaptation",
+      "files": [
+        {
+          "path": ".omp/skills/ecc-deep-research/SKILL.md",
+          "sha256": "ebf4c937eed5b2521411cb5ef8b1f0966fcb76892b74de6ed4ff20ab9255491d",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-eval-harness",
+      "upstreamPath": "skills/eval-harness",
+      "upstreamSha256": "6a8fae5d958ff9b6bdf97c7d9217fdf0b2ec9196f61d125bac0a71468f7d44d0",
+      "adaptedSha256": "b4a7a36e4bbc50ec63cecc69341d039a0c7a30b480ecf8c2718cd3302846f827",
+      "adaptationKind": "skill-namespaced",
+      "disposition": "supported-without-changes",
+      "files": [
+        {
+          "path": ".omp/skills/ecc-eval-harness/SKILL.md",
+          "sha256": "b4a7a36e4bbc50ec63cecc69341d039a0c7a30b480ecf8c2718cd3302846f827",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-mle-workflow",
+      "upstreamPath": "skills/mle-workflow",
+      "upstreamSha256": "2497888dd543ca7bdf5d0cb4d90fce023eb2c1c14f860f0af8e8be42423131b4",
+      "adaptedSha256": "6f9563d62f45bd494802d24bd3c6d7dc06e3771c1af4b3b50dd675c2bfbe7ecf",
+      "adaptationKind": "skill-namespaced",
+      "disposition": "supported-without-changes",
+      "files": [
+        {
+          "path": ".omp/skills/ecc-mle-workflow/SKILL.md",
+          "sha256": "6f9563d62f45bd494802d24bd3c6d7dc06e3771c1af4b3b50dd675c2bfbe7ecf",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-research-ops",
+      "upstreamPath": "skills/research-ops",
+      "upstreamSha256": "114d0e5480ce3ad263316c639ce0c401396e1d9fbec3cf15b3c962ae16f376db",
+      "adaptedSha256": "ec3bfdda1ba15c541ce4e482504de86f2f932a59630a087a5817302c14d51d49",
+      "adaptationKind": "skill-namespaced",
+      "disposition": "supported-without-changes",
+      "files": [
+        {
+          "path": ".omp/skills/ecc-research-ops/SKILL.md",
+          "sha256": "ec3bfdda1ba15c541ce4e482504de86f2f932a59630a087a5817302c14d51d49",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-rust-coding-style",
+      "upstreamPath": "rules/rust/coding-style.md",
+      "upstreamSha256": "01c056bef1bf3b7ca7cfc516986c1d05bcd341c620d2a09ce75acdc2ed539f5f",
+      "adaptedSha256": "9befba1d5d887ca78e5dab23d81442dc6a2a5e60c7f1429b31dc216f81beab8d",
+      "adaptationKind": "rule-metadata",
+      "disposition": "supported-with-adaptation",
+      "files": [
+        {
+          "path": ".omp/rules/ecc-rust-coding-style.md",
+          "sha256": "9befba1d5d887ca78e5dab23d81442dc6a2a5e60c7f1429b31dc216f81beab8d",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-scholar-evaluation",
+      "upstreamPath": "skills/scientific-thinking-scholar-evaluation",
+      "upstreamSha256": "e9f8a3bce2bce769a96611a52804a2b3955f2796ee2749bc8275aea38a26cd2d",
+      "adaptedSha256": "6e3d59f829db7a8e841ea845f739a7484c831a384fb410c2ddf1166b0c227bf7",
+      "adaptationKind": "skill-namespaced",
+      "disposition": "supported-without-changes",
+      "files": [
+        {
+          "path": ".omp/skills/ecc-scholar-evaluation/SKILL.md",
+          "sha256": "6e3d59f829db7a8e841ea845f739a7484c831a384fb410c2ddf1166b0c227bf7",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-search-first",
+      "upstreamPath": "skills/search-first",
+      "upstreamSha256": "d66d744228b9cf860acf35f8a90cbbe8195e61367860da9d3632f9fc65706733",
+      "adaptedSha256": "08f818ee02845e4b84dd95128ac6136040f265ce15c5bb369efc9d95a691e7fc",
+      "adaptationKind": "skill-namespaced",
+      "disposition": "supported-with-adaptation",
+      "files": [
+        {
+          "path": ".omp/skills/ecc-search-first/SKILL.md",
+          "sha256": "08f818ee02845e4b84dd95128ac6136040f265ce15c5bb369efc9d95a691e7fc",
+          "mode": "644"
+        }
+      ]
+    },
+    {
+      "id": "ecc-verification-loop",
+      "upstreamPath": "skills/verification-loop",
+      "upstreamSha256": "f0d56107f79e607d4de6c5543b8edfb1b58ab9ae4019b39831689cd91116543e",
+      "adaptedSha256": "d986b17ae9b514ab730f338dc4643e1f8b24668a4cfc0c88ffa4b7d751727899",
+      "adaptationKind": "skill-namespaced",
+      "disposition": "supported-with-adaptation",
+      "files": [
+        {
+          "path": ".omp/skills/ecc-verification-loop/SKILL.md",
+          "sha256": "d986b17ae9b514ab730f338dc4643e1f8b24668a4cfc0c88ffa4b7d751727899",
+          "mode": "644"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "assetId": "ecc-search-first",
+  "upstreamPath": "skills/search-first",
+  "upstreamSha256": "d66d744228b9cf860acf35f8a90cbbe8195e61367860da9d3632f9fc65706733",
+  "adaptedSha256": "08f818ee02845e4b84dd95128ac6136040f265ce15c5bb369efc9d95a691e7fc",
+  "edits": [
+    {
+      "reason": "Translate the local skill catalog check to the omp skills directory",
+      "find": [
+        "| Skills directory | `ls ~/.claude/skills ~/.codex/skills` where applicable | Say no local skill catalog was available |"
+      ],
+      "replace": [
+        "| Skills directory | `ls ~/.omp/agent/skills` where applicable | Say no local skill catalog was available |"
+      ]
+    },
+    {
+      "reason": "Point MCP discovery at the active omp session, not Claude settings",
+      "find": [
+        "2. Is there an MCP for this? \u2192 Check `~/.claude/settings.json` and search"
+      ],
+      "replace": [
+        "2. Is there an MCP for this? \u2192 Check the MCP servers configured for this omp session"
+      ]
+    },
+    {
+      "reason": "Point skill discovery at the omp skills directory",
+      "find": [
+        "3. Is there a skill for this? \u2192 Check `~/.claude/skills/`"
+      ],
+      "replace": [
+        "3. Is there a skill for this? \u2192 Check `~/.omp/agent/skills/`"
+      ]
+    },
+    {
+      "reason": "Name the native subagent launch instead of the researcher agent",
+      "find": [
+        "For non-trivial functionality, launch the researcher agent:"
+      ],
+      "replace": [
+        "For non-trivial functionality, launch a general-purpose subagent with the omp `agent` tool:"
+      ]
+    },
+    {
+      "reason": "Rename the searched skill catalog to the installed omp skills",
+      "find": [
+        "  Search: npm/PyPI, MCP servers, Claude Code skills, GitHub"
+      ],
+      "replace": [
+        "  Search: npm/PyPI, MCP servers, installed omp skills, GitHub"
+      ]
+    },
+    {
+      "reason": "Replace the Claude-only Task guidance with the native agent tool",
+      "find": [
+        "Older Claude Code docs may call this `Task(...)`; use the current agent/subagent",
+        "tool name exposed by the active harness."
+      ],
+      "replace": [
+        "Use the subagent type exposed by the active harness for this launch."
+      ]
+    }
+  ]
+}

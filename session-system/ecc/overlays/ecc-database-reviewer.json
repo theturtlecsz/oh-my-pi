@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "assetId": "ecc-database-reviewer",
+  "upstreamPath": "agents/database-reviewer.md",
+  "upstreamSha256": "945c107dea01ca74e3e9bc3a5841e79e744673e8f14697e88cf1cfd9c01a1cc5",
+  "adaptedSha256": "5b1a5638bd746a73c37e7b2901f885c65f7ee2d62e3a5d65cfa463a6d37436ca",
+  "edits": [
+    {
+      "reason": "Drop the psql diagnostic commands; the advisor is read-only",
+      "find": [
+        "## Diagnostic Commands",
+        "",
+        "```bash",
+        "psql $DATABASE_URL",
+        "psql -c \"SELECT query, mean_exec_time, calls FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 10;\"",
+        "psql -c \"SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) FROM pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC;\"",
+        "psql -c \"SELECT indexrelname, idx_scan, idx_tup_read FROM pg_stat_user_indexes ORDER BY idx_scan DESC;\"",
+        "```"
+      ],
+      "replace": [
+        "## Inspection",
+        "",
+        "This advisor has read, grep, and glob only. Inspect schema, migrations, and",
+        "query text from the repository; never run psql or any database command."
+      ]
+    },
+    {
+      "reason": "Reframe EXPLAIN ANALYZE as a recommendation the advisor cannot run",
+      "find": [
+        "- Run `EXPLAIN ANALYZE` on complex queries \u2014 check for Seq Scans on large tables"
+      ],
+      "replace": [
+        "- Check complex queries for Seq Scans on large tables by reading the query text (this advisor cannot run EXPLAIN ANALYZE)"
+      ]
+    },
+    {
+      "reason": "Mark the referenced ECC skills as not installed by this pack",
+      "find": [
+        "For detailed index patterns, schema design examples, connection management, concurrency strategies, JSONB patterns, and full-text search, see skills: `postgres-patterns` and `database-migrations`."
+      ],
+      "replace": [
+        "Related ECC skills (reference only, not installed by this pack): `postgres-patterns` and `database-migrations`."
+      ]
+    },
+    {
+      "reason": "Remove the instruction to run EXPLAIN ANALYZE from the closing note",
+      "find": [
+        "**Remember**: Database issues are often the root cause of application performance problems. Optimize queries and schema design early. Use EXPLAIN ANALYZE to verify assumptions. Always index foreign keys and RLS policy columns."
+      ],
+      "replace": [
+        "**Remember**: Database issues are often the root cause of application performance problems. Review query and schema design early, and always recommend indexing foreign keys and RLS policy columns."
+      ]
+    }
+  ]
+}
