@@ -69182,6 +69182,38 @@
 			"requiresGlyphTokenization": false,
 			"supportsComputerUse": false
 		},
+		"gemini-3.5-flash-lite": {
+			"id": "gemini-3.5-flash-lite",
+			"name": "Gemini 3.5 Flash Lite",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.3,
+				"output": 2.5,
+				"cacheRead": 0.03,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65535,
+			"thinking": {
+				"mode": "google-level",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"requiresEffort": true
+			},
+			"requiresGlyphTokenization": false,
+			"supportsComputerUse": false
+		},
 		"gemini-3.6-flash": {
 			"id": "gemini-3.6-flash",
 			"name": "Gemini 3.6 Flash",
@@ -69252,6 +69284,134 @@
 					"medium": "gemini-3.7-flash-medium",
 					"high": "gemini-3.7-flash-high"
 				}
+			},
+			"requiresGlyphTokenization": false,
+			"supportsComputerUse": false
+		},
+		"gemini-3.8-flash-high": {
+			"id": "gemini-3.8-flash-high",
+			"name": "Gemini 3.8 Flash (High)",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "google-level",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"requiresEffort": true
+			},
+			"requiresGlyphTokenization": false,
+			"supportsComputerUse": false
+		},
+		"gemini-3.8-flash-low": {
+			"id": "gemini-3.8-flash-low",
+			"name": "Gemini 3.8 Flash (Low)",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "google-level",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"requiresEffort": true
+			},
+			"requiresGlyphTokenization": false,
+			"supportsComputerUse": false
+		},
+		"gemini-3.8-flash-medium": {
+			"id": "gemini-3.8-flash-medium",
+			"name": "Gemini 3.8 Flash (Medium)",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "google-level",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"requiresEffort": true
+			},
+			"requiresGlyphTokenization": false,
+			"supportsComputerUse": false
+		},
+		"gemini-3.8-flash-tiered": {
+			"id": "gemini-3.8-flash-tiered",
+			"name": "gemini-3.8-flash-tiered",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "google-level",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"requiresEffort": true
 			},
 			"requiresGlyphTokenization": false,
 			"supportsComputerUse": false
