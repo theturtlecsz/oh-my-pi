@@ -166,9 +166,7 @@ describe("CPK-6 supervision replay regression edges (OMP-208-s02-s02)", () => {
 			candidate: armFrom("empty-candidate", () => []),
 		});
 
-		expect(report.regressions).toEqual([
-			{ sessionId: "dup", ruleClass: "gate-defect", transcriptIndex: 0 },
-		]);
+		expect(report.regressions).toEqual([{ sessionId: "dup", ruleClass: "gate-defect", transcriptIndex: 0 }]);
 		expect(report.uncaught).toEqual([{ sessionId: "dup", ruleClass: "gate-defect", transcriptIndex: 0 }]);
 		expect(report.classes["gate-defect"].legacy.caught).toBe(1);
 		expect(report.classes["gate-defect"].legacy.missed).toBe(1);
