@@ -50,10 +50,11 @@ interface Arm {
 
 function sameNotes(left: readonly BufferedNote[], right: readonly BufferedNote[]): boolean {
 	if (left.length !== right.length) return false;
-	for (let i = 0; i < left.length; i++) {
-		const a = left[i];
-		const b = right[i];
-		if (!a || !b) return false;
+	const rightIterator = right[Symbol.iterator]();
+	for (const a of left) {
+		const nextRight = rightIterator.next();
+		if (nextRight.done) return false;
+		const b = nextRight.value;
 		if (
 			a.note !== b.note ||
 			a.severity !== b.severity ||
