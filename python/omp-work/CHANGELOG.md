@@ -25,6 +25,9 @@
 - Added record_external_delivery command closing externally delivered work with an evidence receipt (OMP-283).
 - `record_fable_advice` command (`work.approve`) records advisor verification evidence bound to candidate and bounded intake semantic and rule bundle hashes (OMP-266).
 - `publish_bounded_intake` command (`work.approve`, owner-only) ratifies one ready bounded intake draft into a work item, related OMP-249 edge, planned candidate, and `intake_publication` receipt in one serializable transaction (OMP-266).
+- Bounded typed intake end to end: `assess_bounded_intake` scores a draft and reports readiness, `record_fable_advice` binds advisor verification, `attest_intake_admission` is the sole native admission gate over the authoritative lineage, and owner-only `publish_bounded_intake` atomically ratifies a ready draft into a work item, relation, candidate, and receipt (OMP-266).
+- `omp-work approve` writes an `attestation` marker over the contract version, digest, issue, and approval time; `omp-work validate --require-approval` rejects `approval.json` without a matching one (`approval attestation missing or invalid`).
+- `bun scripts/approval-provenance.ts` fails CI when `approval.json` changes in a commit that is not authored by `flood-owner` with an owner marker subject (`owner step by flood` / `flood rebase_repair`).
 
 ### Changed
 

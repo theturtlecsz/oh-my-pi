@@ -79,3 +79,8 @@ CPK refactor or an unrelated existing issue.
 
 Use [the session guide](omp-stabilization-plan.md) for checkpoint order. Current
 scope, plan bytes, checkpoint results, and next action belong in WorkService.
+
+## Amendment, 25 September 2026
+
+The [OMP immediate roadmap amendment](plans/fleet-knowledge/OMP_Immediate_Roadmap_Amendment.md)
+allows isolated Fleet Knowledge work. Historical statuses in this review are unchanged.

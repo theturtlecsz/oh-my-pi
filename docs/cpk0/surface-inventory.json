@@ -5251,6 +5251,7 @@
     "packages/coding-agent/src/prompts/jev/irreversible.md",
     "packages/coding-agent/src/prompts/jev/live_cutover.md",
     "packages/coding-agent/src/prompts/jev/no_repro.md",
+    "packages/coding-agent/src/prompts/jev/unexpected-stop.md",
     "packages/coding-agent/src/prompts/memories/consolidation.md",
     "packages/coding-agent/src/prompts/memories/consolidation_system.md",
     "packages/coding-agent/src/prompts/memories/read-path.md",

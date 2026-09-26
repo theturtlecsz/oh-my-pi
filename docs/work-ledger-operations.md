@@ -22,6 +22,14 @@ uv run --project python/omp-work omp-work approve --issue <work-key>
 
 This must be run by the owner in an interactive terminal after reviewing the printed digest and exact prospective JSON payload. Redirected or non-interactive input is refused, and agents must never mint `approval.json` from chat scope.
 
+`omp-work approve` writes an `attestation` field into `approval.json`: a SHA-256 over the literal `omp-work approve` marker, the contract version, the contract digest, the issue, and `approved_at`. `omp-work validate --require-approval` recomputes it from those stored fields and rejects the file with `approval attestation missing or invalid` when the field is absent or does not match, so a hand-written or partially rewritten file fails even when every other field parses.
+
+The attestation is not an unforgeable proof of owner intent, and one is not possible here: the owner, flood, and implementers all run as the same local user on one host, so no secret exists that an implementer cannot read, and CI could not verify a secret-keyed signature because it would have to hold the same key. The marker only proves the file matches what `omp-work approve` writes, not who ran the command. The enforcing control is provenance:
+
+`bun scripts/approval-provenance.ts --base <rev>` runs in the CI `check` job on pull requests (`--base` is the PR's target branch). It fails when any commit in `<base>..<head>` adds or changes `approval.json` unless that commit is authored by `flood-owner` with a subject containing `owner step by flood` or `flood rebase_repair`; for a merge commit it fails only when the merged blob matches no parent (a conflict resolution that rewrote the attestation).
+
+Implementers never write `approval.json` or the `WORK_CONTRACT_SHA256` digest in `packages/work-client/src/contract.ts`, including when resolving a rebase conflict.
+
 ### Staged digest approval for autonomous flood slices
 
 When autonomous flood tasks alter the Work contract (`python/omp-work`), execution tests (`session-system/tests/auditor-runner.test.ts`) enforce contract safety: prospective contract changes pause execution before candidate freeze at `prospective contract digest <D> is not approved` until owner approval lands in `approval.json`.
@@ -51,8 +59,9 @@ To allow contract-changing slices to reach `main` cleanly with owner hash-attest
 7. **Approval commit**: The owner creates the approval commit on the detached tree:
    ```sh
    git add python/omp-work/src/omp_work/contracts/v1/approval.json packages/work-client/src/contract.ts docs/upstream-fork-inventory.tsv
-   git commit -m "chore(contract): owner approval of v1 digest <D> (<issue>)"
+   git commit --author="flood-owner <flood@localhost>" -m "chore(contract): owner step by flood — approve v1 digest <D> (<issue>)"
    ```
+   The `--author` and the `owner step by flood` subject marker are what `bun scripts/approval-provenance.ts` accepts; without them CI's `check` job fails the PR.
 8. **Fast-forward task branch**: The owner records the commit SHA, returns to the primary repo, fast-forwards the flood branch with the approval commit, and removes the temporary worktree:
    ```sh
    APPROVAL_SHA=$(git rev-parse HEAD)

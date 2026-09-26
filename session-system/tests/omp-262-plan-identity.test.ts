@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { EvidenceReceipt, ExecutionGrantItemView } from "@oh-my-pi/pi-work-client";
 import { z } from "zod";
 import type { ExecutionSnapshot, NowRef, PlanStamp, WorkflowBackend } from "../extensions/workflow/backend";
+import { executionRemoteRef } from "../extensions/workflow/git";
 import { createWorkflowHost } from "../extensions/workflow/host";
 import { createWorkBackend, plannedCandidateId } from "../extensions/workflow/work";
 
@@ -171,7 +172,7 @@ describe("stamp payload parity", () => {
 				workspace_id: "00000000-0000-7000-8000-000000000001",
 				owner_id: "owner-1",
 				repository: tempDir,
-				remote_ref: "refs/heads/execution/omp-1",
+				remote_ref: executionRemoteRef("OMP-1", "grant-1"),
 				state: "active",
 				mode: "single",
 				grant_version: 1,
@@ -216,6 +217,7 @@ describe("stamp payload parity", () => {
 			evidenceKinds: ["verification", "closeout"],
 			scopeFix: "",
 			getExecution: async () => structuredClone(execution),
+			findIssue: async () => ({ id: workId, key: "OMP-1", title: "Work title" }),
 			stampExecutionPlan: async () => structuredClone(execution),
 			workClient: {
 				healthReady: async () => ({

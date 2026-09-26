@@ -10,6 +10,7 @@ import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { z } from "zod";
 import type { ExecutionSnapshot, WorkflowBackend } from "../extensions/workflow/backend";
 import * as gitModule from "../extensions/workflow/git";
+import { executionRemoteRef } from "../extensions/workflow/git";
 import { createWorkflowHost } from "../extensions/workflow/host";
 import { createWorkBackend } from "../extensions/workflow/work";
 import { computeAuditTcb } from "../extensions/workflow/audit-tcb";
@@ -60,7 +61,7 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 			workspace_id: "workspace-1",
 			owner_id: "owner-1",
 			repository: repository ?? directory,
-			remote_ref: "refs/heads/execution/omp-1",
+			remote_ref: executionRemoteRef("OMP-1", "grant-1"),
 			state,
 			mode: "single",
 			grant_version: 3,
