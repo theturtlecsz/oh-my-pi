@@ -394,14 +394,29 @@ function createStderrCapture(exitLabel: string): StderrCapture {
 	try {
 		reapStaleStderrCaptures();
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), STDERR_CAPTURE_PREFIX));
-		// Record the owner before opening the log so a killed parent's dir is
-		// attributable even if the crash lands between the two writes.
+		const logPath = path.join(dir, "stderr.log");
+		const fd = fs.openSync(logPath, "w+");
+		// POSIX keeps an unlinked file's data readable through its open fd, so
+		// dropping the directory entry (and the now-empty dir) immediately means a
+		// SIGKILL to this process — which never runs the `exit` handler — still
+		// leaves nothing in the temp root. Windows holds the open file, so it
+		// keeps the dir and relies on the exit handler plus the owner-marker reap.
+		if (process.platform !== "win32") {
+			try {
+				fs.unlinkSync(logPath);
+				fs.rmdirSync(dir);
+				return { target: fd, fd, dir: null, cleanupOnExit: null };
+			} catch {
+				// Fall through to the marker-backed cleanup below.
+			}
+		}
+		// Record the owner before relying on exit cleanup so a killed parent's dir
+		// is attributable even if the crash lands between the two writes.
 		try {
 			fs.writeFileSync(path.join(dir, STDERR_CAPTURE_OWNER_FILE), String(process.pid));
 		} catch {
 			// The unmarked-dir age fallback still reaps it eventually.
 		}
-		const fd = fs.openSync(path.join(dir, "stderr.log"), "w+");
 		const cleanupOnExit = (): void => cleanupStderrCapture({ target: fd, fd, dir, cleanupOnExit: null });
 		process.once("exit", cleanupOnExit);
 		return { target: fd, fd, dir, cleanupOnExit };

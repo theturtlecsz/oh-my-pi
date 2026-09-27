@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { type as arkType } from "@oh-my-pi/omptype";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -284,7 +287,7 @@ describe("computer worker round trips", () => {
 		expect(result.payload.screenshots[0]?.path).toMatch(/omp-computer-.*\.png$/);
 	});
 
-	it("removes the temp screenshot file once the run settles", async () => {
+	it("keeps a run's temp screenshot readable until the worker stops needing it", async () => {
 		const transport = new MemoryTransport();
 		const native = new FakeNativeSession();
 		new ComputerWorkerCore(transport, () => native);
@@ -294,9 +297,26 @@ describe("computer worker round trips", () => {
 		if (!result.ok) return;
 		const screenshotPath = result.payload.screenshots[0]?.path;
 		expect(screenshotPath).toBeDefined();
-		// The run already settled, so the temp PNG must be gone instead of
-		// accumulating in os.tmpdir() (OMP-389).
-		expect(await Bun.file(screenshotPath!).exists()).toBe(false);
+		// The result carries this path, so it must still resolve once the run
+		// settled — deleting it here would publish a dead path (OMP-389 review).
+		expect(fs.existsSync(screenshotPath!)).toBe(true);
+
+		// A new run supersedes that result, so the old capture is no longer
+		// referenced and is removed instead of accumulating in os.tmpdir().
+		const next = await runWorker(transport, "temp-cleanup-next", "1");
+		expect(next.ok).toBe(true);
+		expect(fs.existsSync(screenshotPath!)).toBe(false);
+
+		// Closing the worker drops the latest run's capture too — that is the
+		// path every terminated session takes, so nothing outlives it.
+		const closing = await runWorker(transport, "temp-cleanup-close", "await desktop.screenshot({ silent: true })");
+		expect(closing.ok).toBe(true);
+		if (!closing.ok) return;
+		const latestPath = closing.payload.screenshots[0]?.path;
+		expect(latestPath).toBeDefined();
+		transport.inbound({ type: "close" });
+		await transport.waitFor(message => message.type === "closed");
+		expect(fs.existsSync(latestPath!)).toBe(false);
 	});
 
 	it("reports source dimensions when a screenshot is scaled", async () => {
@@ -550,6 +570,41 @@ class SupervisorWorker implements ComputerWorkerHandle {
 	}
 }
 
+/** Reports one temp capture and then hangs, so the supervisor must terminate it. */
+class CaptureReportingWorker implements ComputerWorkerHandle {
+	readonly #capture: string;
+	#messageHandlers = new Set<(message: ComputerWorkerOutbound) => void>();
+	#terminated = false;
+
+	constructor(capture: string) {
+		this.#capture = capture;
+	}
+	send(message: ComputerWorkerInbound): void {
+		if (message.type === "run") {
+			queueMicrotask(() => {
+				this.#emit({ type: "captures", paths: [this.#capture] });
+			});
+		} else if (message.type === "close") {
+			queueMicrotask(() => this.#emit({ type: "closed" }));
+		}
+	}
+	onMessage(handler: (message: ComputerWorkerOutbound) => void): () => void {
+		this.#messageHandlers.add(handler);
+		queueMicrotask(() => this.#emit({ type: "ready" }));
+		return () => this.#messageHandlers.delete(handler);
+	}
+	onError(_handler: (error: Error) => void): () => void {
+		return () => {};
+	}
+	async terminate(): Promise<void> {
+		this.#terminated = true;
+	}
+	#emit(message: ComputerWorkerOutbound): void {
+		if (this.#terminated) return;
+		for (const handler of this.#messageHandlers) handler(message);
+	}
+}
+
 describe("computer supervisor recovery", () => {
 	it("surfaces a timeout ToolError and creates a fresh worker for the next run", async () => {
 		let workers = 0;
@@ -566,6 +621,22 @@ describe("computer supervisor recovery", () => {
 		const result = await supervisor.run("41 + 1", 1_000, snapshot());
 		expect(result.returnValue).toBe("fresh");
 		expect(workers).toBe(2);
+		await supervisor.close();
+	});
+
+	it("removes a killed worker's reported temp captures", async () => {
+		// A worker thread cannot run cleanup when it is `terminate()`d, so the
+		// supervisor owns removal of the temp PNGs the worker mirrored to it.
+		const capture = path.join(os.tmpdir(), `omp-computer-test-${crypto.randomUUID()}.png`);
+		await Bun.write(capture, "png");
+		const supervisor = new ComputerSupervisor(toolSession(), () => new CaptureReportingWorker(capture), {
+			startMs: 200,
+			closeMs: 200,
+		});
+		await expect(supervisor.run("await new Promise(() => {})", 5, snapshot())).rejects.toEqual(
+			expect.objectContaining({ name: "ToolError" }),
+		);
+		expect(fs.existsSync(capture)).toBe(false);
 		await supervisor.close();
 	});
 });

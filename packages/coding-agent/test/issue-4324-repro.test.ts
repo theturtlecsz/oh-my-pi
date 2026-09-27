@@ -164,31 +164,65 @@ describe("issue #4324 — worker subprocess stderr survives to the exit error", 
 		expect(errored).toBe(false);
 	}, 15_000);
 
-	it("reaps a capture dir whose owning process is gone instead of leaving it in tmpdir", async () => {
-		// OMP-389: `stderr.log` only removes its dir on a graceful process exit,
-		// so a hard-killed parent orphaned `omp-worker-stderr-*` forever. A later
-		// spawn must reap a dir whose recorded owner pid no longer exists.
-		const staleDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-worker-stderr-"));
-		fs.writeFileSync(path.join(staleDir, "owner.pid"), "999999");
-		const liveDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-worker-stderr-"));
-		fs.writeFileSync(path.join(liveDir, "owner.pid"), String(process.pid));
-
-		// The spawn's own capture dir is owner=this-process; it is removed by the
-		// normal drain path, which the test awaits below.
-		try {
-			const sub = createWorkerSubprocess<FakeWorkerOutbound>({
-				spawnCommand: stderrExitCommand("", 0),
+	it("leaves no capture dir behind when its owning process is hard-killed", async () => {
+		// OMP-389: the parent owns the capture for its whole lifetime. On POSIX the
+		// log is unlinked while its fd is open, so no directory entry is ever
+		// created — a `SIGKILL` to the parent (which never runs the `exit` handler)
+		// therefore cannot leave an `omp-worker-stderr-*` dir in the temp root.
+		const repoRoot = path.resolve(import.meta.dir, "..");
+		// The child watches the wrapper and exits once that owner is gone, so this
+		// test never leaves an orphaned worker process behind.
+		const workerScript =
+			"const ownerPid = Number(process.argv.at(-1)); const lock = new Int32Array(new SharedArrayBuffer(4)); while (true) { try { process.kill(ownerPid, 0); } catch { break; } Atomics.wait(lock, 0, 0, 100); }";
+		const wrapperScript = `
+			const { createWorkerSubprocess } = await import("@oh-my-pi/pi-coding-agent/subprocess/worker-client");
+			const sub = createWorkerSubprocess({
+				spawnCommand: { cmd: [process.execPath, "-e", ${JSON.stringify(workerScript)}, String(process.pid)] },
 				env: {},
-				exitLabel: "tts subprocess",
+				exitLabel: "killed subprocess",
 			});
-			expect(fs.existsSync(staleDir)).toBe(false);
-			// The sweep only removes dirs owned by dead processes.
-			expect(fs.existsSync(liveDir)).toBe(true);
-			// Let the capture drain so its own dir is cleaned before the test ends.
-			await sub.stderrDrained;
+			process.stdout.write("READY:" + String(sub.proc.pid));
+			await new Promise(() => {});
+		`;
+		const captureNames = (baseline: Set<string>): string[] =>
+			(fs.readdirSync(os.tmpdir()) as string[]).filter(
+				name => name.startsWith("omp-worker-stderr-") && !baseline.has(name),
+			);
+		const baseline = new Set(fs.readdirSync(os.tmpdir()) as string[]);
+
+		const wrapper = Bun.spawn([process.execPath, "-e", wrapperScript], {
+			cwd: repoRoot,
+			stdout: "pipe",
+			stderr: "pipe",
+			env: { ...process.env, BUN_ENV: "development", NODE_ENV: "development", PI_TEST_RUNTIME: "0" },
+		});
+		const reader = (wrapper.stdout as ReadableStream<Uint8Array>).getReader();
+		const decoder = new TextDecoder();
+		let stdout = "";
+		try {
+			const deadline = Date.now() + 10_000;
+			while (!stdout.includes("READY:") && Date.now() < deadline) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				stdout += decoder.decode(value, { stream: true });
+			}
+			expect(stdout).toContain("READY:");
+			const workerPid = Number(stdout.slice(stdout.indexOf("READY:") + "READY:".length).trim());
+			expect(Number.isSafeInteger(workerPid)).toBe(true);
+
+			// While the owner is still alive: POSIX keeps the capture only in the
+			// unlinked fd, never as a temp dir (Windows retains it until exit).
+			if (process.platform !== "win32") expect(captureNames(baseline)).toEqual([]);
+
+			wrapper.kill("SIGKILL");
+			await wrapper.exited;
+
+			if (process.platform === "win32") return; // The owner-marker reap covers Windows on the next spawn.
+			// The hard-killed owner ran no exit handler, yet left nothing behind.
+			expect(captureNames(baseline)).toEqual([]);
 		} finally {
-			fs.rmSync(staleDir, { recursive: true, force: true });
-			fs.rmSync(liveDir, { recursive: true, force: true });
+			wrapper.kill("SIGKILL");
+			await reader.cancel().catch(() => {});
 		}
-	}, 15_000);
+	}, 20_000);
 });

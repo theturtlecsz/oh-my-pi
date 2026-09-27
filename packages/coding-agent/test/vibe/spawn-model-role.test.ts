@@ -106,9 +106,12 @@ describe("vibe worker spawn model role", () => {
 		expect(options.modelRole).toBeUndefined();
 	});
 
-	it("removes the throwaway artifacts dir once the session-less spawn settles", async () => {
+	it("keeps the throwaway artifacts dir as the keep-alive home until the worker is killed", async () => {
 		// OMP-389: a worker with no session file gets a tmpdir `omp-vibe-*` home.
-		// It must not outlive the turn — otherwise every session-less spawn leaks.
+		// That dir is the keep-alive session home the executor writes
+		// `<id>.jsonl`/`<id>.md` into, so it must survive the turn settling (a
+		// delete here broke park/revive and `agent://`); it is removed only when
+		// the worker's lifetime ends.
 		const settings = Settings.isolated({ modelRoles: { default: "anthropic/opus", smol: "fast/hy3" } });
 		const manager = new AsyncJobManager({ onJobComplete: () => {} });
 		const session = { ...makeParentSession(settings), asyncJobManager: manager } as unknown as ToolSession;
@@ -131,10 +134,16 @@ describe("vibe worker spawn model role", () => {
 			} as SingleResult;
 		});
 
-		const { jobId } = await VibeSessionRegistry.global().spawn(session, { cli: "fast", prompt: "work" });
+		const { id, jobId } = await VibeSessionRegistry.global().spawn(session, { cli: "fast", prompt: "work" });
 		const options = await captured.promise;
 		expect(options.artifactsDir).toMatch(/omp-vibe-/);
+		const artifactsDir = options.artifactsDir!;
 		await manager.getJob(jobId)?.promise;
-		expect(fs.existsSync(options.artifactsDir!)).toBe(false);
+		// The turn settled but the keep-alive home must still be there.
+		expect(fs.existsSync(artifactsDir)).toBe(true);
+
+		// Killing the worker ends its lifetime, so the throwaway home goes with it.
+		await VibeSessionRegistry.global().kill(session, id);
+		expect(fs.existsSync(artifactsDir)).toBe(false);
 	});
 });
