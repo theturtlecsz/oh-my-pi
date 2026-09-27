@@ -83,6 +83,7 @@ import { pendingOpsDir, type WorkClientConfig } from "./config";
 import { candidateDrift, type CandidateDriftShape, freezeCandidateCommit, headCommit, pushCandidate } from "./git";
 import { ackOps as ackClaimOps, claimPendingOp, dropPendingOp, intentFingerprint, readPendingClaims, resolvePendingOp } from "./pending-ops";
 import { procedureDigestLines, spawnRunner } from "./procedures";
+import { defaultRun, stageContextLines } from "./stage-context";
 import { bounded, healthWord, oneRecovery, redactSecrets } from "./status";
 
 const DRAIN_MAX_QUEUE = 8;
@@ -1153,7 +1154,16 @@ export function createWorkBackend(
 					)),
 				);
 			}
-			return extraLines;
+			return [
+				...extraLines,
+				...(inflight
+					? await stageContextLines(
+							{ key: inflight.alias.key, cwd },
+							// `run` above claims a ledger mutation. This hook spawns the s06 CLI.
+							{ workflow: k => client.workflow(k), liveAttempt, env: process.env, run: defaultRun },
+						)
+					: []),
+			];
 		},
 
 		async statusLines(now: NowRef | null): Promise<string[]> {
