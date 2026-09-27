@@ -9491,9 +9491,10 @@ export class AgentSession {
 		return admitted;
 	}
 
-	/** Arm this turn's first model call with the hidden next-turn messages' still-
-	 *  unclaimed dispatch-time authority checks, so a validator that flips after the
-	 *  drain (e.g. inside a `before_agent_start` handler) still refuses the request. */
+	/** Arm this turn's first model call with the hidden next-turn messages that
+	 *  still carry a dispatch-time authority check. The hook re-reads each
+	 *  validator once, then removes itself; the caller also releases it when the
+	 *  turn ends before that call. A refusal or throw stops the provider request. */
 	#armHiddenNextTurnDispatchGuard(messages: readonly AgentMessage[]): (() => void) | undefined {
 		const guarded: CustomMessage[] = [];
 		for (const candidate of messages) {
@@ -9502,10 +9503,15 @@ export class AgentSession {
 			if (this.#hiddenNextTurnDispatchValidators.has(message)) guarded.push(message);
 		}
 		if (guarded.length === 0) return undefined;
-		let checked = false;
-		return this.agent.addBeforeModelCall(async () => {
-			if (checked) return undefined;
-			checked = true;
+		let remove: (() => void) | undefined;
+		const release = () => {
+			const current = remove;
+			remove = undefined;
+			current?.();
+		};
+		remove = this.agent.addBeforeModelCall(async () => {
+			// Unregister before awaiting so a later model call in this turn cannot re-enter.
+			release();
 			for (const message of guarded) {
 				if (!(await this.#runHiddenNextTurnDispatchValidation(message))) {
 					return { stop: true, reason: "Hidden next-turn extension message refused at dispatch" };
@@ -9513,6 +9519,7 @@ export class AgentSession {
 			}
 			return undefined;
 		});
+		return release;
 	}
 
 	#getCustomMessageTextContent(message: Pick<CustomMessage, "content">): string {

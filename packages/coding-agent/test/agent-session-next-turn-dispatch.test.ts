@@ -3,7 +3,7 @@
  * messages (S2.5). A queued hidden message may carry a `validateDispatch`
  * re-check: refused or thrown before the message can own a turn (no provider
  * request, no session entry), and re-checked once more at the turn's first
- * model call so a validator that flips after the drain still refuses.
+ * model call so a validator that flips or throws after the drain still refuses.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
@@ -155,6 +155,51 @@ describe("AgentSession hidden next-turn dispatch authority", () => {
 		await promptTask;
 		await harness.session.waitForIdle();
 
+		expect(harness.providerCalls).toBe(1);
+		expect(harness.mock.calls).toHaveLength(1);
+	});
+
+	it("refuses the turn when the re-check validator throws after before_agent_start", async () => {
+		let queued = false;
+		let throwOnRecheck = false;
+		let validations = 0;
+		const emitBeforeAgentStart = async () => {
+			if (queued) throwOnRecheck = true;
+			return undefined;
+		};
+		const extensionRunner = {
+			setTaskResultProcessingGate: () => {},
+			hasHandlers: () => false,
+			emitBeforeAgentStart,
+			emit: async () => undefined,
+		} as unknown as ExtensionRunner;
+
+		const harness = await createSession(extensionRunner);
+		const promptTask = harness.session.prompt("hello");
+		await harness.started;
+
+		// Admitted while streaming (first validation returns ok). The continuation
+		// turn's before_agent_start then arms the throw, so only the pre-model
+		// re-check can stop that turn.
+		await harness.session.sendCustomMessage(
+			{ customType: "hidden-recheck-throw", content: "hidden-note-throw", display: false, attribution: "agent" },
+			{
+				deliverAs: "nextTurn",
+				triggerTurn: true,
+				validateDispatch: async () => {
+					validations++;
+					if (throwOnRecheck) throw new Error("recheck failed");
+					return { ok: true };
+				},
+			},
+		);
+		queued = true;
+
+		harness.release();
+		await promptTask;
+		await harness.session.waitForIdle();
+
+		expect(validations).toBe(2);
 		expect(harness.providerCalls).toBe(1);
 		expect(harness.mock.calls).toHaveLength(1);
 	});
