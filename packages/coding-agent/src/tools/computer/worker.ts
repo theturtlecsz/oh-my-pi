@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -99,6 +100,8 @@ interface ComputerRunContext {
 	snapshot: ComputerSessionSnapshot;
 	output: RunOutput;
 	screenshots: ComputerScreenshot[];
+	/** Temp screenshot files written this run, removed once the run settles. */
+	tempScreenshots: Set<string>;
 }
 
 type RunContextAccessor = () => ComputerRunContext;
@@ -194,6 +197,7 @@ async function captureScreenshot(
 	);
 	const destination = path.join(os.tmpdir(), `omp-computer-${Snowflake.next()}.png`);
 	await Bun.write(destination, frame.data);
+	context.tempScreenshots.add(destination);
 	const scaled = frame.width !== frame.sourceWidth || frame.height !== frame.sourceHeight;
 	context.screenshots.push({
 		path: destination,
@@ -500,12 +504,14 @@ export class ComputerWorkerCore {
 		this.#active = active;
 		const output = new RunOutput();
 		const screenshots: ComputerScreenshot[] = [];
+		const tempScreenshots = new Set<string>();
 		const runContext: ComputerRunContext = {
 			signal,
 			readOnly: message.session.readOnly,
 			snapshot: message.session,
 			output,
 			screenshots,
+			tempScreenshots,
 		};
 		let returnValue: unknown;
 		let failure: { error: unknown } | undefined;
@@ -570,6 +576,15 @@ export class ComputerWorkerCore {
 		} finally {
 			runAc.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Computer run ended")));
 			if (this.#active?.id === message.id) this.#active = null;
+			// The temp PNGs back the run's own display images; drop them once the
+			// run settles so a finished run leaves no `omp-computer-*` in tmpdir.
+			for (const file of tempScreenshots) {
+				try {
+					fs.rmSync(file, { force: true });
+				} catch {
+					// Best-effort temp cleanup.
+				}
+			}
 		}
 		if (failure !== undefined) {
 			this.#transport.send({ type: "result", id: message.id, ok: false, error: errorPayload(failure.error) });

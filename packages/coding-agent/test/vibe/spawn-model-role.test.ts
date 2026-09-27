@@ -9,6 +9,7 @@
  * chain and vibe children silently retry on the `default` role's chain.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -103,5 +104,37 @@ describe("vibe worker spawn model role", () => {
 
 		expect(options.modelOverride).toEqual(["openai-codex/sol"]);
 		expect(options.modelRole).toBeUndefined();
+	});
+
+	it("removes the throwaway artifacts dir once the session-less spawn settles", async () => {
+		// OMP-389: a worker with no session file gets a tmpdir `omp-vibe-*` home.
+		// It must not outlive the turn — otherwise every session-less spawn leaks.
+		const settings = Settings.isolated({ modelRoles: { default: "anthropic/opus", smol: "fast/hy3" } });
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const session = { ...makeParentSession(settings), asyncJobManager: manager } as unknown as ToolSession;
+		const captured = Promise.withResolvers<ExecutorOptions>();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			captured.resolve(options);
+			return {
+				index: 0,
+				id: options.id,
+				agent: options.agent.name,
+				agentSource: "bundled",
+				task: options.task,
+				exitCode: 0,
+				output: "done",
+				stderr: "",
+				truncated: false,
+				durationMs: 1,
+				tokens: 0,
+				requests: 0,
+			} as SingleResult;
+		});
+
+		const { jobId } = await VibeSessionRegistry.global().spawn(session, { cli: "fast", prompt: "work" });
+		const options = await captured.promise;
+		expect(options.artifactsDir).toMatch(/omp-vibe-/);
+		await manager.getJob(jobId)?.promise;
+		expect(fs.existsSync(options.artifactsDir!)).toBe(false);
 	});
 });

@@ -9,6 +9,9 @@ import * as path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ss-obligation-"));
+afterAll(() => {
+	fs.rmSync(tempRoot, { recursive: true, force: true });
+});
 const home = path.join(tempRoot, "home");
 const probe = path.join(tempRoot, "repo");
 const harness = path.join(import.meta.dir, "fixtures/obligation-loop-harness.ts");

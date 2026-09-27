@@ -284,6 +284,21 @@ describe("computer worker round trips", () => {
 		expect(result.payload.screenshots[0]?.path).toMatch(/omp-computer-.*\.png$/);
 	});
 
+	it("removes the temp screenshot file once the run settles", async () => {
+		const transport = new MemoryTransport();
+		const native = new FakeNativeSession();
+		new ComputerWorkerCore(transport, () => native);
+
+		const result = await runWorker(transport, "temp-cleanup", "await desktop.screenshot({ silent: true })");
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const screenshotPath = result.payload.screenshots[0]?.path;
+		expect(screenshotPath).toBeDefined();
+		// The run already settled, so the temp PNG must be gone instead of
+		// accumulating in os.tmpdir() (OMP-389).
+		expect(await Bun.file(screenshotPath!).exists()).toBe(false);
+	});
+
 	it("reports source dimensions when a screenshot is scaled", async () => {
 		const transport = new MemoryTransport();
 		const native = new FakeNativeSession();

@@ -529,8 +529,15 @@ describe("autoresearch slash command", () => {
 		}
 	});
 
+	/** A throwaway repo dir whose cleanup is owned by this describe's afterEach. */
+	function tempRepo(): string {
+		const tempDir = makeTempDir();
+		cleanups.push(tempDir);
+		return tempDir.path();
+	}
+
 	it("enables autoresearch with a notify when invoked bare in a clean repo", async () => {
-		const dir = makeTempDir().path();
+		const dir = tempRepo();
 		const harness = createCommandHarness(dir, async (_command, args) => {
 			if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: `${dir}\n` };
 			if (args[0] === "branch" && args[1] === "--show-current") return { code: 0, stderr: "", stdout: "main\n" };
@@ -545,7 +552,7 @@ describe("autoresearch slash command", () => {
 	});
 
 	it("forwards a slash argument as the user message and creates a slug branch", async () => {
-		const dir = makeTempDir().path();
+		const dir = tempRepo();
 		const harness = createCommandHarness(dir, async (_command, args) => {
 			if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: `${dir}\n` };
 			if (args[0] === "branch" && args[1] === "--show-current") return { code: 0, stderr: "", stdout: "main\n" };
@@ -561,7 +568,7 @@ describe("autoresearch slash command", () => {
 	});
 
 	it("aborts with an error when the worktree is dirty", async () => {
-		const dir = makeTempDir().path();
+		const dir = tempRepo();
 		const harness = createCommandHarness(dir, async (_command, args) => {
 			if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: `${dir}\n` };
 			if (args[0] === "branch" && args[1] === "--show-current") return { code: 0, stderr: "", stdout: "main\n" };

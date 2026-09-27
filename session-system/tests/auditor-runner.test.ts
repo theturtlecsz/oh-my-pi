@@ -4193,6 +4193,7 @@ describe("dead execution context and terminal work suppression (OMP-247)", () =>
 
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dead-grant-repo-"));
 		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "dead-grant-cache-"));
+		fixtureCaches.push(cwd, cacheDir);
 		spawnSync("git", ["init", "-b", "main"], { cwd });
 		fs.writeFileSync(path.join(cwd, "seed.txt"), "seed\n");
 		spawnSync("git", ["add", "."], { cwd });
@@ -4277,6 +4278,7 @@ describe("dead execution context and terminal work suppression (OMP-247)", () =>
 
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "dead-stop-repo-"));
 		const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "dead-stop-cache-"));
+		fixtureCaches.push(cwd, cacheDir);
 		spawnSync("git", ["init", "-b", "main"], { cwd });
 		fs.writeFileSync(path.join(cwd, "seed.txt"), "seed\n");
 		spawnSync("git", ["add", "."], { cwd });

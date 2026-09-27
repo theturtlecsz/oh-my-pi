@@ -14,6 +14,8 @@
  * shows up in `~/.omp/logs/omp.log` without regressing idle-worker shutdown.
  */
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { createWorkerSubprocess, type SpawnedSubprocess } from "@oh-my-pi/pi-coding-agent/subprocess/worker-client";
 
@@ -160,5 +162,33 @@ describe("issue #4324 — worker subprocess stderr survives to the exit error", 
 		await sub.proc.exited;
 		await sub.stderrDrained;
 		expect(errored).toBe(false);
+	}, 15_000);
+
+	it("reaps a capture dir whose owning process is gone instead of leaving it in tmpdir", async () => {
+		// OMP-389: `stderr.log` only removes its dir on a graceful process exit,
+		// so a hard-killed parent orphaned `omp-worker-stderr-*` forever. A later
+		// spawn must reap a dir whose recorded owner pid no longer exists.
+		const staleDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-worker-stderr-"));
+		fs.writeFileSync(path.join(staleDir, "owner.pid"), "999999");
+		const liveDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-worker-stderr-"));
+		fs.writeFileSync(path.join(liveDir, "owner.pid"), String(process.pid));
+
+		// The spawn's own capture dir is owner=this-process; it is removed by the
+		// normal drain path, which the test awaits below.
+		try {
+			const sub = createWorkerSubprocess<FakeWorkerOutbound>({
+				spawnCommand: stderrExitCommand("", 0),
+				env: {},
+				exitLabel: "tts subprocess",
+			});
+			expect(fs.existsSync(staleDir)).toBe(false);
+			// The sweep only removes dirs owned by dead processes.
+			expect(fs.existsSync(liveDir)).toBe(true);
+			// Let the capture drain so its own dir is cleaned before the test ends.
+			await sub.stderrDrained;
+		} finally {
+			fs.rmSync(staleDir, { recursive: true, force: true });
+			fs.rmSync(liveDir, { recursive: true, force: true });
+		}
 	}, 15_000);
 });

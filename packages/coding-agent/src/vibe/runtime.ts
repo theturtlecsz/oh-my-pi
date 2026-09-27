@@ -1419,17 +1419,26 @@ export class VibeSessionRegistry {
 		message: string,
 		signal: AbortSignal,
 		onProgress: (progress: AgentProgress) => void,
-	): Promise<ExecutorOptions> {
+	): Promise<{ options: ExecutorOptions; dispose: () => Promise<void> }> {
 		const sessionFile = session.getSessionFile();
 		const sessionArtifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
-		const artifactsDir = sessionArtifactsDir ?? path.join(os.tmpdir(), `omp-vibe-${Snowflake.next()}`);
+		// No session file → no artifact home, so the run gets a throwaway tmpdir
+		// that `dispose` removes once the turn settles (the executor never keeps
+		// artifacts across turns for a session-less worker).
+		let temporaryArtifactsDir: string | undefined;
+		let unregisterArtifactsDir: (() => void) | undefined;
+		let artifactsDir = sessionArtifactsDir;
+		if (!artifactsDir) {
+			temporaryArtifactsDir = path.join(os.tmpdir(), `omp-vibe-${Snowflake.next()}`);
+			artifactsDir = temporaryArtifactsDir;
+		}
 		await fs.mkdir(artifactsDir, { recursive: true });
-		if (!sessionArtifactsDir) registerArtifactsDir(artifactsDir);
+		if (temporaryArtifactsDir) unregisterArtifactsDir = registerArtifactsDir(artifactsDir);
 		const localProtocolOptions: LocalProtocolOptions = session.localProtocolOptions ?? {
 			getArtifactsDir: session.getArtifactsDir ?? (() => null),
 			getSessionId: session.getSessionId ?? (() => null),
 		};
-		return {
+		const options: ExecutorOptions = {
 			cwd: session.cwd,
 			agent: record.agent,
 			task: message,
@@ -1471,6 +1480,16 @@ export class VibeSessionRegistry {
 			parentServiceTier: session.getServiceTierByFamily ? (session.getServiceTierByFamily() ?? null) : undefined,
 			keepAlive: true,
 		};
+		const dispose = async (): Promise<void> => {
+			if (!temporaryArtifactsDir) return;
+			unregisterArtifactsDir?.();
+			try {
+				await fs.rm(temporaryArtifactsDir, { recursive: true, force: true });
+			} catch {
+				// Best-effort temp cleanup.
+			}
+		};
+		return { options, dispose };
 	}
 
 	/** Register one background job that runs a single worker turn and self-delivers its result. */
@@ -1513,6 +1532,7 @@ export class VibeSessionRegistry {
 				record.state = "running";
 				record.turnCount = turnIndex;
 				record.lastActivityAt = Date.now();
+				let disposeArtifacts: (() => Promise<void>) | undefined;
 				try {
 					const turnStartedPersisted = await this.#appendLifecycleEvent(
 						session,
@@ -1526,18 +1546,23 @@ export class VibeSessionRegistry {
 					if (record.childSessionFile && !turnStartedPersisted) {
 						throw new ToolError(`Vibe session "${record.id}" changed parent scope before its turn started.`);
 					}
-					const result = options.first
-						? await runSubprocess(await this.#buildSpawnOptions(session, record, message, signal, onProgress))
-						: await runSubagentFollowUpTurn({
-								id: record.id,
-								agent: record.agent,
-								message,
-								description: `vibe ${record.cli} session`,
-								signal,
-								onProgress,
-								eventBus: session.eventBus,
-								artifactsDir: session.getSessionFile()?.slice(0, -6),
-							});
+					let result: SingleResult;
+					if (options.first) {
+						const spawn = await this.#buildSpawnOptions(session, record, message, signal, onProgress);
+						disposeArtifacts = spawn.dispose;
+						result = await runSubprocess(spawn.options);
+					} else {
+						result = await runSubagentFollowUpTurn({
+							id: record.id,
+							agent: record.agent,
+							message,
+							description: `vibe ${record.cli} session`,
+							signal,
+							onProgress,
+							eventBus: session.eventBus,
+							artifactsDir: session.getSessionFile()?.slice(0, -6),
+						});
+					}
 					return await this.#settleTurn(session, manager, record, turn, ownJobId, turnIndex, result);
 				} catch (error) {
 					if (error instanceof VibeTurnError) throw error;
@@ -1547,6 +1572,8 @@ export class VibeSessionRegistry {
 					throw new VibeTurnError(
 						`[vibe:${record.id} cli=${record.cli} turn=${turnIndex}] turn failed: ${reason}`,
 					);
+				} finally {
+					await disposeArtifacts?.();
 				}
 			},
 			{ id: `${record.id}-t${turnIndex}`, agentId: record.id, ownerId: record.ownerId },
