@@ -5457,6 +5457,7 @@
         "session-system/extensions/workflow/sequence.md",
         "session-system/extensions/workflow/session-ledger-prompt.md",
         "session-system/extensions/workflow/session-ledger.ts",
+        "session-system/extensions/workflow/stage-context.ts",
         "session-system/extensions/workflow/status.ts",
         "session-system/extensions/workflow/tool-description.md",
         "session-system/extensions/workflow/transcript.ts",
