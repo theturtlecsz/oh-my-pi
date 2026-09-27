@@ -6353,6 +6353,10 @@ def _prove_incompatible_contract_refuses_and_terminal_grant_stays_terminal(
                 )
                 assert settled["grant"]["state"] == "canceled"
                 assert settled["grant"]["grant_version"] == canceled_grant["grant_version"]
+                assert (
+                    settled["grant"]["continuations_scheduled"]
+                    == canceled_grant["continuations_scheduled"]
+                ), f"Restart {index} reserved a continuation on the terminal grant"
                 assert settled["activeItem"] is None, settled["activeItem"]
                 assert settled["idempotentCommandRows"] == canceled_snapshot[
                     "idempotentCommandRows"
