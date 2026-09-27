@@ -11,17 +11,20 @@
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 import { once } from "node:events";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { $env, isRecord, Snowflake } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../../capability";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
+	type ExtensionRunner,
 	type ExtensionUIContext,
 	type ExtensionUIDialogOptions,
 	type ExtensionUISelectItem,
 	type ExtensionWidgetOptions,
 	getExtensionUISelectOptionLabel,
+	type InputEventResult,
 } from "../../extensibility/extensions";
 import { buildSkillPromptMessage, parseSkillInvocation } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
@@ -248,6 +251,41 @@ export function watchAndReportLocalOnlyPromptResult(input: {
 		hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
 		waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,
 	});
+}
+
+export type RpcPromptInputRunner = Pick<ExtensionRunner, "hasHandlers" | "emitInput">;
+
+/**
+ * Result of routing an RPC `prompt` message through extension `input` handlers.
+ * `handled` means an extension consumed the input; the prompt must not reach
+ * the agent. Otherwise `message`/`images` carry any handler transforms.
+ */
+export interface RpcPromptInputResult {
+	message: string;
+	images: ImageContent[] | undefined;
+	handled: boolean;
+}
+
+/**
+ * Run an RPC `prompt` message through extension `input` handlers, mirroring the
+ * interactive editor (`runner.emitInput(text, images, "interactive")`). Slash
+ * commands keep their own path (skill/builtin dispatch) and never enter the
+ * pipeline; without a handler the message passes through untouched.
+ */
+export async function applyRpcPromptInput(
+	runner: RpcPromptInputRunner | undefined,
+	message: string,
+	images: ImageContent[] | undefined,
+): Promise<RpcPromptInputResult> {
+	if (!runner?.hasHandlers("input")) return { message, images, handled: false };
+	if (message.trimStart().startsWith("/")) return { message, images, handled: false };
+	const result: InputEventResult = await runner.emitInput(message, images, "rpc");
+	if (result?.handled) return { message, images, handled: true };
+	return {
+		message: result?.text ?? message,
+		images: result?.images ?? images,
+		handled: false,
+	};
 }
 
 /**
@@ -1054,11 +1092,19 @@ export async function runRpcMode(
 				// Don't await - events will stream
 				// Extension commands are executed immediately, file prompt templates are expanded
 				// If streaming and streamingBehavior specified, queues via steer/followUp
+				// Owner text typed over the RPC transport must reach extension `input`
+				// handlers like it does in the interactive editor; a handler can rewrite
+				// the message/images or consume the input entirely.
+				const inputResult = await applyRpcPromptInput(session.extensionRunner, command.message, command.images);
+				if (inputResult.handled) {
+					output({ type: "prompt_result", id, agentInvoked: false });
+					return success(id, "prompt", { agentInvoked: false });
+				}
 				watchAndReportLocalOnlyPromptResult({
 					id,
 					startPrompt: () =>
-						session.prompt(command.message, {
-							images: command.images,
+						session.prompt(inputResult.message, {
+							images: inputResult.images,
 							streamingBehavior: command.streamingBehavior,
 						}),
 					output,

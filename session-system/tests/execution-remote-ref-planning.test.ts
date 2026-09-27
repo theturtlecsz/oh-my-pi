@@ -178,6 +178,9 @@ async function makeHarness(options: {
 			newSessionCalls.push("newSession");
 			return { cancelled: false };
 		},
+		models: {
+			resolve: (role: string) => (role === "@audit" ? ({ id: "audit-model", provider: "mock" } as never) : undefined),
+		},
 		ui: {
 			notify: (text: string) => { notifications.push(text); },
 			setStatus: () => {},

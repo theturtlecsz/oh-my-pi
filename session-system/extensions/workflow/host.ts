@@ -106,7 +106,7 @@ import {
 	type StagedRiderBatch,
 } from "./rider-batch";
 import { registerSessionLedger } from "./session-ledger";
-import { prepareNativeAuditRunner, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
+import { prepareNativeAuditRunner, resolveAuditModel, type NativeAuditRunner, type NativeAuditRunResult } from "./auditor-runner";
 import { computeAuditTcb, type SourceResolver } from "./audit-tcb";
 import { canonicalJson, sha256Hex, WORK_CONTRACT_SHA256, WorkError, type Candidate, type CloseAttempt, type Command, type CommandResult, type ExecutionGrantItemClaim, type ExecutionProvenanceEnvelope, type ExecutionJudgeManifest, type HealthView, type WorkItemView, type WorkflowView } from "@oh-my-pi/pi-work-client";
 
@@ -3362,6 +3362,12 @@ export function createWorkflowHost(cfg: HostConfig) {
 					const preflight = await validateExecutionRecoveryPreflight(activeCtx, backend, exec, "paused");
 					if (!preflight.ok) {
 						ctx.ui.notify(`Cannot resume: ${preflight.reason}`, "error");
+						return;
+					}
+					try {
+						resolveAuditModel(activeCtx);
+					} catch (error) {
+						ctx.ui.notify(`Cannot resume: ${error instanceof Error ? error.message : String(error)}`, "error");
 						return;
 					}
 					const preVersion = exec.grant.grant_version;

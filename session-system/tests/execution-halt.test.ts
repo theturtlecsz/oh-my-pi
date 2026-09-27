@@ -214,6 +214,9 @@ async function makeHarness(state: ExecutionSnapshot["grant"]["state"] = "active"
 			}
 			return { cancelled: false };
 		},
+		models: {
+			resolve: (role: string) => (role === "@audit" ? ({ id: "audit-model", provider: "mock" } as never) : undefined),
+		},
 		ui: {
 			notify: (message: string) => {
 				notifications.push(message);
@@ -457,6 +460,28 @@ describe("execution halt remains available when development breaks the auditor",
 					message.includes("judge TCB computation failed") && message.includes("auditor source unavailable"),
 			),
 		).toBe(true);
+	});
+
+	test("paused grant passing preflight refuses resume when models.resolve returns undefined", async () => {
+		const { h, native } = await nativeResumeHarness();
+		native.appendCustomEntry("work-now", { backend: "work", executionWorkspace: h.workspace });
+		await native.ensureOnDisk();
+		h.context.models.resolve = vi.fn().mockReturnValue(undefined);
+		await h.command("resume OMP-1");
+		expect(h.stateChanges).toEqual([]);
+		const errorNotices = h.notifications.filter(message => message.includes("@audit"));
+		expect(errorNotices).toHaveLength(1);
+		expect(errorNotices[0]).toContain("Cannot resume");
+	});
+
+	test("paused grant passing preflight activates on resume when audit role is resolvable", async () => {
+		const { h, native } = await nativeResumeHarness();
+		native.appendCustomEntry("work-now", { backend: "work", executionWorkspace: h.workspace });
+		await native.ensureOnDisk();
+		await h.command("resume OMP-1");
+		expect(h.stateChanges).toHaveLength(1);
+		expect(h.stateChanges[0].targetState).toBe("active");
+		expect(h.getSnapshot().grant.state).toBe("active");
 	});
 });
 
