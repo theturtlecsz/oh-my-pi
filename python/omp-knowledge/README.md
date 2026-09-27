@@ -5,7 +5,7 @@ Fleet Knowledge service foundation powered by Cognee.
 ## Learning capture CLI (FK-6)
 
 `python -m omp_knowledge.learning` exposes the learning lifecycle subcommands
-`drain`, `retry`, `supply`, `use`, `outcome`, and `correct`.
+`drain`, `retry`, `supply`, `use`, `outcome`, `correct`, and `cleanup`.
 
 ```
 python -m omp_knowledge.learning drain \
@@ -29,3 +29,20 @@ drains — an unavailable record degrades one unit's evidence, never the capture
 `--json` output lists, per unit, `unit_id`, `event_id`, `state`, `attempts`,
 `retryable`, `error_code`, `proposal_ids`, `model`, `profile`, and
 `event_sequence` (the source domain-event sequence the unit came from).
+
+## Cleanup processor (FK-7)
+
+`cleanup` drains pending rows from `cleanup_queue` using `NativeCommittedTarget`,
+which confirms that each procedure's native correction or withdrawal is committed
+before marking the row done.
+
+```
+python -m omp_knowledge.learning cleanup \
+  --state-dir <dir> [--limit N] [--json]
+```
+
+Each pending row is processed in its own transaction:
+- On success: marks the row done (`done_at` timestamp), clears `last_error`, and increments `attempts`.
+- On failure: stores `"<ExcType>: <msg>"` in `last_error`, increments `attempts`, and leaves the row pending for retry.
+
+Exits 0 when every processed row is done, and 1 if any row failed.
