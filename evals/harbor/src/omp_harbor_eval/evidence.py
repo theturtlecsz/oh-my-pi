@@ -168,14 +168,14 @@ class Evidence:
 class EvidenceWriter:
     """Write an evidence directory, then seal it.
 
-    ``dir`` is created if needed and must be empty. ``run.json`` records
+    ``directory`` is created if needed and must be empty. ``run.json`` records
     ``run_id``, ``nonce``, ``fixture_id``, ``fixture_digest``, ``variant``, and
     ``experiment``. After ``seal``, every write raises ``EvidenceSealedError``.
     """
 
     def __init__(
         self,
-        dir: str | Path,
+        directory: str | Path,
         run_id: str,
         nonce: str,
         fixture_id: str,
@@ -189,7 +189,7 @@ class EvidenceWriter:
         self.fixture_digest = _sha256_hex(fixture_digest, "fixture_digest")
         self.variant = _token(variant, "variant")
         self.experiment = _token(experiment, "experiment")
-        self.directory = Path(dir)
+        self.directory = Path(directory)
         self._sealed = False
         self.directory.mkdir(parents=True, exist_ok=True)
         if any(self.directory.iterdir()):
@@ -245,15 +245,15 @@ def _malformed_manifest_entry(key: object) -> str:
     return f"malformed manifest entry: {key!r}"
 
 
-def load_evidence(dir: str | Path, manifest_sha256: str) -> Evidence:
-    """Load ``dir`` if ``manifest_sha256`` is the sha256 of ``manifest.json``.
+def load_evidence(directory: str | Path, manifest_sha256: str) -> Evidence:
+    """Load ``directory`` if ``manifest_sha256`` is the sha256 of ``manifest.json``.
 
     Raises ``EvidenceError`` when the digest does not match, a listed file is
     missing or altered, or the directory contains a file the manifest does not
     list. ``manifest.json`` itself is not a listed file.
     """
 
-    directory = Path(dir)
+    directory = Path(directory)
     if not directory.is_dir():
         raise EvidenceError([f"missing evidence directory: {directory}"])
     if not isinstance(manifest_sha256, str):
