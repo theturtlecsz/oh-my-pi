@@ -92,7 +92,7 @@ def trial_execution(
         FROM omp_jobs.jobs
         WHERE workspace_id = %s AND trial_id = %s AND source = 'native'
         ORDER BY created_at ASC, job_id ASC
-        """,
+        """,  # nosec B608 - static column list
         (ws_uuid, trial_uuid),
     )
     job_rows = list(cur.fetchall())
