@@ -1,4 +1,4 @@
-import type { CloseAttempt, WorkflowView } from "@oh-my-pi/pi-work-client";
+import { payloadHash, type CloseAttempt, type WorkflowView } from "@oh-my-pi/pi-work-client";
 
 export interface StageContextInput {
 	key: string;
@@ -15,11 +15,50 @@ export interface StageContextDeps {
 	workflow: (key: string) => Promise<WorkflowView>;
 	liveAttempt: (view: WorkflowView) => CloseAttempt | undefined;
 	env: Record<string, string | undefined>;
-	run?: StageContextRunner | ((...args: never[]) => unknown);
+	run: StageContextRunner;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const ENV_VAR_NAME = "OMP_KNOWLEDGE_CONTEXT_CMD";
+const MODULE_TOKEN = "omp_knowledge.context";
+// Flags that exist only on the `compile` subparser. `-m` is a python flag and must not match.
+const COMPILE_FLAGS = new Set([
+	"--state-dir",
+	"--token-cmd",
+	"--encoding",
+	"--token-budget",
+	"--structural-state-dir",
+	"--snapshot",
+	"--permit-repository",
+	"--learning-db",
+	"--engine",
+	"--reranker-url",
+	"--reranker-model",
+	"--structural-limit",
+	"--semantic-limit",
+	"--json",
+]);
+
+// The context CLI is `python -m omp_knowledge.context compile ...`. argparse accepts
+// `--state-dir` and the other compile flags only on the `compile` subparser, so the
+// subcommand is spliced ahead of whichever flags the operator folded into
+// OMP_KNOWLEDGE_CONTEXT_CMD — appending `compile` after those flags exits 2.
+function buildCompileArgv(baseCmd: string[]): string[] {
+	const existing = baseCmd.indexOf("compile");
+	if (existing >= 0) {
+		if (baseCmd.includes("--json")) return baseCmd;
+		return [...baseCmd.slice(0, existing + 1), "--json", ...baseCmd.slice(existing + 1)];
+	}
+
+	const moduleIndex = baseCmd.findIndex(token => token === MODULE_TOKEN || token.endsWith(`/${MODULE_TOKEN}`));
+	let insertAt = moduleIndex >= 0 ? moduleIndex + 1 : baseCmd.length;
+	if (moduleIndex < 0) {
+		const flagIndex = baseCmd.findIndex(token => COMPILE_FLAGS.has(token));
+		if (flagIndex >= 0) insertAt = flagIndex;
+	}
+	const jsonFlag = baseCmd.includes("--json") ? [] : ["--json"];
+	return [...baseCmd.slice(0, insertAt), "compile", ...jsonFlag, ...baseCmd.slice(insertAt)];
+}
 
 export async function defaultRun(
 	argv: string[],
@@ -52,18 +91,17 @@ export async function defaultRun(
 		reject(new Error("timeout"));
 	}, timeoutMs);
 
+	const finished = Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
 	try {
-		const [stdoutText, stderrText, exitCode] = await Promise.race([
-			Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]),
-			timeoutPromise,
-		]);
+		const [stdoutText, stderrText, exitCode] = await Promise.race([finished, timeoutPromise]);
 		return { exitCode, stdout: stdoutText, stderr: stderrText };
 	} finally {
 		clearTimeout(timer);
+		void finished.catch(() => undefined);
 	}
 }
 
@@ -88,7 +126,7 @@ export async function stageContextLines(
 			return ["STAGE CONTEXT: unavailable (bad JSON)"];
 		}
 
-		const argv = [...cmd, "compile", "--json"];
+		const argv = buildCompileArgv(cmd);
 
 		const view = await deps.workflow(input.key);
 		const attempt = deps.liveAttempt(view);
@@ -121,16 +159,9 @@ export async function stageContextLines(
 			workflow: view,
 		});
 
-		const isWorkBackendRun =
-			typeof deps.run === "function" &&
-			deps.run.name === "run" &&
-			deps.run.toString().includes("intentFingerprint");
-		const runner: StageContextRunner =
-			deps.run && !isWorkBackendRun ? (deps.run as StageContextRunner) : defaultRun;
-
 		let result: { exitCode: number; stdout: string; stderr: string };
 		try {
-			result = await runner(argv, stdin, DEFAULT_TIMEOUT_MS);
+			result = await deps.run(argv, stdin, DEFAULT_TIMEOUT_MS);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			const isTimeout = msg.toLowerCase().includes("timeout");
@@ -171,7 +202,8 @@ export async function stageContextLines(
 			text: string;
 		};
 
-		const actualSha = new Bun.CryptoHasher("sha256").update(p.text, "utf8").digest("hex");
+		// compile_bundle stores sha256(canonical_json(text)): the JSON string, quotes included.
+		const actualSha = payloadHash(p.text);
 		if (actualSha !== p.bundle_sha256) {
 			return ["STAGE CONTEXT: unavailable (sha mismatch)"];
 		}

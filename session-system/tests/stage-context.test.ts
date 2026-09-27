@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CloseAttempt, WorkflowView } from "@oh-my-pi/pi-work-client";
+import { payloadHash, type CloseAttempt, type WorkflowView } from "@oh-my-pi/pi-work-client";
 import {
 	stageContextLines,
 	type StageContextInput,
@@ -77,11 +77,12 @@ describe("stageContextLines", () => {
 		let capturedArgv: string[] = [];
 		let capturedStdin: string = "";
 
+		const text = "FLEET CONTEXT v1\n\n## exact\n- rev";
+		// sha256(canonical_json(text)) from omp_work.v1.canonical — not the raw UTF-8 digest.
+		const sha = "8ac1238c4ecfe209b1c2e8c1ade80df0d2e16f60d69411012a259d2c7f49c489";
 		const fakeRunner: StageContextRunner = async (argv, stdin) => {
 			capturedArgv = argv;
 			capturedStdin = stdin;
-			const text = "FLEET CONTEXT v1\n\n## exact\n- rev";
-			const sha = new Bun.CryptoHasher("sha256").update(text, "utf8").digest("hex");
 			return {
 				exitCode: 0,
 				stdout: JSON.stringify({
@@ -97,7 +98,7 @@ describe("stageContextLines", () => {
 			};
 		};
 
-		const baseCmd = ["python", "-m", "omp_knowledge.context", "--state-dir", "/tmp/state"];
+		const baseCmd = ["uv", "run", "--project", "/opt/omp-knowledge", "python", "-m", "omp_knowledge.context", "--state-dir", "/tmp/state"];
 		const lines = await stageContextLines(defaultInput, {
 			workflow: async key => {
 				expect(key).toBe("OMP-100");
@@ -108,7 +109,20 @@ describe("stageContextLines", () => {
 			run: fakeRunner,
 		});
 
-		expect(capturedArgv).toEqual([...baseCmd, "compile", "--json"]);
+		// `--state-dir` exists only on the compile subparser, so it follows `compile`.
+		expect(capturedArgv).toEqual([
+			"uv",
+			"run",
+			"--project",
+			"/opt/omp-knowledge",
+			"python",
+			"-m",
+			"omp_knowledge.context",
+			"compile",
+			"--json",
+			"--state-dir",
+			"/tmp/state",
+		]);
 
 		const parsedStdin = JSON.parse(capturedStdin);
 		expect(parsedStdin.stage).toBe("plan");
@@ -116,8 +130,67 @@ describe("stageContextLines", () => {
 		expect(parsedStdin.cwd).toBe("/repo/test");
 		expect(parsedStdin.workflow).toEqual(view);
 
-		expect(lines[0]).toBe("STAGE CONTEXT plan bundle=b-plan sha256=" + parsedStdin.workflow.item.candidate?.candidate_sha256 ? lines[0] : "");
-		expect(lines[0]).toContain("STAGE CONTEXT plan bundle=b-plan");
+		expect(lines).toEqual([
+			`STAGE CONTEXT plan bundle=b-plan sha256=${sha} tokens=42/1000 excluded=0`,
+			"FLEET CONTEXT v1",
+			"",
+			"## exact",
+			"- rev",
+		]);
+	});
+
+	test("splices compile ahead of flags when the command has no module token", async () => {
+		let capturedArgv: string[] = [];
+		const fakeRunner: StageContextRunner = async argv => {
+			capturedArgv = argv;
+			return { exitCode: 2, stdout: "", stderr: "" };
+		};
+
+		const baseCmd = ["context-cli", "--state-dir", "/tmp/state", "--token-budget", "4000"];
+		await stageContextLines(defaultInput, {
+			workflow: async () => makeMinimalView(),
+			liveAttempt: () => undefined,
+			env: { OMP_KNOWLEDGE_CONTEXT_CMD: JSON.stringify(baseCmd) },
+			run: fakeRunner,
+		});
+
+		expect(capturedArgv).toEqual([
+			"context-cli",
+			"compile",
+			"--json",
+			"--state-dir",
+			"/tmp/state",
+			"--token-budget",
+			"4000",
+		]);
+	});
+
+	test("reuses an existing compile subcommand instead of duplicating it", async () => {
+		let capturedArgv: string[] = [];
+		const fakeRunner: StageContextRunner = async argv => {
+			capturedArgv = argv;
+			return { exitCode: 2, stdout: "", stderr: "" };
+		};
+
+		const baseCmd = ["python", "-m", "omp_knowledge.context", "compile", "--state-dir", "/tmp/state", "--encoding", "cl100k"];
+		await stageContextLines(defaultInput, {
+			workflow: async () => makeMinimalView(),
+			liveAttempt: () => undefined,
+			env: { OMP_KNOWLEDGE_CONTEXT_CMD: JSON.stringify(baseCmd) },
+			run: fakeRunner,
+		});
+
+		expect(capturedArgv).toEqual([
+			"python",
+			"-m",
+			"omp_knowledge.context",
+			"compile",
+			"--json",
+			"--state-dir",
+			"/tmp/state",
+			"--encoding",
+			"cl100k",
+		]);
 	});
 
 	test("implement view sends the right stage, attempt_id and fetched view on stdin", async () => {
@@ -184,7 +257,7 @@ describe("stageContextLines", () => {
 		const fakeRunner: StageContextRunner = async (_argv, stdin) => {
 			capturedStdin = stdin;
 			const text = "FLEET CONTEXT v1\n\n## structural\n- file.ts:1";
-			const sha = new Bun.CryptoHasher("sha256").update(text, "utf8").digest("hex");
+			const sha = payloadHash(text);
 			return {
 				exitCode: 0,
 				stdout: JSON.stringify({
@@ -233,7 +306,7 @@ describe("stageContextLines", () => {
 		const fakeRunner: StageContextRunner = async (_argv, stdin) => {
 			capturedStdin = stdin;
 			const text = "FLEET CONTEXT v1\n\n## identity\nwork_id: work-1";
-			const sha = new Bun.CryptoHasher("sha256").update(text, "utf8").digest("hex");
+			const sha = payloadHash(text);
 			return {
 				exitCode: 0,
 				stdout: JSON.stringify({
@@ -265,7 +338,7 @@ describe("stageContextLines", () => {
 
 	test("good output -> header line then text lines verbatim", async () => {
 		const text = "FLEET CONTEXT v1\n\n## structural\n- mod: line 1\n- mod: line 2\n\n--- identity ---\nstage: implement";
-		const sha = new Bun.CryptoHasher("sha256").update(text, "utf8").digest("hex");
+		const sha = payloadHash(text);
 
 		const fakeRunner: StageContextRunner = async () => ({
 			exitCode: 0,
@@ -299,6 +372,32 @@ describe("stageContextLines", () => {
 			"--- identity ---",
 			"stage: implement",
 		]);
+	});
+
+	test("raw utf-8 digest is a sha mismatch", async () => {
+		const text = "FLEET CONTEXT v1\n\n## exact\n- rev";
+		const raw = new Bun.CryptoHasher("sha256").update(text, "utf8").digest("hex");
+
+		const lines = await stageContextLines(defaultInput, {
+			workflow: async () => makeMinimalView(),
+			liveAttempt: () => undefined,
+			env: { OMP_KNOWLEDGE_CONTEXT_CMD: JSON.stringify(["ctx"]) },
+			run: async () => ({
+				exitCode: 0,
+				stdout: JSON.stringify({
+					bundle_id: "b-raw",
+					bundle_sha256: raw,
+					stage: "plan",
+					tokens: 10,
+					token_budget: 1000,
+					exclusions: [],
+					text,
+				}),
+				stderr: "",
+			}),
+		});
+
+		expect(lines).toEqual(["STAGE CONTEXT: unavailable (sha mismatch)"]);
 	});
 
 	test("sha mismatch -> one unavailable line only", async () => {
