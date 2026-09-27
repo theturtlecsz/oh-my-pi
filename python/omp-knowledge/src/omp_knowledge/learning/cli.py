@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from omp_work.v1.client import WorkClient
 from pydantic import ValidationError
 
-from omp_work.v1.client import WorkClient
-
 from .capture import NativeEvents, NativeRecords, RunRecord, drain, retry
+from .cleanup import CleanupTarget, NativeCommittedTarget, drain_cleanup
 from .corrections import CorrectionRecord, correct
 from .generation import LessonGenerator, LocalChatGenerator
 from .models import Attribution, Precondition, SourceIdentity
@@ -106,6 +106,16 @@ def _build_parser() -> argparse.ArgumentParser:
     correct_parser.add_argument("--profile", required=True)
     correct_parser.add_argument("--json", action="store_true")
 
+    cleanup_parser = subcommands.add_parser("cleanup")
+    cleanup_parser.add_argument("--state-dir", required=True)
+    cleanup_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="maximum pending cleanup rows processed in this run",
+    )
+    cleanup_parser.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -166,6 +176,7 @@ def main(
     receipts: NativeReceipts | None = None,
     generator: LessonGenerator | None = None,
     records: NativeRecords | None = None,
+    target: CleanupTarget | None = None,
 ) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -319,6 +330,24 @@ def main(
             else:
                 print(_format_correction(record))
             return EXIT_OK
+
+        if args.command == "cleanup":
+            run_target = target or NativeCommittedTarget(active_store)
+            run = drain_cleanup(active_store, run_target, limit=args.limit)
+            if args.json:
+                print(json.dumps(run.model_dump(mode="json"), indent=2, sort_keys=True))
+            else:
+                print(
+                    f"CLEANUP processed={run.processed} succeeded={run.succeeded} failed={run.failed}"
+                )
+                for item in run.items:
+                    status = "done" if item.done else "failed"
+                    err = f" error={item.last_error!r}" if item.last_error else ""
+                    print(
+                        f"  [{item.queue_id}] {item.procedure_id} {item.action} "
+                        f"{status} attempts={item.attempts}{err}"
+                    )
+            return EXIT_OK if run.failed == 0 else EXIT_RUN_FAILED
 
         raise SystemExit(2)
     finally:

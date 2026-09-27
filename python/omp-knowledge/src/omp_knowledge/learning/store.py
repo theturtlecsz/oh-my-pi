@@ -143,7 +143,9 @@ CREATE TABLE IF NOT EXISTS cleanup_queue (
     procedure_id TEXT NOT NULL,
     action TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    done_at TEXT DEFAULT NULL
+    done_at TEXT DEFAULT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_units_state ON units(state);
@@ -192,6 +194,16 @@ class LearningStore:
 
     def _init_db(self) -> None:
         self._conn.executescript(SCHEMA_SQL)
+        cursor = self._conn.execute("PRAGMA table_info(cleanup_queue)")
+        cols = {row["name"] for row in cursor.fetchall()}
+        if "attempts" not in cols:
+            self._conn.execute(
+                "ALTER TABLE cleanup_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+            )
+        if "last_error" not in cols:
+            self._conn.execute(
+                "ALTER TABLE cleanup_queue ADD COLUMN last_error TEXT"
+            )
 
     @contextmanager
     def transaction(self) -> Generator[sqlite3.Connection, None, None]:
