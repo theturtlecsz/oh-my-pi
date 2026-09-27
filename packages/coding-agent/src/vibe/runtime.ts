@@ -195,6 +195,15 @@ interface VibeRecord {
 	suspended: boolean;
 	/** True only after a terminal lifecycle event has durably flushed. */
 	terminalPersisted: boolean;
+	/**
+	 * `omp-vibe-*` session home created for a session-less worker (no parent
+	 * session file). It backs the worker's persisted transcript for its whole
+	 * lifetime, so it is removed only when the worker is torn down, never when a
+	 * single turn settles.
+	 */
+	temporaryArtifactsDir?: string;
+	/** Unregisters {@link temporaryArtifactsDir} from `agent://` resolution on teardown. */
+	temporaryArtifactsUnregister?: () => void;
 }
 
 /**
@@ -762,6 +771,27 @@ export class VibeSessionRegistry {
 		});
 	}
 
+	/**
+	 * Remove the throwaway `omp-vibe-*` home of a session-less worker once its
+	 * lifetime ends. Callers run this after the worker's release and job
+	 * settlement have drained, so nothing reads the transcript anymore.
+	 */
+	async #disposeTemporaryArtifacts(record: VibeRecord): Promise<void> {
+		const dir = record.temporaryArtifactsDir;
+		record.temporaryArtifactsDir = undefined;
+		record.temporaryArtifactsUnregister?.();
+		record.temporaryArtifactsUnregister = undefined;
+		if (!dir) return;
+		try {
+			await fs.rm(dir, { recursive: true, force: true });
+		} catch (error) {
+			logger.warn("vibe: failed to remove throwaway worker artifacts dir", {
+				id: record.id,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
 	#finishAgentRelease(id: string, ref: AgentRef, task: TrackedVibeTeardown, action: "detach" | "release"): void {
 		if (task.status() === "settled") return;
 		if (task.status() === "pending") {
@@ -1027,6 +1057,8 @@ export class VibeSessionRegistry {
 					throw new ToolError("Vibe parent session changed before spawn failure could be persisted.");
 				}
 			}
+			// The failed turn's throwaway home has no surviving worker; drop it now.
+			await this.#disposeTemporaryArtifacts(record);
 			this.#records.delete(key);
 			throw error;
 		}
@@ -1198,6 +1230,14 @@ export class VibeSessionRegistry {
 				});
 				this.#continueSuspendedCleanup(scope, record, jobTask);
 			}
+			// The detached worker's lifetime ends here; remove its throwaway home
+			// once its cancelled turn has stopped reading the transcript.
+			if (jobTask?.status() === "pending") {
+				const pending = jobTask;
+				void pending.promise.then(() => this.#disposeTemporaryArtifacts(record)).catch(() => {});
+			} else {
+				await this.#disposeTemporaryArtifacts(record);
+			}
 			if (this.#records.has(scopeKey(scope, record.id))) continue;
 			const lateRef = this.#registeredAgent(record);
 			if (lateRef && lateRef !== ref) {
@@ -1342,6 +1382,10 @@ export class VibeSessionRegistry {
 				jobId: job.id,
 			});
 		}
+		// The worker's lifetime ends here: with no turn still draining, its
+		// throwaway home (kept only for revival) can be removed. A pending job
+		// owns the removal via `#continueKilledCleanup` once it stops reading.
+		if (pendingJobs.length === 0) await this.#disposeTemporaryArtifacts(record);
 		const terminalRef = registered ?? this.#registeredAgent(record) ?? null;
 		await this.#markTerminalRecord(record, terminalRef, deadline);
 		if (pendingJobs.length > 0) {
@@ -1403,7 +1447,10 @@ export class VibeSessionRegistry {
 		expected: AgentRef | undefined,
 	): void {
 		void Promise.allSettled(jobTasks.map(task => task.promise))
-			.then(() => this.#markTerminalRecord(record, expected, Date.now() + this.#teardownGraceMs))
+			.then(async () => {
+				await this.#markTerminalRecord(record, expected, Date.now() + this.#teardownGraceMs);
+				await this.#disposeTemporaryArtifacts(record);
+			})
 			.catch(error => {
 				logger.warn("vibe: failed to finish killed worker cleanup", {
 					id: record.id,
@@ -1422,14 +1469,24 @@ export class VibeSessionRegistry {
 	): Promise<ExecutorOptions> {
 		const sessionFile = session.getSessionFile();
 		const sessionArtifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
-		const artifactsDir = sessionArtifactsDir ?? path.join(os.tmpdir(), `omp-vibe-${Snowflake.next()}`);
+		// No session file → no artifact home on disk, so the worker gets a
+		// throwaway tempdir. It is the worker's session home for its whole
+		// lifetime — the executor writes `<id>.jsonl` and `<id>.md` there and the
+		// keep-alive worker is revived from that transcript — so it is removed
+		// only when the worker is torn down (`#killRecord` / `suspendScope`),
+		// never when a single turn settles.
+		let artifactsDir = sessionArtifactsDir;
+		if (!artifactsDir) {
+			artifactsDir = path.join(os.tmpdir(), `omp-vibe-${Snowflake.next()}`);
+			record.temporaryArtifactsDir = artifactsDir;
+		}
 		await fs.mkdir(artifactsDir, { recursive: true });
-		if (!sessionArtifactsDir) registerArtifactsDir(artifactsDir);
+		if (record.temporaryArtifactsDir) record.temporaryArtifactsUnregister = registerArtifactsDir(artifactsDir);
 		const localProtocolOptions: LocalProtocolOptions = session.localProtocolOptions ?? {
 			getArtifactsDir: session.getArtifactsDir ?? (() => null),
 			getSessionId: session.getSessionId ?? (() => null),
 		};
-		return {
+		const options: ExecutorOptions = {
 			cwd: session.cwd,
 			agent: record.agent,
 			task: message,
@@ -1471,6 +1528,7 @@ export class VibeSessionRegistry {
 			parentServiceTier: session.getServiceTierByFamily ? (session.getServiceTierByFamily() ?? null) : undefined,
 			keepAlive: true,
 		};
+		return options;
 	}
 
 	/** Register one background job that runs a single worker turn and self-delivers its result. */
@@ -1526,18 +1584,23 @@ export class VibeSessionRegistry {
 					if (record.childSessionFile && !turnStartedPersisted) {
 						throw new ToolError(`Vibe session "${record.id}" changed parent scope before its turn started.`);
 					}
-					const result = options.first
-						? await runSubprocess(await this.#buildSpawnOptions(session, record, message, signal, onProgress))
-						: await runSubagentFollowUpTurn({
-								id: record.id,
-								agent: record.agent,
-								message,
-								description: `vibe ${record.cli} session`,
-								signal,
-								onProgress,
-								eventBus: session.eventBus,
-								artifactsDir: session.getSessionFile()?.slice(0, -6),
-							});
+					let result: SingleResult;
+					if (options.first) {
+						result = await runSubprocess(
+							await this.#buildSpawnOptions(session, record, message, signal, onProgress),
+						);
+					} else {
+						result = await runSubagentFollowUpTurn({
+							id: record.id,
+							agent: record.agent,
+							message,
+							description: `vibe ${record.cli} session`,
+							signal,
+							onProgress,
+							eventBus: session.eventBus,
+							artifactsDir: session.getSessionFile()?.slice(0, -6),
+						});
+					}
 					return await this.#settleTurn(session, manager, record, turn, ownJobId, turnIndex, result);
 				} catch (error) {
 					if (error instanceof VibeTurnError) throw error;

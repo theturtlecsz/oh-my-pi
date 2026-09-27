@@ -326,11 +326,97 @@ interface StderrCapture {
 	cleanupOnExit: (() => void) | null;
 }
 
+const STDERR_CAPTURE_PREFIX = "omp-worker-stderr-";
+const STDERR_CAPTURE_OWNER_FILE = "owner.pid";
+/**
+ * A capture dir without an owner marker predates this release. Its owning
+ * process is unknown, so only reap it once it is clearly abandoned rather than
+ * risk deleting the live stderr target of an older-version worker.
+ */
+const STDERR_CAPTURE_UNOWNED_REAP_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * True while `pid` exists; a permission/sandbox failure still counts as alive.
+ * Mirrors the provider in-flight lease liveness check (`packages/ai/src/stream.ts`).
+ */
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code !== "ESRCH";
+	}
+}
+
+/**
+ * Remove capture dirs left behind by a process that was hard-killed before its
+ * `exit` handler ran — the capture can only clean itself up on graceful exit,
+ * so a `SIGKILL` to the parent (or its whole group) orphaned the directory.
+ * Ownership is recorded in `owner.pid`, so a surviving process reaps any dir
+ * whose owner is gone, plus unmarked dirs old enough to be abandoned.
+ */
+function reapStaleStderrCaptures(): void {
+	let names: string[];
+	try {
+		names = fs.readdirSync(os.tmpdir(), { encoding: "utf8" });
+	} catch {
+		return;
+	}
+	for (const name of names) {
+		if (!name.startsWith(STDERR_CAPTURE_PREFIX)) continue;
+		const dir = path.join(os.tmpdir(), name);
+		let owner: number | null = null;
+		try {
+			const parsed = Number(fs.readFileSync(path.join(dir, STDERR_CAPTURE_OWNER_FILE), "utf8").trim());
+			owner = Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+		} catch {
+			owner = null;
+		}
+		if (owner !== null) {
+			if (isProcessAlive(owner)) continue;
+		} else {
+			try {
+				if (Date.now() - fs.statSync(dir).mtimeMs < STDERR_CAPTURE_UNOWNED_REAP_AGE_MS) continue;
+			} catch {
+				continue;
+			}
+		}
+		try {
+			fs.rmSync(dir, { recursive: true, force: true });
+		} catch {
+			// Best-effort; another process may already have reaped it.
+		}
+	}
+}
+
 /** Create a file-backed stderr target that does not pin Bun's event loop. */
 function createStderrCapture(exitLabel: string): StderrCapture {
 	try {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-worker-stderr-"));
-		const fd = fs.openSync(path.join(dir, "stderr.log"), "w+");
+		reapStaleStderrCaptures();
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), STDERR_CAPTURE_PREFIX));
+		const logPath = path.join(dir, "stderr.log");
+		const fd = fs.openSync(logPath, "w+");
+		// POSIX keeps an unlinked file's data readable through its open fd, so
+		// dropping the directory entry (and the now-empty dir) immediately means a
+		// SIGKILL to this process — which never runs the `exit` handler — still
+		// leaves nothing in the temp root. Windows holds the open file, so it
+		// keeps the dir and relies on the exit handler plus the owner-marker reap.
+		if (process.platform !== "win32") {
+			try {
+				fs.unlinkSync(logPath);
+				fs.rmdirSync(dir);
+				return { target: fd, fd, dir: null, cleanupOnExit: null };
+			} catch {
+				// Fall through to the marker-backed cleanup below.
+			}
+		}
+		// Record the owner before relying on exit cleanup so a killed parent's dir
+		// is attributable even if the crash lands between the two writes.
+		try {
+			fs.writeFileSync(path.join(dir, STDERR_CAPTURE_OWNER_FILE), String(process.pid));
+		} catch {
+			// The unmarked-dir age fallback still reaps it eventually.
+		}
 		const cleanupOnExit = (): void => cleanupStderrCapture({ target: fd, fd, dir, cleanupOnExit: null });
 		process.once("exit", cleanupOnExit);
 		return { target: fd, fd, dir, cleanupOnExit };

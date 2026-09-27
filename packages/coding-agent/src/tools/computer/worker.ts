@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -99,6 +100,8 @@ interface ComputerRunContext {
 	snapshot: ComputerSessionSnapshot;
 	output: RunOutput;
 	screenshots: ComputerScreenshot[];
+	/** Records a temp PNG written this run for the worker's lifetime cleanup. */
+	trackScreenshot: (path: string) => void;
 }
 
 type RunContextAccessor = () => ComputerRunContext;
@@ -193,6 +196,9 @@ async function captureScreenshot(
 		}),
 	);
 	const destination = path.join(os.tmpdir(), `omp-computer-${Snowflake.next()}.png`);
+	// Report before writing: a kill between the write and the report would leak
+	// the file, and the supervisor's `force` removal tolerates a missing path.
+	context.trackScreenshot(destination);
 	await Bun.write(destination, frame.data);
 	const scaled = frame.width !== frame.sourceWidth || frame.height !== frame.sourceHeight;
 	context.screenshots.push({
@@ -423,6 +429,13 @@ export class ComputerWorkerCore {
 	#runtime?: JsRuntime;
 	#active: ActiveRun | null = null;
 	/**
+	 * Temp PNGs written by settled runs. A completed run's result carries the
+	 * paths, so the supervisor may read them until the next run starts; they are
+	 * dropped then, and unconditionally on close, so a worker never accumulates
+	 * captures across its lifetime.
+	 */
+	readonly #tempScreenshots = new Set<string>();
+	/**
 	 * Per-run context, carried through AsyncLocalStorage so async work leaked
 	 * from an ended run (timers, dangling promises) keeps that run's aborted
 	 * context instead of borrowing the next run's signal and read-only policy.
@@ -473,6 +486,38 @@ export class ComputerWorkerCore {
 		return this.#runtime;
 	}
 
+	/** Delete every retained temp PNG; best-effort so one locked file cannot block the rest. */
+	#removeTempScreenshots(): void {
+		for (const file of this.#tempScreenshots) {
+			try {
+				fs.rmSync(file, { force: true });
+			} catch {
+				// Best-effort temp cleanup.
+			}
+		}
+		this.#tempScreenshots.clear();
+		this.#syncCaptures();
+	}
+
+	/**
+	 * Retain one temp PNG for the worker's lifetime cleanup. A `terminate()`d
+	 * worker thread runs none of its own cleanup, so the retained set is also
+	 * mirrored to the supervisor, which removes it after a kill.
+	 */
+	#trackScreenshot(file: string): void {
+		this.#tempScreenshots.add(file);
+		this.#syncCaptures();
+	}
+
+	/** Mirror the retained temp PNGs to the supervisor so a kill can still remove them. */
+	#syncCaptures(): void {
+		try {
+			this.#transport.send({ type: "captures", paths: [...this.#tempScreenshots] });
+		} catch {
+			// Transport already closed: the worker has closed and cleaned up.
+		}
+	}
+
 	async #run(message: Extract<ComputerWorkerInbound, { type: "run" }>): Promise<void> {
 		if (this.#closed) {
 			this.#transport.send({
@@ -498,6 +543,9 @@ export class ComputerWorkerCore {
 		const signal = AbortSignal.any([timeoutSignal, ac.signal, runAc.signal]);
 		const active: ActiveRun = { id: message.id, ac, signal, pendingTools: new Map() };
 		this.#active = active;
+		// A new run supersedes the previous result, so its retained captures are
+		// no longer readable by anyone and are dropped here.
+		this.#removeTempScreenshots();
 		const output = new RunOutput();
 		const screenshots: ComputerScreenshot[] = [];
 		const runContext: ComputerRunContext = {
@@ -506,6 +554,7 @@ export class ComputerWorkerCore {
 			snapshot: message.session,
 			output,
 			screenshots,
+			trackScreenshot: path => this.#trackScreenshot(path),
 		};
 		let returnValue: unknown;
 		let failure: { error: unknown } | undefined;
@@ -737,6 +786,9 @@ export class ComputerWorkerCore {
 			// Closing is best-effort; the worker is exiting and has no request to report this against.
 		} finally {
 			this.#session = undefined;
+			// The worker's lifetime ends here and no result can still be read, so
+			// the retained temp PNGs are dropped now.
+			this.#removeTempScreenshots();
 			this.#unsubscribe();
 			this.#transport.send({ type: "closed" });
 			this.#transport.close();

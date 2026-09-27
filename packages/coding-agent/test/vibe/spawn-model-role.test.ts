@@ -9,6 +9,7 @@
  * chain and vibe children silently retry on the `default` role's chain.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -32,6 +33,9 @@ function makeParentSession(settings: Settings): ToolSession {
 	} as unknown as ToolSession;
 }
 
+/** Every session-less worker spawned here, so afterEach can end its lifetime. */
+const spawned: Array<{ session: ToolSession; id: string }> = [];
+
 /** Spawn one worker and capture the ExecutorOptions the vibe path hands the executor. */
 async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings): Promise<ExecutorOptions> {
 	const captured = Promise.withResolvers<ExecutorOptions>();
@@ -54,13 +58,19 @@ async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings): Promise
 	});
 
 	const registry = VibeSessionRegistry.global();
-	await registry.spawn(makeParentSession(settings), { cli, prompt: "work" });
+	const session = makeParentSession(settings);
+	const { id } = await registry.spawn(session, { cli, prompt: "work" });
+	spawned.push({ session, id });
 	return captured.promise;
 }
 
 describe("vibe worker spawn model role", () => {
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
+		// A session-less worker's `omp-vibe-*` home lives until its lifetime ends,
+		// so kill every worker spawned here before resetting the registry.
+		const live = spawned.splice(0, spawned.length);
+		for (const { session, id } of live) await VibeSessionRegistry.global().kill(session, id);
 		VibeSessionRegistry.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
 	});
@@ -103,5 +113,46 @@ describe("vibe worker spawn model role", () => {
 
 		expect(options.modelOverride).toEqual(["openai-codex/sol"]);
 		expect(options.modelRole).toBeUndefined();
+	});
+
+	it("keeps the throwaway artifacts dir as the keep-alive home until the worker is killed", async () => {
+		// OMP-389: a worker with no session file gets a tmpdir `omp-vibe-*` home.
+		// That dir is the keep-alive session home the executor writes
+		// `<id>.jsonl`/`<id>.md` into, so it must survive the turn settling (a
+		// delete here broke park/revive and `agent://`); it is removed only when
+		// the worker's lifetime ends.
+		const settings = Settings.isolated({ modelRoles: { default: "anthropic/opus", smol: "fast/hy3" } });
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const session = { ...makeParentSession(settings), asyncJobManager: manager } as unknown as ToolSession;
+		const captured = Promise.withResolvers<ExecutorOptions>();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			captured.resolve(options);
+			return {
+				index: 0,
+				id: options.id,
+				agent: options.agent.name,
+				agentSource: "bundled",
+				task: options.task,
+				exitCode: 0,
+				output: "done",
+				stderr: "",
+				truncated: false,
+				durationMs: 1,
+				tokens: 0,
+				requests: 0,
+			} as SingleResult;
+		});
+
+		const { id, jobId } = await VibeSessionRegistry.global().spawn(session, { cli: "fast", prompt: "work" });
+		const options = await captured.promise;
+		expect(options.artifactsDir).toMatch(/omp-vibe-/);
+		const artifactsDir = options.artifactsDir!;
+		await manager.getJob(jobId)?.promise;
+		// The turn settled but the keep-alive home must still be there.
+		expect(fs.existsSync(artifactsDir)).toBe(true);
+
+		// Killing the worker ends its lifetime, so the throwaway home goes with it.
+		await VibeSessionRegistry.global().kill(session, id);
+		expect(fs.existsSync(artifactsDir)).toBe(false);
 	});
 });

@@ -476,9 +476,13 @@ async function tryAcquireProviderInFlightLease(
 }
 
 async function signalProviderInFlightWaitersInDir(dir: string): Promise<void> {
+	// Wake-up is fire-and-forget and waiters also poll on a timer, so a missing
+	// provider dir just means no one is watching it. `fs.writeFile` (unlike
+	// `Bun.write`) does not create missing parent directories, so a release that
+	// settles after the dir was removed cannot resurrect an empty one — same
+	// reasoning as `writeProviderInFlightInfo` above.
 	try {
-		await fs.mkdir(dir, { recursive: true });
-		await Bun.write(path.join(dir, ".wakeup"), String(Date.now()));
+		await fs.writeFile(path.join(dir, ".wakeup"), String(Date.now()));
 	} catch {}
 }
 

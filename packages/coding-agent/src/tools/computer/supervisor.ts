@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import type { DesktopCapabilities } from "@oh-my-pi/pi-natives";
 import { withTimeout } from "@oh-my-pi/pi-utils/async";
 import * as logger from "@oh-my-pi/pi-utils/logger";
@@ -144,6 +145,8 @@ export class ComputerSupervisor implements ComputerController {
 	#startResolve?: () => void;
 	#latestCapabilities?: DesktopCapabilities;
 	#pending = new Map<string, PendingRun>();
+	/** Temp screenshot PNGs the worker reported, so a killed worker's files can be removed. */
+	#reportedCaptures = new Set<string>();
 	#nextId = 0;
 	#closed = false;
 	#unsubscribeMessage?: () => void;
@@ -230,6 +233,11 @@ export class ComputerSupervisor implements ComputerController {
 			this.#startResolve?.();
 			this.#startResolve = undefined;
 			this.#startReject = undefined;
+			return;
+		}
+		if (message.type === "captures") {
+			// The worker mirrors its retained temp PNGs so a kill can remove them.
+			this.#reportedCaptures = new Set(message.paths);
 			return;
 		}
 		if (message.type === "result") {
@@ -329,6 +337,21 @@ export class ComputerSupervisor implements ComputerController {
 		}
 		this.#pending.clear();
 		await worker?.terminate().catch(() => undefined);
+		// A terminated worker thread runs none of its own cleanup, so remove the
+		// temp PNGs it reported before its lifetime ended.
+		this.#removeReportedCaptures();
+	}
+
+	/** Best-effort removal of the temp PNGs the worker reported. */
+	#removeReportedCaptures(): void {
+		for (const file of this.#reportedCaptures) {
+			try {
+				fs.rmSync(file, { force: true });
+			} catch {
+				// Best-effort temp cleanup.
+			}
+		}
+		this.#reportedCaptures.clear();
 	}
 
 	async close(): Promise<void> {

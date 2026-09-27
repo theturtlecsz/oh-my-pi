@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed thinking-only Gemini Cloud Code Assist responses being treated as failures when silence is valid, preventing passive advisors from unnecessarily switching providers.
+- Fixed a provider in-flight lease release recreating an already-removed coordination directory, which left empty coordination dirs in the temp root.
 ## [18.0.6] - 2026-08-26
 
 ### Added

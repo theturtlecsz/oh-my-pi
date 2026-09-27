@@ -59,6 +59,7 @@ export type ComputerWorkerOutbound =
 	| { type: "result"; id: string; ok: true; payload: ComputerRunOk }
 	| { type: "result"; id: string; ok: false; error: RunErrorPayload }
 	| { type: "tool-call"; id: string; runId: string; name: string; args: unknown }
+	| { type: "captures"; paths: string[] }
 	| { type: "closed" };
 
 /** Transport used by the worker core in Bun workers and tests. */
