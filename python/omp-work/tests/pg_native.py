@@ -17,6 +17,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import psycopg
+from installed_runtime_support import ReservedPort
 
 _SUPERVISOR = Path(__file__).with_name("pg_supervisor.py")
 
@@ -42,7 +43,15 @@ def _wait_until_ready(process: subprocess.Popen[bytes], port: int, log: Path) ->
 
 
 @contextlib.contextmanager
-def native_postgres(root: Path, port: int) -> Generator[None]:
+def native_postgres(
+    root: Path, port: int, *, reserve: ReservedPort | None = None
+) -> Generator[None]:
+    """Run disposable PostgreSQL on ``port``, holding it against a rival bind.
+
+    ``reserve`` is a ``ReservedPort`` whose held socket keeps the port out of the
+    ephemeral pool until postgres binds it (OMP-388). The reservation is released
+    once the server is ready, so normal allocation continues afterwards.
+    """
     data_dir = root / "pgdata"
     root.mkdir(parents=True, exist_ok=True)
     log = root / "postgres.log"
@@ -63,6 +72,8 @@ def native_postgres(root: Path, port: int) -> Generator[None]:
         _wait_until_ready(supervisor, port, log)
         yield
     finally:
+        if reserve is not None:
+            reserve.close()
         if supervisor.stdin:
             supervisor.stdin.close()
         try:

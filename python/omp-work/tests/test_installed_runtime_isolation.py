@@ -18,8 +18,8 @@ from uuid import UUID
 
 from installed_runtime_support import (
     InstalledRelease,
+    ReservedPort,
     RpcProcess,
-    _free_port,
     _health,
     _process,
     _run,
@@ -68,7 +68,8 @@ def test_candidate_edits_and_inherited_config_do_not_change_installed_processes(
         "PYTHONPATH": str(candidate / "python"),
         "NODE_OPTIONS": "--require=/does-not-exist/qualification-poison.js",
     }
-    pg_port, http_port = _free_port(), _free_port()
+    pg_reservation, http_reservation = ReservedPort(), ReservedPort()
+    pg_port, http_port = pg_reservation.port, http_reservation.port
     service_args = ("--service", "--postgres-port", str(pg_port))
 
     def run_service(*arguments: str) -> str:
@@ -104,7 +105,7 @@ def test_candidate_edits_and_inherited_config_do_not_change_installed_processes(
         port=pg_port,
     )
     base_url = f"http://127.0.0.1:{http_port}"
-    with native_postgres(tmp_path / "postgres", pg_port):
+    with native_postgres(tmp_path / "postgres", pg_port, reserve=pg_reservation):
         run_service("ops", "bootstrap")
         seed_authority(
             config.connection_kwargs("postgres"),
@@ -176,8 +177,11 @@ def test_candidate_edits_and_inherited_config_do_not_change_installed_processes(
             "--capabilities-dir",
             str(config.config_dir / "capabilities"),
         )
+        # Hold http_port while the installed service binds it in its own process
+        # (OMP-388), then release it once health proves the port is served.
         with _process(service_command, candidate, env, service_log) as service:
             before = _health(base_url, service, service_log)
+            http_reservation.close()
             assert (
                 before["service_fingerprint"] == python_identity["serviceFingerprint"]
             )

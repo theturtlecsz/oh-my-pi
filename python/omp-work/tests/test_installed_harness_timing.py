@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -19,6 +20,7 @@ import pytest
 from installed_runtime_support import (
     LOAD_SCALE_CAP,
     PROXY_UPSTREAM_TIMEOUT_SECONDS,
+    ReservedPort,
     RpcProcess,
     _NewlineCompleteLog,
     _run,
@@ -174,6 +176,67 @@ def test_an_empty_log_reads_immediately(tmp_path: Path) -> None:
     started = time.monotonic()
     assert _NewlineCompleteLog(log, alive=lambda: True).read_text() == ""
     assert time.monotonic() - started < support.LINE_STABILIZE_SECONDS
+
+
+def test_reserved_port_survives_a_rival_bind_until_its_server_takes_it(
+    tmp_path: Path,
+) -> None:
+    """The installed service binds its port in a separate process, after launch.
+
+    ``_free_port`` closes its probe socket before the service starts, so any
+    concurrent ``bind(("127.0.0.1", 0))`` may claim the number first — the
+    ``[Errno 98]`` service exit OMP-388 reports. ``ReservedPort`` keeps the port
+    bound and out of that pool until the service itself binds and listens on it,
+    which a real server does over the held socket (both set SO_REUSEADDR).
+    """
+    reservation = ReservedPort()
+    script = tmp_path / "server.py"
+    script.write_text(
+        "import socket, sys\n"
+        "server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+        "server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+        "server.bind(('127.0.0.1', int(sys.argv[1])))\n"
+        "server.listen(64)\n"
+        "client, _ = server.accept()\n"
+        "client.sendall(b'ok')\n"
+        "client.close()\n"
+    )
+    try:
+        for _ in range(400):
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", 0))
+            assert probe.getsockname()[1] != reservation.port, (
+                "bind(0) handed out a port that is still reserved"
+            )
+            probe.close()
+        server = subprocess.Popen(
+            [sys.executable, str(script), str(reservation.port)],
+        )
+        try:
+            deadline = time.monotonic() + 10
+            answer = b""
+            while time.monotonic() < deadline:
+                assert server.poll() is None, "server process exited before listening"
+                try:
+                    client = socket.create_connection(
+                        ("127.0.0.1", reservation.port), timeout=1
+                    )
+                except OSError:
+                    time.sleep(0.05)
+                    continue
+                answer = client.recv(2)
+                client.close()
+                break
+            assert answer == b"ok", "server did not serve the released reservation"
+        finally:
+            if server.poll() is None:
+                server.kill()
+                server.wait(timeout=10)
+            else:
+                assert server.returncode == 0, "server process exited abnormally"
+    finally:
+        reservation.close()
 
 
 def test_scale_is_floored_scaled_and_capped() -> None:
