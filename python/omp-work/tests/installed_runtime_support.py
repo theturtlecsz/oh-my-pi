@@ -263,6 +263,23 @@ class AuthorityResponseProxy:
         self.committed_command: str | None = None
         self.command_claimed = False
         self.discard_command_response = False
+        self.contract_digest_override: str | None = None
+
+    def set_contract_digest_override(self, digest: str | None) -> None:
+        """Default-off: forward a substituted X-OMP-Contract-SHA256 on every request.
+
+        The real service still receives the request; the stale digest only makes
+        it refuse the handshake before writing. Every overridden request is
+        recorded in ``snapshot()`` so a caller can prove which forwarded requests
+        the service refused. ``None`` restores the original forwarding behavior.
+        """
+        if digest is not None:
+            assert len(digest) == 64 and all(
+                character in "0123456789abcdef" for character in digest
+            ), digest
+        with self.lock:
+            self.contract_digest_override = digest
+            self._save()
 
     def arm_committed_command(self, command_type: str) -> None:
         """Hold one real successful command response; caller independently verifies commit."""
@@ -356,6 +373,32 @@ class AuthorityResponseProxy:
                     for name, value in self.headers.items()
                     if name.lower() not in hop_headers
                 ]
+                with proxy.lock:
+                    override = proxy.contract_digest_override
+                if override is not None:
+                    # Default-off incompatibility cut: replace only the handshake
+                    # digest header on the forwarded bytes. The real service sees
+                    # exactly this request and writes nothing for a mismatch.
+                    headers = [
+                        (name, override)
+                        if name.lower() == "x-omp-contract-sha256"
+                        else (name, value)
+                        for name, value in headers
+                    ]
+                    with proxy.lock:
+                        proxy.records.append(
+                            {
+                                "ordinal": len(proxy.records) + 1,
+                                "method": self.command,
+                                "path": self.path,
+                                "startedAt": started_at,
+                                "overriddenContractDigest": override,
+                                "originalContractDigest": self.headers.get(
+                                    "X-OMP-Contract-SHA256"
+                                ),
+                            }
+                        )
+                        proxy._save()
                 try:
                     request = client.build_request(
                         self.command,
