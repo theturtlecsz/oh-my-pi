@@ -32,6 +32,7 @@ from installed_runtime_support import (
 from installed_runtime_support import (
     installed_release as installed_release,  # noqa: PLC0414 -- pytest fixture re-export
 )
+from omp_work import contract_sha256
 from omp_work.operations.config import OperationsConfig
 from omp_work.v1.api_models import CommandResponse
 from pg_native import native_postgres, seed_authority
@@ -583,6 +584,20 @@ class RecoveryProvider:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+
+def idempotent_command_row_count(config: OperationsConfig, workspace_id: str) -> int:
+    """Count the disposable service's real idempotency rows for one workspace."""
+    with psycopg.connect(
+        **config.connection_kwargs("postgres"), row_factory=dict_row
+    ) as connection:
+        return int(
+            connection.execute(
+                "SELECT count(*) AS count FROM omp_control.idempotent_commands "
+                "WHERE workspace_id=%s",
+                (workspace_id,),
+            ).fetchone()["count"]
+        )
 
 
 def execution_message_count(entries: list[dict]) -> int:
@@ -4897,6 +4912,7 @@ def exercise_controller_recovery(
     cancel_queued_continuation: bool = False,
     push_ack_loss: bool = False,
     broken_auditor: bool = False,
+    incompatible_contract: bool = False,
 ) -> None:
     if committed_post_loss is True:
         committed_post_loss = "seal_execution_criteria"
@@ -4920,8 +4936,13 @@ def exercise_controller_recovery(
                 committed_post_loss,
                 cancel_queued_continuation,
                 push_ack_loss,
+                incompatible_contract,
             )
         ), "broken_auditor is a standalone recovery journey"
+    if incompatible_contract:
+        assert checkpoint == "review", (
+            "incompatible_contract extends only the review path"
+        )
     repository = tmp_path / "repository"
     repository.mkdir()
     state = tmp_path / "runtime"
@@ -5012,7 +5033,10 @@ def exercise_controller_recovery(
     )
     authority_proxy = (
         AuthorityResponseProxy(base_url, tmp_path)
-        if task_fault == "child-result-gap" or predecessor_case is not None or committed_post_loss
+        if task_fault == "child-result-gap"
+        or predecessor_case is not None
+        or committed_post_loss
+        or incompatible_contract
         else None
     )
     with (
@@ -5255,6 +5279,31 @@ def exercise_controller_recovery(
                             session_id=str(initial["sessionId"]),
                             setup=setup,
                             agent_dir=agent_dir,
+                        )
+                        return
+                    if incompatible_contract:
+                        assert authority_proxy is not None
+                        _prove_incompatible_contract_refuses_and_terminal_grant_stays_terminal(
+                            release=release,
+                            tmp_path=tmp_path,
+                            state=state,
+                            repository=repository,
+                            env=env,
+                            client=client,
+                            config=config,
+                            authority_proxy=authority_proxy,
+                            execution_url=(
+                                f"/v1/workspaces/{identity['workspace_id']}/execution/{provider.key}"
+                            ),
+                            workspace_id=identity["workspace_id"],
+                            provider=provider,
+                            rpc=rpc,
+                            cli=cli,
+                            command=release.command(state, repository, *cli_args),
+                            service=service,
+                            session_id=str(initial["sessionId"]),
+                            session_file=str(own_path),
+                            setup=setup,
                         )
                         return
                     if committed_post_loss in {
@@ -5969,6 +6018,393 @@ def exercise_controller_recovery(
                     )
 
 
+def _prove_incompatible_contract_refuses_and_terminal_grant_stays_terminal(
+    *,
+    release: InstalledRelease,
+    tmp_path: Path,
+    state: Path,
+    repository: Path,
+    env: dict[str, str],
+    client: httpx.Client,
+    config: OperationsConfig,
+    authority_proxy: AuthorityResponseProxy,
+    execution_url: str,
+    workspace_id: str,
+    provider: RecoveryProvider,
+    rpc: RpcProcess,
+    cli: subprocess.Popen[str],
+    command: list[str],
+    service: subprocess.Popen[str],
+    session_id: str,
+    session_file: str,
+    setup: dict,
+) -> None:
+    """Route the controller through the proxy with a stale contract digest.
+
+    The real service sees the controller's forwarded bytes and refuses the
+    handshake before writing anything, while the test's own compatible client
+    cancels the grant. Restarts then must leave the terminal grant terminal.
+    """
+    evidence_path = tmp_path / "recovery-journey-contract-mismatch.json"
+    mismatch = "0" * 64
+    # The controller sends the digest its binary loaded (the release TCB value);
+    # the service compares it against the digest it computes from its own
+    # contract bundle, so the two are recorded side by side.
+    host_digest = setup["tcb"]["judgeManifest"]["contract_sha256"]
+    service_digest = contract_sha256()
+    evidence: dict = {
+        "command": command,
+        "cwd": str(repository),
+        "releaseDigest": release.digest,
+        "pids": {"service": service.pid, "controller": cli.pid},
+        "signals": [],
+        "providerCounts": {},
+        "effectCounts": {},
+        "rpcPaths": [str(rpc.stdout_log)],
+        "stderrPaths": [str(rpc.log)],
+        "hostContractDigest": host_digest,
+        "serviceContractDigest": service_digest,
+        "overrideContractDigest": mismatch,
+        "refusedRequests": [],
+    }
+
+    def write_evidence() -> None:
+        evidence_path.write_text(json.dumps(evidence, indent=2, default=str) + "\n")
+
+    # The proxy rewrites the handshake on every forwarded request while the
+    # override is armed, so the compatible test client addresses the real
+    # service directly (the proxy still carries the controller's traffic).
+    service_base = authority_proxy.upstream
+
+    def execution_now() -> dict:
+        response = client.get(f"{service_base}{execution_url}")
+        response.raise_for_status()
+        return response.json()
+
+    def rpc_events(rpc_process: RpcProcess) -> list[dict]:
+        return [
+            json.loads(line)
+            for line in rpc_process.stdout_log.read_text().splitlines()
+            if line
+        ]
+
+    def notices(events: list[dict]) -> list[str]:
+        return [
+            str(event.get("message", ""))
+            for event in events
+            if event.get("type") == "extension_ui_request"
+            and event.get("method") == "notify"
+        ]
+
+    def idempotent_row_count() -> int:
+        return idempotent_command_row_count(config, workspace_id)
+
+    def snapshot_state() -> dict:
+        workflow_response = client.get(
+            f"{service_base}/v1/work-items/{provider.key}/workflow"
+        )
+        workflow_response.raise_for_status()
+        execution = execution_now()
+        entries = _session_entries(Path(session_file))
+        return {
+            "grant": execution["grant"],
+            "items": execution["items"],
+            "activeItem": execution["active_item"],
+            "workflow": workflow_response.json(),
+            "idempotentCommandRows": idempotent_row_count(),
+            "workExecuteIds": _work_execute_ids(entries),
+        }
+
+    try:
+        assert provider.barrier.wait(scaled_timeout(60)), (
+            f"Production review barrier not reached: {rpc.log.read_text()[-6000:]}"
+        )
+        assert provider.error is None, provider.error
+        live = rpc.request("get_state")
+        assert live["sessionId"] == session_id
+        assert Path(str(live["sessionFile"])) == Path(session_file), live["sessionFile"]
+        admitted = execution_now()
+        assert admitted["grant"]["state"] == "active", admitted["grant"]
+        grant_id = admitted["grant"]["grant_id"]
+        assert grant_id == setup["execution"]["grant"]["grant_id"]
+        active_item = admitted["active_item"]
+        assert active_item is not None, admitted
+        revision_id = (
+            active_item.get("criteria_revision_id") or active_item["claimed_revision_id"]
+        )
+        initial_requests = len(provider.calls)
+        assert initial_requests >= 1, "Initial run produced no provider request"
+        initial_snapshot = snapshot_state()
+        evidence.update(
+            {
+                "ids": {
+                    "sessionId": session_id,
+                    "grantId": grant_id,
+                    "itemId": active_item["item_id"],
+                    "revisionId": revision_id,
+                },
+                "grantVersionAtAdmission": admitted["grant"]["grant_version"],
+                "grantStateAtAdmission": admitted["grant"]["state"],
+                "providerCounts": {"beforeKill": initial_requests},
+                "admittedExecution": admitted,
+            }
+        )
+        write_evidence()
+
+        os.killpg(cli.pid, signal.SIGKILL)
+        killed_exit = cli.wait(timeout=scaled_timeout(10))
+        assert killed_exit == -signal.SIGKILL
+        evidence["signals"].append(
+            {"pid": cli.pid, "signal": "SIGKILL", "exitCode": killed_exit}
+        )
+        provider.restarting = True
+        provider.release.set()
+        write_evidence()
+
+        restart_command = release.command(
+            state,
+            repository,
+            "--mode",
+            "rpc",
+            "--session",
+            session_file,
+            "--provider",
+            "qualification",
+            "--model",
+            "local-recovery",
+        )
+        authority_proxy.set_contract_digest_override(mismatch)
+        mismatch_log = tmp_path / "controller-contract-mismatch.stderr"
+        with _process(restart_command, repository, env, mismatch_log) as incompatible:
+            incompatible_rpc = RpcProcess(incompatible, mismatch_log)
+            evidence["rpcPaths"].append(str(incompatible_rpc.stdout_log))
+            evidence["stderrPaths"].append(str(mismatch_log))
+            evidence["pids"]["incompatibleRestart"] = incompatible.pid
+            observed = incompatible_rpc.request("get_state")
+            assert observed["sessionId"] == session_id
+            assert (
+                Path(str(observed["sessionFile"])) == Path(session_file)
+            ), observed["sessionFile"]
+
+            def contract_notices() -> list[str]:
+                return [
+                    text
+                    for text in notices(rpc_events(incompatible_rpc))
+                    if "contract_mismatch" in text
+                ]
+
+            deadline = time.monotonic() + scaled_timeout(30)
+            while time.monotonic() < deadline and not contract_notices():
+                time.sleep(0.05)
+            refusals = contract_notices()
+            time.sleep(scaled_timeout(1))
+            provider_requests = len(provider.calls)
+            unchanged = snapshot_state()
+            refused = [
+                row
+                for row in authority_proxy.snapshot()
+                if row.get("overriddenContractDigest") == mismatch
+            ]
+            evidence["refusedRequests"] = refused
+            evidence["incompatibleNotices"] = notices(rpc_events(incompatible_rpc))
+            evidence["effectCounts"] = {
+                "providerRequests": provider_requests,
+                "continuationsScheduled": unchanged["grant"]["continuations_scheduled"],
+                "grantVersion": unchanged["grant"]["grant_version"],
+            }
+            assert refusals, (
+                "Incompatible controller did not name the contract mismatch: "
+                f"{evidence['incompatibleNotices']}"
+            )
+            # The service's own diagnostics echo the digest it received, so a
+            # notice carrying the overridden digest proves the real handshake
+            # refused this exact request rather than a generic client error.
+            assert any(mismatch in text for text in refusals), refusals
+            assert refused, "No request was forwarded under the overridden digest"
+            assert provider_requests == initial_requests, (
+                "Incompatible controller issued a provider request"
+            )
+            assert unchanged["grant"] == initial_snapshot["grant"], (
+                "Incompatible controller changed grant state/version"
+            )
+            assert unchanged["idempotentCommandRows"] == initial_snapshot[
+                "idempotentCommandRows"
+            ], "Incompatible controller wrote an idempotency row"
+            assert unchanged["activeItem"] == initial_snapshot["activeItem"]
+            assert unchanged["workExecuteIds"] == initial_snapshot["workExecuteIds"], (
+                "Incompatible controller injected a continuation"
+            )
+            os.killpg(incompatible.pid, signal.SIGKILL)
+            incompatible_exit = incompatible.wait(timeout=scaled_timeout(10))
+            assert incompatible_exit == -signal.SIGKILL
+            evidence["signals"].append(
+                {
+                    "pid": incompatible.pid,
+                    "signal": "SIGKILL",
+                    "exitCode": incompatible_exit,
+                }
+            )
+            write_evidence()
+
+        # The compatible service API cancels the grant while the controller is
+        # incompatible: the test client addresses the real service directly with
+        # the correct digest, bypassing the proxy's overridden forwarding.
+        pause_deadline = time.monotonic() + scaled_timeout(10)
+        while True:
+            current = execution_now()
+            if current["grant"]["state"] == "active" or time.monotonic() >= pause_deadline:
+                break
+            time.sleep(0.05)
+        assert current["grant"]["state"] == "active", current["grant"]
+        cancel_response = client.post(
+            f"{service_base}/v1/commands",
+            json={
+                "api_version": "work.omp.dev/v1",
+                "workspace_id": workspace_id,
+                "operation_id": str(uuid4()),
+                "request_id": str(uuid4()),
+                "correlation_id": str(uuid4()),
+                "command": {
+                    "type": "set_execution_state",
+                    "payload": {
+                        "grant_id": current["grant"]["grant_id"],
+                        "expected_grant_version": current["grant"]["grant_version"],
+                        "target_state": "canceled",
+                        "reason": "disposable_contract_mismatch_fixture_cancel",
+                        "judge_sha256": current["grant"]["judge_sha256"],
+                    },
+                },
+            },
+        )
+        cancel_response.raise_for_status()
+        canceled_grant = cancel_response.json()["result"]["grant"]
+        assert canceled_grant["state"] == "canceled", canceled_grant
+        assert (
+            canceled_grant["grant_version"] == current["grant"]["grant_version"] + 1
+        ), canceled_grant
+        assert (
+            canceled_grant["continuations_scheduled"]
+            == current["grant"]["continuations_scheduled"]
+        ), canceled_grant
+        canceled_snapshot = snapshot_state()
+        evidence["cancel"] = {
+            "before": current["grant"],
+            "command": cancel_response.json(),
+        }
+        write_evidence()
+
+        authority_proxy.set_contract_digest_override(None)
+        terminal_versions: list[int] = []
+        for index, log_name in enumerate(
+            ("controller-compatible-restart-1.stderr", "controller-compatible-restart-2.stderr"),
+            start=1,
+        ):
+            restart_log = tmp_path / log_name
+            before_requests = len(provider.calls)
+            with _process(restart_command, repository, env, restart_log) as compatible:
+                compatible_rpc = RpcProcess(compatible, restart_log)
+                evidence["rpcPaths"].append(str(compatible_rpc.stdout_log))
+                evidence["stderrPaths"].append(str(restart_log))
+                evidence["pids"][f"compatibleRestart{index}"] = compatible.pid
+                restored = compatible_rpc.request("get_state")
+                assert restored["sessionId"] == session_id
+                deadline = time.monotonic() + scaled_timeout(15)
+                stable_since: float | None = None
+                quiet = scaled_timeout(2)
+                while time.monotonic() < deadline:
+                    streaming = bool(
+                        compatible_rpc.request("get_state")["isStreaming"]
+                    )
+                    if streaming:
+                        stable_since = None
+                    elif stable_since is None:
+                        stable_since = time.monotonic()
+                    elif time.monotonic() - stable_since >= quiet:
+                        break
+                    time.sleep(0.05)
+                settled = snapshot_state()
+                assert len(provider.calls) == before_requests, (
+                    f"Compatible restart {index} issued a provider request"
+                )
+                assert settled["grant"] == canceled_grant, (
+                    f"Restart {index} changed the terminal grant: {settled['grant']}"
+                )
+                assert settled["grant"]["state"] == "canceled"
+                assert settled["grant"]["grant_version"] == canceled_grant["grant_version"]
+                assert settled["activeItem"] is None, settled["activeItem"]
+                assert settled["idempotentCommandRows"] == canceled_snapshot[
+                    "idempotentCommandRows"
+                ], f"Restart {index} wrote an idempotency row"
+                assert settled["workExecuteIds"] == canceled_snapshot["workExecuteIds"], (
+                    f"Restart {index} injected a continuation"
+                )
+                assert settled["workflow"]["close_attempts"] == canceled_snapshot[
+                    "workflow"
+                ]["close_attempts"], f"Restart {index} changed close attempts"
+                terminal_versions.append(settled["grant"]["grant_version"])
+                evidence[f"compatibleRestart{index}"] = {
+                    "grant": settled["grant"],
+                    "idempotentCommandRows": settled["idempotentCommandRows"],
+                    "providerRequests": len(provider.calls),
+                }
+                write_evidence()
+                os.killpg(compatible.pid, signal.SIGKILL)
+                compatible_exit = compatible.wait(timeout=scaled_timeout(10))
+                assert compatible_exit == -signal.SIGKILL
+                evidence["signals"].append(
+                    {
+                        "pid": compatible.pid,
+                        "signal": "SIGKILL",
+                        "exitCode": compatible_exit,
+                    }
+                )
+        assert terminal_versions == [
+            canceled_grant["grant_version"],
+            canceled_grant["grant_version"],
+        ], terminal_versions
+        evidence["effectCounts"] = {
+            "providerRequests": len(provider.calls),
+            "grantVersionAtCancel": canceled_grant["grant_version"],
+            "terminalVersions": terminal_versions,
+        }
+        write_evidence()
+        saved = json.loads(evidence_path.read_text())
+        # Standard recovery-journey fields, plus the digests and the refused
+        # request list this incompatibility cut adds.
+        for key in (
+            "command",
+            "cwd",
+            "releaseDigest",
+            "pids",
+            "signals",
+            "providerCounts",
+            "effectCounts",
+            "rpcPaths",
+            "stderrPaths",
+            "hostContractDigest",
+            "serviceContractDigest",
+            "overrideContractDigest",
+            "refusedRequests",
+        ):
+            assert key in saved and saved[key] not in (None, "", [], {}), key
+        for recorded in (
+            saved["cwd"],
+            *saved["rpcPaths"],
+            *saved["stderrPaths"],
+        ):
+            assert Path(recorded).is_relative_to(tmp_path), recorded
+        assert saved["overrideContractDigest"] == mismatch
+        assert saved["overrideContractDigest"] != saved["serviceContractDigest"]
+        assert saved["hostContractDigest"] != mismatch
+        assert all(
+            row["overriddenContractDigest"] == mismatch
+            for row in saved["refusedRequests"]
+        )
+    finally:
+        authority_proxy.set_contract_digest_override(None)
+        write_evidence()
+
+
 def complete_installed_predecessor_fixture(
     client: httpx.Client, workspace_id: str, key: str, execution_url: str,
     setup: dict, root: Path, model_url: str, result_path: Path,
@@ -6331,5 +6767,14 @@ def test_broken_auditor_keeps_halt_and_cancel_usable(
     """A missing audit model must refuse resume while owner pause and cancel still work."""
     exercise_controller_recovery(
         installed_release, tmp_path, "review", broken_auditor=True
+    )
+
+
+def test_incompatible_contract_refuses_and_terminal_grant_stays_terminal(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """An incompatible host digest must refuse without writes, and cancel stays terminal."""
+    exercise_controller_recovery(
+        installed_release, tmp_path, "review", incompatible_contract=True
     )
 
