@@ -2198,13 +2198,23 @@ export function createWorkflowHost(cfg: HostConfig) {
 			// Review can freeze and begin its attempt before checkpoint delivery
 			// advances the item phase. Accept only this grant's bound candidate in
 			// that window, never an unrelated finalized candidate or arbitrary HEAD.
+			const remoteRef = exec.grant.remote_ref ?? currentSymbolicRef(ctx.cwd);
+			const hasRemoteCandidate = Boolean(
+				item.candidate?.commit_sha
+				&& remoteRef
+				&& (() => {
+					const ls = runGit(ctx.cwd, ["ls-remote", "origin", remoteRef], 30_000);
+					return ls.ok && ls.out.split(/\s+/)[0] === item.candidate.commit_sha;
+				})(),
+			);
 			const ownPendingReview = exec.activeItem.phase === "executing" && item.candidate?.kind === "final"
-				&& (workflow.close_attempts ?? []).some(attempt =>
+				&& ((workflow.close_attempts ?? []).some(attempt =>
 					LIVE_ATTEMPT_STATES[attempt.state] === true
 					&& attempt.authorization_kind === "execution"
 					&& attempt.execution_grant_id === exec.grant.grant_id
 					&& attempt.work_id === item.work_id
-					&& matchesReviewCandidate(attempt, item.candidate, item.revision.revision_id));
+					&& matchesReviewCandidate(attempt, item.candidate, item.revision.revision_id))
+					|| hasRemoteCandidate);
 			if ((["reviewing", "remediating"].includes(exec.activeItem.phase) || ownPendingReview) && item.candidate?.commit_sha) {
 				expectedHead = item.candidate.commit_sha;
 			} else {
@@ -4680,10 +4690,8 @@ export function createWorkflowHost(cfg: HostConfig) {
 							type ReceiptRow = { receipt_id: string; kind: string; verdict?: string | null; candidate_commit?: string | null };
 							type LaunchRow = { launch_id: string; attempt_id: string; launch_number: number };
 							type WfAttemptIdentityRow = { attempt_id: string; revision_id?: string; candidate_id?: string | null; candidate_sha256?: string | null; candidate_commit?: string | null };
-							type WfItemIdentity = { current_revision_id?: string; revision?: { revision_id?: string }; candidate?: { candidate_id?: string; candidate_sha256?: string; commit_sha?: string | null } | null };
-							const wfView = liveAttempt
-								? ((await backend.workClient!.workflow(targetIssue.key)) as { receipts?: ReceiptRow[]; auditor_launches?: LaunchRow[]; item?: WfItemIdentity; close_attempts?: WfAttemptIdentityRow[] })
-								: undefined;
+							type WfItemIdentity = { current_revision_id?: string; revision?: { revision_id?: string }; candidate?: Candidate | null };
+							const wfView = (await backend.workClient!.workflow(targetIssue.key)) as { receipts?: ReceiptRow[]; auditor_launches?: LaunchRow[]; item?: WfItemIdentity; close_attempts?: WfAttemptIdentityRow[] };
 							const receiptRows: ReceiptRow[] = wfView?.receipts ?? [];
 							const recoverReceipt = (kind: "push" | "audit", candidateCommit: string | undefined): ReceiptRow | undefined => {
 								for (let i = receiptRows.length - 1; i >= 0; i--) {
@@ -4994,12 +5002,25 @@ export function createWorkflowHost(cfg: HostConfig) {
 							);
 							if ("refused" in freeze) return deny(`Candidate freeze refused: ${freeze.reason}`);
 
-							const finalCandidate = await backend.finalizeExecutionCandidate(targetIssue.key, plannedCandidateId, freeze);
+							const existingCandidate = wfView?.item?.candidate;
+							const candidateAlreadyFinalized =
+								existingCandidate
+								&& existingCandidate.kind === "final"
+								&& existingCandidate.commit_sha === freeze.commitSha
+								&& existingCandidate.candidate_sha256 === freeze.candidateSha256;
+							const finalCandidate: Candidate = candidateAlreadyFinalized
+								? (existingCandidate as Candidate)
+								: await backend.finalizeExecutionCandidate(targetIssue.key, plannedCandidateId, freeze);
 
-							await backend.appendEvidence(targetIssue, "verification", params.body.trim(), {
-								candidateSha256: finalCandidate.candidate_sha256,
-								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
-							});
+							const hasVerification = (wfView?.receipts ?? []).some(
+								r => r.kind === "verification" && r.candidate_commit === (finalCandidate.commit_sha ?? freeze.commitSha),
+							);
+							if (!hasVerification) {
+								await backend.appendEvidence(targetIssue, "verification", params.body.trim(), {
+									candidateSha256: finalCandidate.candidate_sha256,
+									candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
+								});
+							}
 
 							const grantBaseline = exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline;
 							let recoveredStaleTip: string | undefined;

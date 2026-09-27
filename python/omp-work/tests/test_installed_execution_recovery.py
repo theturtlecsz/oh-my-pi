@@ -61,8 +61,10 @@ class RecoveryProvider:
         checkpoint: Literal["review", "resume", "persisted", "task-active"],
         progress: bool = False,
         task_fault: TaskFault = "child-request",
+        push_ack_loss: bool = False,
     ):
         self.root = root
+        self.push_ack_loss = push_ack_loss
         self.progress = progress
         self.progressed = threading.Event()
         self.operation_calls = 0
@@ -360,6 +362,38 @@ class RecoveryProvider:
                 ):
                     self.error = str(results[-1])
                 self.progressed.set()
+            if self.push_ack_loss:
+                results = [
+                    message
+                    for message in request.get("messages", [])
+                    if message.get("role") == "tool"
+                ]
+                if not results or not any(
+                    "END YOUR TURN NOW" in str(r.get("content", ""))
+                    for r in results
+                ):
+                    return {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "recovery-reissued-review",
+                                "type": "function",
+                                "function": {
+                                    "name": "work",
+                                    "arguments": json.dumps(
+                                        {
+                                            "action": "begin_execution_review",
+                                            "work": self.key,
+                                            "body": "The real read tool read result.txt and returned after. Disposable recovery fixture; no audit verdict asserted.",
+                                        }
+                                    ),
+                                },
+                            }
+                        ]
+                    }
+                self.barrier.set()
+                self.release.wait(60)
+                return {"content": "Turn ended."}
             return {"content": "Recovery continuation observed."}
         if self.checkpoint == "task-active":
             results = [
@@ -4140,6 +4174,334 @@ def _prove_queued_continuation_after_cancel_starts_no_work(
         write_evidence()
 
 
+def _prove_push_ack_loss_reconciles_remote_without_second_push(
+    *,
+    release: InstalledRelease,
+    tmp_path: Path,
+    state: Path,
+    repository: Path,
+    remote: Path,
+    env: dict[str, str],
+    client: httpx.Client,
+    execution_url: str,
+    workspace_id: str,
+    provider: RecoveryProvider,
+    rpc: RpcProcess,
+    cli: subprocess.Popen[str],
+    command: list[str],
+    workspace: Path,
+    service_pid: int,
+    session_id: str,
+    hook_counter: Path,
+    hook_release: Path,
+    setup: dict,
+    actual_session: Path,
+) -> None:
+    """Lost push ack reconciles against the real remote without a second push."""
+    evidence_path = tmp_path / "recovery-journey-push-ack-loss.json"
+    evidence: dict = {
+        "command": command,
+        "cwd": str(repository),
+        "releaseDigest": release.digest,
+        "pids": {"service": service_pid, "initialController": cli.pid},
+        "signals": [],
+        "barrierObservations": {},
+        "rpcPaths": [str(rpc.stdout_log)],
+        "stderrPaths": [str(rpc.log)],
+    }
+
+    def write_evidence() -> None:
+        evidence_path.write_text(json.dumps(evidence, indent=2, default=str) + "\n")
+
+    try:
+        workflow_url = f"/v1/work-items/{provider.key}/workflow"
+        target_remote_ref = setup["execution"]["grant"]["remote_ref"]
+
+        # 1. Wait for counter 1 and remote ref == frozen candidate
+        deadline = time.monotonic() + scaled_timeout(60)
+        candidate_commit = None
+        while time.monotonic() < deadline:
+            wf_resp = client.get(workflow_url)
+            if wf_resp.status_code == 200:
+                cand = wf_resp.json().get("item", {}).get("candidate")
+                if cand and cand.get("commit_sha"):
+                    candidate_commit = cand["commit_sha"]
+            counter_lines = (
+                hook_counter.read_text().splitlines()
+                if hook_counter.is_file()
+                else []
+            )
+            if counter_lines and candidate_commit:
+                remote_tip = _run(
+                    ["git", "rev-parse", target_remote_ref], remote, env
+                ).strip()
+                if len(counter_lines) == 1 and remote_tip == candidate_commit:
+                    break
+            time.sleep(0.05)
+
+        counter_lines = (
+            hook_counter.read_text().splitlines()
+            if hook_counter.is_file()
+            else []
+        )
+        assert len(counter_lines) == 1, f"Expected counter 1, got {counter_lines}"
+        assert candidate_commit is not None, "Candidate commit not finalized in service"
+        remote_tip = _run(
+            ["git", "rev-parse", target_remote_ref], remote, env
+        ).strip()
+        assert remote_tip == candidate_commit, (
+            f"Remote tip {remote_tip} != candidate {candidate_commit}"
+        )
+
+        # 2. Prove no push receipt in the service and no begin_execution_review result in the session file
+        wf_data = client.get(workflow_url).json()
+        push_receipts = [
+            r for r in wf_data.get("receipts", []) if r.get("kind") == "push"
+        ]
+        assert len(push_receipts) == 0, f"Expected no push receipt, got {push_receipts}"
+        assert len(wf_data.get("close_attempts", [])) == 0, (
+            "Close attempt was begun before push ack"
+        )
+
+        session_entries = read_complete_session(actual_session)
+        assert not any(
+            "close-attempt checkpoint" in str(entry)
+            or "END YOUR TURN NOW" in str(entry)
+            for entry in session_entries
+        ), "begin_execution_review result found in session file before ack"
+        assert not any(
+            entry.get("type") == "message"
+            and (entry.get("message") or {}).get("role") == "tool"
+            and entry.get("message", {}).get("tool_call_id") == "recovery-4"
+            for entry in session_entries
+        ), "begin_execution_review tool result found in session file before ack"
+
+        evidence["barrierObservations"] = {
+            "hookCounter": len(counter_lines),
+            "candidateCommit": candidate_commit,
+            "remoteTip": remote_tip,
+            "pushReceiptsBeforeKill": len(push_receipts),
+            "closeAttemptsBeforeKill": len(wf_data.get("close_attempts", [])),
+        }
+        write_evidence()
+
+        # 3. SIGKILL the process group; create the release file
+        os.killpg(cli.pid, signal.SIGKILL)
+        killed_exit = cli.wait(timeout=scaled_timeout(10))
+        assert killed_exit == -signal.SIGKILL
+        evidence["signals"].append(
+            {"pid": cli.pid, "signal": "SIGKILL", "exitCode": killed_exit}
+        )
+        hook_release.write_text("released\n")
+        write_evidence()
+
+        # 4. Restart the same session, no prompt; record the outcome.
+        # If it does not retry itself, drive the owner retry (service pause, RPC /execute resume <key>)
+        # so the scripted provider re-issues begin_execution_review.
+        provider.restarting = True
+        restart1_log = tmp_path / "controller-restart-1.stderr"
+        restart_command = release.command(
+            state,
+            repository,
+            "--mode",
+            "rpc",
+            "--session",
+            str(actual_session),
+            "--provider",
+            "qualification",
+            "--model",
+            "local-recovery",
+        )
+        with _process(restart_command, repository, env, restart1_log) as child1:
+            child1_rpc = RpcProcess(child1, restart1_log)
+            evidence["rpcPaths"].append(str(child1_rpc.stdout_log))
+            evidence["stderrPaths"].append(str(restart1_log))
+            evidence["pids"]["restart1"] = child1.pid
+
+            child1_state = child1_rpc.request("get_state")
+            assert child1_state["sessionId"] == session_id
+
+            retried_itself = bool(child1_state.get("isStreaming"))
+            if not retried_itself:
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline:
+                    if child1_rpc.request("get_state").get("isStreaming"):
+                        retried_itself = True
+                        break
+                    time.sleep(0.1)
+
+            evidence["firstRestartOutcome"] = {
+                "pid": child1.pid,
+                "retriedItself": retried_itself,
+                "isStreaming": child1_rpc.request("get_state").get("isStreaming"),
+            }
+            write_evidence()
+
+            if not retried_itself:
+                curr_exec = client.get(execution_url).json()["grant"]
+                pause_res = client.post(
+                    "/v1/commands",
+                    json={
+                        "api_version": "work.omp.dev/v1",
+                        "workspace_id": workspace_id,
+                        "operation_id": str(uuid4()),
+                        "request_id": str(uuid4()),
+                        "correlation_id": str(uuid4()),
+                        "command": {
+                            "type": "set_execution_state",
+                            "payload": {
+                                "grant_id": curr_exec["grant_id"],
+                                "expected_grant_version": curr_exec["grant_version"],
+                                "target_state": "paused",
+                                "reason": "owner_retry_after_push_ack_loss",
+                                "judge_sha256": curr_exec["judge_sha256"],
+                            },
+                        },
+                    },
+                )
+                pause_res.raise_for_status()
+                paused_grant = pause_res.json()["result"]["grant"]
+                assert paused_grant["state"] == "paused"
+
+                child1_rpc.send("prompt", message=f"/execute resume {provider.key}")
+
+            assert provider.barrier.wait(scaled_timeout(60)), (
+                f"Review barrier not reached on retry: {restart1_log.read_text()[-6000:]}"
+            )
+            assert provider.error is None, provider.error
+
+            provider.release.set()
+            child1_rpc.until(lambda event: event.get("type") == "agent_end")
+
+            # Check post-retry conditions:
+            # - Hook counter stays 1; the remote ref got one update, to the candidate.
+            counter_after_retry = (
+                hook_counter.read_text().splitlines()
+                if hook_counter.is_file()
+                else []
+            )
+            assert len(counter_after_retry) == 1, (
+                f"Hook counter changed after retry: {counter_after_retry}"
+            )
+
+            tip_after_retry = _run(
+                ["git", "rev-parse", target_remote_ref], remote, env
+            ).strip()
+            assert tip_after_retry == candidate_commit
+
+            # - Exactly one push receipt (remote_commit == candidate); one close attempt begun.
+            wf_after_retry = client.get(workflow_url).json()
+            push_receipts = [
+                r for r in wf_after_retry.get("receipts", []) if r.get("kind") == "push"
+            ]
+            assert len(push_receipts) == 1, (
+                f"Expected exactly 1 push receipt, found {len(push_receipts)}"
+            )
+            assert push_receipts[0]["remote_commit"] == candidate_commit
+
+            close_attempts = wf_after_retry.get("close_attempts", [])
+            assert len(close_attempts) == 1, (
+                f"Expected exactly 1 close attempt, found {len(close_attempts)}"
+            )
+            assert close_attempts[0]["candidate_commit"] == candidate_commit
+
+            os.killpg(child1.pid, signal.SIGKILL)
+            exit1 = child1.wait(timeout=scaled_timeout(10))
+            assert exit1 == -signal.SIGKILL
+            evidence["signals"].append(
+                {"pid": child1.pid, "signal": "SIGKILL", "exitCode": exit1}
+            )
+            write_evidence()
+
+        # 5. Restart once more, no prompt.
+        # - Final restart: zero provider requests, unchanged service rows and refs.
+        restart2_log = tmp_path / "controller-restart-2.stderr"
+        calls_before_final = len(provider.calls)
+        with _process(restart_command, repository, env, restart2_log) as child2:
+            child2_rpc = RpcProcess(child2, restart2_log)
+            evidence["rpcPaths"].append(str(child2_rpc.stdout_log))
+            evidence["stderrPaths"].append(str(restart2_log))
+            evidence["pids"]["restart2"] = child2.pid
+
+            state2 = child2_rpc.request("get_state")
+            assert state2["sessionId"] == session_id
+
+            deadline = time.monotonic() + scaled_timeout(15)
+            stable_since: float | None = None
+            quiet = scaled_timeout(3)
+            while time.monotonic() < deadline:
+                count = len(provider.calls)
+                assert count == calls_before_final, (
+                    f"Final restart made provider requests: {count} > {calls_before_final}"
+                )
+                streaming = bool(child2_rpc.request("get_state").get("isStreaming"))
+                if streaming:
+                    stable_since = None
+                elif stable_since is None:
+                    stable_since = time.monotonic()
+                elif time.monotonic() - stable_since >= quiet:
+                    break
+                time.sleep(0.05)
+
+            assert len(provider.calls) == calls_before_final, (
+                "Final restart made provider requests"
+            )
+
+            # Check unchanged service rows and refs
+            wf_final = client.get(workflow_url).json()
+            assert wf_final["receipts"] == wf_after_retry["receipts"]
+            assert wf_final["close_attempts"] == wf_after_retry["close_attempts"]
+            assert wf_final["item"] == wf_after_retry["item"]
+
+            counter_final = (
+                hook_counter.read_text().splitlines()
+                if hook_counter.is_file()
+                else []
+            )
+            assert len(counter_final) == 1, (
+                f"Hook counter changed on final restart: {counter_final}"
+            )
+
+            tip_final = _run(
+                ["git", "rev-parse", target_remote_ref], remote, env
+            ).strip()
+            assert tip_final == candidate_commit
+
+            os.killpg(child2.pid, signal.SIGKILL)
+            exit2 = child2.wait(timeout=scaled_timeout(10))
+            evidence["signals"].append(
+                {"pid": child2.pid, "signal": "SIGKILL", "exitCode": exit2}
+            )
+
+        # 6. Evidence tmp_path/recovery-journey-push-ack-loss.json
+        evidence.update(
+            {
+                "command": restart_command,
+                "cwd": str(repository),
+                "releaseDigest": release.digest,
+                "ids": {
+                    "sessionId": session_id,
+                    "grantId": setup["execution"]["grant"]["grant_id"],
+                    "itemId": setup["execution"]["active_item"]["item_id"],
+                    "revisionId": (
+                        setup["execution"]["active_item"].get("criteria_revision_id")
+                        or setup["execution"]["active_item"]["claimed_revision_id"]
+                    ),
+                    "candidateCommit": candidate_commit,
+                },
+                "hookCounter": len(counter_final),
+                "remoteTips": {
+                    "initial": remote_tip,
+                    "afterRetry": tip_after_retry,
+                    "final": tip_final,
+                },
+            }
+        )
+        write_evidence()
+    finally:
+        write_evidence()
+
+
 def exercise_controller_recovery(
     release: InstalledRelease,
     tmp_path: Path,
@@ -4154,6 +4516,7 @@ def exercise_controller_recovery(
         Literal["seal_execution_criteria", "stamp_execution_plan", "set_execution_state"] | bool | None
     ) = None,
     cancel_queued_continuation: bool = False,
+    push_ack_loss: bool = False,
 ) -> None:
     if committed_post_loss is True:
         committed_post_loss = "seal_execution_criteria"
@@ -4162,6 +4525,10 @@ def exercise_controller_recovery(
     if cancel_queued_continuation:
         assert checkpoint == "resume", (
             "cancel_queued_continuation extends only the resume path"
+        )
+    if push_ack_loss:
+        assert checkpoint == "review", (
+            "push_ack_loss extends only the review path"
         )
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -4196,6 +4563,25 @@ def exercise_controller_recovery(
     _run(["git", "init", "--bare", str(remote)], repository, env)
     _run(["git", "remote", "add", "origin", str(remote)], repository, env)
     _run(["git", "push", "-u", "origin", "main"], repository, env)
+    hook_counter = tmp_path / "post-receive-counter"
+    hook_release = tmp_path / "post-receive-release"
+    if push_ack_loss:
+        hooks_dir = remote / "hooks"
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        post_receive = hooks_dir / "post-receive"
+        post_receive.write_text(
+            f"#!/bin/sh\n"
+            f"echo push >> '{hook_counter}'\n"
+            f"deadline=$(( $(date +%s) + 180 ))\n"
+            f"while [ ! -f '{hook_release}' ]; do\n"
+            f"  if [ \"$(date +%s)\" -ge \"$deadline\" ]; then\n"
+            f"    exit 1\n"
+            f"  fi\n"
+            f"  sleep 0.2\n"
+            f"done\n"
+            f"exit 0\n"
+        )
+        os.chmod(post_receive, 0o755)
     pg_port, service_port = _free_port(), _free_port()
     service_args = ("--service", "--postgres-port", str(pg_port))
 
@@ -4228,7 +4614,9 @@ def exercise_controller_recovery(
             ).fetchall()
 
     base_url = f"http://127.0.0.1:{service_port}"
-    provider = RecoveryProvider(tmp_path, checkpoint, progress, task_fault)
+    provider = RecoveryProvider(
+        tmp_path, checkpoint, progress, task_fault, push_ack_loss=push_ack_loss
+    )
     authority_proxy = (
         AuthorityResponseProxy(base_url, tmp_path)
         if task_fault == "child-result-gap" or predecessor_case is not None or committed_post_loss
@@ -4507,6 +4895,29 @@ def exercise_controller_recovery(
                             initial=initial,
                             service_pid=service.pid,
                             authority_proxy=authority_proxy,
+                        )
+                    if push_ack_loss:
+                        _prove_push_ack_loss_reconciles_remote_without_second_push(
+                            release=release,
+                            tmp_path=tmp_path,
+                            state=state,
+                            repository=repository,
+                            remote=remote,
+                            env=env,
+                            client=client,
+                            execution_url=f"/v1/workspaces/{identity['workspace_id']}/execution/{provider.key}",
+                            workspace_id=identity["workspace_id"],
+                            provider=provider,
+                            rpc=rpc,
+                            cli=cli,
+                            command=release.command(state, repository, *cli_args),
+                            workspace=Path(setup["workspace"]["path"]),
+                            service_pid=service.pid,
+                            session_id=str(initial["sessionId"]),
+                            hook_counter=hook_counter,
+                            hook_release=hook_release,
+                            setup=setup,
+                            actual_session=own_path,
                         )
                         return
                     assert provider.barrier.wait(60), (
@@ -5486,3 +5897,13 @@ def test_committed_resume_post_response_loss_reconciles_same_operation(
     exercise_controller_recovery(
         installed_release, tmp_path, "resume", committed_post_loss="set_execution_state"
     )
+
+
+def test_push_ack_loss_reconciles_remote_without_second_push(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """Lost push ack reconciles against the real remote without a second push."""
+    exercise_controller_recovery(
+        installed_release, tmp_path, "review", push_ack_loss=True
+    )
+
