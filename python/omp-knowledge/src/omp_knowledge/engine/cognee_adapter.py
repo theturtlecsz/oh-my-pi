@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime, timezone
@@ -30,6 +31,11 @@ from .protocol import (
 try:
     from cognee.infrastructure.engine.models.DataPoint import DataPoint
     from cognee.infrastructure.databases.graph.get_graph_engine import get_graph_engine
+    from cognee.modules.graph.utils import (
+        deduplicate_nodes_and_edges,
+        ensure_default_edge_properties,
+        get_graph_from_model,
+    )
     from cognee.tasks.storage.add_data_points import add_data_points
     from cognee.tasks.code_graph.models import (
         ApiEndpoint,
@@ -52,6 +58,9 @@ try:
 except ImportError:
     COGNEE_AVAILABLE = False
     DataPoint = Any  # type: ignore[misc,assignment]
+    deduplicate_nodes_and_edges = Any  # type: ignore[misc,assignment]
+    ensure_default_edge_properties = Any  # type: ignore[misc,assignment]
+    get_graph_from_model = Any  # type: ignore[misc,assignment]
 
 
 def compute_graph_sha256(node_ids: Iterable[str], edge_keys: Iterable[tuple]) -> str:
@@ -95,6 +104,74 @@ def _get_model_class(kind: str) -> Any:
         "lint": CodeLintFinding,
     }
     return models_map.get(kind, CodeSymbol)
+
+
+async def _write_snapshot_edges(
+    graph_engine: Any,
+    all_edges: list[tuple],
+    repo_node_id: str | None = None,
+    chunk_size: int = 2000,
+) -> None:
+    """Route edges through str endpoints, drop duplicate (src,dst,rel), and write
+    create-only via graph_engine.query while snapshot repo node has no edges, else add_edges.
+    """
+    seen: set[tuple[str, str, str]] = set()
+    deduped_edges: list[tuple[str, str, str, dict[str, Any]]] = []
+
+    for edge in all_edges:
+        if len(edge) < 3:
+            continue
+        src = str(edge[0])
+        dst = str(edge[1])
+        rel = str(edge[2])
+        props = edge[3] if len(edge) > 3 and isinstance(edge[3], dict) else {}
+        key = (src, dst, rel)
+        if key not in seen:
+            seen.add(key)
+            deduped_edges.append((src, dst, rel, props))
+
+    if not deduped_edges:
+        return
+
+    can_create_only = False
+    if repo_node_id:
+        rows = await graph_engine.query(
+            "MATCH (r:Node {id: $repo_id})-[e:EDGE]-() RETURN count(e)",
+            {"repo_id": repo_node_id},
+        )
+        repo_edge_count = rows[0][0] if rows else 0
+        can_create_only = (repo_edge_count == 0)
+
+    if can_create_only:
+        create_query = """
+        UNWIND $edges AS edge
+        MATCH (from:Node {id: edge.from_id}), (to:Node {id: edge.to_id})
+        CREATE (from)-[r:EDGE {
+            relationship_name: edge.relationship_name,
+            created_at: TIMESTAMP(edge.created_at),
+            updated_at: TIMESTAMP(edge.updated_at),
+            properties: edge.properties
+        }]->(to)
+        """
+        for start in range(0, len(deduped_edges), chunk_size):
+            chunk = deduped_edges[start : start + chunk_size]
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+            chunk_params = [
+                {
+                    "from_id": e[0],
+                    "to_id": e[1],
+                    "relationship_name": e[2],
+                    "properties": json.dumps(e[3], default=str),
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                for e in chunk
+            ]
+            await graph_engine.query(create_query, {"edges": chunk_params})
+    else:
+        for start in range(0, len(deduped_edges), chunk_size):
+            chunk = deduped_edges[start : start + chunk_size]
+            await graph_engine.add_edges(chunk)
 
 
 class RealCogneeAdapter(KnowledgeEngine):
@@ -359,11 +436,40 @@ class RealCogneeAdapter(KnowledgeEngine):
             facts=facts,
         )
 
-        await add_data_points(data_points, graph_only=True)
+        added_nodes: dict[Any, Any] = {}
+        added_edges: dict[Any, Any] = {}
+        visited_properties: dict[Any, Any] = {}
 
-        if edges:
-            graph_engine = await get_graph_engine()
-            await graph_engine.add_edges(edges)
+        results = await asyncio.gather(
+            *[
+                get_graph_from_model(
+                    data_point,
+                    added_nodes=added_nodes,
+                    added_edges=added_edges,
+                    visited_properties=visited_properties,
+                )
+                for data_point in data_points
+            ]
+        )
+
+        nodes: list[Any] = []
+        datapoint_edges: list[tuple] = []
+        for result_nodes, result_edges in results:
+            nodes.extend(result_nodes)
+            datapoint_edges.extend(result_edges)
+
+        nodes, datapoint_edges = deduplicate_nodes_and_edges(nodes, datapoint_edges)
+        datapoint_edges = ensure_default_edge_properties(datapoint_edges, nodes=nodes)
+
+        graph_engine = await get_graph_engine()
+        await graph_engine.add_nodes(nodes)
+
+        repo_node_id = node_ids[0] if node_ids else None
+        await _write_snapshot_edges(
+            graph_engine,
+            datapoint_edges + edges,
+            repo_node_id=repo_node_id,
+        )
 
         return IngestResult(
             snapshot_id=sid,
