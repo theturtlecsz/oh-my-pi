@@ -282,6 +282,7 @@ import type {
 	AsyncJobSnapshot,
 	CommandMetadataChangedListener,
 	ContextUsageBreakdown,
+	DispatchAuthorityValidation,
 	DroppedPrompt,
 	FollowUpOptions,
 	FreshSessionResult,
@@ -700,6 +701,13 @@ export class AgentSession {
 
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	#pendingNextTurnMessages: CustomMessage[] = [];
+	/**
+	 * Dispatch-time authority checks for hidden next-turn messages (S2.5). Keyed by
+	 * the exact queued object identity so a queued batch's validator survives the
+	 * drain, restore, and before-model-call paths. A validator is honored only for
+	 * a hidden `deliverAs: "nextTurn"` + `triggerTurn: true` message.
+	 */
+	#hiddenNextTurnDispatchValidators = new WeakMap<CustomMessage, DispatchAuthorityValidation>();
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
 	#queuedMessageDrainScheduled = false;
 	#planModeState: PlanModeState | undefined;
@@ -8653,6 +8661,7 @@ export class AgentSession {
 		this.#beginInFlight();
 		const generation = this.#promptGeneration;
 		this.#promptSequence++;
+		let releaseDrainedGuard: (() => void) | undefined;
 		try {
 			await this.#recovery.maybeRestoreRetryFallbackPrimary();
 			if (!(await this.#runUsageAwarePreflightForNextModelCall())) return false;
@@ -8783,9 +8792,20 @@ export class AgentSession {
 			// session-ledger note) join this prompt instead of slipping to the
 			// following turn. Order: active user message, queued nextTurn messages
 			// in queue order, then messages returned by before_agent_start.
-			const drainedNextTurn = this.#pendingNextTurnMessages;
-			messages.splice(nextTurnInsertIndex, 0, ...drainedNextTurn);
+			//
+			// A hidden next-turn message may carry a dispatch-time authority check
+			// (S2.5): re-read it now, before the message joins the prompt, and drop
+			// any refusal so no session entry and no provider request is produced.
+			const queuedNextTurn = this.#pendingNextTurnMessages;
 			this.#pendingNextTurnMessages = [];
+			const drainedNextTurn = this.#hasAnyHiddenNextTurnDispatchValidator(queuedNextTurn)
+				? await this.#admitHiddenNextTurnMessages(queuedNextTurn)
+				: queuedNextTurn;
+			if (this.#promptGeneration !== generation) {
+				this.#pendingNextTurnMessages = [...drainedNextTurn, ...this.#pendingNextTurnMessages];
+				return false;
+			}
+			messages.splice(nextTurnInsertIndex, 0, ...drainedNextTurn);
 			// Transactional drain: any generation bail below hands the drained
 			// batch back to the queue (ahead of anything queued since), so it
 			// survives for the next prompt instead of dying with this array.
@@ -8794,6 +8814,15 @@ export class AgentSession {
 					this.#pendingNextTurnMessages = [...drainedNextTurn, ...this.#pendingNextTurnMessages];
 				}
 			};
+			// Guard the turn's first model call with every hidden next-turn message
+			// admitted for this prompt — the anchor plus any prepended siblings and
+			// the live drain — so a validator that flips after this point (e.g. inside
+			// the before_agent_start handler above) still refuses before the request.
+			releaseDrainedGuard = this.#armHiddenNextTurnDispatchGuard([
+				message,
+				...(options?.prependMessages ?? []),
+				...drainedNextTurn,
+			]);
 			if (this.#extensionRunner) {
 				if (result?.messages) {
 					const promptAttribution: "user" | "agent" | undefined =
@@ -8941,6 +8970,7 @@ export class AgentSession {
 			return true;
 		} finally {
 			// The per-turn before_agent_start override lives only for this turn.
+			releaseDrainedGuard?.();
 			this.#tools.clearTurnSystemPromptOverride();
 			this.#usagePreflightReadyForNextModelCall = false;
 			this.#endInFlight();
@@ -9385,12 +9415,18 @@ export class AgentSession {
 
 		const queuedMessages = [...this.#pendingNextTurnMessages];
 		this.#pendingNextTurnMessages = [];
-		const message = queuedMessages[queuedMessages.length - 1];
+		// Re-read each queued message's dispatch-time authority BEFORE it can own a
+		// turn here: a refusal is dropped outright, so it never becomes the turn's
+		// anchor (or a prepended member) and never reaches append/persist.
+		const admittedMessages = this.#hasAnyHiddenNextTurnDispatchValidator(queuedMessages)
+			? await this.#admitHiddenNextTurnMessages(queuedMessages)
+			: queuedMessages;
+		const message = admittedMessages[admittedMessages.length - 1];
 		if (!message) {
 			return;
 		}
 
-		const prependMessages = queuedMessages.slice(0, -1);
+		const prependMessages = admittedMessages.slice(0, -1);
 		const textContent = this.#getCustomMessageTextContent(message);
 		try {
 			await this.#promptWithMessage(message, textContent, {
@@ -9398,9 +9434,85 @@ export class AgentSession {
 				skipPostPromptRecoveryWait: true,
 			});
 		} catch (error) {
-			this.#pendingNextTurnMessages = [...queuedMessages, ...this.#pendingNextTurnMessages];
+			this.#pendingNextTurnMessages = [...admittedMessages, ...this.#pendingNextTurnMessages];
 			throw error;
 		}
+	}
+
+	#hasAnyHiddenNextTurnDispatchValidator(messages: readonly CustomMessage[]): boolean {
+		for (const message of messages) {
+			if (this.#hiddenNextTurnDispatchValidators.has(message)) return true;
+		}
+		return false;
+	}
+
+	/** Record the dispatch-time authority check for a queued hidden next-turn
+	 *  message. Honored only for `deliverAs: "nextTurn"` + `triggerTurn: true`. */
+	#associateHiddenNextTurnDispatchValidator(
+		message: CustomMessage,
+		options?: {
+			triggerTurn?: boolean;
+			deliverAs?: "steer" | "followUp" | "nextTurn";
+			validateDispatch?: DispatchAuthorityValidation;
+		},
+	): void {
+		if (options?.deliverAs !== "nextTurn" || options.triggerTurn !== true || !options.validateDispatch) return;
+		this.#hiddenNextTurnDispatchValidators.set(message, options.validateDispatch);
+	}
+
+	/** Await a hidden next-turn message's dispatch-time authority check, if any.
+	 *  A refusal (`ok: false`) or a thrown validator drops the message: `false`. */
+	async #runHiddenNextTurnDispatchValidation(message: CustomMessage): Promise<boolean> {
+		const validateDispatch = this.#hiddenNextTurnDispatchValidators.get(message);
+		if (!validateDispatch) return true;
+		try {
+			const result = await validateDispatch();
+			if (result.ok) return true;
+			logger.warn("Hidden next-turn extension message refused at dispatch", {
+				customType: message.customType,
+				reason: result.reason,
+			});
+			return false;
+		} catch (error) {
+			logger.warn("Hidden next-turn extension message dispatch validation threw", {
+				customType: message.customType,
+				error: String(error),
+			});
+			return false;
+		}
+	}
+
+	/** Drop any hidden next-turn messages whose dispatch-time authority check refuses. */
+	async #admitHiddenNextTurnMessages(messages: readonly CustomMessage[]): Promise<CustomMessage[]> {
+		const admitted: CustomMessage[] = [];
+		for (const message of messages) {
+			if (await this.#runHiddenNextTurnDispatchValidation(message)) admitted.push(message);
+		}
+		return admitted;
+	}
+
+	/** Arm this turn's first model call with the hidden next-turn messages' still-
+	 *  unclaimed dispatch-time authority checks, so a validator that flips after the
+	 *  drain (e.g. inside a `before_agent_start` handler) still refuses the request. */
+	#armHiddenNextTurnDispatchGuard(messages: readonly AgentMessage[]): (() => void) | undefined {
+		const guarded: CustomMessage[] = [];
+		for (const candidate of messages) {
+			if (candidate.role !== "custom") continue;
+			const message = candidate as CustomMessage;
+			if (this.#hiddenNextTurnDispatchValidators.has(message)) guarded.push(message);
+		}
+		if (guarded.length === 0) return undefined;
+		let checked = false;
+		return this.agent.addBeforeModelCall(async () => {
+			if (checked) return undefined;
+			checked = true;
+			for (const message of guarded) {
+				if (!(await this.#runHiddenNextTurnDispatchValidation(message))) {
+					return { stop: true, reason: "Hidden next-turn extension message refused at dispatch" };
+				}
+			}
+			return undefined;
+		});
 	}
 
 	#getCustomMessageTextContent(message: Pick<CustomMessage, "content">): string {
@@ -9433,10 +9545,16 @@ export class AgentSession {
 	async #promptAgentInitiatedMessage(
 		message: CustomMessage,
 		options?: { acceptTerminalEmptyStop?: boolean },
-	): Promise<void> {
+	): Promise<boolean> {
 		this.#beginInFlight();
+		let releaseDispatchGuard: (() => void) | undefined;
 		try {
-			if (!(await this.#runUsageAwarePreflightForNextModelCall())) return;
+			if (!(await this.#runUsageAwarePreflightForNextModelCall())) return true;
+			// Re-read the dispatch-time authority check before this message can be
+			// appended/persisted or reach the provider: an idle `triggerTurn` send is
+			// never queued, so this is its only pre-append gate. A refusal drops it.
+			if (!(await this.#runHiddenNextTurnDispatchValidation(message))) return false;
+			releaseDispatchGuard = this.#armHiddenNextTurnDispatchGuard([message]);
 			const acceptTerminalEmptyStop = options?.acceptTerminalEmptyStop === true;
 			if (acceptTerminalEmptyStop) {
 				this.#resetPromptMaintenanceState();
@@ -9447,7 +9565,9 @@ export class AgentSession {
 			this.#associatePromptPreparation(message, [], this.#promptGeneration);
 			await this.agent.prompt(message);
 			await this.#waitForPostPromptRecovery();
+			return true;
 		} finally {
+			releaseDispatchGuard?.();
 			this.#usagePreflightReadyForNextModelCall = false;
 			this.#recovery.setAcceptTerminalEmptyStop(false);
 			this.#endInFlight();
@@ -9510,6 +9630,13 @@ export class AgentSession {
 			deliverAs?: "steer" | "followUp" | "nextTurn";
 			queueChipText?: string;
 			acceptTerminalEmptyStop?: boolean;
+			/**
+			 * Dispatch-time authority check, honored only for a hidden
+			 * `deliverAs: "nextTurn"` message with `triggerTurn: true`. Re-read before
+			 * this message can reach a provider (or be persisted) and again before the
+			 * turn's first model call; a refusal or throw drops it silently.
+			 */
+			validateDispatch?: DispatchAuthorityValidation;
 		},
 	): Promise<boolean> {
 		this.#assertTaskRecoveryInput();
@@ -9533,6 +9660,7 @@ export class AgentSession {
 			timestamp: Date.now(),
 		};
 		const normalizedAppMessage = await this.#normalizeAgentMessageImages(appMessage);
+		this.#associateHiddenNextTurnDispatchValidator(normalizedAppMessage, options);
 		if (this.isStreaming) {
 			if (options?.deliverAs === "nextTurn") {
 				this.#queueHiddenNextTurnMessage(normalizedAppMessage, options?.triggerTurn ?? false);
@@ -9555,10 +9683,9 @@ export class AgentSession {
 					this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 					return false;
 				}
-				await this.#promptAgentInitiatedMessage(normalizedAppMessage, {
+				return this.#promptAgentInitiatedMessage(normalizedAppMessage, {
 					acceptTerminalEmptyStop: options.acceptTerminalEmptyStop === true,
 				});
-				return true;
 			}
 			this.agent.appendMessage(normalizedAppMessage);
 			this.sessionManager.appendCustomMessageEntry(

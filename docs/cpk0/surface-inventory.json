@@ -436,7 +436,7 @@
   "extension_surfaces": {
     "extensions": {
       "interface_count": 81,
-      "type_count": 40,
+      "type_count": 41,
       "interfaces": [
         {
           "name": "AfterProviderResponseEvent",
@@ -1469,7 +1469,7 @@
               "name": "sendMessage",
               "kind": "method",
               "optional": false,
-              "parameters": "message: CustomMessagePayload<T>, options?: { triggerTurn?: boolean; deliverAs?: \"steer\" | \"followUp\" | \"nextTurn\" }",
+              "parameters": "message: CustomMessagePayload<T>, options?: SendMessageOptions",
               "return_type": "void"
             },
             {
@@ -4092,7 +4092,33 @@
           "kind": "type",
           "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
           "members": [],
-          "definition": "<T = unknown>(\n\tmessage: CustomMessagePayload<T>,\n\t/**\n\t * `deliverAs: \"nextTurn\"` queues hidden custom context for the next turn.\n\t * When paired with `triggerTurn: true` during prompt teardown, the session schedules\n\t * an internal continuation without surfacing the message in the editable pending queue.\n\t */\n\toptions?: { triggerTurn?: boolean; deliverAs?: \"steer\" | \"followUp\" | \"nextTurn\" },\n) => void"
+          "definition": "<T = unknown>(\n\tmessage: CustomMessagePayload<T>,\n\t/**\n\t * `deliverAs: \"nextTurn\"` queues hidden custom context for the next turn.\n\t * When paired with `triggerTurn: true` during prompt teardown, the session schedules\n\t * an internal continuation without surfacing the message in the editable pending queue.\n\t */\n\toptions?: SendMessageOptions,\n) => void"
+        },
+        {
+          "name": "SendMessageOptions",
+          "kind": "type",
+          "source_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+          "members": [
+            {
+              "name": "triggerTurn",
+              "kind": "property",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "name": "deliverAs",
+              "kind": "property",
+              "optional": true,
+              "type": "\"steer\" | \"followUp\" | \"nextTurn\""
+            },
+            {
+              "name": "validateDispatch",
+              "kind": "property",
+              "optional": true,
+              "type": "DispatchAuthorityValidation"
+            }
+          ],
+          "definition": "{\n\ttriggerTurn?: boolean;\n\tdeliverAs?: \"steer\" | \"followUp\" | \"nextTurn\";\n\t/**\n\t * Optional dispatch-time authority check, honored only for a hidden\n\t * `deliverAs: \"nextTurn\"` message with `triggerTurn: true`. Re-read\n\t * immediately before the queued message would reach the provider and again\n\t * during the turn's first model call; a refusal or throw drops the message\n\t * without a provider request or a session entry.\n\t */\n\tvalidateDispatch?: DispatchAuthorityValidation;\n}"
         },
         {
           "name": "SendUserMessageHandler",
