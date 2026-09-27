@@ -4189,7 +4189,6 @@ def _prove_push_ack_loss_reconciles_remote_without_second_push(
     rpc: RpcProcess,
     cli: subprocess.Popen[str],
     command: list[str],
-    workspace: Path,
     service_pid: int,
     session_id: str,
     hook_counter: Path,
@@ -4896,6 +4895,7 @@ def exercise_controller_recovery(
                             service_pid=service.pid,
                             authority_proxy=authority_proxy,
                         )
+                        return
                     if push_ack_loss:
                         _prove_push_ack_loss_reconciles_remote_without_second_push(
                             release=release,
@@ -4911,7 +4911,6 @@ def exercise_controller_recovery(
                             rpc=rpc,
                             cli=cli,
                             command=release.command(state, repository, *cli_args),
-                            workspace=Path(setup["workspace"]["path"]),
                             service_pid=service.pid,
                             session_id=str(initial["sessionId"]),
                             hook_counter=hook_counter,

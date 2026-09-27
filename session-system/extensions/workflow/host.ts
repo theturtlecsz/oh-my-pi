@@ -5004,23 +5004,17 @@ export function createWorkflowHost(cfg: HostConfig) {
 
 							const existingCandidate = wfView?.item?.candidate;
 							const candidateAlreadyFinalized =
-								existingCandidate
-								&& existingCandidate.kind === "final"
+								existingCandidate?.kind === "final"
 								&& existingCandidate.commit_sha === freeze.commitSha
 								&& existingCandidate.candidate_sha256 === freeze.candidateSha256;
-							const finalCandidate: Candidate = candidateAlreadyFinalized
-								? (existingCandidate as Candidate)
+							const finalCandidate: Candidate = candidateAlreadyFinalized && existingCandidate
+								? existingCandidate
 								: await backend.finalizeExecutionCandidate(targetIssue.key, plannedCandidateId, freeze);
 
-							const hasVerification = (wfView?.receipts ?? []).some(
-								r => r.kind === "verification" && r.candidate_commit === (finalCandidate.commit_sha ?? freeze.commitSha),
-							);
-							if (!hasVerification) {
-								await backend.appendEvidence(targetIssue, "verification", params.body.trim(), {
-									candidateSha256: finalCandidate.candidate_sha256,
-									candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
-								});
-							}
+							await backend.appendEvidence(targetIssue, "verification", params.body.trim(), {
+								candidateSha256: finalCandidate.candidate_sha256,
+								candidateCommit: finalCandidate.commit_sha ?? freeze.commitSha,
+							});
 
 							const grantBaseline = exec.activeItem.current_git_baseline ?? exec.activeItem.initial_git_baseline;
 							let recoveredStaleTip: string | undefined;
