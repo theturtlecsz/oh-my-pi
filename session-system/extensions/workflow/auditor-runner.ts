@@ -5,7 +5,7 @@
  * with no model-transport copy/paste, no agent loop recreation, and no
  * prompt-enforced budget prose.
  */
-import { completeSimple } from "@oh-my-pi/pi-ai";
+import { completeSimple, type Model } from "@oh-my-pi/pi-ai";
 import { getAgentDir, Settings, type ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -23,6 +23,17 @@ export type NativeAuditRunner = (
 	attemptId: string,
 	signal?: AbortSignal,
 ) => Promise<NativeAuditRunResult>;
+
+/**
+ * Resolves the `@audit` role model from the extension context or throws.
+ */
+export function resolveAuditModel(ctx: { models: { resolve(model: string): Model<any> | undefined } }): Model<any> {
+	const auditModel = ctx.models.resolve("@audit");
+	if (!auditModel) {
+		throw new Error("Could not resolve @audit role — fix modelRoles.audit and retry");
+	}
+	return auditModel;
+}
 
 /**
  * Prepares a native auditor runner for the current extension context.
@@ -45,10 +56,7 @@ export async function prepareNativeAuditRunner(ctx: ExtensionContext, signal?: A
 		throw new Error('Installed "auditor" agent definition is missing required output schema');
 	}
 
-	const auditModel = ctx.models.resolve("@audit");
-	if (!auditModel) {
-		throw new Error("Could not resolve @audit role — fix modelRoles.audit and retry");
-	}
+	const auditModel = resolveAuditModel(ctx);
 
 	// OMP-251: auditor transport preflight. Launch reservations are budgeted
 	// (3 per attempt); prove credentials + endpoint connectivity BEFORE the

@@ -992,6 +992,9 @@ describe("native auditor runner (OMP-168)", () => {
 			taskDepth: 0,
 			abort: () => {},
 			sessionManager: { getBranch: () => [ownershipEntry, ...branchEntries], getSessionId: () => "pause-notice-session", getCwd: () => cwd },
+			models: {
+				resolve: (role: string) => (role === "@audit" ? ({ id: "audit-model", provider: "mock" } as never) : undefined),
+			},
 			ui: {
 				notify: (text: string) => { notifications.push(text); },
 				theme: { fg: (_color: string, text: string) => text },
@@ -2195,6 +2198,9 @@ describe("terminal execution grant closing notices and banners (OMP-196)", () =>
 			cwd,
 			taskDepth: 0,
 			sessionManager: { getBranch: () => [ownershipEntry], getSessionId: () => "sess-1", getCwd: () => cwd },
+			models: {
+				resolve: (role: string) => (role === "@audit" ? ({ id: "audit-model", provider: "mock" } as never) : undefined),
+			},
 			ui: {
 				notify: (text: string) => { notifications.push(text); },
 				theme: { fg: (_c: string, t: string) => t },
