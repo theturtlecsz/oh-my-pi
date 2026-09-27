@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ from .records import (
     remove_sidecars,
     verify_manifest_files,
     verify_record_digests,
+    verify_store_contents,
     write_json,
 )
 
@@ -61,9 +63,13 @@ def _source_files(state_root: Path) -> list[str]:
 
 def _copy_sources(source_root: Path, dest_root: Path) -> None:
     source = source_root / SOURCES_DIR
-    if not source.is_dir():
-        return
     destination = dest_root / SOURCES_DIR
+    if not source.is_dir():
+        # A tree removed from the state root must not survive in a backup
+        # directory that previously held it; a backup reflects the root now.
+        if destination.is_dir():
+            shutil.rmtree(destination)
+        return
     if destination.exists():
         shutil.rmtree(destination)
     shutil.copytree(source, destination)
@@ -86,10 +92,16 @@ def create_backup(
 
     for spec in STORE_SPECS:
         source = root / spec.filename
-        if not source.is_file():
-            continue
         target = destination / spec.filename
+        if not source.is_file():
+            # A store removed from the root must not linger from an earlier
+            # backup in the same directory; the manifest would keep naming it.
+            if target.exists():
+                target.unlink()
+            remove_sidecars(target)
+            continue
         tables = copy_store(source, target)
+        remove_sidecars(target)
         stores[spec.name] = {
             "file": spec.filename,
             "tables": {
@@ -201,9 +213,13 @@ def rebuild_from_records(
     source = Path(backup_dir).resolve()
     target = Path(target_root).resolve()
     manifest = load_manifest(source)
+    # Everything that can refuse must refuse before the target is created:
+    # checksums, the record/manifest store and table sets, the record digests,
+    # and the on-disk store contents.
     verify_manifest_files(source, manifest)
     records = load_records(source)
     verify_record_digests(manifest, records)
+    verify_store_contents(source, manifest)
 
     if target.exists():
         if not target.is_dir():
@@ -212,16 +228,16 @@ def rebuild_from_records(
             raise MaintenanceError(f"target root is not empty: {target}")
     target.mkdir(parents=True, exist_ok=True)
 
-    store_names = [spec.name for spec in STORE_SPECS if spec.name in records["stores"]]
+    store_names = sorted(records["stores"])
     for spec in STORE_SPECS:
-        if spec.name in records["stores"]:
+        if spec.name in store_names:
             _insert_store(spec, target, records["stores"][spec.name]["tables"])
 
     _copy_sources(source, target)
     _verify_target(target, manifest, store_names)
     return {
         "target_root": str(target),
-        "stores": sorted(store_names),
+        "stores": store_names,
         "files": len(manifest["files"]),
     }
 
@@ -234,36 +250,52 @@ def rollback(
     source = Path(backup_dir).resolve()
     root = Path(state_root).resolve()
     manifest = load_manifest(source)
+    # Refuse on any damage while the live root is still in place: checksums, the
+    # record/manifest store and table sets, the record digests, and the on-disk
+    # store contents. Only after all of that passes do we touch the live root.
     verify_manifest_files(source, manifest)
     records = load_records(source)
     verify_record_digests(manifest, records)
+    verify_store_contents(source, manifest)
 
+    # Restore only the files the manifest names, into a staging directory in the
+    # root's parent (so the rename is atomic on one filesystem). The old root is
+    # never mutated until the staged tree is complete and verified.
+    store_names = sorted(records["stores"])
+    root.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f"{root.name}.rollback-", dir=str(root.parent))
+    )
     aside: Path | None = None
-    if root.exists():
-        if not root.is_dir():
-            raise MaintenanceError(f"state root is not a directory: {root}")
-        aside = aside_path(root)
-        root.rename(aside)
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        for spec in STORE_SPECS:
+            if spec.name not in store_names:
+                continue
+            backup_file = source / spec.filename
+            target_file = staging / spec.filename
+            shutil.copyfile(backup_file, target_file)
+            remove_sidecars(target_file)
+        _copy_sources(source, staging)
+        _verify_target(staging, manifest, store_names)
 
-    restored_stores: list[str] = []
-    for spec in STORE_SPECS:
-        backup_file = source / spec.filename
-        if not backup_file.is_file():
-            continue
-        target_file = root / spec.filename
-        shutil.copyfile(backup_file, target_file)
-        restored_stores.append(spec.name)
-
-    _copy_sources(source, root)
-    _verify_target(root, manifest, restored_stores)
-    for spec in STORE_SPECS:
-        if spec.name in restored_stores:
-            remove_sidecars(root / spec.filename)
+        if root.exists():
+            if not root.is_dir():
+                raise MaintenanceError(f"state root is not a directory: {root}")
+            aside = aside_path(root)
+            root.rename(aside)
+        try:
+            staging.rename(root)
+        except BaseException:
+            if aside is not None:
+                aside.rename(root)
+            raise
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
     return {
         "state_root": str(root),
         "aside": str(aside) if aside is not None else None,
-        "stores": sorted(restored_stores),
+        "stores": store_names,
         "files": len(manifest["files"]),
     }
 
@@ -271,10 +303,10 @@ def rollback(
 __all__ = [
     "FORMAT",
     "MANIFEST_NAME",
-    "MaintenanceError",
     "RECORDS_NAME",
     "SOURCES_DIR",
     "STORE_SPECS",
+    "MaintenanceError",
     "aside_path",
     "create_backup",
     "file_sha256",
@@ -284,4 +316,5 @@ __all__ = [
     "rollback",
     "verify_manifest_files",
     "verify_record_digests",
+    "verify_store_contents",
 ]

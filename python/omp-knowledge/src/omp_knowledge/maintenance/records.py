@@ -20,11 +20,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from omp_work.knowledge_publication import StructuralPublicationStore
+from omp_work.v1.canonical import sha256
+
 from omp_knowledge.context.store import ContextBundleStore
 from omp_knowledge.learning.store import LearningStore
 from omp_knowledge.publication import PublicationManager
-from omp_work.knowledge_publication import StructuralPublicationStore
-from omp_work.v1.canonical import sha256
 
 FORMAT = "omp-knowledge-backup/1"
 SOURCES_DIR = "sources"
@@ -249,16 +250,43 @@ def verify_manifest_files(backup_dir: Path, manifest: dict[str, Any]) -> None:
 
 
 def verify_record_digests(manifest: dict[str, Any], records: dict[str, Any]) -> None:
-    """Every exact-record table digest must equal the manifest's recorded digest."""
-    for store_name, store in records["stores"].items():
-        manifest_store = manifest["stores"].get(store_name)
+    """The records must describe exactly the stores and tables the manifest names.
+
+    A record whose store or table set diverges from the manifest (a dropped
+    store, a dropped table) is a refusal, not a smaller rebuild: the whole point
+    of the exact records is that they reconstruct the whole backup. Every
+    remaining table digest must also equal the manifest's recorded digest.
+    """
+    recorded_stores = manifest["stores"]
+    record_names = set(records["stores"])
+    recorded_names = set(recorded_stores)
+    if record_names != recorded_names:
+        raise MaintenanceError(
+            "exact records store set does not match the manifest: "
+            f"missing {sorted(recorded_names - record_names)}, "
+            f"unexpected {sorted(record_names - recorded_names)}"
+        )
+    for store_name in sorted(recorded_names):
+        store = records["stores"][store_name]
+        if not isinstance(store, dict) or not isinstance(store.get("tables"), dict):
+            raise MaintenanceError(f"exact records missing tables for {store_name!r}")
+        manifest_store = recorded_stores[store_name]
         if not isinstance(manifest_store, dict):
-            raise MaintenanceError(f"exact records name unknown store {store_name!r}")
+            raise MaintenanceError(f"manifest store {store_name!r} is malformed")
         recorded = manifest_store.get("tables")
         if not isinstance(recorded, dict):
             raise MaintenanceError(f"manifest has no tables for store {store_name!r}")
-        for table_name, table in store["tables"].items():
-            expected = recorded.get(table_name)
+        table_names = set(store["tables"])
+        recorded_tables = set(recorded)
+        if table_names != recorded_tables:
+            raise MaintenanceError(
+                f"exact records tables for store {store_name!r} do not match the "
+                f"manifest: missing {sorted(recorded_tables - table_names)}, "
+                f"unexpected {sorted(table_names - recorded_tables)}"
+            )
+        for table_name in sorted(table_names):
+            table = store["tables"][table_name]
+            expected = recorded[table_name]
             if not isinstance(expected, dict) or "sha256" not in expected:
                 raise MaintenanceError(
                     f"manifest has no digest for {store_name}.{table_name}"
@@ -268,6 +296,51 @@ def verify_record_digests(manifest: dict[str, Any], records: dict[str, Any]) -> 
                 raise MaintenanceError(
                     f"exact record digest mismatch for {store_name}.{table_name}: "
                     f"expected {expected['sha256']}, got {actual}"
+                )
+
+
+def verify_store_contents(backup_dir: Path, manifest: dict[str, Any]) -> None:
+    """Every store the manifest names must exist as SQLite with the recorded tables.
+
+    Checked before rebuild creates anything or rollback renames the live root, so
+    a store whose bytes do not match the manifest digest (a forged record digest,
+    a truncated file) refuses while the state is still untouched.
+    """
+    for store_name in sorted(manifest["stores"]):
+        store = manifest["stores"][store_name]
+        if not isinstance(store, dict):
+            raise MaintenanceError(f"manifest store {store_name!r} is malformed")
+        filename = store.get("file")
+        if not isinstance(filename, str):
+            raise MaintenanceError(f"manifest store {store_name!r} has no file name")
+        db_path = backup_dir / filename
+        if not db_path.is_file():
+            raise MaintenanceError(f"backup store missing: {filename}")
+        expected = store.get("tables")
+        if not isinstance(expected, dict):
+            raise MaintenanceError(f"manifest has no tables for store {store_name!r}")
+        try:
+            conn = sqlite3.connect(str(db_path))
+        except sqlite3.Error as exc:
+            raise MaintenanceError(f"backup store unreadable: {filename}: {exc}") from exc
+        try:
+            actual = extract_tables(conn)
+        except sqlite3.Error as exc:
+            raise MaintenanceError(f"backup store unreadable: {filename}: {exc}") from exc
+        finally:
+            conn.close()
+        if set(actual) != set(expected):
+            raise MaintenanceError(
+                f"backup store {store_name} has tables {sorted(actual)} "
+                f"but the manifest records {sorted(expected)}"
+            )
+        for table_name, info in actual.items():
+            recorded = expected[table_name]
+            digest = recorded.get("sha256") if isinstance(recorded, dict) else None
+            if info["sha256"] != digest:
+                raise MaintenanceError(
+                    f"backup store {store_name}.{table_name} does not match its "
+                    "recorded digest"
                 )
 
 
@@ -295,8 +368,8 @@ __all__ = [
     "MANIFEST_NAME",
     "RECORDS_NAME",
     "SOURCES_DIR",
-    "MaintenanceError",
     "STORE_SPECS",
+    "MaintenanceError",
     "StoreSpec",
     "aside_path",
     "copy_store",
@@ -314,5 +387,6 @@ __all__ = [
     "table_digest",
     "verify_manifest_files",
     "verify_record_digests",
+    "verify_store_contents",
     "write_json",
 ]

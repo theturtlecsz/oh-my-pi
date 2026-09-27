@@ -18,10 +18,10 @@ from .records import (
 __all__ = [
     "FORMAT",
     "MANIFEST_NAME",
-    "MaintenanceError",
     "RECORDS_NAME",
     "SOURCES_DIR",
     "STORE_SPECS",
+    "MaintenanceError",
     "StoreSpec",
     "create_backup",
     "rebuild_from_records",

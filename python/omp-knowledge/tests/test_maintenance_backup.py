@@ -18,12 +18,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 import sqlite3
 import threading
 from pathlib import Path
 
 import pytest
-
 from omp_knowledge.context.store import ContextBundleStore
 from omp_knowledge.learning.store import LearningStore
 from omp_knowledge.maintenance import (
@@ -37,6 +37,7 @@ from omp_knowledge.maintenance.records import (
     extract_tables,
     load_manifest,
     load_records,
+    table_digest,
 )
 from omp_knowledge.publication import PublicationManager
 from omp_work.knowledge_publication import StructuralPublicationStore
@@ -192,6 +193,22 @@ def test_backup_while_writer_active_records_match_copy(tmp_path: Path) -> None:
     }
     assert learning["tables"]["capture_cursor"]["rows"]
     assert learning["tables"]["cleanup_queue"]["rows"]
+
+
+def _restamp_records(backup: Path) -> None:
+    """Edit exact_records.json and keep its manifest file checksum consistent.
+
+    Makes the refusal come from the record/digest contract rather than the file
+    checksum, so the pre-mutation window is actually exercised.
+    """
+    records_path = backup / "exact_records.json"
+    manifest_path = backup / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["exact_records.json"] = {
+        "sha256": hashlib.sha256(records_path.read_bytes()).hexdigest(),
+        "size": records_path.stat().st_size,
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
 
 def test_rebuild_from_records_reproduces_digests_and_sources(tmp_path: Path) -> None:
@@ -362,6 +379,118 @@ def test_rollback_refuses_tampered_checksum_and_leaves_state_untouched(
 
     assert _tree_hashes(root) == before
     assert not list(tmp_path.glob("state.pre-rollback-*"))
+
+
+def test_rebuild_refuses_store_dropped_from_records_before_touching_target(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "state"
+    _seed_state_root(root)
+    backup = tmp_path / "backup"
+    create_backup(root, backup)
+
+    records_path = backup / "exact_records.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    del records["stores"]["context_bundles"]
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+    _restamp_records(backup)
+
+    target = tmp_path / "restored"
+    with pytest.raises(MaintenanceError, match="store set does not match"):
+        rebuild_from_records(backup, target)
+    assert not target.exists()
+
+
+def test_rebuild_refuses_table_dropped_from_records_before_touching_target(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "state"
+    _seed_state_root(root)
+    backup = tmp_path / "backup"
+    create_backup(root, backup)
+
+    records_path = backup / "exact_records.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    del records["stores"]["learning"]["tables"]["procedures"]
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+    _restamp_records(backup)
+
+    target = tmp_path / "restored"
+    with pytest.raises(MaintenanceError, match="tables for store 'learning'"):
+        rebuild_from_records(backup, target)
+    assert not target.exists()
+
+
+def test_rollback_restores_only_manifest_stores(tmp_path: Path) -> None:
+    root = tmp_path / "state"
+    _seed_state_root(root)
+    backup = tmp_path / "backup"
+    create_backup(root, backup)
+
+    # A second backup of the same directory after a store is gone must not
+    # resurrect it: the manifest, not the leftover file, is authoritative. The
+    # live root is then restored to a full root, so the rollback must remove the
+    # store the manifest no longer names.
+    (root / "learning.sqlite").unlink()
+    create_backup(root, backup)
+    assert not (backup / "learning.sqlite").exists()
+    assert "learning" not in load_manifest(backup)["stores"]
+
+    shutil.rmtree(root)
+    _seed_state_root(root)
+    learning = LearningStore(root)
+    with learning.transaction() as conn:
+        conn.execute(
+            "INSERT INTO cleanup_queue (procedure_id, action, created_at) "
+            "VALUES ('proc-1', 'stale', 'now')"
+        )
+    learning.close()
+    assert (root / "learning.sqlite").exists()
+
+    result = rollback(backup, root)
+    assert result["stores"] == ["context_bundles", "publications", "structural_publications"]
+    assert not (root / "learning.sqlite").exists()
+    assert (root / "context-bundles.sqlite").exists()
+    aside = Path(result["aside"])
+    assert aside.exists()
+    assert (aside / "learning.sqlite").exists()
+
+
+def test_rollback_refuses_forged_digest_with_stale_store_before_moving_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "state"
+    _seed_state_root(root)
+    backup = tmp_path / "backup"
+    create_backup(root, backup)
+
+    # Forge a record row, the manifest's per-table digest for it, and the
+    # records file checksum. The SQLite file itself is untouched, so only the
+    # pre-mutation store-content check can catch this.
+    records_path = backup / "exact_records.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    rows = records["stores"]["learning"]["tables"]["capture_cursor"]["rows"]
+    rows[0][1] = 999_999
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+
+    manifest_path = backup / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["stores"]["learning"]["tables"]["capture_cursor"]["sha256"] = table_digest(
+        records["stores"]["learning"]["tables"]["capture_cursor"]["columns"],
+        records["stores"]["learning"]["tables"]["capture_cursor"]["rows"],
+    )
+    manifest["files"]["exact_records.json"] = {
+        "sha256": hashlib.sha256(records_path.read_bytes()).hexdigest(),
+        "size": records_path.stat().st_size,
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    before = _tree_hashes(root)
+    with pytest.raises(MaintenanceError, match="does not match its recorded digest"):
+        rollback(backup, root)
+    assert _tree_hashes(root) == before
+    assert not list(tmp_path.glob("state.pre-rollback-*"))
+    assert not list(tmp_path.glob("state.rollback-*"))
 
 
 def test_cli_backup_exit_codes_and_json(tmp_path: Path) -> None:
