@@ -1,5 +1,6 @@
-"""Host-side Harbor evaluation evidence, fixtures, and grader."""
+"""Host-side Harbor evaluation evidence, fixtures, grader, and RPC adapter."""
 
+from .adapter import ProbeError, RpcAdapter, ServiceProbe
 from .evidence import Evidence, EvidenceError, EvidenceSealedError, EvidenceWriter, load_evidence
 from .fixtures import Fixture, IndependentTest, Scenario, Terminal, fixture_digest, load_fixture
 from .grader import grade, validate
@@ -11,7 +12,10 @@ __all__ = [
     "EvidenceWriter",
     "Fixture",
     "IndependentTest",
+    "ProbeError",
+    "RpcAdapter",
     "Scenario",
+    "ServiceProbe",
     "Terminal",
     "fixture_digest",
     "grade",
