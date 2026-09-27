@@ -786,8 +786,8 @@ export class ComputerWorkerCore {
 			// Closing is best-effort; the worker is exiting and has no request to report this against.
 		} finally {
 			this.#session = undefined;
-			// The worker's lifetime ends here: no result can still be read, so no
-			// retained temp PNG is dropped before this point.
+			// The worker's lifetime ends here and no result can still be read, so
+			// the retained temp PNGs are dropped now.
 			this.#removeTempScreenshots();
 			this.#unsubscribe();
 			this.#transport.send({ type: "closed" });

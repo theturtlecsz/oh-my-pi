@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -160,12 +160,18 @@ class FakeNativeSession implements NativeDesktopSession {
 }
 
 class MemoryTransport implements ComputerWorkerTransport {
+	/** Every transport created here, so afterEach can close the worker holding temp files. */
+	static readonly opened = new Set<MemoryTransport>();
 	readonly outbound: ComputerWorkerOutbound[] = [];
 	#handler?: (message: ComputerWorkerInbound) => void;
 	#waiters = new Set<{
 		predicate: (message: ComputerWorkerOutbound) => boolean;
 		resolve: (message: ComputerWorkerOutbound) => void;
 	}>();
+
+	constructor() {
+		MemoryTransport.opened.add(this);
+	}
 
 	send(message: ComputerWorkerOutbound): void {
 		this.outbound.push(message);
@@ -261,6 +267,18 @@ describe("computer schema and approval", () => {
 });
 
 describe("computer worker round trips", () => {
+	afterEach(async () => {
+		// A worker retains its run's temp PNGs until it closes. Close every
+		// worker these tests opened so a passing or failing assertion cannot
+		// leave an `omp-computer-*` file behind.
+		const opened = [...MemoryTransport.opened];
+		MemoryTransport.opened.clear();
+		for (const transport of opened) transport.inbound({ type: "close" });
+		await Promise.all(
+			opened.map(transport => transport.waitFor(message => message.type === "closed").catch(() => undefined)),
+		);
+	});
+
 	it("lists windows and returns screenshot caption, image, and detail through a fake native session", async () => {
 		const transport = new MemoryTransport();
 		const native = new FakeNativeSession();

@@ -33,6 +33,9 @@ function makeParentSession(settings: Settings): ToolSession {
 	} as unknown as ToolSession;
 }
 
+/** Every session-less worker spawned here, so afterEach can end its lifetime. */
+const spawned: Array<{ session: ToolSession; id: string }> = [];
+
 /** Spawn one worker and capture the ExecutorOptions the vibe path hands the executor. */
 async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings): Promise<ExecutorOptions> {
 	const captured = Promise.withResolvers<ExecutorOptions>();
@@ -55,13 +58,19 @@ async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings): Promise
 	});
 
 	const registry = VibeSessionRegistry.global();
-	await registry.spawn(makeParentSession(settings), { cli, prompt: "work" });
+	const session = makeParentSession(settings);
+	const { id } = await registry.spawn(session, { cli, prompt: "work" });
+	spawned.push({ session, id });
 	return captured.promise;
 }
 
 describe("vibe worker spawn model role", () => {
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
+		// A session-less worker's `omp-vibe-*` home lives until its lifetime ends,
+		// so kill every worker spawned here before resetting the registry.
+		const live = spawned.splice(0, spawned.length);
+		for (const { session, id } of live) await VibeSessionRegistry.global().kill(session, id);
 		VibeSessionRegistry.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
 	});
