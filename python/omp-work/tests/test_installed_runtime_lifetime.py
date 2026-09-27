@@ -13,7 +13,7 @@ from uuid import UUID
 
 from installed_runtime_support import (
     InstalledRelease,
-    _free_port,
+    ReservedPort,
     _run,
 )
 from installed_runtime_support import (
@@ -110,7 +110,8 @@ def test_sigkill_of_pytest_parent_terminates_installed_runtime_servers(
     state = tmp_path / "runtime"
     candidate = tmp_path / "candidate"
     candidate.mkdir()
-    pg_port, http_port = _free_port(), _free_port()
+    pg_reservation, http_reservation = ReservedPort(), ReservedPort()
+    pg_port, http_port = pg_reservation.port, http_reservation.port
     service_args = ("--service", "--postgres-port", str(pg_port))
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
 
@@ -119,7 +120,7 @@ def test_sigkill_of_pytest_parent_terminates_installed_runtime_servers(
             release.command(state, candidate, *service_args, *arguments), candidate, env
         )
 
-    with native_postgres(tmp_path / "postgres", pg_port):
+    with native_postgres(tmp_path / "postgres", pg_port, reserve=pg_reservation):
         identity = json.loads(run_service("ops", "credentials", "init"))
         run_service("ops", "bootstrap")
         config = OperationsConfig(
@@ -186,6 +187,9 @@ def test_sigkill_of_pytest_parent_terminates_installed_runtime_servers(
                 assert time.monotonic() < deadline, "parent runner never reported ready"
                 time.sleep(0.1)
 
+            # The runner reports ready only after the server bound http_port and
+            # answered health, so the reservation is no longer needed (OMP-388).
+            http_reservation.close()
             pids = json.loads(ready_file.read_text())
             bun_pid = pids["bun_pid"]
             python_pid = pids["python_pid"]

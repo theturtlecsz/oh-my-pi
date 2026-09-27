@@ -20,7 +20,7 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import cast
+from typing import Self, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -124,6 +124,35 @@ def _free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return int(listener.getsockname()[1])
+
+
+class ReservedPort:
+    """A loopback port held free for the process that will bind it later.
+
+    ``_free_port`` binds port 0, reads the number, then closes the socket, so the
+    kernel may hand that exact number to any ``bind(("127.0.0.1", 0))`` between
+    the choice and the server's own bind. The installed service binds from a
+    different process well after launch, and parallel qualification workers
+    allocate ports constantly, so that window produced ``[Errno 98] address
+    already in use`` (OMP-388). Holding a bound, non-listening socket here closes
+    it: an ephemeral allocation never reuses a port that is still bound, while
+    the server binds it normally because both sockets set ``SO_REUSEADDR``.
+    """
+
+    def __init__(self) -> None:
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.bind(("127.0.0.1", 0))
+        self.port = int(self.socket.getsockname()[1])
+
+    def close(self) -> None:
+        self.socket.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
 
 _PR_SET_PDEATHSIG = 1

@@ -22,8 +22,8 @@ import psycopg
 from installed_runtime_support import (
     AuthorityResponseProxy,
     InstalledRelease,
+    ReservedPort,
     RpcProcess,
-    _free_port,
     _health,
     _process,
     _run,
@@ -4581,7 +4581,8 @@ def exercise_controller_recovery(
             f"exit 0\n"
         )
         os.chmod(post_receive, 0o755)
-    pg_port, service_port = _free_port(), _free_port()
+    pg_reservation, service_reservation = ReservedPort(), ReservedPort()
+    pg_port, service_port = pg_reservation.port, service_reservation.port
     service_args = ("--service", "--postgres-port", str(pg_port))
 
     def service_command(*args: str) -> str:
@@ -4622,7 +4623,7 @@ def exercise_controller_recovery(
         else None
     )
     with (
-        native_postgres(tmp_path / "postgres", pg_port),
+        native_postgres(tmp_path / "postgres", pg_port, reserve=pg_reservation),
         provider.serve() as model_url,
         (
             authority_proxy.serve()
@@ -4693,7 +4694,10 @@ def exercise_controller_recovery(
                 "modelRoles:\n  audit: qualification/local-recovery\n  default: qualification/local-recovery\n  smol: qualification/local-recovery\n  task: qualification/local-task\nadvisor:\n  enabled: false\nasync:\n  enabled: false\ntask:\n  batch: false\n  isolation:\n    mode: none\n  prewalk: false\n  maxRecursionDepth: 1\ntools:\n  xdev: false\n"
             )
         service_log = tmp_path / "service.stderr"
-        with _process(
+        # The reservation holds service_port out of the ephemeral pool until the
+        # installed service binds it, which happens in a separate process after
+        # launch (OMP-388); it is released when this block exits.
+        with service_reservation, _process(
             release.command(
                 state,
                 repository,
