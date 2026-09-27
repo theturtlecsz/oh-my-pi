@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Generator
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Literal
@@ -598,6 +599,27 @@ def idempotent_command_row_count(config: OperationsConfig, workspace_id: str) ->
                 (workspace_id,),
             ).fetchone()["count"]
         )
+
+
+def grant_matches(left: dict, right: dict) -> bool:
+    """Compare two grant views field-by-field, timestamps by the instant they name.
+
+    The command API serializes UTC as ``+00:00`` while read endpoints emit ``Z``
+    for the identical instant; raw text comparison would report a difference the
+    service never made.
+    """
+
+    def normalize(value: object) -> object:
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                return value
+        return value
+
+    return set(left) == set(right) and all(
+        normalize(left[key]) == normalize(right[key]) for key in left
+    )
 
 
 def execution_message_count(entries: list[dict]) -> int:
@@ -6326,7 +6348,7 @@ def _prove_incompatible_contract_refuses_and_terminal_grant_stays_terminal(
                 assert len(provider.calls) == before_requests, (
                     f"Compatible restart {index} issued a provider request"
                 )
-                assert settled["grant"] == canceled_grant, (
+                assert grant_matches(settled["grant"], canceled_grant), (
                     f"Restart {index} changed the terminal grant: {settled['grant']}"
                 )
                 assert settled["grant"]["state"] == "canceled"
