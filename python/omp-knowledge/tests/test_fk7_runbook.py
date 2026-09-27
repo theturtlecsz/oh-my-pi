@@ -7,6 +7,8 @@ documented CLI flags match the shipped argument parsers without drift.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -14,6 +16,8 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -75,6 +79,41 @@ def _extract_all_commands(content: str) -> list[str]:
     return commands
 
 
+_web_parser: argparse.ArgumentParser | None = None
+
+
+def _get_inspection_serve_parser() -> argparse.ArgumentParser:
+    """Reads the argument parser from the shipped omp_knowledge.inspection.web module."""
+    global _web_parser
+    if _web_parser is not None:
+        return _web_parser
+
+    import omp_knowledge.inspection.web as web_mod
+
+    if hasattr(web_mod, "build_parser") and callable(getattr(web_mod, "build_parser")):
+        _web_parser = web_mod.build_parser()  # type: ignore[no-any-return]
+        return _web_parser
+
+    captured: list[argparse.ArgumentParser] = []
+    orig_init = argparse.ArgumentParser.__init__
+
+    def capture_init(self: argparse.ArgumentParser, *args: Any, **kwargs: Any) -> None:
+        orig_init(self, *args, **kwargs)
+        captured.append(self)
+
+    with io.StringIO() as buf, contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        with patch.object(argparse.ArgumentParser, "__init__", capture_init):
+            try:
+                web_mod.main(["--help"])
+            except SystemExit:
+                pass
+
+    if not captured:
+        raise RuntimeError("omp_knowledge.inspection.web.main did not instantiate an ArgumentParser")
+    _web_parser = captured[0]
+    return _web_parser
+
+
 def _parser_and_flags_for_command(cmd_str: str) -> tuple[argparse.ArgumentParser, list[str]]:
     """Resolves an ArgumentParser and extracted flag list for a command invocation."""
     tokens = cmd_str.split()
@@ -104,10 +143,7 @@ def _parser_and_flags_for_command(cmd_str: str) -> tuple[argparse.ArgumentParser
         if subcmd == "show":
             return _get_subparser(build_inspection_show_parser(), "show"), flags
         if subcmd == "serve":
-            p = argparse.ArgumentParser(prog="python -m omp_knowledge.inspection serve")
-            p.add_argument("--state-root", required=True)
-            p.add_argument("--port", type=int, default=0)
-            return p, flags
+            return _get_inspection_serve_parser(), flags
         raise ValueError(f"Unknown inspection subcommand {subcmd!r} in {cmd_str}")
 
     if module == "omp_knowledge.maintenance":
@@ -150,6 +186,15 @@ def test_flag_drift_detection_rejects_unknown_flags() -> None:
 
     assert "--drifted-flag" in flags
     assert "--drifted-flag" not in valid_options
+
+    fake_serve = "python -m omp_knowledge.inspection serve --state-root /tmp --port 8000 --drifted-flag"
+    serve_parser, serve_flags = _parser_and_flags_for_command(fake_serve)
+    serve_options = _valid_option_strings(serve_parser)
+
+    assert "--drifted-flag" in serve_flags
+    assert "--drifted-flag" not in serve_options
+    assert "--state-root" in serve_options
+    assert "--port" in serve_options
 
 
 def test_fk7_exercise_block_execution(tmp_path: Path) -> None:

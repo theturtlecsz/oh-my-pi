@@ -28,31 +28,34 @@ A Fleet Knowledge state root contains the local SQLite stores and retained sourc
 
 - **`learning.sqlite`** (owned by `LearningStore`):
   - `capture_cursor`: per-workspace domain event commit watermark cursor (`workspace_id`, `last_sequence`, `updated_at`).
-  - `units`: capture units for completed work (`unit_id`, `workspace_id`, `event_id`, `state`, `attempts`, `retryable`, `error_code`, `lease_until`, ...).
-  - `proposals`: generated lesson proposals pending or accepted (`proposal_id`, `unit_id`, `status`, `reason`, `lesson_json`, ...).
-  - `procedures`: active or retired procedures (`procedure_id`, `fingerprint`, `status`, `current_version`, `title`, ...).
-  - `procedure_versions`: immutable version history (`procedure_id`, `version`, `title`, `steps_json`, `preconditions_json`, `model`, `profile`, `source_json`, ...).
-  - `uses`: records of procedure application to candidate revisions (`use_id`, `procedure_id`, `version`, `candidate_id`, `supply_id`, ...).
-  - `outcomes`: verification verdicts bound to uses (`outcome_id`, `use_id`, `receipt_id`, `verdict`, ...).
-  - `corrections`: narrowing or withdrawal records bound to counterevidence (`correction_id`, `procedure_id`, `action`, `from_version`, `to_version`, `receipt_id`, ...).
-  - `cleanup_queue`: pending asynchronous cleanup actions resulting from corrections (`queue_id`, `procedure_id`, `action`, `attempts`, `done_at`, `last_error`, ...).
+  - `runs`: domain-event capture drain run summaries (`run_id`, `workspace_id`, `status`, `units_total`, `units_failed`, `units_no_lesson`, `proposals_accepted`, `proposals_rejected`, `started_at`, `completed_at`).
+  - `units`: capture units for completed work (`unit_id`, `workspace_id`, `event_id`, `state`, `attempts`, `retryable`, `error_code`, `lease_until`, `trace_json`, `model`, `profile`, `source_json`, `created_at`, `updated_at`).
+  - `proposals`: generated lesson proposals accepted or rejected (`proposal_id`, `unit_id`, `status`, `reason`, `procedure_id`, `lesson_json`, `model`, `profile`, `source_json`, `created_at`).
+  - `procedures`: active or withdrawn procedures (`procedure_id`, `fingerprint`, `status`, `current_version`, `title`, `created_at`, `updated_at`).
+  - `procedure_versions`: immutable version history (`procedure_id`, `version`, `title`, `steps_json`, `preconditions_json`, `model`, `profile`, `source_json`, `created_at`).
+  - `procedure_support`: receipts citing and supporting a procedure (`procedure_id`, `receipt_id`, `proposal_id`, `created_at`).
+  - `supplies`: records of procedures retrieved/supplied for candidate context (`supply_id`, `procedure_id`, `version`, `workspace_id`, `work_key`, `context_json`, `supplied_at`).
+  - `uses`: records of procedure application to candidate revisions (`use_id`, `supply_id`, `candidate_id`, `receipt_ids_json`, `used_at`).
+  - `outcomes`: verification verdicts bound to uses (`outcome_id`, `use_id`, `receipt_id`, `candidate_id`, `verdict`, `recorded_at`).
+  - `corrections`: narrowing or withdrawal records bound to counterevidence (`correction_id`, `procedure_id`, `receipt_id`, `action`, `status`, `reason`, `from_version`, `to_version`, `preconditions_json`, `model`, `profile`, `source_json`, `created_at`).
+  - `cleanup_queue`: pending asynchronous cleanup actions resulting from corrections (`queue_id`, `procedure_id`, `action`, `created_at`, `done_at`, `attempts`, `last_error`).
 
 - **`context-bundles.sqlite`** (owned by `ContextBundleStore`):
-  - `context_bundles`: deterministic compiled context packages (`bundle_id`, `work_id`, `work_key`, `stage`, `bundle_text`, `bundle_sha256`, ...).
-  - `context_exclusions`: audit trail of dropped or excluded items (`bundle_id`, `ordinal`, `section`, `ref`, `reason`, `detail`).
+  - `context_bundles`: deterministic compiled context packages (`bundle_id`, `work_id`, `work_key`, `revision_id`, `stage`, `attempt_id`, `candidate_id`, `request_json`, `counter_profile_json`, `counts_json`, `bundle_text`, `bundle_sha256`, `section_sha256_json`, `created_at`).
+  - `context_exclusions`: audit trail of dropped or excluded items (`bundle_id`, `ordinal`, `section`, `source`, `ref`, `reason`, `detail`).
 
 - **`structural-publications.sqlite`** (owned by `StructuralPublicationStore`):
-  - `structural_snapshots`: published code graph projections and coverage metadata (`workspace_id`, `repository_id`, `snapshot_id`, `namespace`, `state`, `projection_json`, `published_at`, ...).
+  - `structural_snapshots`: published code graph projections and coverage metadata (`workspace_id`, `repository_id`, `snapshot_id`, `namespace`, `state`, `projection_json`, `published_at`, `expires_at`).
 
 - **`publications.sqlite`** (owned by `PublicationManager`):
-  - `snapshot_publications`: high-level snapshot lifecycle records (`workspace_id`, `repository_id`, `snapshot_id`, `status`, `published_at`, ...).
+  - `snapshot_publications`: high-level snapshot lifecycle records (`workspace_id`, `repository_id`, `snapshot_id`, `status`, `published_at`).
 
 - **`sources/` Tree**:
   - Contains immutable byte strings for each repository snapshot. Retained files are referenced by SHA-256 and checked for bit-for-bit identity across repeated imports.
 
 ### WAL Mode and Sidecar Management
 
-All SQLite databases operate with Write-Ahead Logging (`PRAGMA journal_mode = WAL`). During active execution, `-wal` and `-shm` sidecar files exist beside each database file. Offline maintenance operations (`backup`, `rebuild`, `rollback`) ensure clean checkpoints, verify zero sidecars remain in snapshot copies, and preserve transaction atomicity.
+Only `learning.sqlite` operates with Write-Ahead Logging (`PRAGMA journal_mode = WAL`). Fresh `publications.sqlite`, `structural-publications.sqlite`, and `context-bundles.sqlite` use SQLite's default rollback journal mode (`PRAGMA journal_mode = delete`). During active execution, `-wal` and `-shm` sidecar files may exist beside `learning.sqlite`. Offline maintenance operations (`backup`, `rollback`) delete sidecars with `remove_sidecars` when creating or staging copies without inspecting or asserting that none remain. `rebuild` constructs clean stores from exact records via schema owners.
 
 ---
 
@@ -277,7 +280,7 @@ python -m omp_knowledge.maintenance rebuild \
 ```
 
 #### `rollback`
-Verifies all backup manifest checksums before touching the live root. Atomically renames the live root aside to `<state-root>.aside.<timestamp>`, then restores the verified stores and sources from the backup.
+Verifies all backup manifest checksums before touching the live root. Atomically renames the live root aside to `<root-parent>/<root-name>.pre-rollback-<YYYYMMDDTHHMMSSZ>` (and `-<n>` if that path exists), then restores the verified stores and sources from the backup.
 
 ```sh
 python -m omp_knowledge.maintenance rollback \
@@ -295,7 +298,7 @@ The table below maps verified failure modes to their corresponding recovery comm
 | Failure Case | Symptom / Error Code | Recovery Command | Contract Test | Recovery Behavior |
 | :--- | :--- | :--- | :--- | :--- |
 | **Generator outage** | `generator_unavailable` (unit failed, `retryable=1`) | `python -m omp_knowledge.learning retry` | `test_generator_outage` | Running `retry` with a restored generator reprocesses the unit, creates the proposal once, and clears retryable status. |
-| **Malformed output** | `malformed_generator_output` (unit failed, `retryable=0`) | `python -m omp_knowledge.learning retry` / `drain` | `test_malformed_output` | Corrupt model envelope fails safely; no orphan proposal is committed to the store. |
+| **Malformed output** | `malformed_generator_output` (unit failed, `retryable=1`) | `python -m omp_knowledge.learning retry` | `test_malformed_output` | Corrupt model envelope fails safely (unit marked failed, retryable=1, no orphan proposal written); subsequent retry reprocesses the unit. |
 | **Crash between store writes** | Process dies during multi-table update | Automatic atomic rollback; rerun `python -m omp_knowledge.learning correct` | `test_crash_between_store_writes` | Single SQLite transaction rolls back completely; `current_version` and status remain unchanged. |
 | **Stale cache** | Procedure modified or withdrawn after bundle compilation | `python -m omp_knowledge.learning correct` (action `withdraw`) | `test_stale_cache` | New compilation excludes withdrawn procedure; previous bundles reproduce byte-for-byte from bundle store. |
 | **Restart / replay** | Unit left in `running` state when process crashes | `python -m omp_knowledge.learning drain` then `retry` | `test_restart_replay` | Expired leases transition to `state='failed'`, `error_code='dropped'` on next drain; `retry` completes them idempotently. |
