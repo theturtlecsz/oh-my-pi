@@ -4501,6 +4501,386 @@ def _prove_push_ack_loss_reconciles_remote_without_second_push(
         write_evidence()
 
 
+def _prove_broken_auditor_keeps_halt_and_cancel_usable(
+    *,
+    release: InstalledRelease,
+    tmp_path: Path,
+    state: Path,
+    repository: Path,
+    env: dict[str, str],
+    client: httpx.Client,
+    execution_url: str,
+    provider: RecoveryProvider,
+    rpc: RpcProcess,
+    cli: subprocess.Popen[str],
+    command: list[str],
+    service_pid: int,
+    session_id: str,
+    setup: dict,
+    agent_dir: Path,
+) -> None:
+    """Kill an active grant, point only modelRoles.audit at a missing model, then pause, resume, and cancel."""
+    evidence_path = tmp_path / "recovery-journey-broken-auditor.json"
+    evidence: dict = {
+        "command": command,
+        "cwd": str(repository),
+        "releaseDigest": release.digest,
+        "pids": {"service": service_pid, "controller": cli.pid},
+        "signals": [],
+        "ids": {},
+        "effectCounts": {},
+        "rpcPaths": [str(rpc.stdout_log)],
+        "stderrPaths": [str(rpc.log)],
+        "configChange": {},
+        "refusalTexts": [],
+    }
+
+    def write_evidence() -> None:
+        evidence_path.write_text(json.dumps(evidence, indent=2, default=str) + "\n")
+
+    def execution_now() -> dict:
+        response = client.get(execution_url)
+        response.raise_for_status()
+        return response.json()
+
+    def workflow_now() -> dict:
+        response = client.get(f"/v1/work-items/{provider.key}/workflow")
+        response.raise_for_status()
+        return response.json()
+
+    def rpc_events(rpc_process: RpcProcess) -> list[dict]:
+        return [
+            json.loads(line)
+            for line in rpc_process.stdout_log.read_text().splitlines()
+            if line
+        ]
+
+    def notify_texts(events: list[dict]) -> list[str]:
+        return [
+            str(event.get("message", ""))
+            for event in events
+            if event.get("type") == "extension_ui_request"
+            and event.get("method") == "notify"
+        ]
+
+    def wait_until_idle(rpc_process: RpcProcess, phase: str) -> None:
+        deadline = time.monotonic() + scaled_timeout(45)
+        stable_since: float | None = None
+        quiet = scaled_timeout(1)
+        while time.monotonic() < deadline:
+            streaming = bool(rpc_process.request("get_state")["isStreaming"])
+            if streaming:
+                stable_since = None
+            elif stable_since is None:
+                stable_since = time.monotonic()
+            elif time.monotonic() - stable_since >= quiet:
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"{phase} stayed streaming past the quiet window")
+
+    def record_exit(pid: int, exit_code: int | None, phase: str) -> None:
+        signal_name = (
+            signal.Signals(-exit_code).name
+            if isinstance(exit_code, int) and exit_code < 0
+            else None
+        )
+        evidence["signals"].append(
+            {"pid": pid, "phase": phase, "signal": signal_name, "exitCode": exit_code}
+        )
+        write_evidence()
+
+    try:
+        admitted = execution_now()
+        assert admitted["grant"]["state"] == "active", admitted["grant"]
+        assert admitted["grant"]["grant_id"] == setup["execution"]["grant"]["grant_id"]
+        active_item = admitted["active_item"]
+        assert active_item is not None, admitted
+        revision_id = (
+            active_item.get("criteria_revision_id") or active_item["claimed_revision_id"]
+        )
+        evidence["ids"] = {
+            "sessionId": session_id,
+            "grantId": admitted["grant"]["grant_id"],
+            "itemId": active_item["item_id"],
+            "revisionId": revision_id,
+        }
+        live = rpc.request("get_state")
+        assert live["sessionId"] == session_id
+        actual_session = Path(str(live["sessionFile"]))
+        evidence["sessionFile"] = str(actual_session)
+        held_provider_requests = len(provider.calls)
+        evidence["effectCounts"] = {
+            "providerRequestsAtKill": held_provider_requests,
+            "continuationsScheduledAtKill": admitted["grant"]["continuations_scheduled"],
+        }
+        write_evidence()
+
+        os.killpg(cli.pid, signal.SIGKILL)
+        killed_exit = cli.wait(timeout=scaled_timeout(10))
+        assert killed_exit == -signal.SIGKILL
+        record_exit(cli.pid, killed_exit, "beforeConfigChange")
+        provider.restarting = True
+        provider.release.set()
+
+        config_path = agent_dir / "config.yml"
+        assert config_path.is_relative_to(state)
+        assert config_path.is_relative_to(tmp_path)
+        assert not config_path.resolve().is_relative_to(release.root.resolve())
+        before_config = config_path.read_text()
+        audit_before = "  audit: qualification/local-recovery"
+        audit_after = "  audit: qualification/missing-audit"
+        before_lines = before_config.splitlines()
+        assert before_lines.count(audit_before) == 1, before_config
+        after_lines = [
+            audit_after if line == audit_before else line for line in before_lines
+        ]
+        assert [(old, new) for old, new in zip(before_lines, after_lines) if old != new] == [
+            (audit_before, audit_after)
+        ]
+        after_config = "\n".join(after_lines) + ("\n" if before_config.endswith("\n") else "")
+        config_path.write_text(after_config)
+        assert config_path.read_text() == after_config
+        evidence["configChange"] = {
+            "path": str(config_path),
+            "auditBefore": "qualification/local-recovery",
+            "auditAfter": "qualification/missing-audit",
+            "before": before_config,
+            "after": after_config,
+        }
+        write_evidence()
+
+        restart_command = release.command(
+            state,
+            repository,
+            "--mode",
+            "rpc",
+            "--session",
+            str(actual_session),
+            "--provider",
+            "qualification",
+            "--model",
+            "local-recovery",
+        )
+        evidence["command"] = restart_command
+        restart_log = tmp_path / "controller-broken-auditor.stderr"
+        evidence["stderrPaths"].append(str(restart_log))
+        with _process(restart_command, repository, env, restart_log) as restarted:
+            restarted_rpc = RpcProcess(restarted, restart_log)
+            evidence["rpcPaths"].append(str(restarted_rpc.stdout_log))
+            evidence["pids"]["afterConfig"] = restarted.pid
+            write_evidence()
+            started = restarted_rpc.request("get_state")
+            assert started["sessionId"] == session_id
+            assert Path(str(started["sessionFile"])) == actual_session
+            deadline = time.monotonic() + scaled_timeout(20)
+            saw_streaming = False
+            while time.monotonic() < deadline:
+                if bool(restarted_rpc.request("get_state")["isStreaming"]):
+                    saw_streaming = True
+                    break
+                time.sleep(0.05)
+            if saw_streaming:
+                wait_until_idle(restarted_rpc, "startup")
+            startup_notices = notify_texts(rpc_events(restarted_rpc))
+            evidence["startupNotices"] = startup_notices
+            active = execution_now()
+            assert active["grant"]["state"] == "active", active["grant"]
+            execute_before_pause = _work_execute_ids(_session_entries(actual_session))
+            write_evidence()
+
+            owner_id = restarted_rpc.send(
+                "prompt", message="Please stop and let me inspect this failure"
+            )
+            pause_deadline = time.monotonic() + scaled_timeout(30)
+            paused = active
+            while time.monotonic() < pause_deadline:
+                paused = execution_now()
+                if paused["grant"]["state"] == "paused":
+                    break
+                time.sleep(0.05)
+            assert paused["grant"]["state"] == "paused", paused["grant"]
+            assert paused["grant"]["grant_version"] == active["grant"]["grant_version"] + 1
+            assert (
+                paused["grant"]["continuations_scheduled"]
+                == active["grant"]["continuations_scheduled"]
+            )
+            # Owner text pauses in the input handler before a model turn. RPC
+            # emits prompt_result for that text only when a handler consumes it;
+            # this pause leaves the text for the agent, so settle the session.
+            wait_until_idle(restarted_rpc, "owner input")
+            paused = execution_now()
+            assert paused["grant"]["state"] == "paused", paused["grant"]
+            evidence["ownerInput"] = {
+                "requestId": owner_id,
+                "grant": paused["grant"],
+            }
+            write_evidence()
+
+            version = paused["grant"]["grant_version"]
+            continuations = paused["grant"]["continuations_scheduled"]
+            execute_at_pause = _work_execute_ids(_session_entries(actual_session))
+            resume_mark = len(rpc_events(restarted_rpc))
+            resume_id = restarted_rpc.send(
+                "prompt", message=f"/execute resume {provider.key}"
+            )
+            resume_result = restarted_rpc.until(
+                lambda event: (
+                    event.get("type") == "prompt_result" and event.get("id") == resume_id
+                ),
+                step="broken auditor resume result",
+            )
+            wait_until_idle(restarted_rpc, "resume refusal")
+            resume_events = rpc_events(restarted_rpc)[resume_mark:]
+            resume_notices = notify_texts(resume_events)
+            refusal_texts = [
+                text
+                for text in resume_notices
+                if "@audit" in text and "resume" in text.lower()
+            ]
+            evidence["refusalTexts"] = refusal_texts
+            evidence["resumeNotices"] = resume_notices
+            evidence["resumeResult"] = resume_result
+            still_paused = execution_now()
+            assert still_paused["grant"]["state"] == "paused", still_paused["grant"]
+            assert still_paused["grant"]["grant_version"] == version
+            assert still_paused["grant"]["continuations_scheduled"] == continuations
+            assert _work_execute_ids(_session_entries(actual_session)) == execute_at_pause
+            assert execution_message_count(_session_entries(actual_session)) == len(
+                execute_at_pause
+            )
+            assert refusal_texts, (
+                f"resume was not refused with a message naming @audit: {resume_notices}"
+            )
+            write_evidence()
+
+            cancel_mark = len(rpc_events(restarted_rpc))
+            cancel_id = restarted_rpc.send(
+                "prompt", message=f"/execute cancel {provider.key}"
+            )
+            cancel_deadline = time.monotonic() + scaled_timeout(30)
+            canceled = still_paused
+            while time.monotonic() < cancel_deadline:
+                canceled = execution_now()
+                if canceled["grant"]["state"] == "canceled":
+                    break
+                time.sleep(0.05)
+            assert canceled["grant"]["state"] == "canceled", canceled["grant"]
+            assert canceled["grant"]["terminal_reason"] == "owner_cancel", canceled["grant"]
+            assert canceled["grant"]["grant_version"] == version + 1
+            cancel_result = restarted_rpc.until(
+                lambda event: (
+                    event.get("type") == "prompt_result" and event.get("id") == cancel_id
+                ),
+                step="owner cancel result",
+            )
+            wait_until_idle(restarted_rpc, "cancel")
+            provider_at_cancel = len(provider.calls)
+            execute_at_cancel = _work_execute_ids(_session_entries(actual_session))
+            evidence["cancelNotices"] = notify_texts(rpc_events(restarted_rpc)[cancel_mark:])
+            evidence["cancelResult"] = cancel_result
+            evidence["effectCounts"] = {
+                **evidence["effectCounts"],
+                "providerRequestsAtCancel": provider_at_cancel,
+                "continuationsScheduled": canceled["grant"]["continuations_scheduled"],
+                "workExecuteMessagesAtCancel": len(execute_at_cancel),
+            }
+            write_evidence()
+
+            os.killpg(restarted.pid, signal.SIGKILL)
+            restart_exit = restarted.wait(timeout=scaled_timeout(10))
+            assert restart_exit == -signal.SIGKILL
+            record_exit(restarted.pid, restart_exit, "afterCancel")
+
+        final_log = tmp_path / "controller-broken-auditor-again.stderr"
+        evidence["stderrPaths"].append(str(final_log))
+        final_command = restart_command
+        with _process(final_command, repository, env, final_log) as final:
+            final_rpc = RpcProcess(final, final_log)
+            evidence["rpcPaths"].append(str(final_rpc.stdout_log))
+            evidence["pids"]["finalRestart"] = final.pid
+            write_evidence()
+            final_state = final_rpc.request("get_state")
+            assert final_state["sessionId"] == session_id
+            assert Path(str(final_state["sessionFile"])) == actual_session
+            wait_until_idle(final_rpc, "final restart")
+            observe_until = time.monotonic() + scaled_timeout(3)
+            while time.monotonic() < observe_until:
+                assert final_rpc.request("get_state")["isStreaming"] is False
+                assert len(provider.calls) == provider_at_cancel, (
+                    "final restart issued a provider request"
+                )
+                time.sleep(0.2)
+            final_events = rpc_events(final_rpc)
+            assert not any(event.get("type") == "agent_start" for event in final_events), (
+                "final restart started a model turn"
+            )
+            assert len(provider.calls) == provider_at_cancel, (
+                "final restart issued a provider request"
+            )
+            assert _work_execute_ids(_session_entries(actual_session)) == execute_at_cancel
+            observed = execution_now()
+            assert observed["grant"] == canceled["grant"]
+            assert observed["grant"]["state"] == "canceled"
+            workflow = workflow_now()
+            launches = workflow["auditor_launches"]
+            launch_events = [
+                event
+                for event in workflow["close_attempt_events"]
+                if event.get("event_type")
+                in {"auditor_launch_reserved", "auditor_launch_settled"}
+            ]
+            pass_receipts = [
+                receipt
+                for receipt in workflow["receipts"]
+                if receipt.get("kind") == "audit" and receipt.get("verdict") == "PASS"
+            ]
+            assert launches == [], launches
+            assert launch_events == [], launch_events
+            assert pass_receipts == [], pass_receipts
+            assert all(
+                attempt.get("launch_count", 0) == 0 for attempt in workflow["close_attempts"]
+            ), workflow["close_attempts"]
+            evidence["effectCounts"] = {
+                **evidence["effectCounts"],
+                "providerRequests": len(provider.calls),
+                "continuationsScheduled": observed["grant"]["continuations_scheduled"],
+                "auditorLaunches": len(launches),
+                "reservedOrSettledAuditorLaunches": len(launches) + len(launch_events),
+                "passAuditReceipts": len(pass_receipts),
+                "workExecuteMessages": len(execute_at_cancel),
+                "workExecuteMessagesBeforePause": len(execute_before_pause),
+            }
+            evidence["finalRestartNotices"] = notify_texts(final_events)
+            write_evidence()
+        record_exit(evidence["pids"]["finalRestart"], final.returncode, "finalRestart")
+        saved = json.loads(evidence_path.read_text())
+        for key in (
+            "command",
+            "cwd",
+            "releaseDigest",
+            "pids",
+            "signals",
+            "ids",
+            "effectCounts",
+            "rpcPaths",
+            "stderrPaths",
+            "configChange",
+            "refusalTexts",
+        ):
+            assert key in saved and saved[key] not in (None, "", [], {}), key
+        for recorded in (
+            saved["cwd"],
+            saved["configChange"]["path"],
+            *saved["rpcPaths"],
+            *saved["stderrPaths"],
+        ):
+            assert Path(recorded).is_relative_to(tmp_path), recorded
+        assert saved["configChange"]["auditAfter"] == "qualification/missing-audit"
+        assert any("@audit" in text for text in saved["refusalTexts"])
+    finally:
+        write_evidence()
+
+
 def exercise_controller_recovery(
     release: InstalledRelease,
     tmp_path: Path,
@@ -4516,6 +4896,7 @@ def exercise_controller_recovery(
     ) = None,
     cancel_queued_continuation: bool = False,
     push_ack_loss: bool = False,
+    broken_auditor: bool = False,
 ) -> None:
     if committed_post_loss is True:
         committed_post_loss = "seal_execution_criteria"
@@ -4529,6 +4910,18 @@ def exercise_controller_recovery(
         assert checkpoint == "review", (
             "push_ack_loss extends only the review path"
         )
+    if broken_auditor:
+        assert not any(
+            (
+                progress,
+                unrelated_session,
+                predecessor_case,
+                completion_route,
+                committed_post_loss,
+                cancel_queued_continuation,
+                push_ack_loss,
+            )
+        ), "broken_auditor is a standalone recovery journey"
     repository = tmp_path / "repository"
     repository.mkdir()
     state = tmp_path / "runtime"
@@ -4843,6 +5236,27 @@ def exercise_controller_recovery(
                         "wrapperArgv": release.command(state, repository, *cli_args),
                     }
                     (tmp_path / "setup.json").write_text(json.dumps(setup, indent=2))
+                    if broken_auditor:
+                        _prove_broken_auditor_keeps_halt_and_cancel_usable(
+                            release=release,
+                            tmp_path=tmp_path,
+                            state=state,
+                            repository=repository,
+                            env=env,
+                            client=client,
+                            execution_url=(
+                                f"/v1/workspaces/{identity['workspace_id']}/execution/{provider.key}"
+                            ),
+                            provider=provider,
+                            rpc=rpc,
+                            cli=cli,
+                            command=release.command(state, repository, *cli_args),
+                            service_pid=service.pid,
+                            session_id=str(initial["sessionId"]),
+                            setup=setup,
+                            agent_dir=agent_dir,
+                        )
+                        return
                     if committed_post_loss in {
                         "seal_execution_criteria",
                         "stamp_execution_plan",
@@ -5908,5 +6322,14 @@ def test_push_ack_loss_reconciles_remote_without_second_push(
     """Lost push ack reconciles against the real remote without a second push."""
     exercise_controller_recovery(
         installed_release, tmp_path, "review", push_ack_loss=True
+    )
+
+
+def test_broken_auditor_keeps_halt_and_cancel_usable(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """A missing audit model must refuse resume while owner pause and cancel still work."""
+    exercise_controller_recovery(
+        installed_release, tmp_path, "review", broken_auditor=True
     )
 
