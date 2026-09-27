@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import signal
-import subprocess
+import subprocess  # nosec B404 - types and wraps RpcClient argv Popen (no shell); SIGKILL uses the resulting process
 import threading
 import time
 import urllib.error
@@ -75,6 +75,20 @@ def _frame_subset(pattern: Any, frame: Any) -> bool:
             _frame_subset(item, frame[index]) for index, item in enumerate(pattern)
         )
     return pattern == frame and type(pattern) is type(frame)
+
+
+class _DeniedFileAndData(urllib.request.FileHandler, urllib.request.DataHandler):
+    """Stand-ins that make ``build_opener`` omit the default file: and data: handlers."""
+
+    def file_open(self, request: urllib.request.Request) -> None:
+        raise urllib.error.URLError(f"file URLs are not permitted: {request.full_url}")
+
+    def data_open(self, request: urllib.request.Request) -> None:
+        raise urllib.error.URLError(f"data URLs are not permitted: {request.full_url}")
+
+
+# Same handlers as ``urlopen`` except file: and data:, which that call would allow.
+_HTTP_OPENER = urllib.request.build_opener(_DeniedFileAndData)
 
 
 class ProbeError(Exception):
@@ -236,7 +250,7 @@ class ServiceProbe:
             headers["X-OMP-Workspace-ID"] = self.workspace_id
         request = urllib.request.Request(self.base_url + path, headers=headers, method="GET")
         try:
-            with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT_S) as response:
+            with _HTTP_OPENER.open(request, timeout=_HTTP_TIMEOUT_S) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             raise ProbeError(f"{path} returned {exc.code}") from exc
