@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 from uuid import NAMESPACE_OID, UUID, uuid5
@@ -172,6 +173,41 @@ async def _write_snapshot_edges(
         for start in range(0, len(deduped_edges), chunk_size):
             chunk = deduped_edges[start : start + chunk_size]
             await graph_engine.add_edges(chunk)
+
+
+_COMMON_STOPWORDS = frozenset(
+    {
+        "a", "about", "above", "after", "again", "against", "all", "also", "am", "an", "and",
+        "any", "are", "aren", "arent", "as", "at", "be", "because", "been", "before",
+        "being", "below", "between", "both", "but", "by", "can", "cannot", "could",
+        "couldn", "couldnt", "did", "didn", "didnt", "do", "does", "doesn", "doesnt",
+        "doing", "don", "dont", "down", "during", "each", "few", "for", "from",
+        "further", "had", "hadn", "hadnt", "has", "hasn", "hasnt", "have", "haven",
+        "havent", "having", "he", "her", "here", "hers", "herself", "him", "himself",
+        "his", "how", "if", "in", "into", "is", "isn", "isnt", "it", "its", "itself",
+        "just", "me", "more", "most", "mustn", "mustnt", "my", "myself", "no", "nor",
+        "not", "of", "off", "on", "once", "only", "or", "other", "ought", "our",
+        "ours", "ourselves", "out", "over", "own", "same", "shan", "shant", "she",
+        "should", "shouldn", "shouldnt", "so", "some", "such", "than", "that", "the",
+        "their", "theirs", "them", "themselves", "then", "there", "these", "they",
+        "this", "those", "through", "to", "too", "under", "until", "up", "very",
+        "was", "wasn", "wasnt", "we", "were", "weren", "werent", "what", "when",
+        "where", "which", "while", "who", "whom", "why", "will", "with", "won",
+        "wont", "would", "wouldn", "wouldnt", "you", "your", "yours", "yourself",
+        "yourselves",
+    }
+)
+
+
+def _extract_query_terms(query_text: str) -> list[str]:
+    raw_tokens = re.findall(r"\w+", query_text.lower())
+    seen: set[str] = set()
+    terms: list[str] = []
+    for token in raw_tokens:
+        if len(token) >= 3 and token not in _COMMON_STOPWORDS and token not in seen:
+            seen.add(token)
+            terms.append(token)
+    return terms
 
 
 class RealCogneeAdapter(KnowledgeEngine):
@@ -500,6 +536,31 @@ class RealCogneeAdapter(KnowledgeEngine):
                 snapshot_id=snapshot_id,
             )
 
+        stripped = query_text.strip()
+        if not stripped:
+            return QueryResult(
+                facts=(),
+                total_matched=0,
+                query=query_text,
+                snapshot_id=snapshot_id,
+                route=self._route,
+            )
+
+        is_star = (stripped == "*")
+        words = stripped.split()
+        is_multi_word = (len(words) > 1)
+
+        terms = _extract_query_terms(stripped) if not is_star else []
+
+        if not is_star and not terms:
+            return QueryResult(
+                facts=(),
+                total_matched=0,
+                query=query_text,
+                snapshot_id=snapshot_id,
+                route=self._route,
+            )
+
         snapshot_label = f"{workspace_id}:{repository_id}@{snapshot_id}"
         graph_engine = await get_graph_engine()
         query_str = (
@@ -510,9 +571,73 @@ class RealCogneeAdapter(KnowledgeEngine):
         scope_json = json.dumps(snapshot_label)
         rows = await graph_engine.query(query_str, {"scope_json": scope_json})
 
-        matching: list[FactRecord] = []
-        query_lower = query_text.lower()
+        if is_multi_word:
+            scored_facts: list[tuple[int, FactRecord]] = []
+            for row in rows:
+                node_id = row[0]
+                name = row[1]
+                raw_props = row[2]
+                if not raw_props:
+                    continue
+                props = json.loads(raw_props) if isinstance(raw_props, str) else raw_props
+                if not isinstance(props, dict):
+                    continue
+                fact_props = props.get("fact_properties") or {}
+                if not isinstance(fact_props, dict):
+                    fact_props = {}
+                if (
+                    props.get("withdrawn")
+                    or fact_props.get("withdrawn")
+                    or props.get("status") == "withdrawn"
+                    or props.get("withdrawn_by")
+                ):
+                    continue
 
+                name_lower = str(name).lower() if name else ""
+                kind = str(props.get("kind", ""))
+                kind_lower = kind.lower()
+                file_path = props.get("file_path")
+                file_lower = str(file_path).lower() if file_path else ""
+
+                matched_count = sum(
+                    1
+                    for term in terms
+                    if term in name_lower or term in kind_lower or (file_lower and term in file_lower)
+                )
+                if matched_count > 0:
+                    fact_id = str(props.get("enola_id") or node_id)
+                    scored_facts.append(
+                        (
+                            matched_count,
+                            FactRecord(
+                                node_id=UUID(str(node_id)),
+                                fact_id=fact_id,
+                                name=name,
+                                kind=kind,
+                                file_path=file_path,
+                                line=props.get("line"),
+                                end_line=props.get("end_line"),
+                                properties=fact_props,
+                                snapshot_id=snapshot_id,
+                                repository_id=repository_id,
+                                workspace_id=workspace_id,
+                            ),
+                        )
+                    )
+
+            scored_facts.sort(key=lambda item: (-item[0], item[1].fact_id))
+            matching = [item[1] for item in scored_facts[:limit]]
+            return QueryResult(
+                facts=tuple(matching),
+                total_matched=len(matching),
+                query=query_text,
+                snapshot_id=snapshot_id,
+                route=self._route,
+            )
+
+        # Single exact-name query or '*'
+        matching_single: list[FactRecord] = []
+        query_lower = stripped.lower()
         for row in rows:
             node_id = row[0]
             name = row[1]
@@ -534,12 +659,12 @@ class RealCogneeAdapter(KnowledgeEngine):
                 continue
 
             kind = str(props.get("kind", ""))
-            if query_text == "*" or (name and query_lower in str(name).lower()) or query_lower in kind.lower():
-                fact_id = props.get("enola_id") or str(node_id)
-                matching.append(
+            if is_star or (name and query_lower in str(name).lower()) or query_lower in kind.lower():
+                fact_id = str(props.get("enola_id") or node_id)
+                matching_single.append(
                     FactRecord(
                         node_id=UUID(str(node_id)),
-                        fact_id=str(fact_id),
+                        fact_id=fact_id,
                         name=name,
                         kind=kind,
                         file_path=props.get("file_path"),
@@ -551,12 +676,12 @@ class RealCogneeAdapter(KnowledgeEngine):
                         workspace_id=workspace_id,
                     )
                 )
-                if len(matching) >= limit:
+                if len(matching_single) >= limit:
                     break
 
         return QueryResult(
-            facts=tuple(matching),
-            total_matched=len(matching),
+            facts=tuple(matching_single),
+            total_matched=len(matching_single),
             query=query_text,
             snapshot_id=snapshot_id,
             route=self._route,
