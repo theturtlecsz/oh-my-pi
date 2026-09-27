@@ -10,7 +10,7 @@ from uuid import UUID
 
 import psycopg
 
-from omp_work.jobs.store import native_trial_bind_diagnostic
+from omp_work.jobs.projection import trial_execution
 from omp_work.operations.artifacts import install_bytes_artifact, read_verified_bytes
 from omp_work.research.custody import (
     artifact_path,
@@ -1419,6 +1419,10 @@ class ResearchStoreMixin:
                 ("research trial id cannot bind as native candidate",),
             )
 
+        execution = trial_execution(cur, envelope.workspace_id, payload.trial_id)
+        if execution["jobs"] and not execution["eligible"]:
+            raise WorkStoreError("completion_blocked", tuple(execution["reasons"]))
+
         cur.execute(
             "SELECT work_id, revision_id, kind FROM omp_work.candidates WHERE workspace_id=%s AND candidate_id=%s",
             (envelope.workspace_id, payload.native_candidate_id),
@@ -1449,14 +1453,6 @@ class ResearchStoreMixin:
         }
         if sha256(binding_identity) != payload.binding_sha256:
             raise WorkStoreError("stale_evidence", ("binding digest does not match identity fields",))
-
-        # Job-less trials keep the R02 bind path. Trials with native jobs bind
-        # only once every one of those jobs is settled.
-        settlement = native_trial_bind_diagnostic(
-            cur, envelope.workspace_id, payload.trial_id
-        )
-        if settlement is not None:
-            raise WorkStoreError("invalid_request", (settlement,))
 
         cur.execute(
             f"""
