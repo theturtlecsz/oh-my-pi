@@ -27,6 +27,7 @@ from installed_runtime_support import (
     _health,
     _process,
     _run,
+    scaled_timeout,
 )
 from installed_runtime_support import (
     installed_release as installed_release,  # noqa: PLC0414 -- pytest fixture re-export
@@ -3732,6 +3733,413 @@ def _perform_committed_response_loss_cut(
         )
 
 
+def _session_entries(path: Path) -> list[dict]:
+    return read_complete_session(path)
+
+
+def _work_execute_ids(entries: list[dict]) -> list[str]:
+    return [
+        str(entry.get("id"))
+        for entry in entries
+        if entry.get("type") == "custom_message"
+        and entry.get("customType") == "work-execute"
+    ]
+
+
+def _continuation_entries(entries: list[dict], message_id: str) -> list[dict]:
+    found = []
+    for entry in entries:
+        if entry.get("type") != "custom_message" or entry.get("customType") != "work-execute":
+            continue
+        identity = (entry.get("details") or {}).get("executionContinuation") or {}
+        if identity.get("messageId") == message_id:
+            found.append(entry)
+    return found
+
+
+def _assistant_after(entries: list[dict], message_id: str) -> list[dict]:
+    carried = _continuation_entries(entries, message_id)
+    if not carried:
+        return []
+    start = entries.index(carried[-1]) + 1
+    return [
+        entry
+        for entry in entries[start:]
+        if entry.get("type") == "message"
+        and (entry.get("message") or {}).get("role") == "assistant"
+    ]
+
+
+def _restart_refused(event: dict) -> bool:
+    if event.get("type") != "extension_ui_request":
+        return False
+    if event.get("method") == "setStatus":
+        text = str(event.get("statusText") or "")
+        return "resume impossible" in text and "canceled" in text
+    if event.get("method") == "notify":
+        message = str(event.get("message") or "")
+        return (
+            "Execution authority is no longer active" in message
+            or "resume impossible" in message
+            or "Execution recovery skipped:" in message
+        )
+    return False
+
+
+def _prove_queued_continuation_after_cancel_starts_no_work(
+    *,
+    release: InstalledRelease,
+    tmp_path: Path,
+    state: Path,
+    repository: Path,
+    remote: Path,
+    env: dict[str, str],
+    client: httpx.Client,
+    execution_url: str,
+    workspace_id: str,
+    resumed_execution: dict,
+    provider: RecoveryProvider,
+    rpc: RpcProcess,
+    cli: subprocess.Popen[str],
+    command: list[str],
+    read_progress_operations: Callable[..., list[dict]],
+    workspace: Path,
+    service_pid: int,
+    session_id: str,
+) -> None:
+    """Cancel a queued resume continuation, then prove release and restarts start nothing."""
+    evidence_path = tmp_path / "recovery-journey-stale-continuation.json"
+    evidence: dict = {
+        "command": command,
+        "cwd": str(repository),
+        "releaseDigest": release.digest,
+        "pids": {"service": service_pid, "controller": cli.pid},
+        "signals": [],
+        "barrierObservations": [],
+        "providerCounts": {},
+        "effectCounts": {},
+        "rpcPaths": [str(rpc.stdout_log)],
+        "stderrPaths": [str(rpc.log)],
+    }
+
+    def write_evidence() -> None:
+        evidence_path.write_text(json.dumps(evidence, indent=2, default=str) + "\n")
+
+    def operation_ids() -> list[str]:
+        return [
+            row["operation_id"]
+            for row in read_progress_operations("set_execution_state")
+        ]
+
+    def session_files() -> list[str]:
+        return sorted(
+            str(path)
+            for path in tmp_path.rglob("*.jsonl")
+            if not path.name.endswith(".rpc.jsonl")
+        )
+
+    try:
+        barrier_state = rpc.request("get_state")
+        assert barrier_state["isStreaming"] is True, (
+            "Provider barrier must still hold the resumed turn"
+        )
+        actual_session = Path(str(barrier_state["sessionFile"]))
+        assert barrier_state["sessionId"] == session_id
+        resumed_version = resumed_execution["grant"]["grant_version"]
+        deadline = time.monotonic() + scaled_timeout(15)
+        entries: list[dict] = []
+        while time.monotonic() < deadline:
+            entries = _session_entries(actual_session)
+            if any(
+                entry.get("customType") == "work-now-execute-outbox"
+                and entry.get("data", {}).get("status") == "queued"
+                and entry.get("data", {}).get("postVersion") == resumed_version
+                for entry in entries
+            ):
+                break
+            time.sleep(0.05)
+        outbox = [
+            entry
+            for entry in entries
+            if entry.get("customType") == "work-now-execute-outbox"
+        ]
+        assert outbox, "Resumed continuation did not persist an outbox record"
+        intent = outbox[-1]["data"]
+        assert intent["status"] == "queued", intent
+        assert intent["postVersion"] == resumed_version, intent
+        assert str(intent["grantId"]) == str(resumed_execution["grant"]["grant_id"])
+        assert intent["sessionId"] == session_id
+        message_id = intent["messageId"]
+        assert _continuation_entries(entries, message_id) == [], (
+            "Queued continuation was already injected into a work-execute message"
+        )
+        active_item = resumed_execution["active_item"]
+        assert active_item is not None, resumed_execution
+        revision_id = (
+            active_item.get("criteria_revision_id") or active_item["claimed_revision_id"]
+        )
+        assert intent["revisionId"] == revision_id, intent
+        item_id = active_item["item_id"]
+        held_provider_requests = len(provider.calls)
+        assert provider.request_observations, "Held provider request was not observed"
+        assert provider.request_observations[-1]["responseStarted"] is False
+        evidence.update(
+            {
+                "sessionId": session_id,
+                "sessionFile": str(actual_session),
+                "grantId": resumed_execution["grant"]["grant_id"],
+                "itemId": item_id,
+                "revisionId": revision_id,
+                "messageId": message_id,
+                "barrierObservations": {
+                    "streaming": True,
+                    "outboxStatuses": [entry["data"]["status"] for entry in outbox],
+                    "queuedOutbox": intent,
+                    "providerRequests": [
+                        dict(row) for row in provider.request_observations
+                    ],
+                    "continuationInjected": False,
+                },
+                "providerCounts": {"held": held_provider_requests},
+            }
+        )
+        write_evidence()
+
+        cancel = client.post(
+            "/v1/commands",
+            json={
+                "api_version": "work.omp.dev/v1",
+                "workspace_id": workspace_id,
+                "operation_id": str(uuid4()),
+                "request_id": str(uuid4()),
+                "correlation_id": str(uuid4()),
+                "command": {
+                    "type": "set_execution_state",
+                    "payload": {
+                        "grant_id": resumed_execution["grant"]["grant_id"],
+                        "expected_grant_version": resumed_version,
+                        "target_state": "canceled",
+                        "reason": "disposable_recovery_fixture_cancel",
+                        "judge_sha256": resumed_execution["grant"]["judge_sha256"],
+                    },
+                },
+            },
+        )
+        cancel.raise_for_status()
+        canceled_grant = cancel.json()["result"]["grant"]
+        assert canceled_grant["state"] == "canceled", canceled_grant
+        assert canceled_grant["grant_version"] == resumed_version + 1, canceled_grant
+        assert (
+            canceled_grant["continuations_scheduled"]
+            == resumed_execution["grant"]["continuations_scheduled"]
+        ), canceled_grant
+        observed = client.get(execution_url)
+        observed.raise_for_status()
+        baseline_execution = observed.json()
+        assert baseline_execution["grant"]["state"] == "canceled"
+        assert baseline_execution["grant"]["grant_version"] == canceled_grant["grant_version"]
+        assert baseline_execution["active_item"] is None
+        assert any(
+            item["item_id"] == item_id and item["claimed_revision_id"] == active_item["claimed_revision_id"]
+            for item in baseline_execution["items"]
+        ), baseline_execution
+        workflow_url = f"/v1/work-items/{provider.key}/workflow"
+        workflow_response = client.get(workflow_url)
+        workflow_response.raise_for_status()
+        baseline_workflow = workflow_response.json()
+        baseline_head = _run(["git", "rev-parse", "HEAD"], workspace, env).strip()
+        baseline_refs = _run(["git", "show-ref"], remote, env)
+        baseline_result = (workspace / "result.txt").read_text()
+        baseline_operations = operation_ids()
+        evidence["sessionFilesAtCancel"] = session_files()
+        queued_execute_ids = _work_execute_ids(entries)
+        evidence["effectCounts"] = {
+            "providerRequests": held_provider_requests,
+            "continuationsScheduled": baseline_execution["grant"]["continuations_scheduled"],
+            "closeAttempts": len(baseline_workflow["close_attempts"]),
+            "receipts": len(baseline_workflow["receipts"]),
+            "auditorLaunches": len(baseline_workflow["auditor_launches"]),
+            "head": baseline_head,
+            "remoteRefs": baseline_refs,
+        }
+        evidence["grantVersionAtCancel"] = canceled_grant["grant_version"]
+        write_evidence()
+
+        settled_execute_ids: list[str] = []
+
+        def assert_unchanged(phase: str, rpc_process: RpcProcess) -> None:
+            count = len(provider.calls)
+            assert count == held_provider_requests, (
+                f"{phase} provider count {count} != held provider count {held_provider_requests}"
+            )
+            current_entries = _session_entries(actual_session)
+            carried = _continuation_entries(current_entries, message_id)
+            assert len(carried) <= 1, f"{phase} injected the queued continuation more than once"
+            assert _assistant_after(current_entries, message_id) == [], (
+                f"{phase} continuation produced an assistant turn"
+            )
+            if phase == "afterRelease":
+                assert _work_execute_ids(current_entries)[: len(queued_execute_ids)] == queued_execute_ids
+                settled_execute_ids[:] = _work_execute_ids(current_entries)
+            else:
+                assert _work_execute_ids(current_entries) == settled_execute_ids, (
+                    f"{phase} injected a continuation"
+                )
+            roster = rpc_process.request("get_subagents")["subagents"]
+            assert roster == [], f"{phase} started a task session: {roster}"
+            execution = client.get(execution_url)
+            execution.raise_for_status()
+            current_execution = execution.json()
+            assert current_execution["grant"]["state"] == "canceled", phase
+            assert (
+                current_execution["grant"]["grant_version"]
+                == baseline_execution["grant"]["grant_version"]
+            ), phase
+            assert current_execution == baseline_execution, phase
+            workflow = client.get(workflow_url)
+            workflow.raise_for_status()
+            current_workflow = workflow.json()
+            assert current_workflow["close_attempts"] == baseline_workflow["close_attempts"], phase
+            assert current_workflow["receipts"] == baseline_workflow["receipts"], phase
+            assert current_workflow["auditor_launches"] == baseline_workflow["auditor_launches"], phase
+            assert current_workflow["item"]["revision"] == baseline_workflow["item"]["revision"], phase
+            assert current_workflow["item"].get("candidate") == baseline_workflow["item"].get("candidate"), phase
+            assert _run(["git", "rev-parse", "HEAD"], workspace, env).strip() == baseline_head, phase
+            assert _run(["git", "show-ref"], remote, env) == baseline_refs, phase
+            assert (workspace / "result.txt").read_text() == baseline_result, phase
+            assert operation_ids() == baseline_operations, phase
+            evidence["sessionFiles"] = session_files()
+            evidence["providerCounts"][phase] = count
+            evidence["effectCounts"] = {
+                **evidence["effectCounts"],
+                "providerRequests": count,
+                "phase": phase,
+            }
+            write_evidence()
+
+        def wait_quiet(rpc_process: RpcProcess, phase: str) -> None:
+            deadline = time.monotonic() + scaled_timeout(45)
+            stable_since: float | None = None
+            quiet = scaled_timeout(3)
+            while time.monotonic() < deadline:
+                count = len(provider.calls)
+                assert count == held_provider_requests, (
+                    f"{phase} provider count {count} != held provider count {held_provider_requests}"
+                )
+                streaming = bool(rpc_process.request("get_state")["isStreaming"])
+                count = len(provider.calls)
+                assert count == held_provider_requests, (
+                    f"{phase} provider count {count} != held provider count {held_provider_requests}"
+                )
+                if streaming:
+                    stable_since = None
+                elif stable_since is None:
+                    stable_since = time.monotonic()
+                elif time.monotonic() - stable_since >= quiet:
+                    return
+                time.sleep(0.05)
+            count = len(provider.calls)
+            assert count == held_provider_requests, (
+                f"{phase} provider count {count} != held provider count {held_provider_requests}"
+            )
+            raise AssertionError(
+                f"{phase} bounded quiet window expired while the agent was still streaming"
+            )
+
+        assert rpc.request("get_state")["isStreaming"] is True
+        provider.release.set()
+        rpc.until(lambda event: event.get("type") == "agent_end")
+        wait_quiet(rpc, "afterRelease")
+        assert_unchanged("afterRelease", rpc)
+        release_events = [
+            json.loads(line)
+            for line in rpc.stdout_log.read_text().splitlines()
+            if line
+        ]
+        assert any(
+            event.get("type") == "extension_ui_request"
+            and event.get("method") == "notify"
+            and event.get("message") == "Execution authority is no longer active"
+            for event in release_events
+        ), "Released continuation did not refuse canceled authority"
+
+        os.killpg(cli.pid, signal.SIGKILL)
+        killed_exit = cli.wait(timeout=scaled_timeout(10))
+        assert killed_exit == -signal.SIGKILL
+        evidence["signals"].append(
+            {"pid": cli.pid, "signal": "SIGKILL", "exitCode": killed_exit}
+        )
+        evidence["pids"]["controller"] = cli.pid
+        write_evidence()
+        provider.restarting = True
+
+        def restart_once(phase: str, stderr_name: str) -> None:
+            log = tmp_path / stderr_name
+            evidence["stderrPaths"].append(str(log))
+            restart_command = release.command(
+                state,
+                repository,
+                "--mode",
+                "rpc",
+                "--session",
+                str(actual_session),
+                "--provider",
+                "qualification",
+                "--model",
+                "local-recovery",
+            )
+            with _process(restart_command, repository, env, log) as child:
+                child_rpc = RpcProcess(child, log)
+                evidence["rpcPaths"].append(str(child_rpc.stdout_log))
+                evidence["pids"][phase] = child.pid
+                refusal = child_rpc.until(_restart_refused)
+                wait_quiet(child_rpc, phase)
+                assert_unchanged(phase, child_rpc)
+                state_now = child_rpc.request("get_state")
+                assert state_now["sessionId"] == session_id, phase
+                assert state_now["isStreaming"] is False, phase
+                assert Path(str(state_now["sessionFile"])) == actual_session, phase
+                events = [
+                    json.loads(line)
+                    for line in child_rpc.stdout_log.read_text().splitlines()
+                    if line
+                ]
+                refusals = [event for event in events if _restart_refused(event)]
+                assert refusals, f"{phase} did not show a refusal"
+                assert not any(
+                    event.get("type") == "agent_start" for event in events
+                ), f"{phase} showed a continuation"
+                evidence.setdefault("restarts", []).append(
+                    {
+                        "phase": phase,
+                        "command": restart_command,
+                        "cwd": str(repository),
+                        "pid": child.pid,
+                        "refusal": refusal,
+                        "refusals": refusals,
+                        "providerRequests": len(provider.calls),
+                    }
+                )
+                write_evidence()
+            exit_code = child.returncode
+            signal_name = (
+                signal.Signals(-exit_code).name
+                if isinstance(exit_code, int) and exit_code < 0
+                else None
+            )
+            evidence["signals"].append(
+                {"pid": child.pid, "phase": phase, "signal": signal_name, "exitCode": exit_code}
+            )
+            write_evidence()
+
+        restart_once("afterRestart", "controller-stale-restart.stderr")
+        restart_once("afterSecondRestart", "controller-stale-again.stderr")
+        evidence["providerCounts"]["final"] = len(provider.calls)
+        write_evidence()
+    finally:
+        write_evidence()
+
+
 def exercise_controller_recovery(
     release: InstalledRelease,
     tmp_path: Path,
@@ -3745,11 +4153,16 @@ def exercise_controller_recovery(
     committed_post_loss: (
         Literal["seal_execution_criteria", "stamp_execution_plan", "set_execution_state"] | bool | None
     ) = None,
+    cancel_queued_continuation: bool = False,
 ) -> None:
     if committed_post_loss is True:
         committed_post_loss = "seal_execution_criteria"
     elif not committed_post_loss:
         committed_post_loss = None
+    if cancel_queued_continuation:
+        assert checkpoint == "resume", (
+            "cancel_queued_continuation extends only the resume path"
+        )
     repository = tmp_path / "repository"
     repository.mkdir()
     state = tmp_path / "runtime"
@@ -4209,6 +4622,28 @@ def exercise_controller_recovery(
                                 indent=2,
                             )
                         )
+                        if cancel_queued_continuation:
+                            _prove_queued_continuation_after_cancel_starts_no_work(
+                                release=release,
+                                tmp_path=tmp_path,
+                                state=state,
+                                repository=repository,
+                                remote=remote,
+                                env=env,
+                                client=client,
+                                execution_url=execution_url,
+                                workspace_id=identity["workspace_id"],
+                                resumed_execution=resumed_response.json(),
+                                provider=provider,
+                                rpc=rpc,
+                                cli=cli,
+                                command=release.command(state, repository, *cli_args),
+                                read_progress_operations=read_progress_operations,
+                                workspace=Path(setup["workspace"]["path"]),
+                                service_pid=service.pid,
+                                session_id=str(initial["sessionId"]),
+                            )
+                            return
                     barrier_state = rpc.request("get_state")
                     assert barrier_state["isStreaming"] is True, (
                         "Provider barrier must hold the existing turn"
@@ -4865,6 +5300,15 @@ def test_killed_controller_recovers_queued_resume_continuation(
 ) -> None:
     """With unchanged baseline HEAD, queued resume work must survive controller death."""
     exercise_controller_recovery(installed_release, tmp_path, "resume")
+
+
+def test_queued_continuation_after_cancel_starts_no_work(
+    installed_release: InstalledRelease, tmp_path: Path
+) -> None:
+    """A queued resume continuation presented after cancel must start no work."""
+    exercise_controller_recovery(
+        installed_release, tmp_path, "resume", cancel_queued_continuation=True
+    )
 
 
 def test_killed_controller_resumes_persisted_unanswered_turn(
