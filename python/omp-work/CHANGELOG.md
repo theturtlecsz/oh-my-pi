@@ -30,6 +30,7 @@
 - `bun scripts/approval-provenance.ts` fails CI when `approval.json` changes in a commit that is not authored by `flood-owner` with an owner marker subject (`owner step by flood` / `flood rebase_repair`).
 - Research contracts for campaigns, trials, observations, deliverable bindings, lifecycle states, the action vocabulary, component identity, and compatibility manifests, with generated work-client bindings (OMP-322).
 - Research artifact custody: content-addressed byte registration and verified reads, contained collection, source and dataset manifests with retention and project ACL, cache-versus-replicate accounting, and receipt manifest binding (OMP-323).
+- native research jobs on the shared omp_jobs substrate (worker handshake/drain, capability routing, leases, fencing, descendant cancellation, stable usage ids, outbox delivery, settled-trial gating) (OMP-324).
 
 ### Changed
 
