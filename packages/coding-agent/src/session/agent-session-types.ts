@@ -455,6 +455,13 @@ export interface PersistedTurnRefusal {
 	reason: string;
 }
 
+/**
+ * Re-reads an effect owner's authority immediately before dispatch. Shared by
+ * persisted-turn continuation and hidden next-turn extension messages so both
+ * surfaces refuse the same way (an `ok: false` result or a thrown error).
+ */
+export type DispatchAuthorityValidation = () => Promise<{ ok: true } | { ok: false; reason: string }>;
+
 /** Resume only this active-branch entry, without adding another prompt. */
 export interface PersistedTurnContinuationRequest {
 	recoverSynchronousTask?: true;
@@ -462,7 +469,7 @@ export interface PersistedTurnContinuationRequest {
 	entryId: string;
 	expectedLeafId: string;
 	/** Re-read the effect owner's authority after preparation, immediately before dispatch. */
-	validateDispatch: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+	validateDispatch: DispatchAuthorityValidation;
 	/** Reports a refusal discovered after scheduling, including preparation failures. */
 	onRefused?: (refusal: PersistedTurnRefusal) => void;
 }

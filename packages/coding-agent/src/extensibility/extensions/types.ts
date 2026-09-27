@@ -64,6 +64,7 @@ import type { CustomEditor } from "../../modes/components/custom-editor";
 import type { Theme } from "../../modes/theme/theme";
 import type { AsyncJobSnapshot } from "../../session/agent-session";
 import type {
+	DispatchAuthorityValidation,
 	PersistedTurnContinuationRequest,
 	PersistedTurnContinuationResult,
 } from "../../session/agent-session-types";
@@ -1459,11 +1460,12 @@ export interface ExtensionAPI {
 	 * `deliverAs: "nextTurn"` keeps the message hidden from the editable pending-message UI.
 	 * If `triggerTurn` is also true while the current turn is still unwinding, the session schedules
 	 * an internal continuation that consumes the message on the next turn.
+	 *
+	 * A `validateDispatch` callback (honored only for `deliverAs: "nextTurn"` +
+	 * `triggerTurn: true`) is awaited before the queued message reaches a prompt
+	 * and again before that turn's first model call; refusal drops it.
 	 */
-	sendMessage<T = unknown>(
-		message: CustomMessagePayload<T>,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
-	): void;
+	sendMessage<T = unknown>(message: CustomMessagePayload<T>, options?: SendMessageOptions): void;
 
 	/** Send a user prompt: idle starts a turn; streaming queues as steer unless deliverAs is set. */
 	sendUserMessage(
@@ -1684,6 +1686,19 @@ export interface ExtensionShortcut {
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
+export type SendMessageOptions = {
+	triggerTurn?: boolean;
+	deliverAs?: "steer" | "followUp" | "nextTurn";
+	/**
+	 * Optional dispatch-time authority check, honored only for a hidden
+	 * `deliverAs: "nextTurn"` message with `triggerTurn: true`. Re-read
+	 * immediately before the queued message would reach the provider and again
+	 * during the turn's first model call; a refusal or throw drops the message
+	 * without a provider request or a session entry.
+	 */
+	validateDispatch?: DispatchAuthorityValidation;
+};
+
 export type SendMessageHandler = <T = unknown>(
 	message: CustomMessagePayload<T>,
 	/**
@@ -1691,7 +1706,7 @@ export type SendMessageHandler = <T = unknown>(
 	 * When paired with `triggerTurn: true` during prompt teardown, the session schedules
 	 * an internal continuation without surfacing the message in the editable pending queue.
 	 */
-	options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+	options?: SendMessageOptions,
 ) => void;
 
 export type SendUserMessageHandler = (

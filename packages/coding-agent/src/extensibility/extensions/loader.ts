@@ -52,6 +52,7 @@ import type {
 	MessageRenderer,
 	ProviderConfig,
 	RegisteredCommand,
+	SendMessageOptions,
 	ToolDefinition,
 	ToolInfo,
 } from "./types";
@@ -272,10 +273,7 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		return this.runtime.flagValues.get(name);
 	}
 
-	sendMessage<T = unknown>(
-		message: CustomMessagePayload<T>,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
-	): void {
+	sendMessage<T = unknown>(message: CustomMessagePayload<T>, options?: SendMessageOptions): void {
 		this.runtime.sendMessage(message, options);
 	}
 
