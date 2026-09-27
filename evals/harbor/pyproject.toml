@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omp-harbor-eval"
+version = "0.1.0"
+description = "Host-side evidence, fixtures, and grader for Harbor evaluation runs"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Stencil Labs, Inc." }]
+keywords = ["omp", "harbor", "eval"]
+dependencies = [
+    "harbor==0.23.0",
+    "pyyaml>=6.0.2",
+    "omp-rpc",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+environments = ["sys_platform == 'linux'"]
+
+[tool.uv.sources]
+omp-rpc = { path = "../../python/omp-rpc", editable = true }
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+omp_harbor_eval = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
