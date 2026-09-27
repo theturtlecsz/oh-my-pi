@@ -14,8 +14,9 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
-import subprocess
+import subprocess  # nosec B404 - invokes git with a fixed argv and no shell
 import sys
 import time
 from collections.abc import Iterable, Mapping
@@ -85,9 +86,12 @@ def _as_uuid(value: UUID | str, name: str) -> UUID:
 
 
 def _git(args: list[str], root: Path) -> str:
+    git = shutil.which("git")
+    if git is None:
+        raise KnowledgeSourceError("checkout_invalid")
     try:
-        proc = subprocess.run(
-            ["git", *args],
+        proc = subprocess.run(  # nosec B603 - absolute git path, no shell, fixed argv
+            [git, *args],
             cwd=root,
             timeout=10,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
