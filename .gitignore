@@ -65,10 +65,8 @@ pi-*.html
 packages/coding-agent/src/export/html/tool-views.generated.js
 packages/natives/npm/
 /runs/
-python/omp-rpc/src/omp_rpc.egg-info/
-python/omp-rpc/build/
-python/omp-work/src/omp_work.egg-info/
-python/omp-work/build/
+python/*/src/*.egg-info/
+python/*/build/
 # parallel-agent worktrees
 .wt/
 CPU*.md
