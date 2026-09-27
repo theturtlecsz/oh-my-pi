@@ -1810,16 +1810,39 @@ export function createWorkflowHost(cfg: HostConfig) {
 			return undefined;
 		}
 
-		async function validateBoundExecutionAuthority(ctx: ExtensionContext, intent: ExecutionOutboxEntry): Promise<{ok: true} | {ok: false; reason: string}> {
+		async function validateExecutionDispatchAuthority(ctx: ExtensionContext, intent: ExecutionOutboxEntry): Promise<{ok: true} | {ok: false; reason: string}> {
 			const witness = ownExecutionWitness(ctx);
 			const owns = () => !!witness && ownsExecutionSession(ctx, witness, witness.workspace.path);
-			if (!witness || witness.workspace.grantId !== intent.grantId || !owns()) return { ok: false, reason: "Execution session ownership is unavailable" };
+			const refuse = (reason: string): {ok: false; reason: string} => {
+				if (owns()) {
+					try { ctx.ui.notify(reason, "warning"); } catch { /* headless */ }
+				}
+				return { ok: false, reason };
+			};
+			if (!witness || witness.workspace.grantId !== intent.grantId || !owns()) return refuse("Execution session ownership is unavailable");
+			let fresh: ExecutionSnapshot | null;
+			try {
+				fresh = await backend.getExecution(intent.grantId);
+			} catch (error) {
+				return refuse(`Execution authority is unreadable: ${String(error)}`);
+			}
+			if (!owns() || (fresh && !witnessMatchesGrant(witness, fresh))) return refuse("Execution session ownership changed");
+			if (!fresh || fresh.grant.grant_id !== intent.grantId || fresh.grant.state !== "active" || Date.parse(fresh.grant.expires_at) <= Date.now() || !fresh.activeItem) return refuse("Execution authority is no longer active");
+			const mismatch = executionIntentMismatch(intent, fresh);
+			return mismatch ? refuse(mismatch) : { ok: true };
+		}
+
+		async function validateBoundExecutionAuthority(ctx: ExtensionContext, intent: ExecutionOutboxEntry): Promise<{ok: true} | {ok: false; reason: string}> {
+			const authority = await validateExecutionDispatchAuthority(ctx, intent);
+			if (!authority.ok) return authority;
+			const witness = ownExecutionWitness(ctx);
+			const owns = () => !!witness && ownsExecutionSession(ctx, witness, witness.workspace.path);
 			try {
 				await backend.getPendingExecutionClaims?.(intent.grantId);
 			} catch (error) {
 				return { ok: false, reason: `Recovery blocked by unreadable claim: ${String(error)}` };
 			}
-			if (!owns()) return { ok: false, reason: "Execution session ownership changed" };
+			if (!witness || !owns()) return { ok: false, reason: "Execution session ownership changed" };
 			const fresh = await backend.getExecution(intent.grantId);
 			if (!owns() || (fresh && !witnessMatchesGrant(witness, fresh))) return { ok: false, reason: "Execution session ownership changed" };
 			if (!fresh || fresh.grant.grant_id !== intent.grantId || fresh.grant.state !== "active" || Date.parse(fresh.grant.expires_at) <= Date.now() || !fresh.activeItem) return { ok: false, reason: "Execution authority is no longer active" };
@@ -1843,8 +1866,9 @@ export function createWorkflowHost(cfg: HostConfig) {
 			ctx?: ExtensionContext,
 			replayEntry?: ExecutionOutboxEntry,
 		): Promise<boolean> {
-			const witness = ctx ? ownExecutionWitness(ctx) : undefined;
-			const owns = () => !!ctx && !!witness && ownsExecutionSession(ctx, witness, witness.workspace.path);
+			if (!ctx) return false;
+			const witness = ownExecutionWitness(ctx);
+			const owns = () => !!witness && ownsExecutionSession(ctx, witness, witness.workspace.path);
 			if (!witness || witness.workspace.grantId !== grantId || !owns()) return false;
 			let current: ExecutionSnapshot | null;
 			try {
@@ -1895,7 +1919,11 @@ export function createWorkflowHost(cfg: HostConfig) {
 				customType: `${TOOL_NAME}-execute`,
 				content: prompt.render(executePromptTemplate, { key: issueKey }),
 				details: { executionContinuation: pendingEntry },
-			}, { deliverAs: "nextTurn", triggerTurn: true });
+			}, {
+				deliverAs: "nextTurn",
+				triggerTurn: true,
+				validateDispatch: () => validateExecutionDispatchAuthority(ctx, pendingEntry),
+			});
 
 			// Enqueue is volatile. Only the matching custom_message in a disk-loaded
 			// session proves injection on restart; neither this marker nor an
