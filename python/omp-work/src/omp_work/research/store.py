@@ -404,7 +404,7 @@ class ResearchStoreMixin:
             self._config.data_dir, workspace_id, manifest.artifact_sha256
         )
         cur.execute(
-            f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",
+            f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",  # nosec B608 - static column fields
             (workspace_id, manifest.artifact_sha256),
         )
         existing = cur.fetchone()
@@ -428,7 +428,7 @@ class ResearchStoreMixin:
             ) VALUES (%s, %s, %s, %s)
             ON CONFLICT (workspace_id, artifact_sha256) DO NOTHING
             RETURNING {_ARTIFACT_FIELDS}
-            """,
+            """,  # nosec B608 - static column fields
             (
                 workspace_id,
                 manifest.artifact_sha256,
@@ -439,7 +439,7 @@ class ResearchStoreMixin:
         row = cur.fetchone()
         if row is None:
             cur.execute(
-                f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",
+                f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",  # nosec B608 - static column fields
                 (workspace_id, manifest.artifact_sha256),
             )
             row = cur.fetchone()
@@ -505,7 +505,7 @@ class ResearchStoreMixin:
         self, cur: psycopg.Cursor[dict[str, object]], workspace_id: UUID, digest: str
     ) -> dict[str, object]:
         cur.execute(
-            f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",
+            f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",  # nosec B608 - static column fields
             (workspace_id, digest),
         )
         row = cur.fetchone()
@@ -528,7 +528,7 @@ class ResearchStoreMixin:
         if manifest.artifact_sha256 is not None:
             self._require_artifact(cur, envelope.workspace_id, manifest.artifact_sha256)
         cur.execute(
-            f"SELECT {_SOURCE_FIELDS} FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",
+            f"SELECT {_SOURCE_FIELDS} FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",  # nosec B608 - static column fields
             (envelope.workspace_id, manifest.source_id),
         )
         existing = cur.fetchone()
@@ -550,7 +550,7 @@ class ResearchStoreMixin:
             ) VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (workspace_id, source_id) DO NOTHING
             RETURNING {_SOURCE_FIELDS}
-            """,
+            """,  # nosec B608 - static column fields
             (
                 envelope.workspace_id,
                 manifest.source_id,
@@ -563,7 +563,7 @@ class ResearchStoreMixin:
         row = cur.fetchone()
         if row is None:
             cur.execute(
-                f"SELECT {_SOURCE_FIELDS} FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",
+                f"SELECT {_SOURCE_FIELDS} FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",  # nosec B608 - static column fields
                 (envelope.workspace_id, manifest.source_id),
             )
             row = cur.fetchone()
@@ -606,7 +606,7 @@ class ResearchStoreMixin:
                 )
             self._require_artifact(cur, envelope.workspace_id, manifest.artifact_sha256)
         cur.execute(
-            f"SELECT {_DATASET_FIELDS} FROM omp_research.datasets WHERE workspace_id=%s AND dataset_id=%s",
+            f"SELECT {_DATASET_FIELDS} FROM omp_research.datasets WHERE workspace_id=%s AND dataset_id=%s",  # nosec B608 - static column fields
             (envelope.workspace_id, manifest.dataset_id),
         )
         existing = cur.fetchone()
@@ -628,7 +628,7 @@ class ResearchStoreMixin:
             ) VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (workspace_id, dataset_id) DO NOTHING
             RETURNING {_DATASET_FIELDS}
-            """,
+            """,  # nosec B608 - static column fields
             (
                 envelope.workspace_id,
                 manifest.dataset_id,
@@ -641,7 +641,7 @@ class ResearchStoreMixin:
         row = cur.fetchone()
         if row is None:
             cur.execute(
-                f"SELECT {_DATASET_FIELDS} FROM omp_research.datasets WHERE workspace_id=%s AND dataset_id=%s",
+                f"SELECT {_DATASET_FIELDS} FROM omp_research.datasets WHERE workspace_id=%s AND dataset_id=%s",  # nosec B608 - static column fields
                 (envelope.workspace_id, manifest.dataset_id),
             )
             row = cur.fetchone()
@@ -1705,7 +1705,7 @@ class ResearchStoreMixin:
         artifacts: list[dict[str, object] | None] = []
         if artifact_hashes:
             cur.execute(
-                f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256 = ANY(%s) ORDER BY artifact_sha256",
+                f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256 = ANY(%s) ORDER BY artifact_sha256",  # nosec B608 - static column fields
                 (workspace_id, list(artifact_hashes)),
             )
             artifacts = [_manifest_json(dict(row)) for row in cur.fetchall()]
@@ -1770,7 +1770,7 @@ class ResearchStoreMixin:
                 ("invalid_artifact_sha256", f"invalid artifact SHA-256: '{artifact_sha256}'"),
             )
         cur.execute(
-            f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",
+            f"SELECT {_ARTIFACT_FIELDS} FROM omp_research.artifacts WHERE workspace_id=%s AND artifact_sha256=%s",  # nosec B608 - static column fields
             (workspace_id, artifact_sha256),
         )
         row = cur.fetchone()
@@ -1783,9 +1783,11 @@ class ResearchStoreMixin:
                 ),
             )
         artifact = _manifest_json(row)
-        assert artifact is not None
+        if artifact is None:
+            raise AssertionError("artifact is None")
         manifest = artifact["manifest"]
-        assert isinstance(manifest, dict)
+        if not isinstance(manifest, dict):
+            raise AssertionError("manifest is not a dict")
         if retention_expired(manifest.get("valid_until")):  # type: ignore[arg-type]
             raise WorkStoreError("stale_evidence", ("artifact validity expired",))
         data = self._read_held_bytes(
@@ -1818,7 +1820,7 @@ class ResearchStoreMixin:
     ) -> dict[str, object]:
         source_id, project_id = self._scoped_identifier(value, "source")
         cur.execute(
-            f"SELECT {_SOURCE_FIELDS} FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",
+            f"SELECT {_SOURCE_FIELDS} FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",  # nosec B608 - static column fields
             (workspace_id, source_id),
         )
         row = cur.fetchone()
@@ -1828,9 +1830,11 @@ class ResearchStoreMixin:
                 ("not_found", f"research source '{source_id}' not found in workspace"),
             )
         source = _manifest_json(row)
-        assert source is not None
+        if source is None:
+            raise AssertionError("source is None")
         manifest = source["manifest"]
-        assert isinstance(manifest, dict)
+        if not isinstance(manifest, dict):
+            raise AssertionError("manifest is not a dict")
         self._authorize_manifest_read(manifest, project_id)
         if source["status"] == "inaccessible" or manifest.get("status") == "inaccessible":
             raise WorkStoreError("artifact_unavailable", ("source inaccessible",))
@@ -1839,7 +1843,8 @@ class ResearchStoreMixin:
         if isinstance(digest, str):
             held = self._require_artifact(cur, workspace_id, digest)
             held_manifest = _manifest_json(held)
-            assert held_manifest is not None
+            if held_manifest is None:
+                raise AssertionError("held_manifest is None")
             size = int(held_manifest["manifest"]["size_bytes"])
             data = self._read_held_bytes(workspace_id, digest, size)
             content = base64.b64encode(data).decode("ascii")
@@ -1850,7 +1855,7 @@ class ResearchStoreMixin:
     ) -> dict[str, object]:
         dataset_id, project_id = self._scoped_identifier(value, "dataset")
         cur.execute(
-            f"SELECT {_DATASET_FIELDS} FROM omp_research.datasets WHERE workspace_id=%s AND dataset_id=%s",
+            f"SELECT {_DATASET_FIELDS} FROM omp_research.datasets WHERE workspace_id=%s AND dataset_id=%s",  # nosec B608 - static column fields
             (workspace_id, dataset_id),
         )
         row = cur.fetchone()
@@ -1860,9 +1865,11 @@ class ResearchStoreMixin:
                 ("not_found", f"research dataset '{dataset_id}' not found in workspace"),
             )
         dataset = _manifest_json(row)
-        assert dataset is not None
+        if dataset is None:
+            raise AssertionError("dataset is None")
         manifest = dataset["manifest"]
-        assert isinstance(manifest, dict)
+        if not isinstance(manifest, dict):
+            raise AssertionError("manifest is not a dict")
         self._authorize_manifest_read(manifest, project_id)
         cur.execute(
             "SELECT status FROM omp_research.sources WHERE workspace_id=%s AND source_id=%s",
@@ -1876,7 +1883,8 @@ class ResearchStoreMixin:
         if isinstance(digest, str):
             held = self._require_artifact(cur, workspace_id, digest)
             held_manifest = _manifest_json(held)
-            assert held_manifest is not None
+            if held_manifest is None:
+                raise AssertionError("held_manifest is None")
             size = int(held_manifest["manifest"]["size_bytes"])
             data = self._read_held_bytes(workspace_id, digest, size)
             content = base64.b64encode(data).decode("ascii")
