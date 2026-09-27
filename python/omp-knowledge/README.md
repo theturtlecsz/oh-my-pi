@@ -46,3 +46,8 @@ Each pending row is processed in its own transaction:
 - On failure: stores `"<ExcType>: <msg>"` in `last_error`, increments `attempts`, and leaves the row pending for retry.
 
 Exits 0 when every processed row is done, and 1 if any row failed.
+
+## Runbook (FK-7)
+
+For local qualification, offline maintenance, failure-mode recovery, and the runnable exercise block, see [docs/fleet-knowledge-fk7-runbook.md](../../docs/fleet-knowledge-fk7-runbook.md).
+
