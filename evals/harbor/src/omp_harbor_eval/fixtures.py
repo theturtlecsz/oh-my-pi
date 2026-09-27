@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -89,7 +90,7 @@ class Scenario:
 class Fixture:
     def __init__(
         self,
-        id: str,
+        fixture_id: str,
         scored_experiment: str,
         seed_patch: str,
         solution_patch: str,
@@ -99,7 +100,7 @@ class Fixture:
         digest: str,
         directory: Path,
     ) -> None:
-        self.id = id
+        self.id = fixture_id
         self.scored_experiment = scored_experiment
         self.seed_patch = seed_patch
         self.solution_patch = solution_patch
@@ -281,7 +282,7 @@ def load_fixture(fixtures_root: str | Path, fixture_id: str) -> Fixture:
         raise ValueError(f"missing scenario file {scenario_name}")
     scenario = _load_scenario(_mapping(_read_json(scenario_path), "scenario"), scenario_name)
     return Fixture(
-        id=file_id,
+        fixture_id=file_id,
         scored_experiment=_string(document["scored_experiment"], "fixture.scored_experiment"),
         seed_patch=_string(document["seed_patch"], "fixture.seed_patch", empty=True),
         solution_patch=_string(document["solution_patch"], "fixture.solution_patch", empty=True),

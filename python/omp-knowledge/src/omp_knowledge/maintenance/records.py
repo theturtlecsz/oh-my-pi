@@ -129,7 +129,7 @@ def read_table(
     rows = [
         tuple(row)
         for row in conn.execute(
-            f"SELECT {selection} FROM {_quote_ident(table)}{order}"
+            f"SELECT {selection} FROM {_quote_ident(table)}{order}",  # nosec B608 - identifiers quoted from schema introspection
         ).fetchall()
     ]
     return columns, rows

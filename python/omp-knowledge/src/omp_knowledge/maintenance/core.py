@@ -27,6 +27,7 @@ from .records import (
     STORE_SPECS,
     MaintenanceError,
     StoreSpec,
+    _quote_ident,
     aside_path,
     copy_store,
     decode_value,
@@ -156,10 +157,10 @@ def _insert_store(spec: StoreSpec, target_root: Path, tables: dict[str, Any]) ->
             rows = tables[name]["rows"]
             if not columns:
                 continue
-            selection = ", ".join(f'"{column}"' for column in columns)
+            selection = ", ".join(_quote_ident(column) for column in columns)
             placeholders = ", ".join("?" for _ in columns)
             conn.executemany(
-                f'INSERT INTO "{name}" ({selection}) VALUES ({placeholders})',
+                f"INSERT INTO {_quote_ident(name)} ({selection}) VALUES ({placeholders})",  # nosec B608 - row values are parameterized, identifiers are quoted
                 [tuple(decode_value(value) for value in row) for row in rows],
             )
         conn.execute("COMMIT")
