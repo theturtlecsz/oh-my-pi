@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -29,6 +29,13 @@ from .canonical import (
     sha256,
     text_sha256,
     validate_execution_paths,
+)
+from .intake_hold import (
+    IntakeClassification,
+    IntakeFacts,
+    Link,
+    ScopeClass,
+    classify_intake,
 )
 from .models import (
     LIVE_CLOSE_ATTEMPT_STATES,
@@ -272,10 +279,84 @@ class WorkStore(Protocol):
     ) -> dict[str, object]: ...
 
 
+def _intake_classifications(
+    cur: psycopg.Cursor[dict[str, object]],
+    workspace_id: UUID,
+    work_ids: Iterable[UUID],
+) -> dict[UUID, IntakeClassification]:
+    target_ids = {UUID(str(wid)) for wid in work_ids}
+    if not target_ids:
+        return {}
+
+    target_id_strs = [str(wid) for wid in target_ids]
+    cur.execute(
+        "SELECT source_work_id, target_work_id, kind, active FROM omp_work.work_relations WHERE workspace_id=%s AND active=true AND kind = ANY(%s) AND (source_work_id = ANY(%s) OR target_work_id = ANY(%s))",
+        (workspace_id, ["parent", "blocks"], target_id_strs, target_id_strs),
+    )
+    rel_rows = cur.fetchall()
+
+    all_work_ids = set(target_ids)
+    links: list[Link] = []
+    for row in rel_rows:
+        src = UUID(str(row["source_work_id"]))
+        tgt = UUID(str(row["target_work_id"]))
+        all_work_ids.add(src)
+        all_work_ids.add(tgt)
+        links.append(
+            Link(
+                source_work_id=src,
+                target_work_id=tgt,
+                kind=str(row["kind"]),
+                active=bool(row["active"]),
+            )
+        )
+
+    all_id_strs = [str(wid) for wid in all_work_ids]
+    cur.execute(
+        "SELECT i.work_id, i.state, i.archived, i.filed_by_kind, r.description FROM omp_work.work_items i LEFT JOIN omp_work.work_revisions r ON r.revision_id = i.current_revision_id WHERE i.workspace_id=%s AND i.work_id = ANY(%s)",
+        (workspace_id, all_id_strs),
+    )
+    fact_rows = cur.fetchall()
+
+    cur.execute(
+        "SELECT work_id FROM omp_work.intake_decisions WHERE workspace_id=%s AND work_id = ANY(%s) AND answer='approve'",
+        (workspace_id, all_id_strs),
+    )
+    intake_approved_ids = {UUID(str(row["work_id"])) for row in cur.fetchall()}
+
+    facts: list[IntakeFacts] = []
+    for row in fact_rows:
+        wid = UUID(str(row["work_id"]))
+        facts.append(
+            IntakeFacts(
+                work_id=wid,
+                state=str(row["state"]),
+                archived=bool(row["archived"]),
+                filed_by_kind=str(row["filed_by_kind"])
+                if row["filed_by_kind"] is not None
+                else None,
+                description=str(row["description"])
+                if row["description"] is not None
+                else "",
+                intake_approved=wid in intake_approved_ids,
+            )
+        )
+
+    classified = classify_intake(facts, links)
+    return {wid: classified[wid] for wid in target_ids if wid in classified}
+
 
 class PostgresWorkStore(ResearchStoreMixin):
     def __init__(self, config: OperationsConfig) -> None:
         self._config = config
+
+    def _intake_classifications(
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        workspace_id: UUID,
+        work_ids: Iterable[UUID],
+    ) -> dict[UUID, IntakeClassification]:
+        return _intake_classifications(cur, workspace_id, work_ids)
 
     @contextmanager
     def _transaction(
@@ -424,9 +505,11 @@ class PostgresWorkStore(ResearchStoreMixin):
                         )
                 self._require_unexpired_execution(cur, envelope)
                 if command.type == "create_work_batch":
-                    result = self._create_batch(cur, envelope)
+                    result = self._create_batch(cur, envelope, actor_kind)
                 elif command.type == "create_same_session_child":
-                    result = self._create_same_session_child(cur, envelope)
+                    result = self._create_same_session_child(
+                        cur, envelope, actor_kind
+                    )
                 elif command.type == "revise_work":
                     result = self._revise(cur, envelope)
                 elif command.type == "set_work_state":
@@ -633,12 +716,18 @@ class PostgresWorkStore(ResearchStoreMixin):
         )
 
     def _create_batch(
-        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        envelope: CommandEnvelope,
+        actor_kind: str,
     ) -> dict[str, object]:
         return {
             "type": "create_work_batch",
             "items": self._create_items(
-                cur, envelope.workspace_id, envelope.command.payload
+                cur,
+                envelope.workspace_id,
+                envelope.command.payload,
+                filed_by_kind=actor_kind,
             ),
         }
 
@@ -647,6 +736,7 @@ class PostgresWorkStore(ResearchStoreMixin):
         cur: psycopg.Cursor[dict[str, object]],
         workspace_id: UUID,
         payload: CreateWorkBatchPayload,
+        filed_by_kind: str | None = None,
     ) -> list[dict[str, object]]:
         """Batch-creation primitive shared by create_work_batch and the OMP-139
         atomic same-session filing: alias allocation, duplicate-title refusal,
@@ -742,8 +832,15 @@ class PostgresWorkStore(ResearchStoreMixin):
                 }
             )
             cur.execute(
-                "INSERT INTO omp_work.work_items(work_id,workspace_id,state,current_revision_id,project_id) VALUES(%s,%s,%s,%s,%s)",
-                (work_id, workspace_id, item.state, revision_id, item.project_id),
+                "INSERT INTO omp_work.work_items(work_id,workspace_id,state,current_revision_id,project_id,filed_by_kind) VALUES(%s,%s,%s,%s,%s,%s)",
+                (
+                    work_id,
+                    workspace_id,
+                    item.state,
+                    revision_id,
+                    item.project_id,
+                    filed_by_kind,
+                ),
             )
             cur.execute(
                 "INSERT INTO omp_work.work_aliases(work_id,workspace_id,key,origin) VALUES(%s,%s,%s,'local')",
@@ -807,7 +904,10 @@ class PostgresWorkStore(ResearchStoreMixin):
         return items
 
     def _create_same_session_child(
-        self, cur: psycopg.Cursor[dict[str, object]], envelope: CommandEnvelope
+        self,
+        cur: psycopg.Cursor[dict[str, object]],
+        envelope: CommandEnvelope,
+        actor_kind: str,
     ) -> dict[str, object]:
         """OMP-139: one serializable transaction files a same-session found-and-fixed
         child — the BACKLOG child inheriting the parent's project, the active
@@ -871,7 +971,10 @@ class PostgresWorkStore(ResearchStoreMixin):
             update={"state": "BACKLOG", "project_id": parent_project}
         )
         items = self._create_items(
-            cur, envelope.workspace_id, CreateWorkBatchPayload(items=(child_input,))
+            cur,
+            envelope.workspace_id,
+            CreateWorkBatchPayload(items=(child_input,)),
+            filed_by_kind=actor_kind,
         )
         child = items[0]
         child_id, child_revision_id = (
@@ -5937,6 +6040,7 @@ class PostgresWorkStore(ResearchStoreMixin):
                     ),
                 )
             ),
+            filed_by_kind=actor_kind,
         )[0]
         intake_work_id = UUID(str(item["work_id"]))
         intake_revision_id = UUID(str(item["revision_id"]))
@@ -6234,6 +6338,19 @@ class PostgresWorkStore(ResearchStoreMixin):
                     self._item_view(cur, workspace_id, key=row["key"])
                     for row in cur.fetchall()
                 ]
+                work_ids = [UUID(str(item["work_id"])) for item in items]
+                classifications = self._intake_classifications(
+                    cur, workspace_id, work_ids
+                )
+                for item in items:
+                    wid = UUID(str(item["work_id"]))
+                    classification = classifications.get(wid)
+                    if classification is not None:
+                        item["scope_class"] = classification.scope_class.value
+                        item["intake_hold"] = classification.held
+                    else:
+                        item["scope_class"] = ScopeClass.owner_filed.value
+                        item["intake_hold"] = False
                 cur.execute(
                     "SELECT workspace_id,source_work_id,target_work_id,kind,active FROM omp_work.work_relations WHERE workspace_id=%s ORDER BY created_at LIMIT 5000",
                     (workspace_id,),
