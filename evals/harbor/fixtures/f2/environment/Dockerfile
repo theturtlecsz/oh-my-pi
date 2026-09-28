@@ -1,1 +1,0 @@
-FROM omp-agent:dev
