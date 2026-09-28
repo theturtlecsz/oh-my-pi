@@ -86,11 +86,14 @@ async function stopAndObserve(exposure: ActiveExposure, invocation: FakeInvocati
 
 beforeAll(() => {
 	fakeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-blob-tunnels-"));
+	Bun.spawnSync(["/usr/bin/mkfifo", path.join(fakeBinDir, "hold.pipe")]);
 	const target = path.join(fakeBinDir, "fake-tunnel");
 	fs.writeFileSync(
 		target,
 		`#!/bin/sh\n` +
-			`if [ "$#" -gt 0 ]; then printf '%s\\n' "$@" > "$OMP_FAKE_TUNNEL_ARGS"; else : > "$OMP_FAKE_TUNNEL_ARGS"; fi\n` +
+			`dir="$(dirname "$0")"\n` +
+			`if [ "$#" -gt 0 ]; then printf '%s\\n' "$@" > "$OMP_FAKE_TUNNEL_ARGS.tmp.$$"; else : > "$OMP_FAKE_TUNNEL_ARGS.tmp.$$"; fi\n` +
+			`/bin/mv -f "$OMP_FAKE_TUNNEL_ARGS.tmp.$$" "$OMP_FAKE_TUNNEL_ARGS"\n` +
 			`printf 'run\\n' >> "$OMP_FAKE_TUNNEL_RUNS"\n` +
 			`trap 'printf "SIGINT\\n" >> "$OMP_FAKE_TUNNEL_SIGNALS"; exit 0' INT\n` +
 			`trap 'printf "SIGTERM\\n" >> "$OMP_FAKE_TUNNEL_SIGNALS"; exit 0' TERM\n` +
@@ -103,7 +106,11 @@ beforeAll(() => {
 			`  printf 'restarted\\n' >> "$OMP_FAKE_TUNNEL_RESTART_MARKER"\n` +
 			`fi\n` +
 			`if [ -n "$OMP_FAKE_TUNNEL_EXIT_CODE" ]; then exit "$OMP_FAKE_TUNNEL_EXIT_CODE"; fi\n` +
-			`while :; do /bin/sleep 1; done\n`,
+			`if [ -p "$dir/hold.pipe" ]; then\n` +
+			`  while :; do read _ < "$dir/hold.pipe"; done\n` +
+			`else\n` +
+			`  while :; do /bin/sleep 1; done\n` +
+			`fi\n`,
 	);
 	fs.chmodSync(target, 0o755);
 	for (const name of ["ssh", "devtunnel", "zrok", "bore", "cloudflared"]) {
