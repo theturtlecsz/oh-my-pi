@@ -180,7 +180,7 @@ class ScriptedModelServer:
             def do_GET(self) -> None:  # noqa: N802
                 service._handle(self)
 
-            def log_message(self, format: str, *args: object) -> None:
+            def log_message(self, format: str, *args: object) -> None:  # pylint: disable=redefined-builtin
                 return
 
         server_class: type[ThreadingHTTPServer] = _ScriptedHTTPServer
