@@ -558,7 +558,7 @@ python/omp-knowledge/src/omp_knowledge/source_import.py	fork-only	added	0917567c
 python/omp-knowledge/src/omp_knowledge/vectors/__init__.py	fork-only	added	1552809dbd4f	OMP-278-s03: re-exports VectorProjectionStore, VectorProjection, VectorHit, build_parser, and main	retained
 python/omp-knowledge/src/omp_knowledge/vectors/__main__.py	fork-only	added	3d5d7ca0df0e	OMP-278-s03: module entrypoint for python -m omp_knowledge.vectors	retained
 python/omp-knowledge/src/omp_knowledge/vectors/cli.py	fork-only	added	5d829b9d2cdc	OMP-278-s03: vectors build CLI resolving declared embedding route, constructing VectorProjectionStore, and printing projection digests and route	retained
-python/omp-knowledge/src/omp_knowledge/vectors/store.py	fork-only	added	8a00115e1b50	OMP-278-s03: VectorProjectionStore maintaining vector_projections and float32 BLOB vector_rows in vectors.sqlite, with build and cosine similarity search	retained
+python/omp-knowledge/src/omp_knowledge/vectors/store.py	fork-only	added	97e302206cb3	OMP-278-s03: VectorProjectionStore maintaining vector_projections and float32 BLOB vector_rows in vectors.sqlite, with build and cosine similarity search	retained
 python/omp-knowledge/tests/conftest.py	fork-only	added	c3e7cf7f91f2	OMP-288: pytest fixtures for knowledge_config and test environment configuration	retained
 python/omp-knowledge/tests/fixtures/A/facts.jsonl	fork-only	added	e83c8593e194	OMP-288: Enola snapshot A facts fixture with symbol and module declarations	retained
 python/omp-knowledge/tests/fixtures/A/insights.json	fork-only	added	0637a088a01e	OMP-288: Enola snapshot A insights fixture with empty explainer findings	retained
