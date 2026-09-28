@@ -16,6 +16,8 @@ A Fleet Knowledge state root contains the local SQLite stores and retained sourc
 ├── context-bundles.sqlite             # Compiled context bundles and exclusion records
 ├── structural-publications.sqlite     # Structural code snapshot publications
 ├── publications.sqlite                # Repository snapshot publication metadata
+├── vectors.sqlite                     # Projected vector rows and generation metadata
+├── context-routes.sqlite              # Resolved inference routes per compiled context bundle
 └── sources/                           # Retained raw source trees and Enola inputs
     └── <repository_id>/
         └── <snapshot_id>/
@@ -50,12 +52,19 @@ A Fleet Knowledge state root contains the local SQLite stores and retained sourc
 - **`publications.sqlite`** (owned by `PublicationManager`):
   - `snapshot_publications`: high-level snapshot lifecycle records (`workspace_id`, `repository_id`, `snapshot_id`, `status`, `published_at`).
 
+- **`vectors.sqlite`** (owned by `VectorProjectionStore`):
+  - `vector_projections`: vector generation summaries and digests (`namespace`, `generation_id`, `vector_count`, `projection_sha256`, `vectors_sha256`, `created_at`).
+  - `vector_rows`: projected float32 vector embedding records (`namespace`, `generation_id`, `fact_id`, `text`, `text_sha256`, `vector`, `created_at`).
+
+- **`context-routes.sqlite`** (owned by `ContextRouteStore`):
+  - `context_bundle_routes`: resolved inference routes bound to compiled bundles (`bundle_id`, `role`, `name`, `provider`, `model`, `accelerator`, `used`, `reason`).
+
 - **`sources/` Tree**:
   - Contains immutable byte strings for each repository snapshot. Retained files are referenced by SHA-256 and checked for bit-for-bit identity across repeated imports.
 
 ### WAL Mode and Sidecar Management
 
-Only `learning.sqlite` operates with Write-Ahead Logging (`PRAGMA journal_mode = WAL`). Fresh `publications.sqlite`, `structural-publications.sqlite`, and `context-bundles.sqlite` use SQLite's default rollback journal mode (`PRAGMA journal_mode = delete`). During active execution, `-wal` and `-shm` sidecar files may exist beside `learning.sqlite`. Offline maintenance operations (`backup`, `rollback`) delete sidecars with `remove_sidecars` when creating or staging copies without inspecting or asserting that none remain. `rebuild` constructs clean stores from exact records via schema owners.
+Only `learning.sqlite` operates with Write-Ahead Logging (`PRAGMA journal_mode = WAL`). Fresh `publications.sqlite`, `structural-publications.sqlite`, `context-bundles.sqlite`, `vectors.sqlite`, and `context-routes.sqlite` use SQLite's default rollback journal mode (`PRAGMA journal_mode = delete`). During active execution, `-wal` and `-shm` sidecar files may exist beside `learning.sqlite`. Offline maintenance operations (`backup`, `rollback`) delete sidecars with `remove_sidecars` when creating or staging copies without inspecting or asserting that none remain. `rebuild` constructs clean stores from exact records via schema owners.
 
 ---
 
@@ -104,7 +113,7 @@ python -m omp_knowledge.learning <subcommand> [options]
 ### Subcommands
 
 #### `drain`
-Scans Work Ledger domain events from the cursor, creates capture units for `complete_work` events, invokes the lesson generator, and records proposals.
+Scans Work Ledger domain events from the cursor, creates capture units for `complete_work` and `complete_execution_item` (/execute) events, invokes the lesson generator, and records proposals.
 
 ```sh
 python -m omp_knowledge.learning drain \
@@ -251,7 +260,7 @@ python -m omp_knowledge.inspection serve \
 
 ## 5. State-Root Maintenance
 
-Offline backup, exact-record rebuild, and rollback operations for state-root recovery and disaster management.
+Offline backup, exact-record rebuild, and rollback operations for state-root recovery and disaster management. Both `vectors.sqlite` and `context-routes.sqlite` restore like other stores during backup, rebuild, and rollback operations. Deleting `vectors.sqlite` and rerunning `vectors build` (README) repeats `projection_sha256` and `vectors_sha256`.
 
 ```sh
 python -m omp_knowledge.maintenance <subcommand> [options]
