@@ -27,6 +27,7 @@ from pydantic import Field
 from omp_knowledge.context.compiler import compile_bundle
 from omp_knowledge.context.models import CompileRequest, ContextItem, Stage
 from omp_knowledge.context.rerank import HttpReranker, OrderReranker, Reranker
+from omp_knowledge.context.routes import ContextRouteStore
 from omp_knowledge.context.semantic import semantic_items
 from omp_knowledge.context.sources import (
     exact_items,
@@ -37,6 +38,10 @@ from omp_knowledge.context.sources import (
 from omp_knowledge.context.store import ContextBundleStore
 from omp_knowledge.context.tokens import OmpTokenCounter, ReproductionError
 from omp_knowledge.engine.protocol import KnowledgeEngine
+from omp_knowledge.errors import KnowledgeError, SnapshotNotPublishedError
+from omp_knowledge.inference.embedding import Embedder, HttpEmbedder
+from omp_knowledge.inference.routes import load_routes, resolve
+from omp_knowledge.vectors.store import VectorProjectionStore
 
 EXIT_OK = 0
 EXIT_ERROR = 2
@@ -68,6 +73,8 @@ def _build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--engine", choices=("none", "cognee"), default="none")
     compile_parser.add_argument("--reranker-url")
     compile_parser.add_argument("--reranker-model")
+    compile_parser.add_argument("--routes")
+    compile_parser.add_argument("--vector-state-dir")
     compile_parser.add_argument("--structural-limit", type=int, default=40)
     compile_parser.add_argument("--semantic-limit", type=int, default=10)
     compile_parser.add_argument("--json", action="store_true")
@@ -190,7 +197,101 @@ def _compile(
     *,
     stdin: TextIO | None,
     engine: KnowledgeEngine | None,
+    embedder: Embedder | None = None,
+    reranker: Reranker | None = None,
 ) -> dict[str, Any]:
+    if args.routes is not None and args.reranker_url is not None:
+        raise ValueError("--routes cannot be combined with --reranker-url")
+    if args.vector_state_dir is not None:
+        if args.routes is None:
+            raise ValueError("--vector-state-dir requires --routes")
+        if args.structural_state_dir is None:
+            raise ValueError("--vector-state-dir requires --structural-state-dir")
+
+    route_set = load_routes(args.routes) if args.routes is not None else None
+
+    reranker_route: dict[str, Any]
+    active_reranker: Reranker
+    if reranker is not None:
+        active_reranker = reranker
+        if route_set is not None:
+            resolved_reranker = resolve(route_set, "reranker")
+            reranker_route = {
+                "role": "reranker",
+                "name": resolved_reranker.profile.name,
+                "provider": resolved_reranker.profile.provider,
+                "model": resolved_reranker.profile.model or "",
+                "accelerator": resolved_reranker.profile.accelerator,
+                "used": resolved_reranker.used,
+                "reason": resolved_reranker.reason,
+            }
+        elif args.reranker_url is not None:
+            reranker_route = {
+                "role": "reranker",
+                "name": "cli",
+                "provider": "llama.cpp",
+                "model": args.reranker_model or "",
+                "accelerator": "unknown",
+                "used": "primary",
+                "reason": "",
+            }
+        else:
+            reranker_route = {
+                "role": "reranker",
+                "name": "order",
+                "provider": "order",
+                "model": "",
+                "accelerator": "cpu",
+                "used": "primary",
+                "reason": "",
+            }
+    elif route_set is not None:
+        resolved_reranker = resolve(route_set, "reranker")
+        if resolved_reranker.profile.provider == "llama.cpp":
+            if not resolved_reranker.profile.endpoint or not resolved_reranker.profile.model:
+                raise ValueError("llama.cpp reranker requires endpoint and model")
+            active_reranker = HttpReranker(
+                resolved_reranker.profile.endpoint,
+                resolved_reranker.profile.model,
+            )
+        elif resolved_reranker.profile.provider == "order":
+            active_reranker = OrderReranker()
+        else:
+            raise ValueError(
+                f"unsupported reranker provider: {resolved_reranker.profile.provider}"
+            )
+        reranker_route = {
+            "role": "reranker",
+            "name": resolved_reranker.profile.name,
+            "provider": resolved_reranker.profile.provider,
+            "model": resolved_reranker.profile.model or "",
+            "accelerator": resolved_reranker.profile.accelerator,
+            "used": resolved_reranker.used,
+            "reason": resolved_reranker.reason,
+        }
+    elif args.reranker_url is not None:
+        active_reranker = _reranker(args.reranker_url, args.reranker_model)
+        reranker_route = {
+            "role": "reranker",
+            "name": "cli",
+            "provider": "llama.cpp",
+            "model": args.reranker_model or "",
+            "accelerator": "unknown",
+            "used": "primary",
+            "reason": "",
+        }
+    else:
+        active_reranker = OrderReranker()
+        reranker_route = {
+            "role": "reranker",
+            "name": "order",
+            "provider": "order",
+            "model": "",
+            "accelerator": "cpu",
+            "used": "primary",
+            "reason": "",
+        }
+
     body = _read_compile_stdin(stdin)
     view = body.workflow
     identity = identity_from_view(view, body.stage, body.attempt_id)
@@ -233,8 +334,127 @@ def _compile(
         )
         items.extend(semantic)
 
+    embedding_route: dict[str, Any] | None = None
+    if args.vector_state_dir is not None:
+        assert route_set is not None
+        resolved_embedding = resolve(route_set, "embedding")
+        embedding_route = {
+            "role": "embedding",
+            "name": resolved_embedding.profile.name,
+            "provider": resolved_embedding.profile.provider,
+            "model": resolved_embedding.profile.model or "",
+            "accelerator": resolved_embedding.profile.accelerator,
+            "used": resolved_embedding.used,
+            "reason": resolved_embedding.reason,
+        }
+        profile = resolved_embedding.profile
+        if profile.endpoint is None or profile.embedding_profile is None:
+            raise ValueError(
+                "resolved embedding profile missing endpoint or embedding_profile"
+            )
+
+        active_embedder = embedder
+        if active_embedder is None:
+            active_embedder = HttpEmbedder(
+                profile.endpoint, profile.embedding_profile
+            )
+
+        query_vector = active_embedder.embed_query(view.item.revision.title)
+        gen_id = profile.embedding_profile.generation_id
+
+        vector_store = VectorProjectionStore(args.vector_state_dir)
+        structural_store = StructuralPublicationStore(args.structural_state_dir)
+
+        permitted_repos = {str(repo_id) for repo_id in permitted}
+
+        for ws_id, repo_id, snap_id in selection:
+            repo_key = str(repo_id)
+            if repo_key not in permitted_repos:
+                items.append(
+                    ContextItem(
+                        section="semantic",
+                        source="vector",
+                        ref=repo_key,
+                        text=f"repository {repo_key} not permitted",
+                        status="denied",
+                        detail="repo not permitted",
+                    )
+                )
+                continue
+
+            if not structural_store.is_published(
+                workspace_id=ws_id,
+                repository_id=repo_id,
+                snapshot_id=snap_id,
+            ):
+                items.append(
+                    ContextItem(
+                        section="semantic",
+                        source="vector",
+                        ref=snap_id,
+                        text=f"snapshot {snap_id} not published",
+                        status="missing",
+                        detail="snapshot_not_published",
+                    )
+                )
+                continue
+
+            try:
+                hits = vector_store.search(
+                    structural_store,
+                    ws_id,
+                    repo_id,
+                    snap_id,
+                    gen_id,
+                    query_vector,
+                    k=args.semantic_limit,
+                )
+            except SnapshotNotPublishedError:
+                items.append(
+                    ContextItem(
+                        section="semantic",
+                        source="vector",
+                        ref=snap_id,
+                        text=f"snapshot {snap_id} not published",
+                        status="missing",
+                        detail="snapshot_not_published",
+                    )
+                )
+                continue
+            except KnowledgeError as exc:
+                if (
+                    getattr(exc, "code", None) == "vector_generation_mismatch"
+                    or "vector_generation_mismatch" in str(exc)
+                ):
+                    items.append(
+                        ContextItem(
+                            section="semantic",
+                            source="vector",
+                            ref=snap_id,
+                            text=f"generation {gen_id} not built for snapshot {snap_id}",
+                            status="missing",
+                            detail="vector_generation_mismatch",
+                        )
+                    )
+                    continue
+                raise
+
+            for hit in hits:
+                items.append(
+                    ContextItem(
+                        section="semantic",
+                        source="vector",
+                        ref=hit.fact_id,
+                        text=hit.text,
+                        status="current",
+                        detail=snap_id,
+                        mandatory=False,
+                        score=hit.score,
+                    )
+                )
+
     ranked = _rerank_optional(
-        _reranker(args.reranker_url, args.reranker_model),
+        active_reranker,
         view.item.revision.title,
         items,
     )
@@ -248,7 +468,13 @@ def _compile(
         request,
         OmpTokenCounter(_parse_token_cmd(args.token_cmd), args.encoding),
     )
+    routes: list[dict[str, Any]] = []
+    if embedding_route is not None:
+        routes.append(embedding_route)
+    routes.append(reranker_route)
+
     bundle_id = ContextBundleStore(args.state_dir).persist(request, compiled)
+    ContextRouteStore(args.state_dir).persist(bundle_id, routes)
     return {
         "bundle_id": bundle_id,
         "bundle_sha256": compiled.sha256,
@@ -257,6 +483,7 @@ def _compile(
         "token_budget": request.token_budget,
         "exclusions": [exclusion.model_dump(mode="json") for exclusion in compiled.exclusions],
         "text": compiled.text,
+        "routes": routes,
     }
 
 
@@ -279,6 +506,8 @@ def main(
     stdin: TextIO | None = None,
     stdout: TextIO | None = None,
     engine: KnowledgeEngine | None = None,
+    embedder: Embedder | None = None,
+    reranker: Reranker | None = None,
 ) -> int:
     """Run one context command. Returns a process exit code and writes nothing on failure."""
     try:
@@ -290,7 +519,13 @@ def main(
                 _stderr(str(exc))
                 return EXIT_REPRODUCTION
         elif args.command == "compile":
-            payload = _compile(args, stdin=stdin, engine=engine)
+            payload = _compile(
+                args,
+                stdin=stdin,
+                engine=engine,
+                embedder=embedder,
+                reranker=reranker,
+            )
         else:
             raise RuntimeError(f"unknown command {args.command!r}")
         _emit(stdout, payload)

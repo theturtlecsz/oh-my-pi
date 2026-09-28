@@ -23,6 +23,7 @@ from typing import Any
 from omp_work.knowledge_publication import StructuralPublicationStore
 from omp_work.v1.canonical import sha256
 
+from omp_knowledge.context.routes import ContextRouteStore
 from omp_knowledge.context.store import ContextBundleStore
 from omp_knowledge.learning.store import LearningStore
 from omp_knowledge.publication import PublicationManager
@@ -69,12 +70,17 @@ def _vectors_schema(root: Path) -> object:
     return VectorProjectionStore(root)
 
 
+def _context_routes_schema(root: Path) -> object:
+    return ContextRouteStore(root)
+
+
 STORE_SPECS: tuple[StoreSpec, ...] = (
     StoreSpec("learning", "learning.sqlite", _learning_schema),
     StoreSpec("context_bundles", "context-bundles.sqlite", _context_schema),
     StoreSpec("structural_publications", "structural-publications.sqlite", _structural_schema),
     StoreSpec("publications", "publications.sqlite", _publications_schema),
     StoreSpec("vectors", "vectors.sqlite", _vectors_schema),
+    StoreSpec("context_routes", "context-routes.sqlite", _context_routes_schema),
 )
 
 
