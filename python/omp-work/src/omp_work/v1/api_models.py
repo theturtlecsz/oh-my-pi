@@ -352,6 +352,12 @@ class RecordFableAdviceResult(StrictModel):
     receipt: EvidenceReceipt
 
 
+class AttestIntakeAdmissionResult(StrictModel):
+    type: Literal["attest_intake_admission"]
+    receipt: EvidenceReceipt
+    operator_actor_id: UUID
+
+
 class PublishBoundedIntakeResult(StrictModel):
     type: Literal["publish_bounded_intake"]
     item: CreatedWorkItem
@@ -507,6 +513,7 @@ CommandResult = Annotated[
     | AssessBoundedIntakeResult
     | RecordExternalDeliveryResult
     | RecordFableAdviceResult
+    | AttestIntakeAdmissionResult
     | PublishBoundedIntakeResult
     | RegisterResearchArtifactResult
     | CollectResearchArtifactResult
