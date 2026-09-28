@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import uvicorn
 
@@ -41,6 +42,53 @@ _SAFE_OPERATION_ERRORS = {
     "linear_import_blocked",
     "linear_import_drift",
 }
+
+
+def _budget_alerts(workspace_id: UUID, actor_id: UUID) -> int:
+    """Sweep item budgets, then deliver committed or failed budget_alert rows.
+
+    The URL is ``OMP_GROKBOT_ALERT_URL``. The bearer token is the stripped
+    contents of the file named by ``OMP_GROKBOT_ALERT_TOKEN_FILE``. Either
+    missing, unreadable, or empty exits 2. On success the process prints the
+    number of alerts sent as JSON.
+    """
+    url = os.environ.get("OMP_GROKBOT_ALERT_URL", "").strip()
+    token_file = os.environ.get("OMP_GROKBOT_ALERT_TOKEN_FILE", "").strip()
+    if not url:
+        print("budget-alerts: OMP_GROKBOT_ALERT_URL is not set", file=sys.stderr)
+        return 2
+    if not token_file:
+        print("budget-alerts: OMP_GROKBOT_ALERT_TOKEN_FILE is not set", file=sys.stderr)
+        return 2
+    try:
+        token = Path(token_file).read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        print("budget-alerts: token file is unreadable", file=sys.stderr)
+        return 2
+    if not token:
+        print("budget-alerts: token file is empty", file=sys.stderr)
+        return 2
+
+    from .jobs.budget import sweep_item_budgets
+    from .jobs.grokbot import deliver_budget_alerts
+    from .jobs.store import NativeJobStore
+
+    store = NativeJobStore(OperationsConfig.defaults())
+    sweep_item_budgets(
+        store,
+        operation_id=str(uuid4()),
+        workspace_id=workspace_id,
+        actor_id=actor_id,
+    )
+    sent = deliver_budget_alerts(
+        store,
+        workspace_id=workspace_id,
+        actor_id=actor_id,
+        url=url,
+        token=token,
+    )
+    print(json.dumps(sent))
+    return 0
 
 
 def _approve(issue: str) -> None:
@@ -139,6 +187,10 @@ def main(argv: list[str] | None = None) -> int | None:
     pa.add_argument("--expected-max", type=int, default=40000)
     pa.add_argument("--packet")
     pa.add_argument("--mission")
+
+    alerts = subcommands.add_parser("budget-alerts")
+    alerts.add_argument("--workspace", required=True, type=UUID)
+    alerts.add_argument("--actor", required=True, type=UUID)
 
     args = parser.parse_args(argv)
     if args.command == "serve":
@@ -269,6 +321,8 @@ def main(argv: list[str] | None = None) -> int | None:
                 packet_path=args.packet,
             ), indent=2))
             return 0
+    if args.command == "budget-alerts":
+        return _budget_alerts(args.workspace, args.actor)
     return 2
 
 
