@@ -16,7 +16,7 @@ from .proposals import create_proposal
 from .record import NativeRecords, bounded_work_record
 from .store import LearningStore, compute_unit_id
 
-DEFAULT_CAPTURE_TYPES = frozenset({"complete_work"})
+DEFAULT_CAPTURE_TYPES = frozenset({"complete_work", "complete_execution_item"})
 DEFAULT_LIMIT = 50
 DEFAULT_LEASE_SECONDS = 300
 DROPPED_ERROR_CODE = "dropped"
@@ -122,11 +122,12 @@ def _event_trace(
 ) -> dict[str, Any]:
     """The trace one unit sends to the generator.
 
-    The event alone carries no execution evidence (a ``complete_work`` payload is
-    only ``work_id``/``state``/``row_version``), so the finished item's own
-    bounded WorkService record is attached when it could be read. ``work_record``
-    is present-but-``null`` when the read was unavailable: absence of evidence is
-    visible to the generator instead of silently looking like an empty trace.
+    The event alone carries no execution evidence (a ``complete_work`` or
+    ``complete_execution_item`` payload names ``work_id`` but not the item's
+    execution record), so the finished item's own bounded WorkService record is
+    attached when it could be read. ``work_record`` is present-but-``null`` when
+    the read was unavailable: absence of evidence is visible to the generator
+    instead of silently looking like an empty trace.
     """
     return {
         "workspace_id": workspace_id,
@@ -531,8 +532,9 @@ def drain(
 
     ``limit`` bounds the number of domain events scanned from the cursor in this
     drain — it is not a unit count, because most scanned events are not of a
-    captured type. When ``records`` is supplied, each ``complete_work`` unit's
-    trace carries that item's own bounded execution record before generation.
+    captured type. When ``records`` is supplied, each ``complete_work`` or
+    ``complete_execution_item`` unit's trace carries that item's own bounded
+    execution record before generation.
     """
     workspace = str(workspace_id)
     started_at = _utcnow().isoformat()
