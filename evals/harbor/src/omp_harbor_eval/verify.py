@@ -30,8 +30,11 @@ from .evidence import EvidenceError, load_evidence
 from .fixtures import Fixture, IndependentTest, load_fixture
 from .grader import grade
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-FIXTURES_ROOT = Path(__file__).resolve().parents[2] / "fixtures"
+_parents = Path(__file__).resolve().parents
+REPO_ROOT = _parents[4] if len(_parents) > 4 else Path("/")
+FIXTURES_ROOT = (
+    _parents[2] / "fixtures" if len(_parents) > 2 else Path("/fixtures")
+)
 BUNDLE_NAME = "worker-repo.bundle"
 
 DEFAULT_RUNNERS: dict[str, tuple[str, ...]] = {

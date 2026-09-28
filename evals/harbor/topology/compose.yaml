@@ -11,6 +11,14 @@ services:
   workservice:
     image: omp-workservice:dev
     command: ["bash", "/opt/harbor/workservice-entrypoint.sh"]
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     environment:
       OMP_SERVICE_BIND_HOST: 127.0.0.1
       OMP_SERVICE_BIND_PORT: "8080"
@@ -21,6 +29,9 @@ services:
   worker:
     image: omp-agent:dev
     command: ["sleep", "infinity"]
+    cap_drop:
+      - ALL
+    cap_add: []
     network_mode: service:workservice
     working_dir: /workspace
     environment:
@@ -35,12 +46,21 @@ services:
 
   verifier:
     image: omp-verifier:dev
+    cap_drop:
+      - ALL
+    cap_add: []
     network_mode: none
     environment:
       OMP_EVIDENCE_DIR: /evidence
     volumes:
       - evidence:/evidence:ro
       - grader:/opt/grader
+
+  main:
+    image: omp-agent:dev
+    cap_drop:
+      - ALL
+    cap_add: []
 
 volumes:
   pg_data: {}
