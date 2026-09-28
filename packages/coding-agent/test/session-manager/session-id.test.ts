@@ -72,4 +72,17 @@ describe("SessionManager session ids", () => {
 		expect(session.getSessionId()).toBe(existingId);
 		expect(session.getHeader()?.id).toBe(existingId);
 	});
+
+	it("preserves session id embedded in filename when reopening an empty or missing session file", async () => {
+		using tempDir = TempDir.createSync("@pi-session-id-empty-");
+		const session = SessionManager.create(tempDir.path(), tempDir.path());
+		const sessionFile = session.getSessionFile()!;
+		const initialId = session.getSessionId();
+
+		const reopened = await SessionManager.open(sessionFile, tempDir.path());
+
+		expect(reopened.getSessionId()).toBe(initialId);
+		expect(reopened.getHeader()?.id).toBe(initialId);
+		expect(reopened.getSessionFile()).toBe(sessionFile);
+	});
 });

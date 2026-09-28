@@ -34,7 +34,7 @@ import omp_rpc
 
 from .evidence import EvidenceWriter
 from .fixtures import Scenario
-from .grader import OUTCOME, SERVICE_READBACK, resolve_pointer
+from .grader import OUTCOME, SERVICE_READBACK, TRANSCRIPT, resolve_pointer
 from .ui_script import UiScript
 
 RPC_TRANSCRIPT = "rpc-transcript.jsonl"
@@ -111,7 +111,10 @@ class _Transcript:
         with self._lock:
             if self._closed:
                 return
-            self._evidence.append_jsonl(RPC_TRANSCRIPT, {"direction": direction, "frame": frame})
+            row = {"direction": direction, "frame": frame}
+            self._evidence.append_jsonl(RPC_TRANSCRIPT, row)
+            if TRANSCRIPT != RPC_TRANSCRIPT:
+                self._evidence.append_jsonl(TRANSCRIPT, row)
 
     def close(self) -> None:
         with self._lock:

@@ -13,8 +13,11 @@ directory under ``OMP_HARBOR_EVIDENCE_ROOT`` before the sidecar stops.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
+import json
 import os
+import shlex
 import tempfile
 import uuid
 from collections.abc import Callable
@@ -28,12 +31,14 @@ from harbor.models.agent.context import AgentContext
 
 from .adapter import RpcAdapter
 from .docker_ops import (
+    DockerError,
     apply_patch,
     compose_container,
     export_bundle,
     pid_killer,
     read_file,
     rpc_command,
+    run,
     write_file,
 )
 from .evidence import MANIFEST_NAME, EvidenceWriter
@@ -92,6 +97,77 @@ def _bundle_hook(worker: str, workdir: str, bundle: Path, docker: str) -> Callab
 
 def _omp_args(task_home: str) -> list[str]:
     return ["--mode", "rpc", "--model", "scripted/scripted", "--session-dir", f"{task_home}/{_SESSION_DIR}"]
+
+
+def stage_worker_environment(
+    worker: str,
+    task: Any,
+    *,
+    workspace_id: str,
+    bearer: str,
+    docker: str,
+) -> None:
+    """Stage Work Ledger client config, provisioned credentials, marker, and extensions."""
+    cred_dir_val = os.environ.get("OMP_HARBOR_CREDENTIALS_DIR")
+    cred_dir = Path(cred_dir_val) if cred_dir_val else Path.home() / ".local/state/omp/harbor-fixtures"
+    owner_id: str | None = None
+    owner_cap_bytes: bytes | None = None
+
+    actor_file = cred_dir / "credentials" / "operator-actor-id"
+    if actor_file.is_file():
+        text = actor_file.read_text(encoding="utf-8").strip()
+        if text:
+            owner_id = text
+
+    cap_file = cred_dir / "capabilities" / "owner.json"
+    if cap_file.is_file():
+        try:
+            owner_cap_bytes = cap_file.read_bytes()
+            owner_cap_data = json.loads(owner_cap_bytes.decode("utf-8"))
+            if not owner_id and owner_cap_data.get("actor_id"):
+                owner_id = str(owner_cap_data["actor_id"])
+        except Exception:
+            pass
+
+    if not owner_id:
+        owner_id = os.environ.get("OMP_HARBOR_OWNER_ID") or "00000000-0000-4000-8000-000000000002"
+
+    if owner_cap_bytes is None:
+        owner_cap = {
+            "actor_id": owner_id,
+            "actor_kind": "owner",
+            "scopes": [
+                "work.approve",
+                "work.close",
+                "work.execute",
+                "work.mutate",
+                "work.read",
+            ],
+            "token": bearer,
+            "workspaces": [workspace_id],
+        }
+        owner_cap_bytes = json.dumps(owner_cap, indent=2, sort_keys=True).encode("utf-8")
+
+    bearer_file = f"{task.home}/.config/omp-work/capabilities/owner.json"
+    client_config = {
+        "base_url": task.workservice_url,
+        "workspace_id": workspace_id,
+        "owner_id": owner_id,
+        "bearer_file": bearer_file,
+    }
+    client_json_bytes = json.dumps(client_config, indent=2, sort_keys=True).encode("utf-8")
+
+    write_file(worker, f"{task.home}/.config/omp-work/client.json", client_json_bytes, docker=docker, mode=0o600)
+    write_file(worker, bearer_file, owner_cap_bytes, docker=docker, mode=0o600)
+    write_file(worker, f"{task.working_dir}/.work-project", b"The Bookends\n", docker=docker)
+
+    install_script = (
+        f"if [ -f {shlex.quote(task.working_dir)}/session-system/install.sh ] && "
+        f"[ ! -f {shlex.quote(task.home)}/.omp/agent/extensions/work-now.ts ]; then "
+        f"HOME={shlex.quote(task.home)} bash {shlex.quote(task.working_dir)}/session-system/install.sh --copy; fi"
+    )
+    with contextlib.suppress(DockerError):
+        run(docker, ["exec", worker, "sh", "-c", install_script])
 
 
 class OmpRpcAgent(BaseAgent):
@@ -153,6 +229,13 @@ class OmpRpcAgent(BaseAgent):
                 worker,
                 f"{task.home}/{_MODELS_PATH}",
                 models_yml(task.model_url).encode("utf-8"),
+                docker=self.docker,
+            )
+            stage_worker_environment(
+                worker,
+                task,
+                workspace_id=workspace_id,
+                bearer=bearer,
                 docker=self.docker,
             )
             sidecar = start_model_sidecar(

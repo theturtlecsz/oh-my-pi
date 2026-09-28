@@ -23,6 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .docker_ops import DockerError, apply_patch, compose_container, run, write_file
+from .harbor_agent import stage_worker_environment
 from .netns import ExecProbe, model_port, start_model_sidecar, stop_container
 from .scripted_model import models_yml
 from .task_env import TaskEnv, load_task
@@ -78,6 +79,13 @@ def run_interactive_env(
             worker,
             f"{task.home}/.omp/agent/models.yml",
             models_yml(task.model_url).encode(),
+            docker=docker,
+        )
+        stage_worker_environment(
+            worker,
+            task,
+            workspace_id=workspace_id,
+            bearer=bearer,
             docker=docker,
         )
         sidecar = start_model_sidecar(

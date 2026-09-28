@@ -141,10 +141,11 @@ def read_file(worker: str, path: str, *, docker: str) -> bytes:
     return run(docker, ["exec", worker, "cat", "--", path]).stdout
 
 
-def write_file(worker: str, path: str, data: bytes, *, docker: str) -> None:
+def write_file(worker: str, path: str, data: bytes, *, docker: str, mode: int | None = None) -> None:
     """Write ``data`` to ``path`` on ``worker``, creating parent directories."""
 
-    script = f"mkdir -p -- {shlex.quote(_posix_parent(path))} && cat > {shlex.quote(path)}"
+    chmod_cmd = f" && chmod {oct(mode)[2:]} -- {shlex.quote(path)}" if mode is not None else ""
+    script = f"mkdir -p -- {shlex.quote(_posix_parent(path))} && cat > {shlex.quote(path)}{chmod_cmd}"
     run(docker, ["exec", "-i", worker, "sh", "-c", script], input=data)
 
 
