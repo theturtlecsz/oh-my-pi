@@ -1,8 +1,10 @@
 """Drive one Harbor scenario over the normal RPC ``/execute`` path.
 
 ``ServiceProbe`` reads loopback WorkService routes. ``RpcAdapter.run`` waits
-for a ready frame, a good ``get_state``, and a ready probe, sends
-``scenario.command`` once, and polls until the readback pointer is terminal.
+for a ready frame and a good ``get_state``, then polls the ready probe until
+it reports ready or a bounded deadline passes. It sends ``scenario.command``
+once and polls until the readback pointer is terminal. A deadline that passes
+records the last probe failure on the outcome reason.
 Scripted UI rules answer ``select``, ``confirm``, ``input``, and ``editor``
 requests. A request with no rule is cancelled and the run ends ``blocked``.
 An outbound frame matching ``scenario.kill_at.match`` is SIGKILLed once and
@@ -43,6 +45,7 @@ UI_ANSWERS = "ui-answers.jsonl"
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 _POLL_INTERVAL_S = 0.05
 _DEFAULT_TIMEOUT_S = 30.0
+_READY_TIMEOUT_S = 30.0
 _RPC_TIMEOUT_S = 15.0
 _HTTP_TIMEOUT_S = 5.0
 _MISSING = object()
@@ -228,11 +231,14 @@ class ServiceProbe:
         self.base_url = _require_loopback(base_url)
         self.bearer = bearer
         self.workspace_id = workspace_id
+        self.last_failure: str | None = None
 
     def ready(self) -> bool:
+        self.last_failure = None
         try:
             document = self._get("/v1/health/ready", auth=False)
-        except ProbeError:
+        except ProbeError as exc:
+            self.last_failure = str(exc) or type(exc).__name__
             return False
         return document.get("ready") is True
 
@@ -293,6 +299,7 @@ class RpcAdapter:
         *,
         session_reader: Callable[[str], bytes] | None = None,
         before_seal: Callable[[EvidenceWriter], None] | None = None,
+        ready_timeout_s: float = _READY_TIMEOUT_S,
     ) -> None:
         if not command:
             raise ValueError("command must be a non-empty argv")
@@ -313,6 +320,7 @@ class RpcAdapter:
             _read_host_session if session_reader is None else session_reader
         )
         self.before_seal = before_seal
+        self.ready_timeout_s = ready_timeout_s
 
     def run(self) -> str:
         """Return ``harness_error``, ``timeout``, ``blocked``, or the terminal readback value."""
@@ -336,13 +344,15 @@ class RpcAdapter:
             self._session_file = session_file
             if session_id == "" or session_file is None or session_file == "":
                 reason = "get_state did not return a session id and file"
-            elif not self.probe.ready():
-                reason = "service not ready"
             else:
-                prompts_sent = 1
-                self._send_prompt(client)
-                outcome, reason, readback = self._after_prompt()
-                client = self._client
+                ready_reason = self._wait_until_ready()
+                if ready_reason is not None:
+                    reason = ready_reason
+                else:
+                    prompts_sent = 1
+                    self._send_prompt(client)
+                    outcome, reason, readback = self._after_prompt()
+                    client = self._client
         except Exception as exc:
             outcome = "harness_error"
             reason = str(exc) or type(exc).__name__
@@ -391,6 +401,35 @@ class RpcAdapter:
         self._client = client
         client.start()
         return client
+
+    def _wait_until_ready(self) -> str | None:
+        """Return None when the probe is ready, else the outcome reason."""
+
+        deadline = time.monotonic() + self.ready_timeout_s
+        reason = "service not ready"
+        while True:
+            attempt = self._ready_attempt()
+            if attempt is None:
+                return None
+            reason = attempt
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return reason
+            time.sleep(min(_POLL_INTERVAL_S, remaining))
+
+    def _ready_attempt(self) -> str | None:
+        """None when this probe read is ready. Otherwise the reason so far."""
+
+        try:
+            if self.probe.ready():
+                return None
+        except ProbeError as exc:
+            text = str(exc) or type(exc).__name__
+            return f"service not ready: {text}"
+        detail = self.probe.last_failure
+        if isinstance(detail, str) and detail != "":
+            return f"service not ready: {detail}"
+        return "service not ready"
 
     def _send_prompt(self, client: _LoggingClient) -> None:
         try:
