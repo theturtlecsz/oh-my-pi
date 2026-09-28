@@ -8,7 +8,8 @@ requests. A request with no rule is cancelled and the run ends ``blocked``.
 An outbound frame matching ``scenario.kill_at.match`` is SIGKILLed once and
 resumed with ``--session`` and no second prompt. Optional ``session_reader``
 and ``before_seal`` hooks read the session log and augment evidence before
-sealing; hook exceptions record ``harness_error``. The evidence directory is
+sealing; hook exceptions record ``harness_error`` (or ``session_read_error`` if
+the run already failed with ``harness_error``). The evidence directory is
 sealed before the RPC process stops.
 """
 
@@ -525,6 +526,7 @@ class RpcAdapter:
             self.evidence.write_json(SESSION_NAME, session_document)
             payload = b""
             hook_raised = False
+            session_read_error: str | None = None
             if session_file:
                 try:
                     read_bytes = self.session_reader(session_file)
@@ -533,9 +535,12 @@ class RpcAdapter:
                     payload = read_bytes
                 except Exception as exc:
                     hook_raised = True
-                    outcome = "harness_error"
                     msg = str(exc) or type(exc).__name__
-                    reason = f"session_reader: {msg}"
+                    if outcome == "harness_error":
+                        session_read_error = f"session_reader: {msg}"
+                    else:
+                        outcome = "harness_error"
+                        reason = f"session_reader: {msg}"
                     payload = b""
             self.evidence.add_file(SESSION_LOG, payload)
             if not hook_raised and self.before_seal is not None:
@@ -545,10 +550,14 @@ class RpcAdapter:
                     outcome = "harness_error"
                     msg = str(exc) or type(exc).__name__
                     reason = f"before_seal: {msg}"
-            self.evidence.write_json(
-                OUTCOME,
-                {"outcome": outcome, "reason": reason, "prompts_sent": prompts_sent},
-            )
+            outcome_document: dict[str, Any] = {
+                "outcome": outcome,
+                "reason": reason,
+                "prompts_sent": prompts_sent,
+            }
+            if session_read_error is not None:
+                outcome_document["session_read_error"] = session_read_error
+            self.evidence.write_json(OUTCOME, outcome_document)
             self.evidence.seal()
         finally:
             if client is not None:

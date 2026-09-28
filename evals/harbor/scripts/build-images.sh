@@ -13,6 +13,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 HARBOR_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 REPO_ROOT="$(cd "$HARBOR_DIR/../.." && pwd -P)"
 
+# The agent image copies these host-built addons in. Never compile Rust here.
+for addon_name in pi_natives.linux-x64-modern.node pi_natives.linux-x64-baseline.node; do
+  addon_path="$REPO_ROOT/packages/natives/native/$addon_name"
+  if [ ! -f "$addon_path" ]; then
+    echo "build-images: missing prebuilt native addon $addon_path; build or copy it into packages/natives/native first" >&2
+    exit 1
+  fi
+done
+
 # The token has to exist before `harbor run`: the agent reads it from the
 # host environment, and the workservice only installs this same bundle.
 bash "$SCRIPT_DIR/provision-credentials.sh"
