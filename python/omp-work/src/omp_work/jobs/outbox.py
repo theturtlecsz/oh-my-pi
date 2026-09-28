@@ -1,10 +1,12 @@
 """Deliver the WP5 usage outbox to the file ledger (R03, OMP-324).
 
 ``record_usage`` writes one ``omp_jobs.outbox`` row per usage identity in state
-``committed``. This module drains the rows of one workspace to the workspace's
-usage ledger file. Delivery is at-least-once with an idempotent effect: the
-ledger is keyed by ``usage_id``, so a row whose event already reached the ledger
-is closed without appending again. State changes reuse the closeout helpers in
+``committed``. This module drains the ``usage_ledger`` rows of one workspace to
+the workspace's usage ledger file; other outbox kinds (for example the
+``budget_alert`` rows written by ``jobs.budget``) have no file-ledger effect and
+stay untouched. Delivery is at-least-once with an idempotent effect: the ledger
+is keyed by ``usage_id``, so a row whose event already reached the ledger is
+closed without appending again. State changes reuse the closeout helpers in
 ``omp_work.contracts.v1.recovery``; there is no second state machine.
 """
 
@@ -31,14 +33,14 @@ def deliver_outbox(
     actor_id: UUID | str,
     ledger_path: Path | str,
 ) -> int:
-    """Append pending outbox events to ``ledger_path`` and close their rows.
+    """Append pending usage outbox events to ``ledger_path`` and close their rows.
 
-    Rows of ``workspace_id`` in ``committed`` or ``failed`` state are read in
-    ``event_id`` order under ``FOR UPDATE SKIP LOCKED``. A ``failed`` row is
-    committed again first (``apply_commit``, revision + 1). An event whose
-    ``usage_id`` is already in the ledger is closed without appending. Otherwise
-    the payload is appended and counted; if the append raises, the row is
-    returned to ``failed`` for a later retry.
+    Only ``kind='usage_ledger'`` rows of ``workspace_id`` in ``committed`` or
+    ``failed`` state are read in ``event_id`` order under ``FOR UPDATE SKIP
+    LOCKED``. A ``failed`` row is committed again first (``apply_commit``,
+    revision + 1). An event whose ``usage_id`` is already in the ledger is closed
+    without appending. Otherwise the payload is appended and counted; if the
+    append raises, the row is returned to ``failed`` for a later retry.
 
     A crash between the append and the state update leaves the row ``committed``;
     the next call finds the ``usage_id`` in the ledger and closes it without
@@ -57,7 +59,7 @@ def deliver_outbox(
             """
             SELECT event_id, state, revision, ack_token, payload
             FROM omp_jobs.outbox
-            WHERE workspace_id=%s AND state = ANY(%s)
+            WHERE workspace_id=%s AND state = ANY(%s) AND kind = 'usage_ledger'
             ORDER BY event_id
             FOR UPDATE SKIP LOCKED
             """,

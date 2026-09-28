@@ -15,6 +15,7 @@ from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
 from omp_work.contracts.v1.recovery import CloseoutRecord, apply_commit
+from omp_work.jobs.budget import check_item_budget, root_work_id
 from omp_work.jobs.store import JobError, NativeJobStore
 from omp_work.v1.canonical import sha256
 
@@ -350,6 +351,16 @@ def record_usage(
                     closeout.revision,
                 ),
             )
+            budget_work_id = root_work_id(cur, workspace_id, job_id) if job_id else work_id
+            if budget_work_id is not None:
+                check_item_budget(
+                    store,
+                    cur,
+                    workspace_id=workspace_id,
+                    actor_id=actor_id,
+                    work_id=budget_work_id,
+                    operation_id=operation_id,
+                )
             return {"status": "applied", "usage_id": usage_id}
 
         outcome = store.run_operation(
