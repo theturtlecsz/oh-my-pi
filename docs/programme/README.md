@@ -9,3 +9,13 @@ Start with [the revised goal prompt](GOAL-PROMPT.md), then read both full append
 The handoff archive includes MASTER, the glossary, ADRs, all files here, and a SHA256 manifest. Historical evidence and external source links retained inside MASTER and the plans may refer to host-local artifacts or remote repositories; those are references, not bundled acceptance receipts. The full ECC and research specifications themselves are included, not dependent on fetching those references.
 
 Completing the handoff does not authorize Q36 or deploy/start implementation. Preserve existing session authorization and explicit pause/resume instructions. First means order, not reduced scope. Full programme remains incomplete until every retained native acceptance gate passes.
+
+## Claim status (D10)
+
+Every claim indexed below is source delivered, not installed-qualified until installed checks pass; current status lives in the Work Ledger (D6).
+
+- M0 acceptance record: [M0-ACCEPTANCE.md](M0-ACCEPTANCE.md).
+- ECC mirror: an 18-file pinned subset, not the complete mirror: [M0-ACCEPTANCE.md](M0-ACCEPTANCE.md), [manifest](../../session-system/ecc/manifest.json).
+- ADR 0004 Horizon A/B PASS: in-process demonstrations; the cockpit_verbs demo is not a Grok Bot integration: [ADR 0004](../adr/0004-hard-padlock-control-plane.md).
+- E1 approval packet and MASTER E1 checkpoint: [packet](E1-CONTRACT-APPROVAL-PACKET.md), [MASTER](../../MASTER.md).
+- WebUI acceptance matrix, kept in the omp-webui repository: https://github.com/theturtlecsz/omp-webui/blob/master/docs/omp-webui/ACCEPTANCE.md (relabel there is owner slice s06).
