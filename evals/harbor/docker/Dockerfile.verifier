@@ -1,0 +1,10 @@
+# Verifier image for the Harbor fixtures. Harbor's verifier runs the fixture's
+# tests/test.sh against the sealed evidence tree mounted read-only at
+# /evidence; the container only needs a shell and sleep.
+#
+# Build context: evals/harbor/docker.
+#   docker build -t omp-verifier:dev -f evals/harbor/docker/Dockerfile.verifier evals/harbor/docker
+FROM alpine:3.20
+
+ENTRYPOINT []
+CMD ["sh", "-c", "sleep infinity"]
