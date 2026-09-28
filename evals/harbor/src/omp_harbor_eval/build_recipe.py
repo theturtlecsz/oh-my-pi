@@ -24,8 +24,6 @@ import shlex
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import yaml
-
 from .isolation import load_compose
 
 BUILD_SCRIPT_REL = Path("scripts") / "build-images.sh"
@@ -90,14 +88,14 @@ def parse_build_script(text: str) -> dict[str, str]:
         if len(tokens) >= 2 and tokens[1] == "build":
             index = 2
             while index < len(tokens):
-                token = tokens[index]
-                if token == "-t" or token == "--tag":
+                argument = tokens[index]
+                if argument == "-t" or argument == "--tag":
                     if index + 1 < len(tokens):
                         recipes[tokens[index + 1]] = "build"
                     index += 2
                     continue
-                if token.startswith("--tag="):
-                    recipes[token.split("=", 1)[1]] = "build"
+                if argument.startswith("--tag="):
+                    recipes[argument.split("=", 1)[1]] = "build"
                 index += 1
         elif len(tokens) >= 4 and tokens[1] == "tag":
             recipes[tokens[-1]] = "tag"
@@ -379,6 +377,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    import sys
-
     raise SystemExit(main())
