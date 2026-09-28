@@ -13,6 +13,15 @@ extra, or altered file, or a run id, nonce, or fixture digest that does not
 match the graded fixture, is `invalid_evidence`. An outcome of `harness_error`
 is `harness_defect`.
 
+Before running a Harbor trial (such as during `OMP-250-s08`), build the fixture
+container images (`omp-verifier:dev`, `omp-workservice:dev`, `omp-agent:dev`,
+`omp-f1-agent:dev`, `omp-f2-agent:dev`). This one-command image build requires
+no network credentials and zero model spend:
+
+```bash
+bash evals/harbor/scripts/build-images.sh
+```
+
 A Harbor trial uses `--agent-import-path omp_harbor_eval.harbor_agent:OmpRpcAgent`
 and four variables: `OMP_HARBOR_BEARER`, `OMP_HARBOR_WORKSPACE_ID`,
 `OMP_HARBOR_RUN_ID`, and `OMP_HARBOR_NONCE`. The bearer and workspace id
@@ -20,6 +29,8 @@ authorize the WorkService read. The run id and nonce are the evidence identity
 the grader checks out of band.
 
 ```bash
+bash evals/harbor/scripts/build-images.sh
+
 OMP_HARBOR_BEARER=... OMP_HARBOR_WORKSPACE_ID=... OMP_HARBOR_RUN_ID=... OMP_HARBOR_NONCE=... \
   harbor run --agent-import-path omp_harbor_eval.harbor_agent:OmpRpcAgent -p evals/harbor/fixtures/<id>
 
